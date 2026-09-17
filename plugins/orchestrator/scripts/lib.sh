@@ -72,7 +72,7 @@ wf_check_claude_args() {
   # shellcheck disable=SC2086
   for w in ${WF_CLAUDE_ARGS:-} ${!var:-} ""; do
     if [ "$prev" = "--plugin-dir" ]; then
-      [ -n "$w" ] && [ "${w#-}" = "$w" ] || wf_die "WF_CLAUDE_ARGS/$var: --plugin-dir needs a path (got '$w'). Use absolute paths, e.g. WF_PLANNER_CLAUDE_ARGS=\"--plugin-dir /repo/plugins/planner\""
+      if [ -z "$w" ] || [ "${w#-}" != "$w" ]; then wf_die "WF_CLAUDE_ARGS/$var: --plugin-dir needs a path (got '$w'). Use absolute paths, e.g. WF_PLANNER_CLAUDE_ARGS=\"--plugin-dir /repo/plugins/planner\""; fi
       [ -d "$w" ] || wf_die "WF_CLAUDE_ARGS/$var: --plugin-dir $w is not a directory"
     fi
     prev="$w"

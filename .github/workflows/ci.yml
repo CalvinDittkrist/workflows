@@ -13,8 +13,11 @@ jobs:
           node-version: 22
       - name: Install Claude Code (for plugin validation)
         run: npm install -g @anthropic-ai/claude-code
-      - name: Install shellcheck
-        run: sudo apt-get install -y shellcheck jq
+      - name: Install shellcheck 0.11.0 (same as brew, so local and CI findings match)
+        run: |
+          sudo apt-get install -y jq
+          curl -sSL https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz | tar -xJ
+          sudo mv shellcheck-v0.11.0/shellcheck /usr/local/bin/shellcheck
       - name: Lint scripts
         run: shellcheck -s bash plugins/*/scripts/*.sh
       - name: Validate plugins
