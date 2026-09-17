@@ -11,12 +11,14 @@ while [ $# -gt 0 ]; do case "$1" in --max-seconds) shift; max="$1";; *) pr="${1#
 [ -n "$pr" ] || wf_die "no open PR for branch $(wf_branch)"
 bots="${WF_PR_BOT_REVIEWERS-chatgpt-codex-connector}"  # no colon: an empty value means "no bot reviewer"
 review_wait="${WF_PR_REVIEW_WAIT:-600}"
+checks_grace="${WF_CHECKS_GRACE:-600}"  # seconds after the last push to wait for CI to register its checks
 owner=$(wf_repo_owner); repo=$(wf_repo_name)
 start=$(date +%s)
 
 snapshot() {
   view=$(gh pr view "$pr" --json number,url,state,isDraft,mergeStateStatus,statusCheckRollup,reviews,commits) || wf_die "cannot read PR #$pr"
   head_at=$(printf '%s' "$view" | jq -r '.commits[-1].committedDate')
+  head_epoch=$(wf_epoch "$head_at" || date +%s)
   checks_total=$(printf '%s' "$view" | jq -r '.statusCheckRollup | length')
   checks_fail=$(printf '%s' "$view" | jq -r '[.statusCheckRollup[] | (.conclusion // .state // "") | select(. == "FAILURE" or . == "ERROR" or . == "CANCELLED" or . == "TIMED_OUT" or . == "ACTION_REQUIRED" or . == "STARTUP_FAILURE")] | length')
   checks_pending=$(printf '%s' "$view" | jq -r '[.statusCheckRollup[] | select(((.status // "COMPLETED") != "COMPLETED") or ((.state // "") == "PENDING" or (.state // "") == "EXPECTED"))] | length')
@@ -45,6 +47,11 @@ checks_done_at=""
 while :; do
   snapshot
   now=$(date +%s)
+  # Right after a push the rollup is empty until GitHub registers the workflow run. With CI configured,
+  # treat that as pending for a grace period instead of reporting a false green (would self-merge in yolo).
+  if [ "$checks_total" -eq 0 ] && [ $((now-head_epoch)) -lt "$checks_grace" ] && [ -n "$(find .github/workflows -maxdepth 1 \( -name '*.yml' -o -name '*.yaml' \) 2>/dev/null | head -n 1)" ]; then
+    checks_pending=1
+  fi
   if [ "$checks_pending" -eq 0 ]; then
     [ -n "$checks_done_at" ] || checks_done_at=$now  # no completedAt in the rollup (statuses): count from first sight
     if [ "$checks_fail" -gt 0 ]; then report "checks-failed"; exit 0; fi

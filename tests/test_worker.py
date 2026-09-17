@@ -97,6 +97,20 @@ class PrWaitTests(ShimTest):
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertIn("status: green", r.stdout)
 
+    def test_empty_check_rollup_right_after_a_push_is_pending_when_ci_is_configured(self):
+        # Regression: GitHub reports no checks for a moment after a push; that was reported as green.
+        (self.repo / ".github/workflows").mkdir(parents=True)
+        (self.repo / ".github/workflows/ci.yml").write_text("on: pull_request\n")
+        import datetime
+        now = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        r = self.wait(SHIM_CHECKS_EMPTY="1", SHIM_HEAD_AT=now, WF_PR_BOT_REVIEWERS="")
+        self.assertEqual(r.returncode, 3, r.stdout + r.stderr)
+        self.assertIn("status: waiting", r.stdout)
+        # An old push with still no checks means the workflow does not run for this PR: green.
+        r = self.wait(SHIM_CHECKS_EMPTY="1", WF_PR_BOT_REVIEWERS="")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("status: green", r.stdout)
+
     def test_zero_review_wait_does_not_block_on_the_bot(self):
         r = self.wait(WF_PR_REVIEW_WAIT="0")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
