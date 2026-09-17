@@ -67,6 +67,8 @@ All knobs are environment variables, set per repository in `.claude/settings.jso
 | `WF_CLAUDE_ARGS` | empty | extra flags for every worker (`--model sonnet`, `--plugin-dir …`) |
 | `WF_MODE`, `WF_ISSUE` | set by `/claim` | per-session mode (`manual`/`yolo`) and issue |
 
+Three places can set a worker's model, and the first one that is present wins: `--model` in `WF_CLAUDE_ARGS`, then the `model` field of the agent file, then `model` in your Claude Code settings. So `WF_CLAUDE_ARGS="--model sonnet"` pins the model per repository whatever the agent files say.
+
 Override any agent or skill per repository by placing a file with the same name in `.claude/agents/` or `.claude/skills/`; project definitions win over plugin ones.
 
 ## Design
