@@ -30,9 +30,18 @@ class ClaimTests(ShimTest):
         start = [c for c in self.calls() if c.startswith("herdr agent start")][0]
         self.assertIn('"WF_MODE":"yolo"', start)
 
+    def test_claude_args_are_word_split_into_the_worker_session_argv(self):
+        r = self.run_script(ORCH / "claim.sh", "12", WF_CLAUDE_ARGS="--model sonnet --plugin-dir /x")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        argv = [c for c in self.argv_calls() if c[1:3] == ["agent", "start"]][0]
+        # Separate entries, not one "--model sonnet --plugin-dir /x" blob: claim.sh must leave $extra unquoted.
+        self.assertEqual(argv[argv.index("--model") + 1], "sonnet")
+        self.assertEqual(argv[argv.index("--plugin-dir") + 1], "/x")
+        self.assertEqual(argv[-1], "/worker:work")
+
     def test_claim_is_idempotent_for_an_existing_worktree(self):
         self.run_script(ORCH / "claim.sh", "12")
-        self.log.unlink()
+        self.reset_calls()
         r = self.run_script(ORCH / "claim.sh", "12")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("status: already-claimed", r.stdout)
@@ -66,7 +75,7 @@ class MergeTests(ShimTest):
         self.run_script(ORCH / "claim.sh", "12")
         path = self.repo / ".claude/worktrees/fix-12-fix-login-timeout"
         self.assertTrue(path.exists())
-        self.log.unlink()
+        self.reset_calls()
         return path
 
     def test_merge_removes_workspace_then_merges_and_deletes_branch(self):

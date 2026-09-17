@@ -27,6 +27,7 @@ class ShimTest(unittest.TestCase):
         self.git("add", ".")
         self.git("commit", "-qm", "init")
         self.log = self.base / "calls.log"
+        self.argv_log = self.base / "calls.argv.log"
         self.wt_root = self.base / "wt"
         self.wt_root.mkdir()
 
@@ -38,6 +39,7 @@ class ShimTest(unittest.TestCase):
         env.update({
             "PATH": f"{SHIMS}:{env['PATH']}",
             "SHIM_LOG": str(self.log),
+            "SHIM_ARGV_LOG": str(self.argv_log),
             "SHIM_WT_ROOT": str(self.wt_root),
             "SHIM_MAIN": str(self.repo),
             "HERDR_ENV": "1",
@@ -50,5 +52,16 @@ class ShimTest(unittest.TestCase):
         return subprocess.run(["bash", str(script), *args], cwd=cwd or self.repo, env=self.env(**extra),
                               input=stdin, text=True, capture_output=True)
 
+    def reset_calls(self):
+        """Forget every recorded call. Both logs, so calls() and argv_calls() cannot drift apart."""
+        for log in (self.log, self.argv_log):
+            log.unlink(missing_ok=True)
+
     def calls(self):
         return self.log.read_text().splitlines() if self.log.exists() else []
+
+    def argv_calls(self):
+        """Each logged call as its real argv list, so quoting and word-splitting stay visible."""
+        if not self.argv_log.exists():
+            return []
+        return [line.split("\x1f") for line in self.argv_log.read_text().splitlines()]
