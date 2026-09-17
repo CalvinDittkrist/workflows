@@ -24,7 +24,7 @@ case "$cmd" in
         *) wf_die "unknown argument $1" ;;
       esac; shift
     done
-    [ -n "$title" ] && [ -n "$body" ] || wf_die "create needs --title and --body-file"
+    if [ -z "$title" ] || [ -z "$body" ]; then wf_die "create needs --title and --body-file"; fi
     [ -f "$body" ] || wf_die "body file $body not found"
     args=(); for l in "${labels[@]+"${labels[@]}"}"; do args+=(--label "$l"); done
     url=$(gh issue create --title "$title" --body-file "$body" "${args[@]+"${args[@]}"}") || wf_die "gh issue create failed (missing label? run labels.sh)"
