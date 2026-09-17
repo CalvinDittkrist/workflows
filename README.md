@@ -61,7 +61,7 @@ All knobs are environment variables, set per repository in `.claude/settings.jso
 | `WF_BASE_BRANCH` | remote default branch | base for worktrees and PRs |
 | `WF_REVIEWERS` | `code,security,docs,tests,senior` | reviewer panel members |
 | `WF_REVIEW_ROUNDS` | `3` | max fix-and-re-review rounds |
-| `WF_PR_BOT_REVIEWERS` | `chatgpt-codex-connector` | bot logins whose PR review the worker waits for |
+| `WF_PR_BOT_REVIEWERS` | `chatgpt-codex-connector` | bot logins whose PR review the worker waits for; set to `""` in repositories without a bot reviewer |
 | `WF_PR_REVIEW_WAIT` | `600` | seconds to wait for a bot review after checks pass |
 | `WF_WORKER_PERMISSION_MODE` | `auto` | permission mode for worker sessions |
 | `WF_CLAUDE_ARGS` | empty | extra flags for every worker (`--model sonnet`, `--plugin-dir …`) |

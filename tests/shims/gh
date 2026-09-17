@@ -18,6 +18,8 @@ case "$*" in
   "pr view 7 --json number,title,url,state,isDraft,mergeable,mergeStateStatus,headRefName,baseRefName,reviewDecision,statusCheckRollup")
     cat "${SHIM_PR_FIXTURE:?}" ;;
   "pr merge 7 --squash --delete-branch") exit 0 ;;
+  "pr view 7 --json number,url,state,isDraft,mergeStateStatus,statusCheckRollup,reviews,commits")
+    echo '{"number":7,"url":"https://github.com/o/r/pull/7","state":"OPEN","isDraft":false,"mergeStateStatus":"CLEAN","statusCheckRollup":[{"name":"test","status":"COMPLETED","conclusion":"SUCCESS"}],"reviews":[],"commits":[{"committedDate":"2026-09-17T10:00:00Z"}]}' ;;
   "pr list --state open --limit 100 --json"*) echo '[]' ;;
   "api graphql"*) echo "${SHIM_UNRESOLVED:-0}" ;;
   *) echo "gh shim: unhandled: $*" >&2; exit 64 ;;

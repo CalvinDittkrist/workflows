@@ -9,7 +9,7 @@ pr="" max="${WF_WAIT_SLICE:-540}"
 while [ $# -gt 0 ]; do case "$1" in --max-seconds) shift; max="$1";; *) pr="${1#\#}";; esac; shift; done
 [ -n "$pr" ] || pr=$(wf_pr_for_branch)
 [ -n "$pr" ] || wf_die "no open PR for branch $(wf_branch)"
-bots="${WF_PR_BOT_REVIEWERS:-chatgpt-codex-connector}"
+bots="${WF_PR_BOT_REVIEWERS-chatgpt-codex-connector}"  # no colon: an empty value means "no bot reviewer"
 review_wait="${WF_PR_REVIEW_WAIT:-600}"
 owner=$(wf_repo_owner); repo=$(wf_repo_name)
 start=$(date +%s)
