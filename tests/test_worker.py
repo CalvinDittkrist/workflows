@@ -59,5 +59,43 @@ class DiffContextTests(ShimTest):
         self.assertIn("a.txt", r.stdout)
 
 
+class FactsTests(ShimTest):
+    def test_reports_mode_issue_base_and_panel_from_env_or_branch(self):
+        self.git("checkout", "-qb", "fix/7-y")
+        r = self.run_script(WORKER / "facts.sh", WF_BASE_BRANCH="main")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stdout.splitlines(), [
+            "mode: manual", "issue: #7", "base: main",
+            "reviewers: code,security,docs,tests,senior", "max_rounds: 3",
+        ])
+        r = self.run_script(WORKER / "facts.sh", WF_BASE_BRANCH="main", WF_MODE="yolo", WF_ISSUE="12",
+                            WF_REVIEWERS="code,senior", WF_REVIEW_ROUNDS="1")
+        self.assertIn("mode: yolo\nissue: #12\n", r.stdout)
+        self.assertIn("reviewers: code,senior\nmax_rounds: 1", r.stdout)
+
+
+class PrWaitTests(ShimTest):
+    def wait(self, **env):
+        env.setdefault("WF_POLL_SECONDS", "1")
+        return self.run_script(WORKER / "pr-wait.sh", "7", "--max-seconds", "2", **env)
+
+    def test_waits_for_the_bot_review_after_checks_pass(self):
+        r = self.wait()
+        self.assertEqual(r.returncode, 3, r.stdout + r.stderr)
+        self.assertIn("status: waiting", r.stdout)
+        self.assertIn("expected from: chatgpt-codex-connector", r.stdout)
+
+    def test_empty_bot_list_means_green_as_soon_as_checks_pass(self):
+        r = self.wait(WF_PR_BOT_REVIEWERS="")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("status: green", r.stdout)
+        self.assertIn("checks: total=1 pass=1 fail=0 pending=0", r.stdout)
+
+    def test_zero_review_wait_does_not_block_on_the_bot(self):
+        r = self.wait(WF_PR_REVIEW_WAIT="0")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("status: green", r.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()

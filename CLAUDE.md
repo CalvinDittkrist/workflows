@@ -18,3 +18,4 @@ Public repository of Claude Code plugins for agent-driven development: an orches
 - `claude plugin validate <dir>` validates a manifest, or a skills/agents directory; run it on both (see `scripts/test.sh`).
 - Skill and agent frontmatter is checked by the runtime; unknown fields fail `--strict`.
 - Herdr commands need `HERDR_ENV=1`; the orchestrator scripts refuse outside Herdr by design.
+- A skill's `` !`command` `` runs through the permission system. Forked skills (`context: fork`) fail silently without a matching `allowed-tools: Bash(${CLAUDE_PLUGIN_ROOT}/scripts/x.sh)` rule, so every injection calls a plugin script and lists it there (tested).

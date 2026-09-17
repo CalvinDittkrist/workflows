@@ -2,11 +2,13 @@
 name: review
 description: Run the independent reviewer panel (code, security, docs, tests, senior) on the branch diff in fresh contexts and fix the findings until the panel passes.
 argument-hint: [reviewers=code,security,docs,tests,senior]
+allowed-tools: Bash(${CLAUDE_PLUGIN_ROOT}/scripts/diff-context.sh), Bash(${CLAUDE_PLUGIN_ROOT}/scripts/facts.sh)
 ---
 Diff context:
-!`"${CLAUDE_PLUGIN_ROOT}/scripts/diff-context.sh"`
+!`${CLAUDE_PLUGIN_ROOT}/scripts/diff-context.sh`
+!`${CLAUDE_PLUGIN_ROOT}/scripts/facts.sh`
 
-Reviewers: !`echo "${WF_REVIEWERS:-code,security,docs,tests,senior}"` · Max rounds: !`echo "${WF_REVIEW_ROUNDS:-3}"`
+Use `reviewers` and `max_rounds` from above unless the argument overrides the reviewer list.
 
 Round procedure:
 1. If there are uncommitted changes, commit them first; reviewers read committed history.
