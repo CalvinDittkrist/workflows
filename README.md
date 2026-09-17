@@ -101,7 +101,7 @@ claude --plugin-dir plugins/worker                # try a plugin in a session wi
 scripts/dev-orchestrator.sh                       # orchestrator from the checkout, inside a Herdr pane
 ```
 
-`dev-orchestrator.sh` sets `WF_CLAUDE_ARGS` to the checkout's planner and worker plugins, so the sessions the orchestrator opens use them too. Without that (or the plugins installed), a started session exits with `--agent 'planner' not found`; `plan.sh` and `claim.sh` detect that, remove the worktree again and print the fix.
+`dev-orchestrator.sh` sets `WF_CLAUDE_ARGS` to the checkout's planner and worker plugins, so the sessions the orchestrator opens use them too. Without that (or the plugins installed), a started session exits with `--agent 'planner' not found`; `plan.sh` and `claim.sh` detect that, remove the worktree again and print the fix. The same rollback runs when Herdr refuses the start itself (its error is printed as is) or when the pane is back at a shell prompt. Herdr agent names are derived from the branch and cut to its 32-character limit.
 
 Tests run the real scripts against `gh` and `herdr` shims (`tests/shims/`). Plugins are self-contained; bump `version` in a plugin's manifest and run `scripts/release.sh <plugin> --push` to tag a release.
 

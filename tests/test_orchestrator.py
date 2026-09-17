@@ -113,6 +113,25 @@ class PlanTests(ShimTest):
         r = self.run_script(ORCH / "claim.sh", "12", WF_CLAUDE_ARGS="--plugin-dir")
         self.assertNotEqual(r.returncode, 0)
 
+    def test_long_topics_get_a_valid_herdr_agent_name(self):
+        words = "Füge einen Map-Skill zum Planner hinzu, wie wayfinder von mattpocock".split()
+        r = self.run_script(ORCH / "plan.sh", *words)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("branch: plan/fuege-einen-map-skill-zum-planner-hinzu", r.stdout)
+        start = [c for c in self.argv_calls() if c[1:3] == ["agent", "start"]][0]
+        self.assertRegex(start[3], r"^[a-z][a-z0-9_-]{0,31}$")
+        self.assertIn("agent: plan-fuege-einen-map-skill-zum-p\n", r.stdout)
+        self.assertIn("agent_status: working", r.stdout)
+
+    def test_herdr_refusing_the_start_is_reported_at_once_and_rolled_back(self):
+        r = self.run_script(ORCH / "plan.sh", "Offline mode", SHIM_AGENT_START_ERROR="pane is not at a shell prompt", WF_AGENT_WAIT="60")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("herdr agent start failed (pane_busy): pane is not at a shell prompt", r.stderr)
+        self.assertNotIn("exited right after start", r.stderr)
+        self.assertFalse([c for c in self.calls() if c.startswith("herdr agent list")])
+        self.assertEqual(self.git("branch", "--list", "plan/offline-mode"), "")
+        self.assertIn("herdr worktree remove --workspace w9 --force", self.calls())
+
     def test_session_back_at_the_shell_prompt_rolls_back_too(self):
         r = self.run_script(ORCH / "plan.sh", "Offline mode", SHIM_AGENT_START_FAILS="2", WF_AGENT_WAIT="0")
         self.assertNotEqual(r.returncode, 0)

@@ -135,10 +135,22 @@ wf_rollback_worktree() {
 }
 
 # Start `claude <args...>` as Herdr agent $2 in pane $1 and wait for it. Sets agent_status.
+# Herdr agent names: lowercase letter first, then lowercase letters, digits, - or _, at most 32 characters.
+wf_agent_name() {
+  printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9_-]+/-/g; s/^[^a-z]+//' | cut -c1-32 | sed -E 's/[-_]+$//'
+}
 wf_start_agent() {
-  local pane="$1" name="$2"; shift 2
+  local pane="$1" name="$2" out code; shift 2
   # The session starts working immediately (its first turn is a skill), so Herdr's "ready for input"
-  # wait can time out although the agent is fine. Ignore that result and detect the agent ourselves.
-  herdr agent start "$name" --kind claude --pane "$pane" --timeout 30000 -- "$@" >/dev/null 2>&1 || true
+  # wait can time out although the agent is fine. Ignore a timeout and detect the agent ourselves;
+  # any other error means nothing was started at all, so report it right away instead of waiting.
+  out=$(herdr agent start "$name" --kind claude --pane "$pane" --timeout 30000 -- "$@" 2>&1) || true
+  code=$(printf '%s' "$out" | jq -r '.error.code // empty' 2>/dev/null || true)
+  if [ -n "$code" ] && [ "$code" != timeout ]; then
+    agent_status=""
+    # shellcheck disable=SC2034  # read by the caller after a non-zero return
+    start_error="herdr agent start failed ($code): $(printf '%s' "$out" | jq -r '.error.message // empty'). Nothing was started in pane $pane."
+    return 1
+  fi
   wf_wait_agent "$pane"
 }

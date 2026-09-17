@@ -56,7 +56,7 @@ if [ -n "$issue" ]; then git config "branch.$branch.description" "issue: #$issue
 
 settings=$(jq -cn --arg s "$slug" --arg i "$issue" '{env:{WF_PLAN:$s}} | if $i != "" then .env.WF_PLAN_ISSUE = $i else . end')
 perm="${WF_PLANNER_PERMISSION_MODE:-auto}"
-name="plan-$slug"
+name=$(wf_agent_name "plan-$slug")
 extra="${WF_CLAUDE_ARGS:-}"
 # shellcheck disable=SC2086  # $extra is a flag list and must word-split
 if ! wf_start_agent "$pane" "$name" --agent planner --permission-mode "$perm" --settings "$settings" --name "plan $slug" $extra "/planner:plan"; then

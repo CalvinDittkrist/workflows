@@ -55,7 +55,7 @@ fi
 # Session-scoped configuration travels through --settings so hooks and skills can read it from the environment.
 settings=$(jq -cn --arg m "$mode" --arg i "$issue" '{env:{WF_MODE:$m, WF_ISSUE:$i}}')
 perm="${WF_WORKER_PERMISSION_MODE:-auto}"
-name="issue-$issue"
+name=$(wf_agent_name "issue-$issue")
 # WF_CLAUDE_ARGS: extra claude flags for every worker (e.g. "--model sonnet" or "--plugin-dir /path" while developing).
 extra="${WF_CLAUDE_ARGS:-}"
 if [ "$sandbox" = 1 ]; then

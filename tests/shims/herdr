@@ -19,6 +19,9 @@ case "$1 $2" in
   "workspace list")
     if [ -f "${SHIM_WT_ROOT}/.ws-w9" ]; then printf '{"result":{"workspaces":[{"workspace_id":"w9","worktree":{"checkout_path":"%s"}}]}}\n' "$(cat "${SHIM_WT_ROOT}/.ws-w9")"; else echo '{"result":{"workspaces":[]}}'; fi ;;
   "agent start")
+    # Same name rule as herdr 0.9: the orchestrator once passed "plan-<40 char slug>" and nothing started.
+    printf '%s' "$3" | grep -Eq '^[a-z][a-z0-9_-]{0,31}$' || { echo '{"error":{"code":"invalid_agent_name","message":"agent name must start with a lowercase letter and contain only lowercase letters, digits, '"'"'-'"'"' or '"'"'_'"'"' (1-32 characters)"}}'; exit 1; }
+    if [ -n "${SHIM_AGENT_START_ERROR:-}" ]; then printf '{"error":{"code":"pane_busy","message":"%s"}}\n' "$SHIM_AGENT_START_ERROR"; exit 1; fi
     pane=""; while [ $# -gt 0 ]; do case "$1" in --pane) shift; pane=$1;; esac; shift; done
     # SHIM_AGENT_START_FAILS=1: claude exits at once (unknown agent), so no agent is ever detected.
     if [ "${SHIM_AGENT_START_FAILS:-0}" != 0 ]; then echo '{"error":{"code":"timeout"}}'; exit 1; fi
