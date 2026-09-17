@@ -22,6 +22,7 @@ class ClaimTests(ShimTest):
         self.assertIn(".claude/worktrees/", (self.repo / ".git/info/exclude").read_text())
         self.assertEqual(self.git("status", "--porcelain"), "", "worktree dir must not show up as untracked")
         self.assertIn("herdr workspace focus wR", self.calls())
+        self.assertIn("agent_status: working", r.stdout)
 
     def test_yolo_flag_is_passed_to_the_worker_session(self):
         r = self.run_script(ORCH / "claim.sh", "12", "--yolo")
