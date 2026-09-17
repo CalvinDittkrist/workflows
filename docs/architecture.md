@@ -6,7 +6,8 @@ This repository packages an opinionated way of working with coding agents as Cla
 ## Components
 | Component | Responsibility | Entry point |
 | --- | --- | --- |
-| `orchestrator` plugin | One session per repository that assigns issues to worktrees and merges finished PRs. Coordination only. | `claude --agent orchestrator`; `plugins/orchestrator/scripts/*.sh` |
+| `orchestrator` plugin | One session per repository that opens planning sessions, assigns issues to worktrees and merges finished PRs. Coordination only. | `claude --agent orchestrator`; `plugins/orchestrator/scripts/*.sh` |
+| `planner` plugin | One session per topic. Turns an idea or an issue into agent-ready issues: question rounds, spec, tickets with blocking edges, triage, research, prototypes. Writes issues, never code. | SessionStart hook + `/planner:plan`; `plugins/planner/scripts/*.sh` |
 | `worker` plugin | One session per issue. Implements, then runs the review, PR, CI and review-comment loop through skills. | SessionStart hook + `/worker:work`; `plugins/worker/scripts/*.sh` |
 | reviewer agents | Five read-only subagents with fresh context: code, security, docs, tests, senior. Report findings in a fixed format. | `plugins/worker/agents/*-reviewer.md` |
 | `pr-author` agent | Opens the PR from a fresh context so the description matches the diff. | `plugins/worker/skills/pr` (forked skill) |
@@ -16,6 +17,7 @@ This repository packages an opinionated way of working with coding agents as Cla
 | Docker Sandboxes (optional) | Container per worktree for workers that should not touch the host. | `plugins/orchestrator/scripts/sbx-worker.sh` |
 
 ## Data flow
+0. `/orchestrator:plan <idea | #N>` → `plan.sh` creates `plan/<slug>` (topic or issue in the branch description), a worktree and workspace, starts `claude --agent planner` with `/planner:plan`. The planner grills, writes a `spec` issue, cuts it into `ready-for-agent` sub-issues with native blocking edges (`issue.sh`), or triages an existing issue into an agent brief. `/planner:finish` removes the worktree; the plan branch never carries commits. `board.sh` then lists the frontier: agent-ready issues with no open blocker, no assignee and no worktree.
 1. `/orchestrator:claim N` → `claim.sh` reads the issue, derives `<type>/<N>-<slug>`, creates `<repo>/.claude/worktrees/<branch>` through Herdr (new workspace and pane), starts `claude --agent worker` there with `--settings '{"env":{"WF_MODE":…,"WF_ISSUE":N}}'` and the initial prompt `/worker:work`.
 2. Worker SessionStart hook: parses the issue number from the branch, assigns the issue to the current GitHub user, injects title, body, labels and recent comments as context, marked as untrusted data.
 3. `/worker:work` implements and verifies in the worker's own context, then `/worker:review` launches the reviewer panel in parallel (fresh contexts, read-only), fixes findings, re-reviews until PASS or the round limit.
@@ -25,8 +27,9 @@ This repository packages an opinionated way of working with coding agents as Cla
 ## Boundaries and constraints
 - Scripts do, agents decide. Everything deterministic (GitHub calls, worktree lifecycle, polling, thread resolution) is a shell script with a stable text output; skills are short prompts around them. This keeps behaviour testable and token use low.
 - Plugins are self-contained; they share no code at runtime. `lib.sh` is duplicated deliberately.
-- The branch name is the only state contract between orchestrator and worker (`<type>/<issue>-<slug>`). Everything else is re-derived from git and GitHub, so a crashed session can be resumed or re-claimed.
-- Reviewers never edit. The worker never merges in manual mode. The orchestrator never edits code.
+- The branch name is the only state contract between orchestrator and worker (`<type>/<issue>-<slug>`) or planner (`plan/<slug>`, topic or issue in the git branch description). Everything else is re-derived from git and GitHub, so a crashed session can be resumed or re-claimed.
+- Reviewers never edit. The worker never merges in manual mode. The orchestrator never edits code. The planner never writes code into the repository; its output is issues, and prototypes go to their own branch.
+- Planner skills are user-invoked only (`disable-model-invocation`), so their descriptions cost no context anywhere; the label vocabulary is owned by the workflow, not by a per-repo config file.
 - Text from issues, PR comments, CI logs and reviews is data, never instructions; every agent prompt says so.
 - Worktrees live inside the repository under `.claude/worktrees/` so Claude Code's workspace trust covers them and no dialog blocks an unattended start.
 

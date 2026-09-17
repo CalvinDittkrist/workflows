@@ -1,10 +1,12 @@
 # workflows
 
-Claude Code plugins for high-throughput, low-token, security-conscious development with AI agents. One orchestrator session claims GitHub issues into isolated worktree sessions; each worker implements, passes an independent reviewer panel, opens a PR from a fresh context, and drives CI and review comments to green.
+Claude Code plugins for high-throughput, low-token, security-conscious development with AI agents. One orchestrator session opens planning sessions that turn ideas into agent-ready issues, and claims those issues into isolated worktree sessions; each worker implements, passes an independent reviewer panel, opens a PR from a fresh context, and drives CI and review comments to green.
 
 ```mermaid
 flowchart LR
-  O[orchestrator<br/>/claim · /merge · /board] -->|worktree + Herdr pane| W[worker<br/>/work]
+  O[orchestrator<br/>/plan · /claim · /merge · /board] -->|worktree + Herdr pane| PL[planner<br/>/grill · /spec · /tickets · /triage]
+  PL -->|ready-for-agent issues| O
+  O -->|worktree + Herdr pane| W[worker<br/>/work]
   W --> I[implement + verify]
   I --> R{reviewer panel<br/>code · security · docs · tests · senior}
   R -->|FIX| I
@@ -18,7 +20,8 @@ flowchart LR
 
 | Plugin | What it gives you | Runs where |
 | --- | --- | --- |
-| [orchestrator](plugins/orchestrator/README.md) | `/claim`, `/yolo-claim`, `/merge`, `/board`, `/abandon`, `/herdr` | main checkout, inside [Herdr](https://herdr.dev) |
+| [orchestrator](plugins/orchestrator/README.md) | `/plan`, `/claim`, `/yolo-claim`, `/merge`, `/board` (with frontier), `/abandon`, `/herdr` | main checkout, inside [Herdr](https://herdr.dev) |
+| [planner](plugins/planner/README.md) | `/grill`, `/spec`, `/tickets`, `/triage`, `/research`, `/prototype`, `/finish`; writes agent-ready issues, never code | each planning worktree |
 | [worker](plugins/worker/README.md) | `/work` pipeline, five read-only reviewer agents, fresh-context PR author, CI and review-thread loop, SessionStart hook that loads and assigns the issue | each issue worktree |
 | [repo-standards](plugins/repo-standards/README.md) | `/init-repo`, `/adr`, `/docs-check`; templates for CLAUDE.md, architecture.md, ADRs, PR template, settings | any repository |
 
@@ -29,6 +32,7 @@ Requirements: Claude Code ≥ 2.1.270, `gh` (authenticated), `jq`, git. Herdr fo
 ```sh
 claude plugin marketplace add CalvinDittkrist/workflows
 claude plugin install worker@workflows
+claude plugin install planner@workflows
 claude plugin install repo-standards@workflows
 claude plugin install orchestrator@workflows
 ```
@@ -44,6 +48,8 @@ cd my-repo && claude --agent orchestrator       # inside a Herdr pane
 ```
 
 ```text
+/orchestrator:plan add offline mode   # worktree + pane + planner: grill, spec, tickets
+/orchestrator:plan 123                # triage or shape an existing issue
 /orchestrator:claim 123          # worktree + pane + worker for issue 123
 /orchestrator:board              # who is doing what, PR and CI state
 /orchestrator:merge 45           # squash-merge, remove worktree, workspace and branch
@@ -64,8 +70,10 @@ All knobs are environment variables, set per repository in `.claude/settings.jso
 | `WF_PR_BOT_REVIEWERS` | `chatgpt-codex-connector` | bot logins whose PR review the worker waits for; set to `""` in repositories without a bot reviewer |
 | `WF_PR_REVIEW_WAIT` | `600` | seconds to wait for a bot review after checks pass |
 | `WF_WORKER_PERMISSION_MODE` | `auto` | permission mode for worker sessions |
-| `WF_CLAUDE_ARGS` | empty | extra flags for every worker (`--model sonnet`, `--plugin-dir …`) |
+| `WF_PLANNER_PERMISSION_MODE` | `auto` | permission mode for planner sessions |
+| `WF_CLAUDE_ARGS` | empty | extra flags for every worker and planner (`--model sonnet`, `--plugin-dir …`) |
 | `WF_MODE`, `WF_ISSUE` | set by `/claim` | per-session mode (`manual`/`yolo`) and issue |
+| `WF_PLAN`, `WF_PLAN_ISSUE` | set by `/plan` | per-session plan slug and, when planning an issue, its number |
 
 A worker session takes its model from the first of these that is set:
 
