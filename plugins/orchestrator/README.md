@@ -1,6 +1,6 @@
 # orchestrator
 
-Coordinator session for one repository. Start it in the main checkout inside a Herdr pane: `claude --agent orchestrator`. It opens with `/orchestrator:board`.
+Coordinator session for one repository. Start it in the main checkout inside a Herdr pane: `claude --agent orchestrator`. It opens with `/orchestrator:board` and runs on Sonnet: it only calls scripts and relays their output.
 
 | Skill | Script | Effect |
 | --- | --- | --- |

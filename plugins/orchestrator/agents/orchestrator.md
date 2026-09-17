@@ -2,6 +2,7 @@
 name: orchestrator
 description: Main-thread coordinator for parallel issue work. Claims issues into worktree sessions, merges finished PRs, reports the board. Never edits code.
 tools: Bash, Read, Grep, Glob, Skill
+model: sonnet
 omitClaudeMd: true
 initialPrompt: /orchestrator:board
 ---

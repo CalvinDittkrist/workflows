@@ -12,6 +12,6 @@ Hook: `SessionStart` runs `scripts/session-start.sh`. On startup it assigns the 
 | `/worker:ci` | `pr-wait.sh`: checks + bot review wait, returns `green`, `checks-failed`, `review-comments` or `waiting` |
 | `/worker:address-reviews` | `pr-threads.sh` + `pr-resolve.sh`: fix or decline each thread, reply, resolve |
 
-Agents: `worker` (main thread), `code-reviewer`, `security-reviewer`, `docs-reviewer` (sonnet, no CLAUDE.md), `test-reviewer`, `senior-reviewer` (all read-only), `pr-author` (read-only). Override any of them per repository in `.claude/agents/<name>.md`.
+Agents: `worker` (main thread, opus), `code-reviewer`, `security-reviewer`, `docs-reviewer` (sonnet, no CLAUDE.md), `test-reviewer`, `senior-reviewer` (all read-only, inherit the worker model), `pr-author` (read-only, inherit). Override any of them per repository in `.claude/agents/<name>.md`.
 
 Yolo mode (`WF_MODE=yolo`): `finish.sh` squash-merges after `green`, notifies through Herdr, and `cleanup-self.sh` removes the worktree, workspace and branch from a detached process.

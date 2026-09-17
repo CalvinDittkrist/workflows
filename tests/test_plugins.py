@@ -30,6 +30,35 @@ class ManifestTests(unittest.TestCase):
                 fm = agent.read_text().split("---")[1]
                 self.assertIn(f"name: {agent.stem}\n", fm, agent)
 
+    def test_agent_models_match_their_role(self):
+        expected = {
+            "orchestrator/agents/orchestrator.md": "sonnet",
+            "worker/agents/worker.md": "opus",
+            "worker/agents/docs-reviewer.md": "sonnet",
+        }
+        for rel, model in expected.items():
+            fm = (ROOT / "plugins" / rel).read_text().split("---")[1]
+            self.assertIn(f"model: {model}\n", fm, rel)
+        for agent in (ROOT / "plugins/worker/agents").glob("*.md"):
+            if f"worker/agents/{agent.name}" in expected:
+                continue
+            fm = agent.read_text().split("---")[1]
+            self.assertIn("model: inherit\n", fm, agent)
+
+    def test_every_inline_command_in_a_skill_is_pre_approved(self):
+        # A forked skill's !`command` fails silently without a matching allowed-tools rule (verified on 2.1.274).
+        for plugin in PLUGINS:
+            for skill in plugin.glob("skills/*/SKILL.md"):
+                fm, body = skill.read_text().split("---")[1:3]
+                commands = re.findall(r"!`([^`]+)`", body)
+                if not commands:
+                    continue
+                rules = re.findall(r"Bash\(([^)]+)\)", fm)
+                for cmd in commands:
+                    script = cmd.split()[0]
+                    self.assertTrue(script.startswith("${CLAUDE_PLUGIN_ROOT}/scripts/"), f"{skill}: {cmd} must be a plugin script")
+                    self.assertTrue(any(script == r.rstrip("*") for r in rules), f"{skill}: no allowed-tools rule for {cmd}")
+
     def test_scripts_referenced_by_skills_and_hooks_exist_and_are_executable(self):
         for plugin in PLUGINS:
             texts = [p.read_text() for p in plugin.glob("skills/*/SKILL.md")]
