@@ -45,19 +45,11 @@ fi
 git fetch -q origin "$base" 2>/dev/null || wf_warn "could not fetch origin/$base; branching from local $base"
 baseref="origin/$base"; git rev-parse -q --verify "$baseref" >/dev/null 2>&1 || baseref="$base"
 
-# Worktrees live inside the trusted repository (Claude's own convention), so no trust dialog blocks the worker.
-wtdir="$root/.claude/worktrees"; mkdir -p "$wtdir"
-grep -qx '.claude/worktrees/' "$root/.git/info/exclude" 2>/dev/null || printf '.claude/worktrees/\n' >> "$root/.git/info/exclude"
-wtpath="$wtdir/$(printf '%s' "$branch" | tr '/' '-')"
-created=$(wf_run herdr worktree create --cwd "$root" --branch "$branch" --base "$baseref" --path "$wtpath" --label "#$issue $(wf_slug "$title" | cut -c1-24)" --no-focus)
+wf_create_worktree "$branch" "$baseref" "#$issue $(wf_slug "$title" | cut -c1-24)"
 if [ "${WF_DRY_RUN:-0}" = 1 ]; then
   wf_kv issue "#$issue"; wf_kv branch "$branch"; wf_kv base "$baseref"; wf_kv mode "$mode"; wf_kv sandbox "$sandbox"
   wf_kv status "dry-run"; exit 0
 fi
-ws=$(printf '%s' "$created" | jq -r '.result.workspace.workspace_id // empty')
-pane=$(printf '%s' "$created" | jq -r '.result.root_pane.pane_id // empty')
-path=$(printf '%s' "$created" | jq -r '.result.worktree.path // empty')
-if [ -z "$ws" ] || [ -z "$pane" ] || [ -z "$path" ]; then wf_die "unexpected herdr response: $created"; fi
 
 # Session-scoped configuration travels through --settings so hooks and skills can read it from the environment.
 settings=$(jq -cn --arg m "$mode" --arg i "$issue" '{env:{WF_MODE:$m, WF_ISSUE:$i}}')
@@ -68,23 +60,11 @@ extra="${WF_CLAUDE_ARGS:-}"
 if [ "$sandbox" = 1 ]; then
   herdr pane run "$pane" "$(dirname "$0")/sbx-worker.sh '$path' -- --agent worker --permission-mode $perm --settings '$settings' --name '#$issue' $extra '/worker:work'" >/dev/null
   herdr agent wait "$pane" --until idle --until blocked --timeout 300000 >/dev/null || wf_warn "worker did not become ready within 5 minutes; inspect pane $pane"
+  wf_wait_agent "$pane"
 else
   # shellcheck disable=SC2086  # $extra is a flag list and must word-split
-  # The worker starts working immediately (its first turn is /worker:work), so Herdr's "ready for input"
-  # wait can time out although the agent is fine. Ignore that result and detect the agent ourselves.
-  herdr agent start "$name" --kind claude --pane "$pane" --timeout 30000 -- --agent worker --permission-mode "$perm" --settings "$settings" --name "#$issue" $extra "/worker:work" >/dev/null 2>&1 || true
+  wf_start_agent "$pane" "$name" --agent worker --permission-mode "$perm" --settings "$settings" --name "#$issue" $extra "/worker:work"
 fi
-agent_status=""
-i=0
-while [ $i -lt 12 ]; do
-  agent_status=$(herdr agent list 2>/dev/null | jq -r --arg p "$pane" '.result.agents[] | select(.pane_id == $p) | .agent_status' 2>/dev/null | head -n 1)
-  [ -n "$agent_status" ] && break
-  i=$((i+1)); sleep 5
-done
-[ -n "$agent_status" ] || wf_warn "no claude agent detected in pane $pane after 60s; inspect the pane"
-
-# agent start moves focus to the new pane; give it back to the orchestrator.
-if [ -n "${HERDR_WORKSPACE_ID:-}" ]; then herdr workspace focus "$HERDR_WORKSPACE_ID" >/dev/null 2>&1 || true; fi
 
 wf_kv issue "#$issue $title"
 wf_kv branch "$branch"

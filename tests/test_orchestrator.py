@@ -60,6 +60,45 @@ class ClaimTests(ShimTest):
         self.assertIn("HERDR_ENV", r.stderr)
 
 
+class PlanTests(ShimTest):
+    def test_plan_from_idea_opens_a_plan_worktree_and_starts_the_planner(self):
+        r = self.run_script(ORCH / "plan.sh", "Offline", "mode", "for", "the", "app")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("branch: plan/offline-mode-for-the-app", r.stdout)
+        self.assertIn("topic: Offline mode for the app", r.stdout)
+        self.assertTrue((self.repo / ".claude/worktrees/plan-offline-mode-for-the-app/README.md").exists())
+        self.assertEqual(self.git("config", "branch.plan/offline-mode-for-the-app.description").strip(), "topic: Offline mode for the app")
+        start = [c for c in self.argv_calls() if c[1:3] == ["agent", "start"]][0]
+        self.assertIn("--agent", start); self.assertEqual(start[start.index("--agent") + 1], "planner")
+        self.assertEqual(start[-1], "/planner:plan")
+        settings = json.loads(start[start.index("--settings") + 1])
+        self.assertEqual(settings["env"], {"WF_PLAN": "offline-mode-for-the-app"})
+        self.assertIn("agent_status: working", r.stdout)
+        self.assertFalse([c for c in self.calls() if "issue view" in c])
+
+    def test_plan_from_issue_uses_its_title_and_records_the_issue(self):
+        r = self.run_script(ORCH / "plan.sh", "#12")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("branch: plan/fix-login-timeout", r.stdout)
+        self.assertIn("issue: #12 Fix login timeout", r.stdout)
+        self.assertEqual(self.git("config", "branch.plan/fix-login-timeout.description").strip(), "issue: #12")
+        start = [c for c in self.argv_calls() if c[1:3] == ["agent", "start"]][0]
+        settings = json.loads(start[start.index("--settings") + 1])
+        self.assertEqual(settings["env"], {"WF_PLAN": "fix-login-timeout", "WF_PLAN_ISSUE": "12"})
+
+    def test_plan_is_idempotent_and_refuses_closed_issues_and_non_herdr(self):
+        self.run_script(ORCH / "plan.sh", "Offline mode")
+        self.reset_calls()
+        r = self.run_script(ORCH / "plan.sh", "Offline mode")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("status: already-open", r.stdout)
+        self.assertFalse([c for c in self.calls() if "worktree create" in c or "agent start" in c])
+        r = self.run_script(ORCH / "plan.sh", "13")
+        self.assertNotEqual(r.returncode, 0); self.assertIn("CLOSED", r.stderr)
+        r = self.run_script(ORCH / "plan.sh", "Offline mode", HERDR_ENV="")
+        self.assertNotEqual(r.returncode, 0); self.assertIn("HERDR_ENV", r.stderr)
+
+
 class MergeTests(ShimTest):
     def pr_fixture(self, **over):
         pr = {"number": 7, "title": "fix: login timeout", "url": "https://github.com/o/r/pull/7", "state": "OPEN",
@@ -144,6 +183,26 @@ class BoardAndAbandonTests(ShimTest):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("worktrees[1]", r.stdout)
         self.assertIn("12,fix/12-fix-login-timeout,", r.stdout)
+        self.run_script(ORCH / "plan.sh", "Offline mode")
+        r = self.run_script(ORCH / "board.sh")
+        self.assertIn("worktrees[2]", r.stdout)
+        self.assertIn("plan,plan/offline-mode,", r.stdout)
+
+    def test_board_shows_the_frontier_of_unblocked_unclaimed_ready_issues(self):
+        fixture = self.base / "ready.json"
+        fixture.write_text(json.dumps([
+            {"number": 40, "title": "Expand schema", "assignees": [], "issue_dependencies_summary": {"blocked_by": 0}},
+            {"number": 41, "title": "Migrate callers", "assignees": [], "issue_dependencies_summary": {"blocked_by": 1}},
+            {"number": 43, "title": "Taken", "assignees": [{"login": "bob"}], "issue_dependencies_summary": {"blocked_by": 0}},
+            {"number": 12, "title": "Fix login timeout", "assignees": [], "issue_dependencies_summary": {"blocked_by": 0}},
+            {"number": 50, "title": "A PR", "assignees": [], "pull_request": {"url": "x"}},
+        ]))
+        self.run_script(ORCH / "claim.sh", "12")
+        r = self.run_script(ORCH / "board.sh", SHIM_FRONTIER_FIXTURE=str(fixture))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("frontier[1]{issue,title}:\n  40,Expand schema\n", r.stdout)
+        self.assertNotIn("41,", r.stdout); self.assertNotIn("43,", r.stdout); self.assertNotIn("12,Fix", r.stdout)
+        self.assertIn("waiting: 3 ready-for-agent issue(s)", r.stdout)
 
     def test_abandon_refuses_dirty_or_unpushed_without_force(self):
         self.run_script(ORCH / "claim.sh", "12")
