@@ -1,9 +1,17 @@
 {
   "name": "orchestrator",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Coordinator session for parallel issue work: claims issues into Herdr worktree workspaces, merges finished PRs, shows the board.",
-  "author": { "name": "Calvin Dittkrist", "url": "https://github.com/CalvinDittkrist" },
+  "author": {
+    "name": "Calvin Dittkrist",
+    "url": "https://github.com/CalvinDittkrist"
+  },
   "repository": "https://github.com/CalvinDittkrist/workflows",
   "license": "MIT",
-  "keywords": ["herdr", "worktree", "orchestration", "github"]
+  "keywords": [
+    "herdr",
+    "worktree",
+    "orchestration",
+    "github"
+  ]
 }

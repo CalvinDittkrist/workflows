@@ -131,3 +131,29 @@ class BoardAndAbandonTests(ShimTest):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class GhAxiContextHookTests(ShimTest):
+    def hook(self, source="startup", agent_id=None, remote="https://github.com/o/r.git", **extra):
+        if remote:
+            self.git("remote", "add", "origin", remote)
+        payload = {"hook_event_name": "SessionStart", "source": source, "cwd": str(self.repo)}
+        if agent_id:
+            payload["agent_id"] = agent_id
+        r = self.run_script(ORCH / "gh-axi-context.sh", stdin=json.dumps(payload), **extra)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return r.stdout
+
+    def test_dashboard_is_printed_on_startup_in_github_repos(self):
+        out = self.hook()
+        self.assertIn("issues: 2 open", out)
+        self.assertIn("gh-axi", out)
+        self.assertNotIn("bin:", out, "the local binary path is noise, not context")
+
+    def test_silent_on_resume_subagent_and_non_github_repo(self):
+        self.assertEqual(self.hook(remote=None), "", "no remote")
+        self.assertEqual(self.hook(remote="https://gitlab.com/o/r.git"), "", "non-GitHub remote")
+        self.git("remote", "set-url", "origin", "https://github.com/o/r.git")
+        self.assertEqual(self.hook(source="resume", remote=None), "", "resume")
+        self.assertEqual(self.hook(agent_id="a1", remote=None), "", "subagent")
+        self.assertFalse([c for c in self.calls() if c.startswith("gh-axi")])

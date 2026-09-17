@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+printf 'gh-axi %s\n' "$*" >> "${SHIM_LOG:-/dev/null}"
+printf 'bin: /shim/gh-axi\nrepo: o/r\nissues: 2 open\nprs: 1 open\n'

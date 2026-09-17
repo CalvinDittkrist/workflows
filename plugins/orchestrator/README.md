@@ -11,4 +11,6 @@ Coordinator session for one repository. Start it in the main checkout inside a H
 | `/orchestrator:abandon <issue\|branch> [--force]` | `abandon.sh` | drop worktree; refuses unpushed or dirty work without `--force` |
 | `/orchestrator:herdr` | | loads Herdr's own skill (from `herdr --skill`) for manual pane control |
 
+Hook: `SessionStart` (startup only) prints the gh-axi dashboard (repo, open issues, open PRs) in GitHub repositories, via `gh-axi` or `npx -y gh-axi`. Both plugins ship a `gh-axi` discovery skill so agents prefer it over raw `gh`.
+
 The agent has no edit tools and does not load CLAUDE.md. Scripts require `HERDR_ENV=1`, `gh`, `jq`, `git`; `--sandbox` requires `sbx`. `WF_CLAUDE_ARGS` adds flags to every worker start.
