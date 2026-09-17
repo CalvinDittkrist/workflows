@@ -78,6 +78,24 @@ class MergeTests(ShimTest):
         self.reset_calls()
         return path
 
+    def test_merge_fast_forwards_main_even_with_untracked_files_present(self):
+        origin = self.base / "origin.git"
+        self.git("init", "-q", "--bare", str(origin))
+        self.git("remote", "add", "origin", str(origin))
+        self.git("push", "-q", "origin", "main")
+        path = self.claimed()
+        (self.repo / "CHANGELOG.md").write_text("squash\n")
+        self.git("add", "."); self.git("commit", "-qm", "docs: squash (#7)")
+        self.git("push", "-q", "origin", "main")
+        self.git("reset", "-q", "--hard", "HEAD~1")  # local main is now behind, as after gh pr merge
+        (self.repo / "prompt.md").write_text("private notes\n")  # untracked, must not block the ff
+        r = self.run_script(ORCH / "merge.sh", "7", SHIM_PR_FIXTURE=self.pr_fixture())
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn("could not fast-forward", r.stderr)
+        self.assertEqual(self.git("rev-parse", "HEAD"), self.git("rev-parse", "origin/main"))
+        self.assertTrue((self.repo / "prompt.md").exists())
+        self.assertTrue(path.exists() is False)
+
     def test_merge_removes_workspace_then_merges_and_deletes_branch(self):
         path = self.claimed()
         r = self.run_script(ORCH / "merge.sh", "7", SHIM_PR_FIXTURE=self.pr_fixture())

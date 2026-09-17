@@ -69,7 +69,8 @@ git branch -D "$branch" >/dev/null 2>&1 || true
 git fetch -q --prune origin || true
 current=$(git rev-parse --abbrev-ref HEAD)
 basebr=$(printf '%s' "$json" | jq -r .baseRefName)
-if [ "$current" = "$basebr" ] && [ -z "$(git status --porcelain)" ]; then
+# Untracked files (notes, scratch) never block a fast-forward; only modified tracked files do.
+if [ "$current" = "$basebr" ] && [ -z "$(git status --porcelain --untracked-files=no)" ]; then
   git pull -q --ff-only origin "$basebr" 2>/dev/null || wf_warn "could not fast-forward $basebr"
 fi
 
