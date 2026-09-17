@@ -65,13 +65,15 @@ wf_run() {
 }
 
 # Refuse a WF_CLAUDE_ARGS that would make every started session exit at once.
+# wf_check_claude_args <VAR>: WF_CLAUDE_ARGS and the per-session VAR (WF_PLANNER_CLAUDE_ARGS or
+# WF_WORKER_CLAUDE_ARGS) are word-split into claude flags; a truncated --plugin-dir would kill the session at start.
 wf_check_claude_args() {
-  local prev="" w
-  # shellcheck disable=SC2086  # WF_CLAUDE_ARGS is a flag list and must word-split
-  for w in ${WF_CLAUDE_ARGS:-} ""; do
+  local var="$1" prev="" w
+  # shellcheck disable=SC2086
+  for w in ${WF_CLAUDE_ARGS:-} ${!var:-} ""; do
     if [ "$prev" = "--plugin-dir" ]; then
-      [ -n "$w" ] && [ "${w#-}" = "$w" ] || wf_die "WF_CLAUDE_ARGS: --plugin-dir needs a path (got '$w'). Use absolute paths, e.g. WF_CLAUDE_ARGS=\"--plugin-dir /repo/plugins/planner --plugin-dir /repo/plugins/worker\""
-      [ -d "$w" ] || wf_die "WF_CLAUDE_ARGS: --plugin-dir $w is not a directory"
+      [ -n "$w" ] && [ "${w#-}" = "$w" ] || wf_die "WF_CLAUDE_ARGS/$var: --plugin-dir needs a path (got '$w'). Use absolute paths, e.g. WF_PLANNER_CLAUDE_ARGS=\"--plugin-dir /repo/plugins/planner\""
+      [ -d "$w" ] || wf_die "WF_CLAUDE_ARGS/$var: --plugin-dir $w is not a directory"
     fi
     prev="$w"
   done

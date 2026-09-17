@@ -73,6 +73,7 @@ class PlanTests(ShimTest):
         self.assertEqual(start[-1], "/planner:plan")
         settings = json.loads(start[start.index("--settings") + 1])
         self.assertEqual(settings["env"], {"WF_PLAN": "offline-mode-for-the-app"})
+        self.assertEqual(settings["enabledPlugins"], {"worker@workflows": False, "orchestrator@workflows": False, "repo-standards@workflows": False})
         self.assertIn("agent_status: working", r.stdout)
         self.assertFalse([c for c in self.calls() if "issue view" in c])
 
@@ -112,6 +113,22 @@ class PlanTests(ShimTest):
             self.assertFalse([c for c in self.calls() if "worktree create" in c], args)
         r = self.run_script(ORCH / "claim.sh", "12", WF_CLAUDE_ARGS="--plugin-dir")
         self.assertNotEqual(r.returncode, 0)
+
+    def test_per_session_claude_args_reach_only_their_session(self):
+        env = dict(WF_CLAUDE_ARGS="--verbose", WF_PLANNER_CLAUDE_ARGS="--model opus", WF_WORKER_CLAUDE_ARGS="--model sonnet")
+        r = self.run_script(ORCH / "plan.sh", "Offline mode", **env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        start = [c for c in self.argv_calls() if c[1:3] == ["agent", "start"]][0]
+        self.assertEqual(start[start.index("--model") + 1], "opus"); self.assertIn("--verbose", start)
+        self.reset_calls()
+        r = self.run_script(ORCH / "claim.sh", "12", **env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        start = [c for c in self.argv_calls() if c[1:3] == ["agent", "start"]][0]
+        self.assertEqual(start[start.index("--model") + 1], "sonnet"); self.assertIn("--verbose", start)
+        settings = json.loads(start[start.index("--settings") + 1])
+        self.assertEqual(settings["enabledPlugins"], {"planner@workflows": False, "orchestrator@workflows": False})
+        r = self.run_script(ORCH / "plan.sh", "Other topic", WF_PLANNER_CLAUDE_ARGS="--plugin-dir")
+        self.assertNotEqual(r.returncode, 0); self.assertIn("WF_PLANNER_CLAUDE_ARGS", r.stderr)
 
     def test_long_topics_get_a_valid_herdr_agent_name(self):
         words = "Füge einen Map-Skill zum Planner hinzu, wie wayfinder von mattpocock".split()

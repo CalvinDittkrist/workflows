@@ -72,12 +72,13 @@ All knobs are environment variables, set per repository in `.claude/settings.jso
 | `WF_WORKER_PERMISSION_MODE` | `auto` | permission mode for worker sessions |
 | `WF_PLANNER_PERMISSION_MODE` | `auto` | permission mode for planner sessions |
 | `WF_CLAUDE_ARGS` | empty | extra flags for every worker and planner (`--model sonnet`, `--plugin-dir …`) |
+| `WF_PLANNER_CLAUDE_ARGS`, `WF_WORKER_CLAUDE_ARGS` | empty | extra flags for planner or worker sessions only |
 | `WF_MODE`, `WF_ISSUE` | set by `/claim` | per-session mode (`manual`/`yolo`) and issue |
 | `WF_PLAN`, `WF_PLAN_ISSUE` | set by `/plan` | per-session plan slug and, when planning an issue, its number |
 
 A worker session takes its model from the first of these that is set:
 
-1. `--model` in `WF_CLAUDE_ARGS`
+1. `--model` in `WF_CLAUDE_ARGS` or `WF_WORKER_CLAUDE_ARGS`
 2. the `model` field of the session's agent file (`opus` for `worker`, `sonnet` for `orchestrator`)
 3. `model` in your Claude Code settings
 
@@ -101,7 +102,7 @@ claude --plugin-dir plugins/worker                # try a plugin in a session wi
 scripts/dev-orchestrator.sh                       # orchestrator from the checkout, inside a Herdr pane
 ```
 
-`dev-orchestrator.sh` sets `WF_CLAUDE_ARGS` to the checkout's planner and worker plugins, so the sessions the orchestrator opens use them too. Without that (or the plugins installed), a started session exits with `--agent 'planner' not found`; `plan.sh` and `claim.sh` detect that, remove the worktree again and print the fix. The same rollback runs when Herdr refuses the start itself (its error is printed as is) or when the pane is back at a shell prompt. Herdr agent names are derived from the branch and cut to its 32-character limit.
+`dev-orchestrator.sh` points `WF_PLANNER_CLAUDE_ARGS` and `WF_WORKER_CLAUDE_ARGS` at the checkout's plugins, so the sessions the orchestrator opens use them too. Without that (or the plugins installed), a started session exits with `--agent 'planner' not found`; `plan.sh` and `claim.sh` detect that, remove the worktree again and print the fix. The same rollback runs when Herdr refuses the start itself (its error is printed as is) or when the pane is back at a shell prompt. Herdr agent names are derived from the branch and cut to its 32-character limit.
 
 Tests run the real scripts against `gh` and `herdr` shims (`tests/shims/`). Plugins are self-contained; bump `version` in a plugin's manifest and run `scripts/release.sh <plugin> --push` to tag a release.
 

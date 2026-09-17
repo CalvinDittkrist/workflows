@@ -20,7 +20,7 @@ done
 printf '%s' "$issue" | grep -Eq '^[0-9]+$' || wf_die "issue must be a number, got '$issue'"
 [ "${HERDR_ENV:-}" = 1 ] || wf_die "claim needs a Herdr-managed pane (HERDR_ENV=1). Start the orchestrator inside Herdr."
 wf_need gh; wf_need jq; wf_need herdr; wf_need git
-wf_check_claude_args
+wf_check_claude_args WF_WORKER_CLAUDE_ARGS
 [ "$sandbox" = 1 ] && wf_need sbx
 
 root=$(wf_main_root); cd "$root"
@@ -53,11 +53,12 @@ if [ "${WF_DRY_RUN:-0}" = 1 ]; then
 fi
 
 # Session-scoped configuration travels through --settings so hooks and skills can read it from the environment.
-settings=$(jq -cn --arg m "$mode" --arg i "$issue" '{env:{WF_MODE:$m, WF_ISSUE:$i}}')
+# The worker session disables the planner and orchestrator plugins so their skills and agents stay out of its context.
+settings=$(jq -cn --arg m "$mode" --arg i "$issue" '{env:{WF_MODE:$m, WF_ISSUE:$i}, enabledPlugins:{"planner@workflows":false, "orchestrator@workflows":false}}')
 perm="${WF_WORKER_PERMISSION_MODE:-auto}"
 name=$(wf_agent_name "issue-$issue")
-# WF_CLAUDE_ARGS: extra claude flags for every worker (e.g. "--model sonnet" or "--plugin-dir /path" while developing).
-extra="${WF_CLAUDE_ARGS:-}"
+# WF_CLAUDE_ARGS applies to every session, WF_WORKER_CLAUDE_ARGS to workers only (e.g. "--model sonnet", "--plugin-dir /path" while developing).
+extra="${WF_CLAUDE_ARGS:-} ${WF_WORKER_CLAUDE_ARGS:-}"
 if [ "$sandbox" = 1 ]; then
   herdr pane run "$pane" "$(dirname "$0")/sbx-worker.sh '$path' -- --agent worker --permission-mode $perm --settings '$settings' --name '#$issue' $extra '/worker:work'" >/dev/null
   herdr agent wait "$pane" --until idle --until blocked --timeout 300000 >/dev/null || wf_warn "worker did not become ready within 5 minutes; inspect pane $pane"
