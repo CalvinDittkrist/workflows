@@ -1,0 +1,4 @@
+# Resolve `. "$(dirname "$0")/lib.sh"` relative to the script (SC1091).
+source-path=SCRIPTDIR
+# jq filters and GraphQL queries legitimately contain $vars inside single quotes.
+disable=SC2016

@@ -7,7 +7,8 @@ input=$(cat)
 command -v jq >/dev/null 2>&1 || exit 0
 [ -z "$(printf '%s' "$input" | jq -r '.agent_id // empty')" ] || exit 0
 source_=$(printf '%s' "$input" | jq -r '.source // "startup"')
-cwd=$(printf '%s' "$input" | jq -r '.cwd // empty'); [ -n "$cwd" ] && cd "$cwd" 2>/dev/null
+cwd=$(printf '%s' "$input" | jq -r '.cwd // empty')
+if [ -n "$cwd" ]; then cd "$cwd" 2>/dev/null || exit 0; fi
 issue=$(wf_issue); [ -n "$issue" ] || exit 0
 mode="${WF_MODE:-manual}"
 

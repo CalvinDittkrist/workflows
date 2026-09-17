@@ -27,7 +27,7 @@ root=$(wf_main_root); cd "$root"
 
 json=$(gh issue view "$issue" --json number,title,state,labels,url 2>/dev/null) || wf_die "issue #$issue not found in $(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || echo 'this repo')"
 state=$(printf '%s' "$json" | jq -r .state)
-[ "$state" = "OPEN" ] && : || wf_die "issue #$issue is $state, not OPEN"
+[ "$state" = "OPEN" ] || wf_die "issue #$issue is $state, not OPEN"
 title=$(printf '%s' "$json" | jq -r .title)
 labels=$(printf '%s' "$json" | jq -r '[.labels[].name] | join(",")')
 branch="$(wf_branch_type "$labels")/$issue-$(wf_slug "$title")"
@@ -69,6 +69,7 @@ if [ "$sandbox" = 1 ]; then
   herdr pane run "$pane" "$(dirname "$0")/sbx-worker.sh '$path' -- --agent worker --permission-mode $perm --settings '$settings' --name '#$issue' $extra '/worker:work'" >/dev/null
   herdr agent wait "$pane" --until idle --until blocked --timeout 300000 >/dev/null || wf_warn "worker did not become ready within 5 minutes; inspect pane $pane"
 else
+  # shellcheck disable=SC2086  # $extra is a flag list and must word-split
   herdr agent start "$name" --kind claude --pane "$pane" --timeout 120000 -- --agent worker --permission-mode "$perm" --settings "$settings" --name "#$issue" $extra "/worker:work" >/dev/null \
     || wf_warn "agent start reported not-ready; inspect pane $pane"
 fi
