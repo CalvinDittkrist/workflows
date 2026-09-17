@@ -98,8 +98,12 @@ Override any agent or skill per repository by placing a file with the same name 
 ```sh
 scripts/test.sh                                   # shellcheck, plugin validate --strict, unit tests
 claude --plugin-dir plugins/worker                # try a plugin in a session without installing it
-WF_CLAUDE_ARGS="--plugin-dir $PWD/plugins/worker" # make claimed workers use the checkout
+# run the orchestrator from the checkout: it must pass the checkout's planner and worker to the sessions it starts
+WF_CLAUDE_ARGS="--plugin-dir $PWD/plugins/planner --plugin-dir $PWD/plugins/worker" \
+  claude --plugin-dir plugins/orchestrator --agent orchestrator
 ```
+
+Without `WF_CLAUDE_ARGS` (or the plugins installed), a started session exits with `--agent 'planner' not found`; `plan.sh` and `claim.sh` detect that, remove the worktree again and print the fix.
 
 Tests run the real scripts against `gh` and `herdr` shims (`tests/shims/`). Plugins are self-contained; bump `version` in a plugin's manifest and run `scripts/release.sh <plugin> --push` to tag a release.
 

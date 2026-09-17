@@ -86,6 +86,24 @@ class PlanTests(ShimTest):
         settings = json.loads(start[start.index("--settings") + 1])
         self.assertEqual(settings["env"], {"WF_PLAN": "fix-login-timeout", "WF_PLAN_ISSUE": "12"})
 
+    def test_plan_slug_transliterates_umlauts_and_drops_urls(self):
+        r = self.run_script(ORCH / "plan.sh", "Füge", "einen", "Map-Skill", "hinzu,", "wie", "https://github.com/mattpocock/skills")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("branch: plan/fuege-einen-map-skill-hinzu-wie", r.stdout)
+
+    def test_failed_session_start_rolls_back_worktree_and_branch(self):
+        r = self.run_script(ORCH / "plan.sh", "Offline mode", SHIM_AGENT_START_FAILS="1", WF_AGENT_WAIT="0")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("--agent 'planner' not found", r.stderr)
+        self.assertIn("WF_CLAUDE_ARGS", r.stderr)
+        self.assertIn("removed", r.stderr)
+        self.assertFalse((self.repo / ".claude/worktrees/plan-offline-mode").exists())
+        self.assertEqual(self.git("branch", "--list", "plan/offline-mode"), "")
+        self.assertIn("herdr worktree remove --workspace w9 --force", self.calls())
+        r = self.run_script(ORCH / "claim.sh", "12", SHIM_AGENT_START_FAILS="1", WF_AGENT_WAIT="0")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertEqual(self.git("branch", "--list", "fix/12-fix-login-timeout"), "")
+
     def test_plan_is_idempotent_and_refuses_closed_issues_and_non_herdr(self):
         self.run_script(ORCH / "plan.sh", "Offline mode")
         self.reset_calls()

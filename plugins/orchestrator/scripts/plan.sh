@@ -58,7 +58,10 @@ perm="${WF_PLANNER_PERMISSION_MODE:-auto}"
 name="plan-$slug"
 extra="${WF_CLAUDE_ARGS:-}"
 # shellcheck disable=SC2086  # $extra is a flag list and must word-split
-wf_start_agent "$pane" "$name" --agent planner --permission-mode "$perm" --settings "$settings" --name "plan $slug" $extra "/planner:plan"
+if ! wf_start_agent "$pane" "$name" --agent planner --permission-mode "$perm" --settings "$settings" --name "plan $slug" $extra "/planner:plan"; then
+  wf_rollback_worktree "$ws" "$path" "$branch"
+  wf_die "$start_error Worktree and branch $branch were removed."
+fi
 
 wf_kv plan "$slug"
 if [ -n "$issue" ]; then wf_kv issue "#$issue $topic"; else wf_kv topic "$topic"; fi

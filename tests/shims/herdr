@@ -20,8 +20,12 @@ case "$1 $2" in
     if [ -f "${SHIM_WT_ROOT}/.ws-w9" ]; then printf '{"result":{"workspaces":[{"workspace_id":"w9","worktree":{"checkout_path":"%s"}}]}}\n' "$(cat "${SHIM_WT_ROOT}/.ws-w9")"; else echo '{"result":{"workspaces":[]}}'; fi ;;
   "agent start")
     pane=""; while [ $# -gt 0 ]; do case "$1" in --pane) shift; pane=$1;; esac; shift; done
+    # SHIM_AGENT_START_FAILS=1: claude exits at once (unknown agent), so no agent is ever detected.
+    if [ "${SHIM_AGENT_START_FAILS:-0}" = 1 ]; then echo '{"error":{"code":"timeout"}}'; exit 1; fi
     printf '%s' "$pane" > "${SHIM_WT_ROOT:?}/.agent-pane"
     echo '{"result":{"ok":true}}' ;;
+  "pane read")
+    if [ "${SHIM_AGENT_START_FAILS:-0}" = 1 ]; then echo "--agent 'planner' not found. Available agents: claude, Explore"; else echo "$ claude ..."; fi ;;
   "agent list")
     if [ -f "${SHIM_WT_ROOT}/.agent-pane" ]; then printf '{"result":{"agents":[{"pane_id":"%s","agent_status":"working"}]}}\n' "$(cat "${SHIM_WT_ROOT}/.agent-pane")"; else echo '{"result":{"agents":[]}}'; fi ;;
   "notification show") exit 0 ;;

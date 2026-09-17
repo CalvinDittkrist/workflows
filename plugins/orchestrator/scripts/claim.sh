@@ -63,7 +63,10 @@ if [ "$sandbox" = 1 ]; then
   wf_wait_agent "$pane"
 else
   # shellcheck disable=SC2086  # $extra is a flag list and must word-split
-  wf_start_agent "$pane" "$name" --agent worker --permission-mode "$perm" --settings "$settings" --name "#$issue" $extra "/worker:work"
+  if ! wf_start_agent "$pane" "$name" --agent worker --permission-mode "$perm" --settings "$settings" --name "#$issue" $extra "/worker:work"; then
+    wf_rollback_worktree "$ws" "$path" "$branch"
+    wf_die "$start_error Worktree and branch $branch were removed."
+  fi
 fi
 
 wf_kv issue "#$issue $title"

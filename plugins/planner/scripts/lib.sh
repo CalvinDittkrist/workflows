@@ -26,8 +26,11 @@ wf_main_root() {
   common=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || wf_die "not inside a git repository"
   dirname "$common"
 }
+# Branch-safe slug: URLs dropped, German umlauts transliterated, ASCII lower-case, at most 40 chars.
 wf_slug() {
-  printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//' | cut -c1-40 | sed -E 's/-+$//'
+  printf '%s' "$1" | sed -E 's#https?://[^ ]*##g' \
+    | sed -e 's/ä/ae/g; s/ö/oe/g; s/ü/ue/g; s/Ä/ae/g; s/Ö/oe/g; s/Ü/ue/g; s/ß/ss/g' \
+    | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//' | cut -c1-40 | sed -E 's/-+$//'
 }
 wf_notify() {
   [ "${HERDR_ENV:-}" = 1 ] || return 0

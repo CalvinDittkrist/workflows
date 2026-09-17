@@ -21,8 +21,11 @@ wf_base_branch() {
   gh repo view --json defaultBranchRef -q .defaultBranchRef.name 2>/dev/null || printf 'main\n'
 }
 
+# Branch-safe slug: URLs dropped, German umlauts transliterated, ASCII lower-case, at most 40 chars.
 wf_slug() {
-  printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//' | cut -c1-40 | sed -E 's/-+$//'
+  printf '%s' "$1" | sed -E 's#https?://[^ ]*##g' \
+    | sed -e 's/ä/ae/g; s/ö/oe/g; s/ü/ue/g; s/Ä/ae/g; s/Ö/oe/g; s/Ü/ue/g; s/ß/ss/g' \
+    | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//' | cut -c1-40 | sed -E 's/-+$//'
 }
 
 # Branch convention: <type>/<issue>-<slug>. The issue number is the only contract the worker hook relies on.
@@ -80,17 +83,37 @@ wf_create_worktree() {
 }
 
 # Wait until Herdr detects a claude agent in pane $1 (sets agent_status), then give focus back to the orchestrator.
+# Returns 1 when the session died right after start (unknown agent, missing plugin); start_error holds the reason.
+# shellcheck disable=SC2034  # start_error and agent_status are read by the callers
 wf_wait_agent() {
-  local pane="$1" i=0
-  agent_status=""
-  while [ $i -lt 12 ]; do
+  local pane="$1" i=0 limit out
+  agent_status=""; start_error=""
+  limit=$(( ${WF_AGENT_WAIT:-60} / 5 ))
+  while :; do
     agent_status=$(herdr agent list 2>/dev/null | jq -r --arg p "$pane" '.result.agents[] | select(.pane_id == $p) | .agent_status' 2>/dev/null | head -n 1)
     [ -n "$agent_status" ] && break
+    [ $i -ge $limit ] && break
     i=$((i+1)); sleep 5
   done
-  [ -n "$agent_status" ] || wf_warn "no claude agent detected in pane $pane after 60s; inspect the pane"
   # agent start moves focus to the new pane; give it back to the orchestrator.
   if [ -n "${HERDR_WORKSPACE_ID:-}" ]; then herdr workspace focus "$HERDR_WORKSPACE_ID" >/dev/null 2>&1 || true; fi
+  [ -n "$agent_status" ] && return 0
+  out=$(herdr pane read "$pane" --source recent --lines 20 --format text 2>/dev/null || true)
+  if printf '%s' "$out" | grep -q "not found"; then
+    start_error="claude exited: $(printf '%s' "$out" | grep "not found" | tail -n 1). The agent's plugin is not loaded in new sessions: install it (claude plugin install <plugin>@workflows) or set WF_CLAUDE_ARGS=\"--plugin-dir <path>\" for the orchestrator."
+    return 1
+  fi
+  wf_warn "no claude agent detected in pane $pane after ${WF_AGENT_WAIT:-60}s; inspect the pane"
+  return 0
+}
+
+# Undo a fresh worktree after a failed session start: workspace (or worktree) and local branch.
+wf_rollback_worktree() {
+  local ws="$1" path="$2" branch="$3"
+  if [ -n "$ws" ]; then herdr worktree remove --workspace "$ws" --force >/dev/null 2>&1 || git worktree remove --force "$path" >/dev/null 2>&1 || true
+  else git worktree remove --force "$path" >/dev/null 2>&1 || true; fi
+  git worktree prune
+  git branch -D "$branch" >/dev/null 2>&1 || true
 }
 
 # Start `claude <args...>` as Herdr agent $2 in pane $1 and wait for it. Sets agent_status.
