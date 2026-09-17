@@ -23,6 +23,9 @@ snapshot() {
   bot_reviews=$(printf '%s' "$view" | jq -r --arg bots ",$bots," --arg h "$head_at" '[.reviews[] | select(($bots | index("," + (.author.login|sub("\\[bot\\]$";"")) + ",")) != null and .submittedAt > $h)] | length')
   unresolved=$(gh api graphql -f query='query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){reviewThreads(first:100){nodes{isResolved}}}}}' -F o="$owner" -F r="$repo" -F n="$pr" -q '[.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved|not)] | length' 2>/dev/null || echo 0)
   merge_state=$(printf '%s' "$view" | jq -r .mergeStateStatus)
+  # When the last check finished, from GitHub, so the review wait survives across calls of this script.
+  last_check=$(printf '%s' "$view" | jq -r '[.statusCheckRollup[] | .completedAt // empty] | max // empty')
+  checks_done_at=$( [ -n "$last_check" ] && wf_epoch "$last_check" || printf '%s' "${checks_done_at:-}" )
 }
 
 report() {
@@ -43,7 +46,7 @@ while :; do
   snapshot
   now=$(date +%s)
   if [ "$checks_pending" -eq 0 ]; then
-    [ -n "$checks_done_at" ] || checks_done_at=$now
+    [ -n "$checks_done_at" ] || checks_done_at=$now  # no completedAt in the rollup (statuses): count from first sight
     if [ "$checks_fail" -gt 0 ]; then report "checks-failed"; exit 0; fi
     if [ "$bot_reviews" -gt 0 ] || [ -z "$bots" ] || [ $((now-checks_done_at)) -ge "$review_wait" ]; then
       if [ "$unresolved" -gt 0 ]; then report "review-comments"; else report "green"; fi

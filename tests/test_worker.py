@@ -91,6 +91,12 @@ class PrWaitTests(ShimTest):
         self.assertIn("status: green", r.stdout)
         self.assertIn("checks: total=1 pass=1 fail=0 pending=0", r.stdout)
 
+    def test_review_wait_counts_from_when_checks_finished_not_from_each_call(self):
+        # Regression: each call restarted the 600 s window, so a worker looping on exit 3 never got green.
+        r = self.wait(SHIM_CHECK_DONE="2026-09-17T10:00:00Z")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("status: green", r.stdout)
+
     def test_zero_review_wait_does_not_block_on_the_bot(self):
         r = self.wait(WF_PR_REVIEW_WAIT="0")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
