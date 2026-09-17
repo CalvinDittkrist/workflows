@@ -29,6 +29,12 @@ class ClaimTests(ShimTest):
         start = [c for c in self.calls() if c.startswith("herdr agent start")][0]
         self.assertIn('"WF_MODE":"yolo"', start)
 
+    def test_claude_args_are_passed_through_to_the_worker_session(self):
+        r = self.run_script(ORCH / "claim.sh", "12", WF_CLAUDE_ARGS="--model sonnet")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        start = [c for c in self.calls() if c.startswith("herdr agent start")][0]
+        self.assertIn("--model sonnet", start)
+
     def test_claim_is_idempotent_for_an_existing_worktree(self):
         self.run_script(ORCH / "claim.sh", "12")
         self.log.unlink()
