@@ -60,12 +60,12 @@ name=$(wf_agent_name "issue-$issue")
 # WF_CLAUDE_ARGS applies to every session, WF_WORKER_CLAUDE_ARGS to workers only (e.g. "--model sonnet", "--plugin-dir /path" while developing).
 extra="${WF_CLAUDE_ARGS:-} ${WF_WORKER_CLAUDE_ARGS:-}"
 if [ "$sandbox" = 1 ]; then
-  herdr pane run "$pane" "$(dirname "$0")/sbx-worker.sh '$path' -- --agent worker --permission-mode $perm --settings '$settings' --name '#$issue' $extra '/worker:work'" >/dev/null
+  herdr pane run "$pane" "$(dirname "$0")/sbx-worker.sh '$path' -- --agent worker --strict-mcp-config --permission-mode $perm --settings '$settings' --name '#$issue' $extra '/worker:work'" >/dev/null
   herdr agent wait "$pane" --until idle --until blocked --timeout 300000 >/dev/null || wf_warn "worker did not become ready within 5 minutes; inspect pane $pane"
   wf_wait_agent "$pane"
 else
   # shellcheck disable=SC2086  # $extra is a flag list and must word-split
-  if ! wf_start_agent "$pane" "$name" --agent worker --permission-mode "$perm" --settings "$settings" --name "#$issue" $extra "/worker:work"; then
+  if ! wf_start_agent "$pane" "$name" --agent worker --strict-mcp-config --permission-mode "$perm" --settings "$settings" --name "#$issue" $extra "/worker:work"; then
     wf_rollback_worktree "$ws" "$path" "$branch"
     wf_die "$start_error Worktree and branch $branch were removed."
   fi

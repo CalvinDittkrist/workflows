@@ -71,6 +71,7 @@ class PlanTests(ShimTest):
         start = [c for c in self.argv_calls() if c[1:3] == ["agent", "start"]][0]
         self.assertIn("--agent", start); self.assertEqual(start[start.index("--agent") + 1], "planner")
         self.assertEqual(start[-1], "/planner:plan")
+        self.assertIn("--strict-mcp-config", start)
         settings = json.loads(start[start.index("--settings") + 1])
         self.assertEqual(settings["env"], {"WF_PLAN": "offline-mode-for-the-app"})
         self.assertEqual(settings["enabledPlugins"], {"worker@workflows": False, "orchestrator@workflows": False, "repo-standards@workflows": False})
@@ -127,6 +128,7 @@ class PlanTests(ShimTest):
         self.assertEqual(start[start.index("--model") + 1], "sonnet"); self.assertIn("--verbose", start)
         settings = json.loads(start[start.index("--settings") + 1])
         self.assertEqual(settings["enabledPlugins"], {"planner@workflows": False, "orchestrator@workflows": False})
+        self.assertIn("--strict-mcp-config", start)
         r = self.run_script(ORCH / "plan.sh", "Other topic", WF_PLANNER_CLAUDE_ARGS="--plugin-dir")
         self.assertNotEqual(r.returncode, 0); self.assertIn("WF_PLANNER_CLAUDE_ARGS", r.stderr)
 

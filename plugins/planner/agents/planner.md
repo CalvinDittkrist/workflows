@@ -1,6 +1,7 @@
 ---
 name: planner
 description: Main-thread agent for one planning worktree. Turns an idea or an issue into agent-ready GitHub issues through the planner skills. Never implements.
+tools: Bash, Read, Write, Edit, Grep, Glob, Agent, WebFetch
 model: opus
 initialPrompt: /planner:plan
 ---

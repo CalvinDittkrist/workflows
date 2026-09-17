@@ -1,5 +1,7 @@
 # worker
 
+The main agent has eight tools (Bash, Read, Write, Edit, Grep, Glob, Agent, Skill); everything else stays out of its context. The reviewers and the PR author run as subagents with read-only tools plus Bash.
+
 One session per issue worktree, started by the orchestrator as `claude --agent worker … "/worker:work"`. Works standalone too: check out a branch named `<type>/<issue>-<slug>`, run `claude --agent worker`, type `/worker:work`.
 
 Hook: `SessionStart` runs `scripts/session-start.sh`. On startup it assigns the issue to you and injects title, labels, body and recent comments as untrusted task data. On resume, clear or compact it injects one reminder line. Silent on other branches and in subagents.
