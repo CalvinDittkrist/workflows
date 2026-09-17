@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Test shim for herdr: logs calls, returns canned JSON shaped like herdr 0.9.
 printf 'herdr %s\n' "$*" >> "${SHIM_LOG:-/dev/null}"
+# Argv-preserving log: "$*" above collapses quoting, so word-splitting regressions are invisible there.
+{ printf 'herdr'; for a in "$@"; do printf '\037%s' "$a"; done; printf '\n'; } >> "${SHIM_ARGV_LOG:-/dev/null}"
 case "$1 $2" in
   "worktree create")
     # Create the worktree for real so later git commands behave; parse --branch/--base/--cwd.

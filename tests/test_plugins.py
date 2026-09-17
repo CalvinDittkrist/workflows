@@ -30,6 +30,16 @@ class ManifestTests(unittest.TestCase):
                 fm = agent.read_text().split("---")[1]
                 self.assertIn(f"name: {agent.stem}\n", fm, agent)
 
+    def test_subagents_declare_a_model_so_the_readme_precedence_note_stays_true(self):
+        # README documents that docs-reviewer keeps its own model while the rest follow the session.
+        models = {a.stem: next((l.split(": ", 1)[1] for l in a.read_text().splitlines() if l.startswith("model: ")), None)
+                  for plugin in PLUGINS for a in plugin.glob("agents/*.md")}
+        self.assertEqual(models["docs-reviewer"], "sonnet")
+        self.assertIsNone(models["worker"], "README says the worker agent sets no model")
+        self.assertIsNone(models["orchestrator"], "README says the orchestrator agent sets no model")
+        for name in ("code-reviewer", "security-reviewer", "senior-reviewer", "test-reviewer", "pr-author"):
+            self.assertEqual(models[name], "inherit", name)
+
     def test_scripts_referenced_by_skills_and_hooks_exist_and_are_executable(self):
         for plugin in PLUGINS:
             texts = [p.read_text() for p in plugin.glob("skills/*/SKILL.md")]

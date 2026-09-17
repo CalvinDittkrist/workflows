@@ -29,11 +29,14 @@ class ClaimTests(ShimTest):
         start = [c for c in self.calls() if c.startswith("herdr agent start")][0]
         self.assertIn('"WF_MODE":"yolo"', start)
 
-    def test_claude_args_are_passed_through_to_the_worker_session(self):
-        r = self.run_script(ORCH / "claim.sh", "12", WF_CLAUDE_ARGS="--model sonnet")
+    def test_claude_args_are_word_split_into_the_worker_session_argv(self):
+        r = self.run_script(ORCH / "claim.sh", "12", WF_CLAUDE_ARGS="--model sonnet --plugin-dir /x")
         self.assertEqual(r.returncode, 0, r.stderr)
-        start = [c for c in self.calls() if c.startswith("herdr agent start")][0]
-        self.assertIn("--model sonnet", start)
+        argv = [c for c in self.argv_calls() if c[1:3] == ["agent", "start"]][0]
+        # Separate entries, not one "--model sonnet --plugin-dir /x" blob: claim.sh must leave $extra unquoted.
+        self.assertEqual(argv[argv.index("--model") + 1], "sonnet")
+        self.assertEqual(argv[argv.index("--plugin-dir") + 1], "/x")
+        self.assertEqual(argv[-1], "/worker:work")
 
     def test_claim_is_idempotent_for_an_existing_worktree(self):
         self.run_script(ORCH / "claim.sh", "12")

@@ -67,7 +67,13 @@ All knobs are environment variables, set per repository in `.claude/settings.jso
 | `WF_CLAUDE_ARGS` | empty | extra flags for every worker (`--model sonnet`, `--plugin-dir …`) |
 | `WF_MODE`, `WF_ISSUE` | set by `/claim` | per-session mode (`manual`/`yolo`) and issue |
 
-`--model` in `WF_CLAUDE_ARGS` sets the worker session's model and beats the `model` field of the session's agent file, which beats `model` in your Claude Code settings; the shipped `worker` and `orchestrator` agents name no model, so today the flag or the setting decides. Subagents resolve separately: an agent file that names a model keeps it — the panel's `docs-reviewer` stays on `sonnet` — and only `model: inherit` follows the session. So `WF_CLAUDE_ARGS="--model sonnet"` pins the worker session per repository, not every reviewer.
+A worker session takes its model from the first of these that is set:
+
+1. `--model` in `WF_CLAUDE_ARGS`
+2. the `model` field of the session's agent file (the shipped `worker` and `orchestrator` agents set none)
+3. `model` in your Claude Code settings
+
+Subagents resolve separately: an agent file that names a model keeps it — the panel's `docs-reviewer` stays on `sonnet` — and only `model: inherit` follows the session. So `WF_CLAUDE_ARGS="--model sonnet"` pins the worker session per repository, not every reviewer.
 
 Override any agent or skill per repository by placing a file with the same name in `.claude/agents/` or `.claude/skills/`; project definitions win over plugin ones.
 
