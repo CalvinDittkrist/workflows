@@ -22,4 +22,4 @@ Source: the spec issue named in the argument ($ARGUMENTS), or the spec this sess
 
 6. Reply with one line per ticket (number, title, blocked by) and `next: the orchestrator claims from the frontier (/orchestrator:board); /planner:finish ends this session`.
 
-Do not close or edit the spec. Bodies carry no file paths and no code; the prototype exception from the spec applies.
+No em dash character (—) anywhere in the body. Do not close or edit the spec. Bodies carry no file paths and no code; the prototype exception from the spec applies.

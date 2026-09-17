@@ -18,4 +18,4 @@ Write the spec from what the conversation has settled. Do not interview. If some
    When the session started from an issue, put `Refines #N` at the top of the body.
 4. Reply with the issue URL and `next: /planner:tickets`. If the whole spec fits one agent session, say so; tickets will then label the spec itself.
 
-No file paths and no code in the spec; they go stale. One exception: a prototype result that states a decision more precisely than prose (a type, a schema, a state table) may be quoted, trimmed to the decision.
+No em dash character (—) anywhere in the body. No file paths and no code in the spec; they go stale. One exception: a prototype result that states a decision more precisely than prose (a type, a schema, a state table) may be quoted, trimmed to the decision.
