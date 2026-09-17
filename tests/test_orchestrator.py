@@ -88,11 +88,12 @@ class MergeTests(ShimTest):
             ({"statusCheckRollup": [{"name": "ci", "status": "IN_PROGRESS"}]}, "pending checks"),
             ({"mergeStateStatus": "UNSTABLE"}, "UNSTABLE"),
             ({"mergeable": "CONFLICTING"}, "CONFLICTING"),
+            ({"mergeable": "UNKNOWN"}, "still computing mergeability"),
             ({"reviewDecision": "CHANGES_REQUESTED"}, "changes requested"),
             ({"isDraft": True}, "draft"),
         ]
         for over, text in cases:
-            r = self.run_script(ORCH / "merge.sh", "7", SHIM_PR_FIXTURE=self.pr_fixture(**over))
+            r = self.run_script(ORCH / "merge.sh", "7", SHIM_PR_FIXTURE=self.pr_fixture(**over), WF_MERGEABLE_WAIT="5")
             self.assertNotEqual(r.returncode, 0, over)
             self.assertIn(text, r.stderr, over)
         r = self.run_script(ORCH / "merge.sh", "7", SHIM_PR_FIXTURE=self.pr_fixture(), SHIM_UNRESOLVED="2")

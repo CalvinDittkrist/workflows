@@ -19,12 +19,19 @@ done
 wf_need gh; wf_need jq; wf_need git
 root=$(wf_main_root); cd "$root"
 
-json=$(gh pr view "$pr" --json number,title,url,state,isDraft,mergeable,mergeStateStatus,headRefName,baseRefName,reviewDecision,statusCheckRollup) || wf_die "PR #$pr not found"
+read_pr() { gh pr view "$pr" --json number,title,url,state,isDraft,mergeable,mergeStateStatus,headRefName,baseRefName,reviewDecision,statusCheckRollup; }
+json=$(read_pr) || wf_die "PR #$pr not found"
+# After the base moves GitHub recomputes mergeability asynchronously and reports UNKNOWN for a while.
+waited=0
+while [ "$(printf '%s' "$json" | jq -r .mergeable)" = "UNKNOWN" ] && [ "$waited" -lt "${WF_MERGEABLE_WAIT:-60}" ]; do
+  sleep 5; waited=$((waited+5)); json=$(read_pr) || wf_die "PR #$pr not found"
+done
 state=$(printf '%s' "$json" | jq -r .state)
 [ "$state" = "OPEN" ] || wf_die "PR #$pr is $state"
 [ "$(printf '%s' "$json" | jq -r .isDraft)" = "false" ] || wf_die "PR #$pr is a draft"
 branch=$(printf '%s' "$json" | jq -r .headRefName)
 mergeable=$(printf '%s' "$json" | jq -r .mergeable)
+[ "$mergeable" != "UNKNOWN" ] || wf_die "GitHub is still computing mergeability of PR #$pr after ${waited}s; try again in a moment"
 [ "$mergeable" = "MERGEABLE" ] || wf_die "PR #$pr is $mergeable; resolve conflicts in the worker first"
 ms=$(printf '%s' "$json" | jq -r .mergeStateStatus)
 case "$ms" in
