@@ -20,6 +20,7 @@ done
 printf '%s' "$issue" | grep -Eq '^[0-9]+$' || wf_die "issue must be a number, got '$issue'"
 [ "${HERDR_ENV:-}" = 1 ] || wf_die "claim needs a Herdr-managed pane (HERDR_ENV=1). Start the orchestrator inside Herdr."
 wf_need gh; wf_need jq; wf_need herdr; wf_need git
+wf_check_claude_args
 [ "$sandbox" = 1 ] && wf_need sbx
 
 root=$(wf_main_root); cd "$root"

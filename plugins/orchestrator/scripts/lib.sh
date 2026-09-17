@@ -64,6 +64,19 @@ wf_run() {
   "$@"
 }
 
+# Refuse a WF_CLAUDE_ARGS that would make every started session exit at once.
+wf_check_claude_args() {
+  local prev="" w
+  # shellcheck disable=SC2086  # WF_CLAUDE_ARGS is a flag list and must word-split
+  for w in ${WF_CLAUDE_ARGS:-} ""; do
+    if [ "$prev" = "--plugin-dir" ]; then
+      [ -n "$w" ] && [ "${w#-}" = "$w" ] || wf_die "WF_CLAUDE_ARGS: --plugin-dir needs a path (got '$w'). Use absolute paths, e.g. WF_CLAUDE_ARGS=\"--plugin-dir /repo/plugins/planner --plugin-dir /repo/plugins/worker\""
+      [ -d "$w" ] || wf_die "WF_CLAUDE_ARGS: --plugin-dir $w is not a directory"
+    fi
+    prev="$w"
+  done
+}
+
 # Create a worktree and Herdr workspace for branch $1 from ref $2 with label $3.
 # Sets ws, pane and path. Under WF_DRY_RUN=1 it only logs and leaves them empty.
 wf_create_worktree() {
@@ -98,9 +111,14 @@ wf_wait_agent() {
   # agent start moves focus to the new pane; give it back to the orchestrator.
   if [ -n "${HERDR_WORKSPACE_ID:-}" ]; then herdr workspace focus "$HERDR_WORKSPACE_ID" >/dev/null 2>&1 || true; fi
   [ -n "$agent_status" ] && return 0
-  out=$(herdr pane read "$pane" --source recent --lines 20 --format text 2>/dev/null || true)
+  out=$(herdr pane read "$pane" --source recent --lines 20 --format text 2>/dev/null | sed '/^[[:space:]]*$/d' || true)
   if printf '%s' "$out" | grep -q "not found"; then
     start_error="claude exited: $(printf '%s' "$out" | grep "not found" | tail -n 1). The agent's plugin is not loaded in new sessions: install it (claude plugin install <plugin>@workflows) or set WF_CLAUDE_ARGS=\"--plugin-dir <path>\" for the orchestrator."
+    return 1
+  fi
+  # A bare shell prompt as the last line means claude exited (bad flag, crash); a slow start would still show claude.
+  if printf '%s' "$out" | tail -n 1 | grep -Eq '[%$#] ?$'; then
+    start_error="claude exited right after start; the pane is back at the shell prompt. Last output: $(printf '%s' "$out" | tail -n 3 | tr '\n' ' '). Check WF_CLAUDE_ARGS (${WF_CLAUDE_ARGS:-empty}) and run the command by hand in that pane."
     return 1
   fi
   wf_warn "no claude agent detected in pane $pane after ${WF_AGENT_WAIT:-60}s; inspect the pane"

@@ -31,12 +31,12 @@ class ClaimTests(ShimTest):
         self.assertIn('"WF_MODE":"yolo"', start)
 
     def test_claude_args_are_word_split_into_the_worker_session_argv(self):
-        r = self.run_script(ORCH / "claim.sh", "12", WF_CLAUDE_ARGS="--model sonnet --plugin-dir /x")
+        r = self.run_script(ORCH / "claim.sh", "12", WF_CLAUDE_ARGS=f"--model sonnet --plugin-dir {self.base}")
         self.assertEqual(r.returncode, 0, r.stderr)
         argv = [c for c in self.argv_calls() if c[1:3] == ["agent", "start"]][0]
         # Separate entries, not one "--model sonnet --plugin-dir /x" blob: claim.sh must leave $extra unquoted.
         self.assertEqual(argv[argv.index("--model") + 1], "sonnet")
-        self.assertEqual(argv[argv.index("--plugin-dir") + 1], "/x")
+        self.assertEqual(argv[argv.index("--plugin-dir") + 1], str(self.base))
         self.assertEqual(argv[-1], "/worker:work")
 
     def test_claim_is_idempotent_for_an_existing_worktree(self):
@@ -103,6 +103,22 @@ class PlanTests(ShimTest):
         r = self.run_script(ORCH / "claim.sh", "12", SHIM_AGENT_START_FAILS="1", WF_AGENT_WAIT="0")
         self.assertNotEqual(r.returncode, 0)
         self.assertEqual(self.git("branch", "--list", "fix/12-fix-login-timeout"), "")
+
+    def test_broken_claude_args_are_refused_before_anything_is_created(self):
+        for args in ("--plugin-dir", "--plugin-dir --model sonnet", "--plugin-dir /nonexistent/dir"):
+            r = self.run_script(ORCH / "plan.sh", "Offline mode", WF_CLAUDE_ARGS=args)
+            self.assertNotEqual(r.returncode, 0, args)
+            self.assertIn("WF_CLAUDE_ARGS", r.stderr)
+            self.assertFalse([c for c in self.calls() if "worktree create" in c], args)
+        r = self.run_script(ORCH / "claim.sh", "12", WF_CLAUDE_ARGS="--plugin-dir")
+        self.assertNotEqual(r.returncode, 0)
+
+    def test_session_back_at_the_shell_prompt_rolls_back_too(self):
+        r = self.run_script(ORCH / "plan.sh", "Offline mode", SHIM_AGENT_START_FAILS="2", WF_AGENT_WAIT="0")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("exited right after start", r.stderr)
+        self.assertIn("argument missing", r.stderr)
+        self.assertEqual(self.git("branch", "--list", "plan/offline-mode"), "")
 
     def test_plan_is_idempotent_and_refuses_closed_issues_and_non_herdr(self):
         self.run_script(ORCH / "plan.sh", "Offline mode")

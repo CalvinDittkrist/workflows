@@ -17,6 +17,7 @@ done
 [ -n "$words" ] || wf_die "usage: plan.sh <topic words...> | <#issue> [--base <branch>]"
 [ "${HERDR_ENV:-}" = 1 ] || wf_die "plan needs a Herdr-managed pane (HERDR_ENV=1). Start the orchestrator inside Herdr."
 wf_need gh; wf_need jq; wf_need herdr; wf_need git
+wf_check_claude_args
 
 root=$(wf_main_root); cd "$root"
 [ -n "$base" ] || base=$(wf_base_branch)
