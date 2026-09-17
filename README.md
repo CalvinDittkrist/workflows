@@ -61,7 +61,7 @@ All knobs are environment variables, set per repository in `.claude/settings.jso
 | `WF_BASE_BRANCH` | remote default branch | base for worktrees and PRs |
 | `WF_REVIEWERS` | `code,security,docs,tests,senior` | reviewer panel members |
 | `WF_REVIEW_ROUNDS` | `3` | max fix-and-re-review rounds |
-| `WF_PR_BOT_REVIEWERS` | `chatgpt-codex-connector` | bot logins whose PR review the worker waits for |
+| `WF_PR_BOT_REVIEWERS` | `chatgpt-codex-connector` | bot logins whose PR review the worker waits for; set to `""` in repositories without a bot reviewer |
 | `WF_PR_REVIEW_WAIT` | `600` | seconds to wait for a bot review after checks pass |
 | `WF_WORKER_PERMISSION_MODE` | `auto` | permission mode for worker sessions |
 | `WF_CLAUDE_ARGS` | empty | extra flags for every worker (`--model sonnet`, `--plugin-dir …`) |
@@ -70,7 +70,7 @@ All knobs are environment variables, set per repository in `.claude/settings.jso
 A worker session takes its model from the first of these that is set:
 
 1. `--model` in `WF_CLAUDE_ARGS`
-2. the `model` field of the session's agent file (the shipped `worker` and `orchestrator` agents set none)
+2. the `model` field of the session's agent file (`opus` for `worker`, `sonnet` for `orchestrator`)
 3. `model` in your Claude Code settings
 
 Subagents resolve separately: an agent file that names a model keeps it — the panel's `docs-reviewer` stays on `sonnet` — and only `model: inherit` follows the session. So `WF_CLAUDE_ARGS="--model sonnet"` pins the worker session per repository, not every reviewer.

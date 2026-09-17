@@ -70,9 +70,18 @@ if [ "$sandbox" = 1 ]; then
   herdr agent wait "$pane" --until idle --until blocked --timeout 300000 >/dev/null || wf_warn "worker did not become ready within 5 minutes; inspect pane $pane"
 else
   # shellcheck disable=SC2086  # $extra is a flag list and must word-split
-  herdr agent start "$name" --kind claude --pane "$pane" --timeout 120000 -- --agent worker --permission-mode "$perm" --settings "$settings" --name "#$issue" $extra "/worker:work" >/dev/null \
-    || wf_warn "agent start reported not-ready; inspect pane $pane"
+  # The worker starts working immediately (its first turn is /worker:work), so Herdr's "ready for input"
+  # wait can time out although the agent is fine. Ignore that result and detect the agent ourselves.
+  herdr agent start "$name" --kind claude --pane "$pane" --timeout 30000 -- --agent worker --permission-mode "$perm" --settings "$settings" --name "#$issue" $extra "/worker:work" >/dev/null 2>&1 || true
 fi
+agent_status=""
+i=0
+while [ $i -lt 12 ]; do
+  agent_status=$(herdr agent list 2>/dev/null | jq -r --arg p "$pane" '.result.agents[] | select(.pane_id == $p) | .agent_status' 2>/dev/null | head -n 1)
+  [ -n "$agent_status" ] && break
+  i=$((i+1)); sleep 5
+done
+[ -n "$agent_status" ] || wf_warn "no claude agent detected in pane $pane after 60s; inspect the pane"
 
 # agent start moves focus to the new pane; give it back to the orchestrator.
 if [ -n "${HERDR_WORKSPACE_ID:-}" ]; then herdr workspace focus "$HERDR_WORKSPACE_ID" >/dev/null 2>&1 || true; fi
@@ -83,6 +92,7 @@ wf_kv path "$path"
 wf_kv workspace "$ws"
 wf_kv pane "$pane"
 wf_kv agent "$name"
+wf_kv agent_status "${agent_status:-not-detected}"
 wf_kv mode "$mode"
 [ "$sandbox" = 1 ] && wf_kv sandbox "docker"
 wf_kv next "board.sh shows progress; merge.sh <pr> when the PR is ready${mode:+ (yolo merges itself)}"

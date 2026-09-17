@@ -30,18 +30,34 @@ class ManifestTests(unittest.TestCase):
                 fm = agent.read_text().split("---")[1]
                 self.assertIn(f"name: {agent.stem}\n", fm, agent)
 
-    def test_subagents_declare_a_model_so_the_readme_precedence_note_stays_true(self):
-        # README documents that docs-reviewer keeps its own model while the rest follow the session.
-        def model_of(agent):  # frontmatter only: a body line starting with "model: " is not a declaration
+    def test_agent_models_match_their_role(self):
+        expected = {
+            "orchestrator/agents/orchestrator.md": "sonnet",
+            "worker/agents/worker.md": "opus",
+            "worker/agents/docs-reviewer.md": "sonnet",
+        }
+        for rel, model in expected.items():
+            fm = (ROOT / "plugins" / rel).read_text().split("---")[1]
+            self.assertIn(f"model: {model}\n", fm, rel)
+        for agent in (ROOT / "plugins/worker/agents").glob("*.md"):
+            if f"worker/agents/{agent.name}" in expected:
+                continue
             fm = agent.read_text().split("---")[1]
-            return next((l.split(": ", 1)[1] for l in fm.splitlines() if l.startswith("model: ")), None)
+            self.assertIn("model: inherit\n", fm, agent)
 
-        models = {(plugin.name, a.stem): model_of(a) for plugin in PLUGINS for a in plugin.glob("agents/*.md")}
-        self.assertEqual(models[("worker", "docs-reviewer")], "sonnet")
-        self.assertIsNone(models[("worker", "worker")], "README says the worker agent sets no model")
-        self.assertIsNone(models[("orchestrator", "orchestrator")], "README says it sets no model")
-        for name in ("code-reviewer", "security-reviewer", "senior-reviewer", "test-reviewer", "pr-author"):
-            self.assertEqual(models[("worker", name)], "inherit", name)
+    def test_every_inline_command_in_a_skill_is_pre_approved(self):
+        # A forked skill's !`command` fails silently without a matching allowed-tools rule (verified on 2.1.274).
+        for plugin in PLUGINS:
+            for skill in plugin.glob("skills/*/SKILL.md"):
+                fm, body = skill.read_text().split("---")[1:3]
+                commands = re.findall(r"!`([^`]+)`", body)
+                if not commands:
+                    continue
+                rules = re.findall(r"Bash\(([^)]+)\)", fm)
+                for cmd in commands:
+                    script = cmd.split()[0]
+                    self.assertTrue(script.startswith("${CLAUDE_PLUGIN_ROOT}/scripts/"), f"{skill}: {cmd} must be a plugin script")
+                    self.assertTrue(any(script == r.rstrip("*") for r in rules), f"{skill}: no allowed-tools rule for {cmd}")
 
     def test_scripts_referenced_by_skills_and_hooks_exist_and_are_executable(self):
         for plugin in PLUGINS:

@@ -21,5 +21,7 @@ wf_notify() {
   [ "${HERDR_ENV:-}" = 1 ] || return 0
   herdr notification show "$1" --body "${2:-}" --sound "${3:-done}" >/dev/null 2>&1 || true
 }
+# ISO-8601 UTC timestamp (2026-09-17T18:45:09Z) to epoch seconds; macOS and GNU date.
+wf_epoch() { date -u -j -f '%Y-%m-%dT%H:%M:%SZ' "$1" +%s 2>/dev/null || date -u -d "$1" +%s 2>/dev/null; }
 # PR number for the current branch, or empty.
 wf_pr_for_branch() { gh pr list --head "$(wf_branch)" --state open --json number -q '.[0].number' 2>/dev/null || true; }
