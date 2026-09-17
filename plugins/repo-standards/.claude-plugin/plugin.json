@@ -1,0 +1,9 @@
+{
+  "name": "repo-standards",
+  "version": "0.1.0",
+  "description": "Repository baseline every agent-driven repo needs: architecture.md, ADRs, CLAUDE.md, PR template, workflow settings. Skills: /init-repo, /adr, /docs-check.",
+  "author": { "name": "Calvin Dittkrist", "url": "https://github.com/CalvinDittkrist" },
+  "repository": "https://github.com/CalvinDittkrist/workflows",
+  "license": "MIT",
+  "keywords": ["adr", "architecture", "standards", "claude-md"]
+}

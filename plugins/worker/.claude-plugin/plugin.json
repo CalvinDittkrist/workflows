@@ -1,0 +1,9 @@
+{
+  "name": "worker",
+  "version": "0.1.0",
+  "description": "Issue worker pipeline: implement, independent reviewer panel in fresh contexts, PR authored in a fresh context, CI and review-comment loop, optional self-merge.",
+  "author": { "name": "Calvin Dittkrist", "url": "https://github.com/CalvinDittkrist" },
+  "repository": "https://github.com/CalvinDittkrist/workflows",
+  "license": "MIT",
+  "keywords": ["review", "security", "pull-request", "ci", "github"]
+}

@@ -1,0 +1,9 @@
+{
+  "extraKnownMarketplaces": {
+    "workflows": { "source": { "source": "github", "repo": "CalvinDittkrist/workflows" } }
+  },
+  "enabledPlugins": {
+    "repo-standards@workflows": true
+  },
+  "attribution": { "commit": "", "pr": "" }
+}

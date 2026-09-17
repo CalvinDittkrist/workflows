@@ -1,0 +1,26 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install Claude Code (for plugin validation)
+        run: npm install -g @anthropic-ai/claude-code
+      - name: Install shellcheck
+        run: sudo apt-get install -y shellcheck jq
+      - name: Lint scripts
+        run: shellcheck -s bash plugins/*/scripts/*.sh
+      - name: Validate plugins
+        run: |
+          claude plugin validate . --strict
+          for p in plugins/*; do claude plugin validate "$p" --strict; done
+          for d in plugins/*/skills plugins/*/agents; do [ -d "$d" ] && claude plugin validate "$d" --strict; done
+      - name: Unit tests
+        run: python3 -m unittest discover -s tests -v

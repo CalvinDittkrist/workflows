@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Test shim for herdr: logs calls, returns canned JSON shaped like herdr 0.9.
+printf 'herdr %s\n' "$*" >> "${SHIM_LOG:-/dev/null}"
+case "$1 $2" in
+  "worktree create")
+    # Create the worktree for real so later git commands behave; parse --branch/--base/--cwd.
+    b=""; base=""; cwd=""; p=""; while [ $# -gt 0 ]; do case "$1" in --branch) shift; b=$1;; --base) shift; base=$1;; --cwd) shift; cwd=$1;; --path) shift; p=$1;; esac; shift; done
+    [ -n "$p" ] || p="${SHIM_WT_ROOT:?}/$(printf '%s' "$b" | tr '/' '-')"
+    printf '%s' "$p" > "${SHIM_WT_ROOT:?}/.ws-w9"
+    git -C "$cwd" worktree add -q -b "$b" "$p" "$base" >/dev/null 2>&1 || git -C "$cwd" worktree add -q "$p" "$b" >/dev/null
+    printf '{"result":{"workspace":{"workspace_id":"w9"},"root_pane":{"pane_id":"w9:p1"},"worktree":{"path":"%s","branch":"%s"}}}\n' "$p" "$b" ;;
+  "worktree remove")
+    ws=""; while [ $# -gt 0 ]; do case "$1" in --workspace) shift; ws=$1;; esac; shift; done
+    p=$(cat "${SHIM_WT_ROOT}/.ws-$ws" 2>/dev/null || true); [ -n "$p" ] && git -C "${SHIM_MAIN:?}" worktree remove --force "$p" >/dev/null 2>&1
+    printf '{"result":{"type":"worktree_removed","workspace_id":"%s"}}\n' "$ws" ;;
+  "workspace focus") echo '{"result":{"type":"ok"}}' ;;
+  "workspace list")
+    if [ -f "${SHIM_WT_ROOT}/.ws-w9" ]; then printf '{"result":{"workspaces":[{"workspace_id":"w9","worktree":{"checkout_path":"%s"}}]}}\n' "$(cat "${SHIM_WT_ROOT}/.ws-w9")"; else echo '{"result":{"workspaces":[]}}'; fi ;;
+  "agent start") echo '{"result":{"ok":true}}' ;;
+  "agent list") echo '{"result":{"agents":[]}}' ;;
+  "notification show") exit 0 ;;
+  *) echo "herdr shim: unhandled: $*" >&2; exit 64 ;;
+esac
