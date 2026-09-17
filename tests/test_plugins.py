@@ -32,13 +32,16 @@ class ManifestTests(unittest.TestCase):
 
     def test_subagents_declare_a_model_so_the_readme_precedence_note_stays_true(self):
         # README documents that docs-reviewer keeps its own model while the rest follow the session.
-        models = {a.stem: next((l.split(": ", 1)[1] for l in a.read_text().splitlines() if l.startswith("model: ")), None)
-                  for plugin in PLUGINS for a in plugin.glob("agents/*.md")}
-        self.assertEqual(models["docs-reviewer"], "sonnet")
-        self.assertIsNone(models["worker"], "README says the worker agent sets no model")
-        self.assertIsNone(models["orchestrator"], "README says the orchestrator agent sets no model")
+        def model_of(agent):  # frontmatter only: a body line starting with "model: " is not a declaration
+            fm = agent.read_text().split("---")[1]
+            return next((l.split(": ", 1)[1] for l in fm.splitlines() if l.startswith("model: ")), None)
+
+        models = {(plugin.name, a.stem): model_of(a) for plugin in PLUGINS for a in plugin.glob("agents/*.md")}
+        self.assertEqual(models[("worker", "docs-reviewer")], "sonnet")
+        self.assertIsNone(models[("worker", "worker")], "README says the worker agent sets no model")
+        self.assertIsNone(models[("orchestrator", "orchestrator")], "README says it sets no model")
         for name in ("code-reviewer", "security-reviewer", "senior-reviewer", "test-reviewer", "pr-author"):
-            self.assertEqual(models[name], "inherit", name)
+            self.assertEqual(models[("worker", name)], "inherit", name)
 
     def test_scripts_referenced_by_skills_and_hooks_exist_and_are_executable(self):
         for plugin in PLUGINS:

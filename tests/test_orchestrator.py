@@ -40,7 +40,7 @@ class ClaimTests(ShimTest):
 
     def test_claim_is_idempotent_for_an_existing_worktree(self):
         self.run_script(ORCH / "claim.sh", "12")
-        self.log.unlink()
+        self.reset_calls()
         r = self.run_script(ORCH / "claim.sh", "12")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("status: already-claimed", r.stdout)
@@ -74,7 +74,7 @@ class MergeTests(ShimTest):
         self.run_script(ORCH / "claim.sh", "12")
         path = self.repo / ".claude/worktrees/fix-12-fix-login-timeout"
         self.assertTrue(path.exists())
-        self.log.unlink()
+        self.reset_calls()
         return path
 
     def test_merge_removes_workspace_then_merges_and_deletes_branch(self):
