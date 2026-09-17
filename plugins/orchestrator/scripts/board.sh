@@ -44,4 +44,4 @@ done < <(git worktree list --porcelain)
 wf_kv repo "$(basename "$root") ($(git rev-parse --abbrev-ref HEAD))"
 printf 'worktrees[%s]{issue,branch,agent,pr,checks,review,workspace}:\n' "$count"
 printf "%b" "$rows"
-[ "$count" = 0 ] && printf 'help: nothing claimed. Run claim.sh <issue>.\n' || true
+if [ "$count" = 0 ]; then printf 'help: nothing claimed. Run claim.sh <issue>.\n'; fi

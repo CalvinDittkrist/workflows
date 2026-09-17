@@ -57,7 +57,7 @@ fi
 ws=$(printf '%s' "$created" | jq -r '.result.workspace.workspace_id // empty')
 pane=$(printf '%s' "$created" | jq -r '.result.root_pane.pane_id // empty')
 path=$(printf '%s' "$created" | jq -r '.result.worktree.path // empty')
-[ -n "$ws" ] && [ -n "$pane" ] && [ -n "$path" ] || wf_die "unexpected herdr response: $created"
+if [ -z "$ws" ] || [ -z "$pane" ] || [ -z "$path" ]; then wf_die "unexpected herdr response: $created"; fi
 
 # Session-scoped configuration travels through --settings so hooks and skills can read it from the environment.
 settings=$(jq -cn --arg m "$mode" --arg i "$issue" '{env:{WF_MODE:$m, WF_ISSUE:$i}}')
@@ -75,7 +75,7 @@ else
 fi
 
 # agent start moves focus to the new pane; give it back to the orchestrator.
-[ -n "${HERDR_WORKSPACE_ID:-}" ] && herdr workspace focus "$HERDR_WORKSPACE_ID" >/dev/null 2>&1 || true
+if [ -n "${HERDR_WORKSPACE_ID:-}" ]; then herdr workspace focus "$HERDR_WORKSPACE_ID" >/dev/null 2>&1 || true; fi
 
 wf_kv issue "#$issue $title"
 wf_kv branch "$branch"
