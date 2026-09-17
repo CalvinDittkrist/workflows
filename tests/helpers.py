@@ -9,6 +9,7 @@ SHIMS = ROOT / "tests" / "shims"
 ORCH = ROOT / "plugins" / "orchestrator" / "scripts"
 WORKER = ROOT / "plugins" / "worker" / "scripts"
 STANDARDS = ROOT / "plugins" / "repo-standards" / "scripts"
+PLANNER = ROOT / "plugins" / "planner" / "scripts"
 
 
 class ShimTest(unittest.TestCase):

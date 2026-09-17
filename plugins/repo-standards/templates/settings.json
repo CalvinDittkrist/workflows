@@ -4,6 +4,7 @@
   },
   "enabledPlugins": {
     "worker@workflows": true,
+    "planner@workflows": true,
     "repo-standards@workflows": true,
     "orchestrator@workflows": true
   },
@@ -19,7 +20,7 @@
       "Bash(git status *)", "Bash(git diff *)", "Bash(git log *)", "Bash(git show *)", "Bash(git add *)",
       "Bash(git commit *)", "Bash(git push origin HEAD)", "Bash(git push -u origin HEAD)", "Bash(git push)",
       "Bash(git fetch *)", "Bash(git worktree list *)",
-      "Bash(gh issue view *)", "Bash(gh pr view *)", "Bash(gh pr list *)", "Bash(gh pr checks *)", "Bash(gh run view *)",
+      "Bash(gh issue view *)", "Bash(gh issue list *)", "Bash(gh label list *)", "Bash(gh pr view *)", "Bash(gh pr list *)", "Bash(gh pr checks *)", "Bash(gh run view *)",
       "Bash(npx -y gh-axi *)"
     ],
     "deny": [

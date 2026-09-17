@@ -2,29 +2,60 @@
   "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
   "name": "workflows",
   "description": "Agentic development workflows: orchestrator, worker pipeline, reviewers, repo standards.",
-  "owner": { "name": "Calvin Dittkrist", "url": "https://github.com/CalvinDittkrist" },
-  "metadata": { "pluginRoot": "./plugins" },
+  "owner": {
+    "name": "Calvin Dittkrist",
+    "url": "https://github.com/CalvinDittkrist"
+  },
+  "metadata": {
+    "pluginRoot": "./plugins"
+  },
   "plugins": [
     {
       "name": "orchestrator",
       "source": "./plugins/orchestrator",
-      "description": "Coordinator session: /claim, /yolo-claim, /merge, /board, /abandon over Herdr worktree workspaces.",
+      "description": "Coordinator session: /plan, /claim, /yolo-claim, /merge, /board, /abandon over Herdr worktree workspaces.",
       "category": "workflow",
-      "keywords": ["herdr", "worktree", "orchestration", "github"]
+      "keywords": [
+        "herdr",
+        "worktree",
+        "orchestration",
+        "github"
+      ]
+    },
+    {
+      "name": "planner",
+      "source": "./plugins/planner",
+      "description": "Planning session: /grill, /spec, /tickets, /triage, /research, /prototype turn an idea or issue into agent-ready issues.",
+      "category": "workflow",
+      "keywords": [
+        "planning",
+        "spec",
+        "tickets",
+        "triage"
+      ]
     },
     {
       "name": "worker",
       "source": "./plugins/worker",
       "description": "Issue worker pipeline: implement, independent reviewer panel, PR in fresh context, CI and review-comment loop.",
       "category": "workflow",
-      "keywords": ["review", "security", "pull-request", "ci"]
+      "keywords": [
+        "review",
+        "security",
+        "pull-request",
+        "ci"
+      ]
     },
     {
       "name": "repo-standards",
       "source": "./plugins/repo-standards",
       "description": "Repository baseline: architecture.md, ADRs, CLAUDE.md, settings; /init-repo, /adr, /docs-check.",
       "category": "documentation",
-      "keywords": ["adr", "architecture", "standards"]
+      "keywords": [
+        "adr",
+        "architecture",
+        "standards"
+      ]
     }
   ]
 }
