@@ -20,24 +20,41 @@ printf '%s' "$v" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' || wf_die "version must 
 wf_need gh; wf_need jq
 nwo=$(gh repo view --json nameWithOwner -q .nameWithOwner) || wf_die "cannot read the GitHub repository; run gh auth status"
 
-ms=$(gh api "repos/$nwo/milestones?state=all&per_page=100" | jq -c --arg t "$v" '[.[] | select(.title == $t)] | first // empty') \
+ms=$(gh api --paginate "repos/$nwo/milestones?state=all&per_page=100" | jq -s -c --arg t "$v" '[.[][] | select(.title == $t)] | first // empty') \
   || wf_die "cannot read the milestones of $nwo"
 [ -n "$ms" ] || wf_die "milestone $v does not exist; create it and attach its issues first (planner: issue.sh milestone $v)"
 [ "$(printf '%s' "$ms" | jq -r .state)" = open ] || wf_die "milestone $v is already closed"
 open=$(printf '%s' "$ms" | jq -r .open_issues)
 [ "$open" = 0 ] || wf_die "milestone $v has $open open issue(s); finish them or move them to a later milestone (gh issue list --milestone $v)"
-if gh api "repos/$nwo/git/ref/tags/$v" >/dev/null 2>&1; then wf_die "tag $v already exists; release a new version instead"; fi
+if gh api "repos/$nwo/git/ref/tags/$v" >/dev/null 2>&1; then
+  wf_die "tag $v already exists; if release $v is already published, close the milestone on GitHub, otherwise release a new version"
+fi
 
-branch_sha() { gh api "repos/$nwo/branches/$1" --jq .commit.sha 2>/dev/null; }
-main=$(branch_sha main) || wf_die "$nwo has no main branch; releases are tagged on main"
+# Head sha of branch $1; empty when GitHub answers 404. Any other failure (network, auth, rate limit) is fatal,
+# so a failed dev lookup can never fall back to the main-only model and release without the promotion.
+branch_sha() {
+  local out
+  if out=$(gh api "repos/$nwo/branches/$1" --jq .commit.sha 2>&1); then printf '%s' "$out"
+  elif printf '%s' "$out" | grep -q 'HTTP 404'; then return 0
+  else wf_die "cannot read branch $1 of $nwo: $out"; fi
+}
+main=$(branch_sha main)
+[ -n "$main" ] || wf_die "$nwo has no main branch; releases are tagged on main"
+dev=$(branch_sha dev)
 wf_kv milestone "$v ($(printf '%s' "$ms" | jq -r .closed_issues) closed issues)"
 
-if branch_sha dev >/dev/null; then
+if [ -n "$dev" ]; then
   wf_kv model "dev+main"
   title="chore(release): $v"
-  prs=$(gh pr list --base main --head dev --state all --limit 100 --json number,title,state,url,mergeCommit) \
+  # --head cannot tell a fork's dev from ours, so pull requests from other repositories are ignored.
+  prs=$(gh pr list --base main --head dev --state all --limit 100 --json number,title,state,url,mergeCommit,isCrossRepository) \
     || wf_die "cannot list promotion pull requests"
+  prs=$(printf '%s' "$prs" | jq -c '[.[] | select(.isCrossRepository == false)]')
   pr=$(printf '%s' "$prs" | jq -c --arg t "$title" '[.[] | select(.title == $t and .state != "CLOSED")] | first // empty')
+  other=$(printf '%s' "$prs" | jq -r --arg t "$title" '[.[] | select(.state == "OPEN" and .title != $t)] | first | .url // empty')
+  if [ -z "$pr" ] && [ -n "$other" ]; then
+    wf_die "another promotion pull request is open ($other); merge or close it before releasing $v"
+  fi
   if [ -z "$pr" ]; then
     body="Promotes \`dev\` to \`main\` for milestone $v. After the merge, \`/orchestrator:release $v\` tags the merge commit and publishes the release."
     url=$(wf_run gh pr create --base main --head dev --title "$title" --body "$body") \

@@ -175,7 +175,7 @@ class MergeTests(ShimTest):
     def pr_fixture(self, **over):
         pr = {"number": 7, "title": "fix: login timeout", "url": "https://github.com/o/r/pull/7", "state": "OPEN",
               "isDraft": False, "mergeable": "MERGEABLE", "mergeStateStatus": "CLEAN", "headRefName": "fix/12-fix-login-timeout",
-              "baseRefName": "main", "reviewDecision": "APPROVED",
+              "baseRefName": "main", "isCrossRepository": False, "reviewDecision": "APPROVED",
               "statusCheckRollup": [{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}]}
         pr.update(over)
         f = self.base / "pr.json"
@@ -239,14 +239,26 @@ class MergeTests(ShimTest):
         self.assertIn("unresolved review threads", r.stderr)
         self.assertFalse([c for c in self.calls() if "pr merge" in c])
 
-    def test_merging_a_promotion_pr_keeps_dev_and_the_checkout(self):
+    def test_merging_a_promotion_pr_uses_a_merge_commit_and_keeps_the_branch(self):
         self.git("branch", "dev")
-        r = self.run_script(ORCH / "merge.sh", "7", SHIM_PR_FIXTURE=self.pr_fixture(headRefName="dev", title="chore(release): v1.2.0"))
+        for head in ("dev", "main"):
+            self.reset_calls()
+            r = self.run_script(ORCH / "merge.sh", "7", SHIM_PR_FIXTURE=self.pr_fixture(headRefName=head, title="chore(release): v1.2.0"))
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertEqual([c for c in self.calls() if c.startswith("gh pr merge")], ["gh pr merge 7 --merge"])
+            self.assertFalse([c for c in self.calls() if c.startswith("herdr worktree remove")])
+            self.assertIn(head, self.git("branch", "--list", head))
+            self.assertIn("merged: merge into main", r.stdout)
+            self.assertIn(f"branch: {head} (long-lived) kept", r.stdout)
+
+    def test_a_fork_pr_never_touches_a_local_branch_of_the_same_name(self):
+        path = self.claimed()
+        r = self.run_script(ORCH / "merge.sh", "7", SHIM_PR_FIXTURE=self.pr_fixture(isCrossRepository=True))
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("gh pr merge 7 --squash", self.calls())
-        self.assertFalse([c for c in self.calls() if "--delete-branch" in c or c.startswith("herdr worktree remove")])
-        self.assertIn("dev", self.git("branch", "--list", "dev"))
-        self.assertIn("branch: dev kept (long-lived)", r.stdout)
+        self.assertEqual([c for c in self.calls() if c.startswith("gh pr merge")], ["gh pr merge 7 --squash"])
+        self.assertTrue(path.exists())
+        self.assertIn("fix/12-fix-login-timeout", self.git("branch", "--list"))
+        self.assertIn("branch: fix/12-fix-login-timeout (fork) kept", r.stdout)
 
     def test_allow_unstable_and_ignore_threads_flags(self):
         self.claimed()
@@ -265,7 +277,7 @@ class ReleaseTests(ShimTest):
 
     def promotions(self, *prs):
         f = self.base / "promotions.json"
-        f.write_text(json.dumps(list(prs)))
+        f.write_text(json.dumps([{"isCrossRepository": False, **pr} for pr in prs]))
         return str(f)
 
     def mutations(self):
@@ -301,6 +313,32 @@ class ReleaseTests(ShimTest):
         self.assertIn("status: waiting", r.stdout)
         self.assertEqual(self.mutations(), [])
 
+    def test_promotion_ignores_fork_prs_and_refuses_while_another_promotion_is_open(self):
+        env = dict(SHIM_MILESTONES_FIXTURE=self.milestones(), SHIM_BRANCHES="main dev")
+        fork = {"number": 66, "title": "chore(release): v1.2.0", "state": "MERGED", "url": "https://github.com/o/r/pull/66",
+                "mergeCommit": {"oid": "evil"}, "isCrossRepository": True}
+        r = self.run_script(ORCH / "release.sh", "v1.2.0", SHIM_PROMOTION_FIXTURE=self.promotions(fork), **env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("promotion: https://github.com/o/r/pull/77 (opened)", r.stdout)
+        self.assertFalse([c for c in self.calls() if "evil" in c])
+        self.reset_calls()
+        stale = {"number": 71, "title": "chore(release): v1.1.5", "state": "OPEN", "url": "https://github.com/o/r/pull/71", "mergeCommit": None}
+        r = self.run_script(ORCH / "release.sh", "v1.2.0", SHIM_PROMOTION_FIXTURE=self.promotions(stale), **env)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("another promotion pull request is open (https://github.com/o/r/pull/71)", r.stderr)
+        self.assertEqual(self.mutations(), [])
+
+    def test_a_failed_dev_lookup_stops_instead_of_releasing_main_alone(self):
+        r = self.run_script(ORCH / "release.sh", "v1.2.0", SHIM_MILESTONES_FIXTURE=self.milestones(), SHIM_BRANCHES="main dev", SHIM_BRANCH_ERROR="dev")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("error: cannot read branch dev of o/r", r.stderr)
+        self.assertEqual(self.mutations(), [])
+
+    def test_a_failed_milestone_close_says_the_release_is_already_published(self):
+        r = self.run_script(ORCH / "release.sh", "v1.2.0", SHIM_MILESTONES_FIXTURE=self.milestones(), SHIM_MILESTONE_CLOSE_FAILS="1")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("error: release v1.2.0 is published but closing milestone v1.2.0 failed", r.stderr)
+
     def test_dev_and_main_tag_the_merge_commit_of_the_merged_promotion(self):
         older = {"number": 60, "title": "chore(release): v1.1.0", "state": "MERGED", "url": "https://github.com/o/r/pull/60", "mergeCommit": {"oid": "old"}}
         closed = {"number": 70, "title": "chore(release): v1.2.0", "state": "CLOSED", "url": "https://github.com/o/r/pull/70", "mergeCommit": None}
@@ -322,10 +360,9 @@ class ReleaseTests(ShimTest):
             (dict(SHIM_MILESTONES_FIXTURE=self.milestones(), SHIM_TAGS="v1.2.0"), "tag v1.2.0 already exists"),
         ]
         for env, text in cases:
-            for branches in ("main", "main dev"):
-                r = self.run_script(ORCH / "release.sh", "v1.2.0", SHIM_BRANCHES=branches, **env)
-                self.assertNotEqual(r.returncode, 0, (env, branches))
-                self.assertIn(f"error: {text}", r.stderr)
+            r = self.run_script(ORCH / "release.sh", "v1.2.0", SHIM_BRANCHES="main dev", **env)
+            self.assertNotEqual(r.returncode, 0, env)
+            self.assertIn(f"error: {text}", r.stderr)
         r = self.run_script(ORCH / "release.sh", "1.2", SHIM_MILESTONES_FIXTURE=self.milestones())
         self.assertNotEqual(r.returncode, 0); self.assertIn("v1.2.3", r.stderr)
         r = self.run_script(ORCH / "release.sh", "v1.1.0", SHIM_MILESTONES_FIXTURE=self.milestones())

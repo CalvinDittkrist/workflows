@@ -15,7 +15,7 @@ usage() { sed -n '3,10p' "$0"; exit "${1:-0}"; }
 cmd="${1:-}"; [ -n "$cmd" ] || usage 1; shift
 version() { printf '%s' "$1" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' || wf_die "milestone must be named vX.Y.Z, got '$1'"; printf '%s' "$1"; }
 # The milestone titled $1 as JSON (open or closed), or empty.
-milestone_json() { gh api "repos/$(wf_repo_nwo)/milestones?state=all&per_page=100" | jq -c --arg t "$1" '[.[] | select(.title == $t)] | first // empty'; }
+milestone_json() { gh api --paginate "repos/$(wf_repo_nwo)/milestones?state=all&per_page=100" | jq -s -c --arg t "$1" '[.[][] | select(.title == $t)] | first // empty'; }
 # Refuse attaching to a milestone that does not exist or was already released (closed).
 open_milestone() {
   local m; m=$(milestone_json "$1") || wf_die "cannot read milestones"
@@ -67,7 +67,7 @@ case "$cmd" in
       fi
     done ;;
   milestones)
-    gh api "repos/$(wf_repo_nwo)/milestones?state=open&per_page=100" | jq -r '
+    gh api --paginate "repos/$(wf_repo_nwo)/milestones?state=open&per_page=100" | jq -s -r 'add // [] |
       "milestones[\(length)]{title,open,closed,description}:",
       (.[] | "  \(.title),\(.open_issues),\(.closed_issues),\(.description // "" | gsub("\n"; " "))")' ;;
   milestone)
