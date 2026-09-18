@@ -107,9 +107,13 @@ class ApplyTests(ShimTest):
 
     def merge(self):
         """GitHub merges the pull request: the branch lands on main and the pull request is marked merged."""
-        self.get("pulls.json") and self.step(CLEANUP, "open")  # refreshes the head sha as GitHub would
-        self.origin_git("update-ref", "refs/heads/main", "refs/heads/chore/standardize")
-        self.put("pulls.json", [dict(p, state="closed", merged_at="2026-09-18T12:00:00Z") for p in self.get("pulls.json")])
+        head = self.origin_git("rev-parse", "refs/heads/chore/standardize").strip()
+        self.origin_git("update-ref", "refs/heads/main", head)
+        pulls = self.get("pulls.json")
+        for p in pulls:
+            self.origin_git("update-ref", f"refs/pull/{p['number']}/head", head)
+        self.put("pulls.json", [dict(p, state="closed", merged_at="2026-09-18T12:00:00Z", head=dict(p["head"], sha=head))
+                                for p in pulls])
 
     def through_open(self):
         self.step(BACKUP)
@@ -380,20 +384,27 @@ class ApplyTests(ShimTest):
     def test_a_target_changed_since_the_tag_or_untracked_is_not_deleted(self):
         self.origin_git("tag", "pre-standard", self.head)
         self.write(".cursor/rules/new.mdc", "newer\n")
+        self.write(".claude/skills/deploy/run.sh", "#!/bin/sh\necho deploy v2\n")
         self.git("add", ".")
         self.git("commit", "-qm", "newer rule")
         self.git("push", "-q", "origin", "main")
         self.write("GEMINI.md", "untracked\n")
-        self.run_script(REPORT, stdin=REPLIES + "finding: agent-config | GEMINI.md | delete | Gemini instructions | high\n")
+        per_skill = REPLIES.replace(
+            "finding: agent-config | .claude/skills | delete | three skills, deploy written for this repository | high\n",
+            "finding: agent-config | .claude/skills/deploy | delete | written for this repository | high\n"
+            "finding: agent-config | .claude/skills/review | delete | copied from upstream | high\n")
+        self.run_script(REPORT, stdin=per_skill + "finding: agent-config | GEMINI.md | delete | Gemini instructions | high\n")
         self.run_script(APPROVE, "agent-config=approve", "tests-ci=approve", "security=approve", "workspace=approve",
                         "files=reject")
         self.step(BACKUP)
         r = self.step(CLEANUP, "prepare")
         self.assertIn("skipped: .cursor changed since the tag pre-standard was set, so the tag cannot restore it", r.stdout)
         catalogue = self.get("issues.json")[0]["body"]
-        self.assertIn("| deploy |", catalogue)
+        self.assertNotIn("| deploy |", catalogue)
+        self.assertIn("| review |", catalogue)
         self.assertIn("local: GEMINI.md is not tracked", r.stdout)
-        self.assertIn("deleted: .claude/skills\n", r.stdout)
+        self.assertIn("skipped: .claude/skills/deploy changed since the tag", r.stdout)
+        self.assertIn("deleted: .claude/skills/review\n", r.stdout)
         self.assertTrue((self.repo / WT / ".cursor/rules/new.mdc").exists())
         self.assertTrue((self.repo / "GEMINI.md").exists())
 
@@ -423,7 +434,9 @@ class ApplyTests(ShimTest):
         hook.chmod(0o755)
         r = self.step(CLEANUP, "open", ok=False)
         self.assertEqual(r.returncode, 1)
-        self.assertIn("lint: trailing space in AGENTS.md", r.stderr)
+        self.assertIn("error: cannot commit in", r.stderr)
+        self.assertIn("lint: trailing space in AGENTS.md", r.stderr.splitlines()[-1])
+        self.assertIn("fix what the repository's commit hooks report there", r.stderr)
         self.assertFalse((self.ws / "pulls.json").exists())
         self.assertEqual(self.origin_git("branch", "--list", "chore/standardize"), "")
         hook.unlink()
@@ -443,6 +456,41 @@ class ApplyTests(ShimTest):
         self.assertEqual(self.git("rev-parse", "chore/standardize").strip(), head)
         self.assertEqual(self.origin_git("branch", "--list", "chore/standardize").strip(), "chore/standardize")
         self.assertTrue(self.get("repo.json")["allow_rebase_merge"])  # the workspace waited
+
+    def test_a_worktree_behind_the_merged_pull_request_is_done_not_pending(self):
+        self.through_open()
+        # Someone commits a review suggestion on GitHub; the worktree never sees it.
+        clone = self.base / "clone"
+        self.git("clone", "-q", "-b", "chore/standardize", str(self.origin), str(clone))
+        self.write("docs/suggested.md", "x\n", root=clone)
+        self.git("add", ".", cwd=clone)
+        self.git("-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-qm", "suggestion", cwd=clone)
+        self.git("push", "-q", "origin", "chore/standardize", cwd=clone)
+        self.merge()
+        self.origin_git("branch", "-D", "chore/standardize")  # deleted on merge
+        r = self.step(FINALIZE)
+        self.assertIn(f"worktree: {self.repo / WT} removed\n", r.stdout)
+
+    def test_a_branch_on_origin_ahead_of_the_merged_pull_request_is_kept(self):
+        self.through_open()
+        self.merge()
+        clone = self.base / "clone"
+        self.git("clone", "-q", "-b", "chore/standardize", str(self.origin), str(clone))
+        self.write("docs/late.md", "x\n", root=clone)
+        self.git("add", ".", cwd=clone)
+        self.git("-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-qm", "late", cwd=clone)
+        self.git("push", "-q", "origin", "chore/standardize", cwd=clone)
+        late = self.git("rev-parse", "HEAD", cwd=clone).strip()
+        r = self.step(FINALIZE)
+        self.assertIn("branch: chore/standardize kept on origin, it has commits the merged pull request does not\n", r.stdout)
+        self.assertEqual(self.origin_git("rev-parse", "refs/heads/chore/standardize").strip(), late)
+
+    def test_an_unreachable_origin_is_named_as_such(self):
+        self.step(BACKUP)
+        self.git("remote", "set-url", "origin", str(self.base / "missing.git"))
+        r = self.step(CLEANUP, "prepare", ok=False)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("error: cannot reach origin: ", r.stderr)
 
     def test_a_workspace_that_refuses_leaves_no_snapshot_and_a_rerun_finishes(self):
         self.through_open()

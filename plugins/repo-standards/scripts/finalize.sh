@@ -24,12 +24,17 @@ state=$(printf '%s' "$pr" | jq -r '.state // "none"') sha=$(printf '%s' "$pr" | 
 git fetch -q origin "refs/heads/$default" 2>"$err" || die "cannot fetch $default from origin: $(tail -n1 "$err")"
 tip=$(git rev-parse FETCH_HEAD)
 # Work in the cleanup worktree that no pull request carries yet: uncommitted changes, or a commit that is neither
-# on the default branch nor the head of the merged pull request (a push or an open that failed).
+# on the default branch nor in the merged pull request (a push or an open that failed). The pull request may have
+# moved on after the last open (a review suggestion, "Update branch"), so its head is fetched from GitHub.
 wt=$(cleanup_worktree) pending=""
+carried() {
+  [ "$1" = "$sha" ] || git merge-base --is-ancestor "$1" "$tip" && return 0
+  [ "$state" = merged ] && git fetch -q origin "refs/pull/$(printf '%s' "$pr" | jq -r .number)/head" 2>/dev/null \
+    && git merge-base --is-ancestor "$1" FETCH_HEAD
+}
 if [ "$(git -C "$wt" rev-parse --abbrev-ref HEAD 2>/dev/null)" = "$WF_BRANCH" ]; then
-  whead=$(git -C "$wt" rev-parse HEAD)
   if [ -n "$(git -C "$wt" status --porcelain)" ]; then pending="uncommitted changes"
-  elif [ "$whead" != "$sha" ] && ! git merge-base --is-ancestor "$whead" "$tip"; then pending="a commit"; fi
+  elif ! carried "$(git -C "$wt" rev-parse HEAD)"; then pending="a commit"; fi
 fi
 case "$state" in
   open) die "the cleanup pull request $(printf '%s' "$pr" | jq -r .url) is not merged yet; merge it once check passes, then run finalize.sh again" ;;
