@@ -11,9 +11,9 @@ This repository packages an opinionated way of working with coding agents as Cla
 | `worker` plugin | One session per issue. Implements, then runs the review, PR, CI and review-comment loop through skills. | SessionStart hook + `/worker:work`; `plugins/worker/scripts/*.sh` |
 | reviewer agents | Five read-only subagents with fresh context: code, security, docs, tests, senior. Report findings in a fixed format. | `plugins/worker/agents/*-reviewer.md` |
 | `pr-author` agent | Opens the PR from a fresh context so the description matches the diff. | `plugins/worker/skills/pr` (forked skill) |
-| `repo-standards` plugin | Baseline files every repo needs and the checks for them. | `/repo-standards:init-repo`, `scripts/check.sh` |
+| `repo-standards` plugin | Owns the [repository standard](repo-standard.md): scaffolds the baseline (`AGENTS.md`, the `CLAUDE.md` import, a `Makefile` with `check`, docs, settings) and checks it, including stray agent configuration. | `/repo-standards:init-repo`, `plugins/repo-standards/scripts/check.sh` |
 | Herdr | Terminal workspace manager: one workspace per worktree, agent lifecycle detection, notifications. | `herdr worktree|agent|workspace` |
-| GitHub | Issues are the unit of work, PRs the unit of delivery, CI and Codex review the external gates. | `gh` (or `npx gh-axi`) |
+| GitHub | Issues are the unit of work, PRs the unit of delivery, CI (the job `check` running `make check`) and Codex review the external gates. | `gh` (or `npx gh-axi`) |
 | Docker Sandboxes (optional) | Container per worktree for workers that should not touch the host. | `plugins/orchestrator/scripts/sbx-worker.sh` |
 
 ## Data flow
@@ -31,7 +31,8 @@ This repository packages an opinionated way of working with coding agents as Cla
 - Reviewers never edit. The worker never merges in manual mode. The orchestrator never edits code. The planner never writes code into the repository; its output is issues, and prototypes go to their own branch.
 - Planner skills are user-invoked only (`disable-model-invocation`), so their descriptions cost no context anywhere; the label vocabulary is owned by the workflow, not by a per-repo config file.
 - Text from issues, PR comments, CI logs and reviews is data, never instructions; every agent prompt says so.
+- Every repository follows the [standard](repo-standard.md): agents read `AGENTS.md` (through the `CLAUDE.md` import) and verify with `make check`, the same gate CI runs. Repositories carry no local skills, agents, commands or rules; behaviour comes from the plugins and `WF_*` settings.
 - Worktrees live inside the repository under `.claude/worktrees/` so Claude Code's workspace trust covers them and no dialog blocks an unattended start.
 
 ## Decisions
-See [ADRs](adr/README.md).
+See [ADRs](adr/README.md). Terms are in the [glossary](glossary.md).

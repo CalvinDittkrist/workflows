@@ -15,6 +15,6 @@ Routes:
 - `/planner:finish` ends the session.
 
 Do now:
-1. Read CLAUDE.md, docs/architecture.md and docs/glossary.md when they exist. Nothing else yet.
+1. Read AGENTS.md, docs/architecture.md and docs/glossary.md when they exist. Nothing else yet.
 2. If the session starts from an issue, summarize it in three lines. Otherwise restate the topic in one line.
 3. Recommend one route in one sentence and stop. The user invokes the stage skills; you never start a stage on your own.
