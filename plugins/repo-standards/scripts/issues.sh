@@ -12,7 +12,7 @@ answers=$(decisions) || exit 1
 err=$(mktemp); trap 'rm -f "$err"' EXIT
 todo=$(approved_findings "$answers" issue)
 [ -n "$todo" ] || { printf 'issues: none approved\n'; exit 0; }
-nwo=$(gh repo view --json nameWithOwner -q .nameWithOwner 2>"$err") || die "cannot read the GitHub repository: $(tail -n1 "$err"); run gh auth status"
+github_repo || exit 1
 labels=$(gh api --paginate "repos/$nwo/labels?per_page=100" 2>"$err") || die "cannot read the labels of $nwo: $(tail -n1 "$err")"
 if ! printf '%s' "$labels" | jq -s -e 'add // [] | any(.[]; (.name | ascii_downcase) == "ready-for-agent")' >/dev/null; then
   label_json ready-for-agent | gh api --method POST "repos/$nwo/labels" --input - >/dev/null 2>"$err" || die "cannot create the label ready-for-agent: $(tail -n1 "$err")"
@@ -24,8 +24,9 @@ while IFS=$'\t' read -r cat target _ reason confidence; do
   title="Standard ($cat): $target"
   n=$(printf '%s' "$titles" | jq -r --arg t "$title" '[.[] | select(.title == $t)] | first // empty | .number')
   if [ -n "$n" ]; then printf 'kept: #%s %s\n' "$n" "$title"; kept=$((kept + 1)); continue; fi
-  body=$(printf '## What to build\n%s\n\n## Context\nThe standardisation run (`/repo-standards:apply`) found this in its `%s` audit of `%s`, confidence %s. The state before the run is tagged `%s`.\n\n## Acceptance criteria\n- [ ] `%s` no longer has the problem above.\n- [ ] `make check` passes.\n' \
-    "$reason" "$cat" "$target" "$confidence" "$WF_TAG" "$target")
+  # The reason is an auditor's judgement of repository content: quoted, so it reads as a finding, not a brief.
+  body=$(printf '## What to build\nResolve this finding of the standardisation run (`/repo-standards:apply`), from its `%s` audit of `%s`, confidence %s:\n\n> %s\n\nThe state before the run is tagged `%s`.\n\n## Acceptance criteria\n- [ ] `%s` no longer has the problem the finding describes.\n- [ ] `make check` passes.\n' \
+    "$cat" "$target" "$confidence" "$reason" "$WF_TAG" "$target")
   n=$(jq -n --arg t "$title" --arg b "$body" '{title: $t, body: $b, labels: ["ready-for-agent"]}' \
     | gh api --method POST "repos/$nwo/issues" --input - 2>"$err" | jq -r .number) || die "cannot open the issue $title: $(tail -n1 "$err")"
   printf 'opened: #%s %s\n' "$n" "$title"; opened=$((opened + 1))

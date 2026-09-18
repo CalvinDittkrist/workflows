@@ -2,7 +2,7 @@
 name: check
 on:
   push:
-    branches: [main, dev]
+    branches: [{{BRANCHES}}]
   pull_request:
 permissions:
   contents: read

@@ -80,3 +80,34 @@ approved_findings() {
 }
 # categories <decisions> <approve|reject>: the categories with this answer, space separated.
 categories() { printf '%s' "$1" | awk -F'\t' -v v="$2" '$2 == v { printf "%s%s", (n++ ? " " : ""), $1 }'; }
+
+# The GitHub side of the apply phase. Each prints an `error:` line and returns 1 when GitHub cannot be read.
+gh_fail() { printf 'error: %s: %s\n' "$1" "$(tail -n1 "$2")" >&2; rm -f "$2"; return 1; }
+# github_repo: sets nwo (owner/name) and default (the default branch).
+github_repo() {
+  local e; e=$(mktemp)
+  nwo=$(gh repo view --json nameWithOwner -q .nameWithOwner 2>"$e") || { gh_fail "cannot read the GitHub repository (run gh auth status)" "$e"; return 1; }
+  default=$(gh api "repos/$nwo" 2>"$e" | jq -r '.default_branch // empty') || { gh_fail "cannot read repos/$nwo" "$e"; return 1; }
+  rm -f "$e"
+  [ -n "$default" ] || { printf 'error: cannot read the default branch of %s\n' "$nwo" >&2; return 1; }
+}
+# catalogue_issue: the number of the catalogue issue, the oldest when several issues carry its title; empty when none.
+catalogue_issue() {
+  local e out; e=$(mktemp)
+  out=$(gh api --paginate "repos/$nwo/issues?labels=skill-candidate&state=all&per_page=100" 2>"$e") || { gh_fail "cannot list the skill-candidate issues" "$e"; return 1; }
+  rm -f "$e"
+  printf '%s' "$out" | jq -s -r --arg t "$WF_CATALOGUE" '[add // [] | .[] | select(.title == $t and .pull_request == null)] | sort_by(.number) | first // empty | .number'
+}
+# branch_pulls: the pull requests from the cleanup branch, newest first, as {number, url, body, state}; state is
+# open, closed (without a merge) or merged.
+branch_pulls() {
+  local e out; e=$(mktemp)
+  out=$(gh api --paginate "repos/$nwo/pulls?head=${nwo%%/*}:$WF_BRANCH&state=all&per_page=100" 2>"$e") || { gh_fail "cannot list the pull requests from $WF_BRANCH" "$e"; return 1; }
+  rm -f "$e"
+  printf '%s' "$out" | jq -s -c '[add // [] | .[] | {number, url: .html_url, body: (.body // ""),
+    state: (if .merged_at then "merged" else .state end)}] | sort_by(-.number)'
+}
+# cleanup_worktree: the path of the cleanup worktree, inside the main checkout like every workflow worktree.
+cleanup_worktree() {
+  printf '%s/.claude/worktrees/%s' "$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")" "$(printf '%s' "$WF_BRANCH" | tr '/' '-')"
+}

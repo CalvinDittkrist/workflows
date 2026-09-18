@@ -14,24 +14,25 @@ die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 for c in gh jq git; do command -v "$c" >/dev/null 2>&1 || die "$c is required but not on PATH"; done
 answers=$(decisions) || exit 1
 err=$(mktemp); tmp=$(mktemp); trap 'rm -f "$err" "$tmp"' EXIT
-nwo=$(gh repo view --json nameWithOwner -q .nameWithOwner 2>"$err") || die "cannot read the GitHub repository: $(tail -n1 "$err"); run gh auth status"
-default=$(gh api "repos/$nwo" 2>"$err" | jq -r '.default_branch // empty') || die "cannot read repos/$nwo: $(tail -n1 "$err")"
-[ -n "$default" ] || die "cannot read the default branch of $nwo"
+github_repo || exit 1
 
 # 1. The tag.
 remote=$(git ls-remote --tags origin "refs/tags/$WF_TAG" 2>"$err" | cut -f1) || die "cannot reach origin: $(tail -n1 "$err")"
 if [ -n "$remote" ]; then
   if local=$(git rev-parse -q --verify "refs/tags/$WF_TAG^{commit}" 2>/dev/null); then
-    [ "$local" = "$(git fetch -q origin "refs/tags/$WF_TAG" 2>/dev/null && git rev-parse 'FETCH_HEAD^{commit}')" ] \
+    git fetch -q origin "refs/tags/$WF_TAG" 2>"$err" || die "cannot fetch the tag $WF_TAG from origin: $(tail -n1 "$err")"
+    [ "$local" = "$(git rev-parse 'FETCH_HEAD^{commit}')" ] \
       || die "the local tag $WF_TAG differs from the one on origin; the one on origin is the backup, so delete the local one (git tag -d $WF_TAG) and run backup.sh again"
   else git fetch -q origin "refs/tags/$WF_TAG:refs/tags/$WF_TAG" 2>"$err" || die "cannot fetch the tag $WF_TAG: $(tail -n1 "$err")"; fi
   printf 'tag: %s kept at %s (pushed before)\n' "$WF_TAG" "$(git rev-parse --short "$WF_TAG^{commit}")"
 else
-  if git rev-parse -q --verify "refs/tags/$WF_TAG" >/dev/null; then how="kept at the local tag"
-  else
-    git fetch -q origin "refs/heads/$default" 2>"$err" || die "origin has no branch $default: $(tail -n1 "$err"); push a first commit (git push -u origin HEAD), then run backup.sh again"
-    git tag "$WF_TAG" FETCH_HEAD; how="the head of $default"
-  fi
+  git fetch -q origin "refs/heads/$default" 2>"$err" || die "origin has no branch $default: $(tail -n1 "$err"); push a first commit (git push -u origin HEAD), then run backup.sh again"
+  if git rev-parse -q --verify "refs/tags/$WF_TAG" >/dev/null; then
+    # A local tag from a run that stopped before the push; it only backs up what the default branch has.
+    git merge-base --is-ancestor "$WF_TAG^{commit}" FETCH_HEAD 2>/dev/null \
+      || die "the local tag $WF_TAG is not on $default, so it backs up something else; delete it (git tag -d $WF_TAG) and run backup.sh again"
+    how="kept at the local tag"
+  else git tag "$WF_TAG" FETCH_HEAD; how="the head of $default"; fi
   git push -q origin "refs/tags/$WF_TAG" 2>"$err" || die "cannot push the tag $WF_TAG: $(tail -n1 "$err")"
   printf 'tag: %s pushed at %s (%s)\n' "$WF_TAG" "$(git rev-parse --short "$WF_TAG^{commit}")" "$how"
 fi
@@ -101,13 +102,16 @@ labels=$(gh api --paginate "repos/$nwo/labels?per_page=100" 2>"$err") || die "ca
 if ! printf '%s' "$labels" | jq -s -e 'add // [] | any(.[]; (.name | ascii_downcase) == "skill-candidate")' >/dev/null; then
   label_json skill-candidate | gh api --method POST "repos/$nwo/labels" --input - >/dev/null 2>"$err" || die "cannot create the label skill-candidate: $(tail -n1 "$err")"
 fi
-found=$(gh api --paginate "repos/$nwo/issues?labels=skill-candidate&state=all&per_page=100" 2>"$err") || die "cannot list the skill-candidate issues: $(tail -n1 "$err")"
-issue=$(printf '%s' "$found" | jq -s -r --arg t "$WF_CATALOGUE" '[add // [] | .[] | select(.title == $t and .pull_request == null)] | sort_by(.number) | first // empty | .number')
+issue=$(catalogue_issue) || exit 1; how="" current=""
 if [ -z "$issue" ]; then
   issue=$(jq -n --arg t "$WF_CATALOGUE" --rawfile b "$tmp" '{title: $t, body: $b, labels: ["skill-candidate"]}' \
     | gh api --method POST "repos/$nwo/issues" --input - 2>"$err" | jq -r .number) || die "cannot open the catalogue issue: $(tail -n1 "$err")"
   how=opened
-elif [ "$(printf '%s' "$found" | jq -s -r --argjson n "$issue" 'add | .[] | select(.number == $n) | .body // ""')" = "$(cat "$tmp")" ]; then how=unchanged
+else
+  current=$(gh api "repos/$nwo/issues/$issue" 2>"$err" | jq -r '.body // ""') || die "cannot read the catalogue issue #$issue: $(tail -n1 "$err")"
+fi
+if [ "$how" = opened ]; then :
+elif [ "$current" = "$(cat "$tmp")" ]; then how=unchanged
 else
   jq -n --rawfile b "$tmp" '{body: $b}' | gh api --method PATCH "repos/$nwo/issues/$issue" --input - >/dev/null 2>"$err" \
     || die "cannot update the catalogue issue #$issue: $(tail -n1 "$err")"

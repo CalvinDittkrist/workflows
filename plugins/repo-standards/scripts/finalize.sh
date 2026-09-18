@@ -15,30 +15,28 @@ for c in gh jq git; do command -v "$c" >/dev/null 2>&1 || die "$c is required bu
 answers=$(decisions) || exit 1
 dir=$(state_dir)
 err=$(mktemp); tmp=$(mktemp); trap 'rm -f "$err" "$tmp"' EXIT
-nwo=$(gh repo view --json nameWithOwner -q .nameWithOwner 2>"$err") || die "cannot read the GitHub repository: $(tail -n1 "$err"); run gh auth status"
-default=$(gh api "repos/$nwo" 2>"$err" | jq -r '.default_branch // empty') || die "cannot read repos/$nwo: $(tail -n1 "$err")"
-catalogue=$(gh api --paginate "repos/$nwo/issues?labels=skill-candidate&state=all&per_page=100" 2>"$err" \
-  | jq -s -r --arg t "$WF_CATALOGUE" '[add // [] | .[] | select(.title == $t)] | first // empty | .number') || die "cannot list the skill-candidate issues: $(tail -n1 "$err")"
+github_repo || exit 1
+catalogue=$(catalogue_issue) || exit 1
 [ -n "$catalogue" ] || die "the catalogue issue is missing; run backup.sh and cleanup.sh first"
 
-pr=$(gh api --paginate "repos/$nwo/pulls?head=${nwo%%/*}:$WF_BRANCH&state=all&per_page=100" 2>"$err" \
-  | jq -s -c '[add // [] | .[] | {number, url: .html_url, state: (if .merged_at then "merged" else .state end)}] | sort_by(-.number) | first // empty') \
-  || die "cannot list the pull requests from $WF_BRANCH: $(tail -n1 "$err")"
+pr=$(branch_pulls) || exit 1; pr=$(printf '%s' "$pr" | jq -c 'first // empty')
 case "$(printf '%s' "$pr" | jq -r '.state // "none"' 2>/dev/null)" in
   open) die "the cleanup pull request $(printf '%s' "$pr" | jq -r .url) is not merged yet; merge it once check passes, then run finalize.sh again" ;;
   closed) die "the cleanup pull request $(printf '%s' "$pr" | jq -r .url) was closed without a merge; reopen and merge it, or run cleanup.sh prepare and open again" ;;
   merged) printf 'pr: %s merged\n' "$(printf '%s' "$pr" | jq -r .url)" ;;
-  *) printf 'pr: none (the default branch needed no cleanup)\n' ;;
+  *) [ -z "$(git -C "$(cleanup_worktree)" status --porcelain 2>/dev/null)" ] \
+       || die "the cleanup worktree $(cleanup_worktree) has changes but no pull request; run cleanup.sh open first"
+     printf 'pr: none (the default branch needed no cleanup)\n' ;;
 esac
 
 # The workspace, only when approved. The snapshot goes to the catalogue issue before anything else can fail.
 status=0
 case " $(categories "$answers" approve) " in
   *" workspace "*)
-    snap="$dir/workspace-snapshot-$(date -u +%Y%m%dT%H%M%SZ).json"
+    snap=$(mktemp "$dir/workspace-snapshot.XXXXXX")
     rc=0; out=$(bash "$here/workspace.sh" --apply --snapshot "$snap" 2>&1) || rc=$?
     printf '%s\n' "$out" | sed 's/^/workspace: /'
-    if [ -s "$snap" ]; then
+    if printf '%s\n' "$out" | grep -qxF "snapshot: $snap"; then
       { printf 'Snapshot of the GitHub workspace before `workspace.sh --apply` on %s, for undoing a change by hand.\n\nChanged:\n```\n%s\n```\n\n<details><summary>Previous state</summary>\n\n```json\n' \
           "$(date -u +%Y-%m-%d)" "$(printf '%s\n' "$out" | grep '^diff: ' || true)"
         jq . "$snap"; printf '```\n\n</details>\n'; } > "$tmp"
@@ -46,6 +44,7 @@ case " $(categories "$answers" approve) " in
         || die "cannot post the snapshot to #$catalogue: $(tail -n1 "$err"); it is in $snap"
       printf 'snapshot: posted to #%s\n' "$catalogue"
     fi
+    [ -s "$snap" ] || rm -f "$snap"
     [ "$rc" = 0 ] || { printf 'workspace: failed; fix the error above and run finalize.sh again\n'; status=1; } ;;
   *) case " $(categories "$answers" reject) " in
        *" workspace "*) printf 'workspace: rejected, left untouched\n' ;;
@@ -55,8 +54,7 @@ esac
 
 # The cleanup branch is done once its pull request is merged: the worktree, the local branch and the branch on
 # origin go, so the next run starts from the default branch.
-root=$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")
-wt="$root/.claude/worktrees/$(printf '%s' "$WF_BRANCH" | tr '/' '-')"
+wt=$(cleanup_worktree)
 if [ "$(printf '%s' "$pr" | jq -r '.state // empty')" = merged ]; then
   if [ -e "$wt" ]; then
     if git worktree remove "$wt" 2>"$err"; then

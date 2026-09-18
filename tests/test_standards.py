@@ -70,6 +70,12 @@ class StandardsTests(ShimTest):
         self.assertEqual(r.returncode, 1)
         self.assertIn("error: unknown category nonsense", r.stderr)
 
+    def test_scaffold_names_the_repository_and_runs_check_on_the_branches_of_the_model(self):
+        r = self.run_script(STANDARDS / "scaffold.sh", "--name", "shop & co", "--default", "dev")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertTrue((self.repo / "AGENTS.md").read_text().startswith("# shop & co\n"))
+        self.assertIn("    branches: [main, dev]\n", (self.repo / ".github/workflows/check.yml").read_text())
+
     def test_scaffold_adds_the_ci_job_check_only_when_no_workflow_has_one(self):
         self.write(".github/workflows/ci.yml", "on: push\njobs:\n  gate:\n    name: check\n    runs-on: ubuntu-latest\n")
         r = self.scaffold()

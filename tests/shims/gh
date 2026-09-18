@@ -30,6 +30,7 @@ if [ -n "${SHIM_WS:-}" ]; then
     "api --paginate repos/o/r/issues?labels="*"&state=all&per_page=100")
       l=${3#*labels=}; l=${l%%&*}; list issues.json | jq --arg l "$l" '[.[] | select(any(.labels[]; .name == $l))]'; exit ;;
     "api --paginate repos/o/r/issues?state=all&per_page=100") list issues.json; exit ;;
+    "api repos/o/r/issues/"[0-9]*) list issues.json | jq -e --argjson n "${2##*/}" '.[] | select(.number == $n)' || nf; exit ;;
     "api --method POST repos/o/r/issues --input -")
       next; save issues.json --argjson b "$body" --argjson n "$n" '. + [$b + {number: $n, state: "open", comments: [],
         html_url: "https://github.com/o/r/issues/\($n)", labels: [($b.labels // [])[] | {name: .}]}]'

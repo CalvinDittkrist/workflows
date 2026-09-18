@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Create the repository baseline and bring .claude/settings.json to the template. Never overwrites a file;
 # prints created/kept/updated per file.
-# Usage: scaffold.sh [--skip <category>]... [<repo-root>]
+# Usage: scaffold.sh [--skip <category>]... [--name <repo>] [--default <branch>] [<repo-root>]
+# --name and --default default to the directory name and the branch origin/HEAD names (else the current one);
+# the apply phase passes both, because it scaffolds a worktree.
 # --skip leaves the files of a category alone: agent-config (AGENTS.md, CLAUDE.md, .claude/settings.json),
 # docs (docs/, the PR template), tests-ci (Makefile, the CI job check), workspace (.github/dependabot.yml).
 # Settings: the marketplace and the workflow plugins go in through `claude plugin ... --scope project`, every
@@ -9,7 +11,7 @@
 # are merged in (existing env values win, permission lists are joined).
 set -euo pipefail
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
-skip=" " root=""
+skip=" " root="" repo="" default=""
 # shellcheck source=lib.sh
 . "$(dirname "$0")/lib.sh"
 while [ $# -gt 0 ]; do
@@ -17,14 +19,20 @@ while [ $# -gt 0 ]; do
     --skip) [ $# -ge 2 ] || die "--skip needs a category"
       case " $WF_CATEGORIES " in *" $2 "*) ;; *) die "unknown category $2; use one of $WF_CATEGORIES" ;; esac
       skip="$skip$2 "; shift ;;
-    -*) die "unknown argument $1; usage: scaffold.sh [--skip <category>]... [<repo-root>]" ;;
+    --name|--default) [ $# -ge 2 ] || die "$1 needs a value"; if [ "$1" = --name ]; then repo=$2; else default=$2; fi; shift ;;
+    -*) die "unknown argument $1; usage: scaffold.sh [--skip <category>]... [--name <repo>] [--default <branch>] [<repo-root>]" ;;
     *) root=$1 ;;
   esac
   shift
 done
 root="${root:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
 tpl="$(cd "$(dirname "$0")/../templates" && pwd)"
-repo=$(basename "$root")
+repo=${repo:-$(basename "$root")}
+[ -n "$default" ] || default=$(git -C "$root" symbolic-ref --short -q refs/remotes/origin/HEAD 2>/dev/null | sed 's#^origin/##' || true)
+[ -n "$default" ] || default=$(git -C "$root" symbolic-ref --short -q HEAD 2>/dev/null || echo main)
+# CI runs check on every push to the default branch, and to main too in the dev plus main model.
+if [ "$default" = dev ]; then branches="main, dev"; else branches=$default; fi
+esc() { printf '%s' "$1" | sed 's/[\\&|]/\\&/g'; }
 skipped() { case "$skip" in *" $1 "*) return 0 ;; esac; return 1; }
 put() { # put <category> <template> <target> [<name make or GitHub also reads instead>...]
   local t="$root/$3" alt
@@ -34,7 +42,7 @@ put() { # put <category> <template> <target> [<name make or GitHub also reads in
   done
   if [ -e "$t" ]; then printf 'kept: %s (exists with a different case)\n' "$3"; return; fi
   mkdir -p "$(dirname "$t")"
-  sed -e "s/{{REPO}}/$repo/g" -e "s/{{RUN_CMD}}/<fill in>/g" "$tpl/$2" > "$t"
+  sed -e "s|{{REPO}}|$(esc "$repo")|g" -e "s|{{BRANCHES}}|$(esc "$branches")|g" -e "s|{{RUN_CMD}}|<fill in>|g" "$tpl/$2" > "$t"
   printf 'created: %s\n' "$3"
 }
 put agent-config AGENTS.md.tpl AGENTS.md

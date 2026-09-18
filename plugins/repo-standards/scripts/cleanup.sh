@@ -19,18 +19,13 @@ case "$step" in prepare|open) ;; *) die "usage: cleanup.sh prepare | open" ;; es
 for c in gh jq git; do command -v "$c" >/dev/null 2>&1 || die "$c is required but not on PATH"; done
 answers=$(decisions) || exit 1
 err=$(mktemp); tmp=$(mktemp); trap 'rm -f "$err" "$tmp"' EXIT
-nwo=$(gh repo view --json nameWithOwner -q .nameWithOwner 2>"$err") || die "cannot read the GitHub repository: $(tail -n1 "$err"); run gh auth status"
-default=$(gh api "repos/$nwo" 2>"$err" | jq -r '.default_branch // empty') || die "cannot read repos/$nwo: $(tail -n1 "$err")"
-root=$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")
-wt="$root/.claude/worktrees/$(printf '%s' "$WF_BRANCH" | tr '/' '-')"
+github_repo || exit 1
+wt=$(cleanup_worktree); root=${wt%/.claude/worktrees/*}
 g() { git -C "$wt" -c core.quotePath=false "$@"; }
-# The head of the default branch on origin, fresh.
-base() { git fetch -q origin "refs/heads/$default" 2>"$err" || die "cannot fetch $default from origin: $(tail -n1 "$err")"; git rev-parse FETCH_HEAD; }
-# The pull requests from the branch, newest first, as number, state (open, closed, merged), url, body.
-pulls() {
-  gh api --paginate "repos/$nwo/pulls?head=${nwo%%/*}:$WF_BRANCH&state=all&per_page=100" 2>"$err" \
-    | jq -s -c '[add // [] | .[] | {number, url: .html_url, body: (.body // ""), state: (if .merged_at then "merged" else .state end)}] | sort_by(-.number)' \
-    || die "cannot list the pull requests from $WF_BRANCH: $(tail -n1 "$err")"
+# The commit the branch forked from the default branch on origin, fresh, so the diff is what GitHub shows.
+base() {
+  git fetch -q origin "refs/heads/$default" 2>"$err" || die "cannot fetch $default from origin: $(tail -n1 "$err")"
+  git merge-base FETCH_HEAD "$(g rev-parse HEAD)"
 }
 rejected=$(categories "$answers" reject)
 # placeholders <base>: the files the branch adds or changes (staged) that still hold a <fill in> placeholder.
@@ -42,8 +37,9 @@ placeholders() {
 
 if [ "$step" = prepare ]; then
   [ -n "$(git ls-remote --tags origin "refs/tags/$WF_TAG" 2>/dev/null)" ] || die "the tag $WF_TAG is not on origin; run backup.sh first, nothing is deleted before the backup"
-  catalogue=$(gh api --paginate "repos/$nwo/issues?labels=skill-candidate&state=all&per_page=100" 2>"$err" \
-    | jq -s -r --arg t "$WF_CATALOGUE" '[add // [] | .[] | select(.title == $t)] | first // empty | .number') || die "cannot list the skill-candidate issues: $(tail -n1 "$err")"
+  git rev-parse -q --verify "refs/tags/$WF_TAG" >/dev/null || git fetch -q origin "refs/tags/$WF_TAG:refs/tags/$WF_TAG" 2>"$err" \
+    || die "cannot fetch the tag $WF_TAG: $(tail -n1 "$err")"
+  catalogue=$(catalogue_issue) || exit 1
   [ -n "$catalogue" ] || die "the catalogue issue is missing; run backup.sh first, nothing is deleted before the backup"
 
   mkdir -p "$root/.claude/worktrees"
@@ -54,20 +50,29 @@ if [ "$step" = prepare ]; then
   else
     [ ! -e "$wt" ] || die "$wt exists but is not a worktree on $WF_BRANCH; move it away, then run cleanup.sh prepare again"
     if [ -n "$(git ls-remote --heads origin "refs/heads/$WF_BRANCH" 2>/dev/null)" ]; then
-      [ "$(pulls | jq -r '.[0].state // empty')" != merged ] \
+      pulls=$(branch_pulls) || exit 1
+      [ "$(printf '%s' "$pulls" | jq -r '.[0].state // empty')" != merged ] \
         || die "$WF_BRANCH on origin belongs to a merged pull request; run finalize.sh, which deletes it, or delete it with git push origin --delete $WF_BRANCH"
       git fetch -q origin "refs/heads/$WF_BRANCH" 2>"$err" || die "cannot fetch $WF_BRANCH: $(tail -n1 "$err")"
       from="the pushed $WF_BRANCH"
-    else base >/dev/null; from="$default"; fi
+    else
+      git fetch -q origin "refs/heads/$default" 2>"$err" || die "cannot fetch $default from origin: $(tail -n1 "$err")"
+      from="$default"
+    fi
     git worktree add -q -B "$WF_BRANCH" "$wt" FETCH_HEAD 2>"$err" || die "cannot create the worktree $wt: $(tail -n1 "$err")"
     printf 'worktree: %s (new, from %s)\n' "$wt" "$from"
   fi
 
-  # Deletions: the targets of approved delete findings. Only tracked files go through the pull request; the
-  # tag holds them. An untracked target is left for the maintainer, since no backup has it.
+  # Deletions: the targets of approved delete findings. Only tracked files go through the pull request, and only
+  # when the tag holds them as they are; a target changed since the tag was set (a tag from an earlier run is
+  # kept, never moved) or an untracked one is left for the maintainer, since no backup has it.
   while IFS= read -r t; do
     [ -n "$t" ] || continue
     if [ -n "$(g ls-files -- ":(literal)$t" | head -n1)" ]; then
+      if [ "$(git ls-tree -r "$WF_TAG" -- ":(literal)$t")" != "$(g ls-tree -r HEAD -- ":(literal)$t")" ]; then
+        printf 'skipped: %s changed since the tag %s was set, so the tag cannot restore it; delete it by hand if it should go\n' "$t" "$WF_TAG"
+        continue
+      fi
       g rm -r -q -- ":(literal)$t"; printf 'deleted: %s\n' "$t"
     elif [ -e "$root/$t" ] && [ -z "$(git -C "$root" ls-files -- ":(literal)$t" | head -n1)" ]; then
       printf 'local: %s is not tracked, so the pull request cannot remove it and the tag does not keep it; delete it in the checkout yourself\n' "$t"
@@ -75,7 +80,7 @@ if [ "$step" = prepare ]; then
   done < <(approved_findings "$answers" delete | cut -f2 | awk '!seen[$0]++')
 
   skips=(); for c in $rejected; do skips+=(--skip "$c"); done
-  out=$(bash "$here/scaffold.sh" ${skips[@]+"${skips[@]}"} "$wt") || exit 1
+  out=$(bash "$here/scaffold.sh" ${skips[@]+"${skips[@]}"} --name "${nwo#*/}" --default "$default" "$wt") || exit 1
   printf '%s\n' "$out" | grep -v '^next:' || true
   g add -A
 
@@ -83,7 +88,8 @@ if [ "$step" = prepare ]; then
   for a in replace create; do
     approved_findings "$answers" "$a" | awk -F'\t' '{ print "todo: " $1 " " $3 " " $2 ": " $4 }'
   done
-  placeholders "$(base)" | sed 's/^/todo: fill the <fill in> placeholders in /'
+  fork=$(base)
+  placeholders "$fork" | sed 's/^/todo: fill the <fill in> placeholders in /'
   [ -z "$rejected" ] || printf 'untouched: %s (rejected)\n' "$(printf '%s' "$rejected" | sed 's/ /, /g')"
   printf 'next: do the todo lines in %s, run make check there, then cleanup.sh open\n' "$wt"
   exit 0
@@ -100,15 +106,14 @@ if ! g diff --cached --quiet; then
     || die "cannot commit in $wt"
 fi
 head=$(g rev-parse HEAD)
-if [ -z "$(git diff --name-only "$main" "$head")" ]; then
+if [ "$(git rev-parse "$main^{tree}")" = "$(git rev-parse "$head^{tree}")" ]; then
   printf 'pr: none needed, %s already has every change\n' "$default"; exit 0
 fi
 g push -q origin "HEAD:refs/heads/$WF_BRANCH" 2>"$err" || die "cannot push $WF_BRANCH: $(tail -n1 "$err"); integrate origin/$WF_BRANCH in $wt without force, then run cleanup.sh open again"
 
 # The description: what goes, by category, with the restore command; what is added or changed; what stays.
 deleted=$(git diff --no-renames --diff-filter=D --name-only "$main" "$head")
-catalogue=$(gh api --paginate "repos/$nwo/issues?labels=skill-candidate&state=all&per_page=100" 2>/dev/null \
-  | jq -s -r --arg t "$WF_CATALOGUE" '[add // [] | .[] | select(.title == $t)] | first // empty | .number' || true)
+catalogue=$(catalogue_issue) || exit 1
 {
   printf '## What\nBrings the repository to the standard of the workflow plugins: removes what the audit found outside it and adds the missing baseline files. Nothing outside this pull request changes; the GitHub workspace is configured after the merge.\n\n'
   printf '## Removed\nThe tag `%s` keeps the state before the run. Fetch it with `git fetch origin tag %s`; each restore command brings a path back into a checkout.%s\n' \
@@ -128,7 +133,8 @@ catalogue=$(gh api --paginate "repos/$nwo/issues?labels=skill-candidate&state=al
   printf '\n## Left alone\n%s\n' "$( [ -n "$rejected" ] && printf 'Rejected in the audit, untouched: %s.' "$(printf '%s' "$rejected" | sed 's/ /, /g')" || printf 'No category was rejected.')"
   printf '\n## Verification\n- [ ] `make check` passes on this branch (CI job `check`).\n'
 } > "$tmp"
-open=$(pulls | jq -c '[.[] | select(.state == "open")] | first // empty')
+pulls=$(branch_pulls) || exit 1
+open=$(printf '%s' "$pulls" | jq -c '[.[] | select(.state == "open")] | first // empty')
 if [ -z "$open" ]; then
   url=$(jq -n --arg h "$WF_BRANCH" --arg b "$default" --rawfile body "$tmp" \
     '{title: "chore: bring the repository to the standard", head: $h, base: $b, body: $body}' \

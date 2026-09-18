@@ -85,8 +85,8 @@ class ApplyTests(ShimTest):
     def get(self, name):
         return json.loads((self.ws / name).read_text())
 
-    def step(self, script, *args, ok=True):
-        r = self.run_script(script, *args, SHIM_WS=str(self.ws))
+    def step(self, script, *args, ok=True, **env):
+        r = self.run_script(script, *args, SHIM_WS=str(self.ws), **env)
         if ok:
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         return r
@@ -94,10 +94,12 @@ class ApplyTests(ShimTest):
     def origin_git(self, *args):
         return self.git(f"--git-dir={self.origin}", *args)
 
-    def fill_in(self):
-        """What the agent does between prepare and open: the replace todo, then every placeholder the branch adds."""
+    def fill_in(self, todo=""):
+        """What the agent does between prepare and open: the CLAUDE.md todo when prepare printed it, then every
+        placeholder the branch adds."""
         wt = self.repo / WT
-        (wt / "CLAUDE.md").write_text("@AGENTS.md\n")
+        if "todo: agent-config replace CLAUDE.md" in todo:
+            (wt / "CLAUDE.md").write_text("@AGENTS.md\n")
         for f in self.git("diff", "--cached", "--name-only", "origin/main", cwd=wt).split():
             p = wt / f
             if p.is_file() and "<fill in>" in p.read_text():
@@ -110,8 +112,7 @@ class ApplyTests(ShimTest):
 
     def through_open(self):
         self.step(BACKUP)
-        self.step(CLEANUP, "prepare")
-        self.fill_in()
+        self.fill_in(self.step(CLEANUP, "prepare").stdout)
         return self.step(CLEANUP, "open")
 
     def test_backup_tags_the_head_protects_the_tag_and_catalogues_each_removed_skill(self):
@@ -201,7 +202,7 @@ class ApplyTests(ShimTest):
         r = self.step(CLEANUP, "open", ok=False)
         self.assertEqual(r.returncode, 1)
         self.assertIn("error: <fill in> placeholders are left in", r.stderr)
-        self.fill_in()
+        self.fill_in(out)
         r = self.step(CLEANUP, "open")
         self.assertIn("pr: https://github.com/o/r/pull/2 opened\n", r.stdout)
 
@@ -218,7 +219,10 @@ class ApplyTests(ShimTest):
         self.assertEqual(settings["env"]["WF_REVIEW_ROUNDS"], "5")
         self.assertEqual(settings["attribution"], {"commit": "", "pr": ""})
         self.assertIn("claude plugin disable foo@bar --scope project", self.calls())
-        self.assertIn("  check:\n", self.origin_git("show", "chore/standardize:.github/workflows/check.yml"))
+        check = self.origin_git("show", "chore/standardize:.github/workflows/check.yml")
+        self.assertIn("  check:\n", check)
+        self.assertIn("    branches: [main]\n", check)
+        self.assertTrue(self.origin_git("show", "chore/standardize:AGENTS.md").startswith("# r\n"))
 
         pr, = self.get("pulls.json")
         self.assertEqual((pr["title"], pr["head"]["ref"], pr["base"]["ref"]),
@@ -244,7 +248,7 @@ class ApplyTests(ShimTest):
                                    "issues: 2 opened, 0 kept\n")
         first, second = self.get("issues.json")
         self.assertEqual([x["name"] for x in first["labels"]], ["ready-for-agent"])
-        self.assertIn("## What to build\nsrc/app.py has no tests\n", first["body"])
+        self.assertIn("audit of `src`, confidence medium:\n\n> src/app.py has no tests\n", first["body"])
         self.assertIn("ready-for-agent", [x["name"] for x in self.get("labels.json")])
         r = self.step(ISSUES)
         self.assertEqual(r.stdout, "kept: #1 Standard (tests-ci): src\nkept: #2 Standard (security): src/app.py\n"
@@ -340,6 +344,103 @@ class ApplyTests(ShimTest):
         self.assertIn("gone: .cursor\n", r.stdout)
         self.assertIn("kept: AGENTS.md\n", r.stdout)
         self.assertEqual((self.repo / WT / "AGENTS.md").read_text(), "# r\nmine\n")
+
+    def test_the_backup_succeeds_without_rulesets_and_names_the_manual_step(self):
+        (self.ws / "plan-free").touch()
+        r = self.step(BACKUP)
+        self.assertIn("manual: protect the tag pre-standard: rulesets cannot be read", r.stdout)
+        self.assertEqual(self.origin_git("rev-parse", "refs/tags/pre-standard").strip(), self.head)
+        self.assertIn("catalogue: #1 opened, 4 skills\n", r.stdout)
+
+    def test_a_local_tag_on_the_default_branch_is_pushed_where_it_is(self):
+        self.git("tag", "pre-standard", "HEAD")
+        self.git("commit", "-q", "--allow-empty", "-m", "later")
+        self.git("push", "-q", "origin", "main")
+        r = self.step(BACKUP)
+        self.assertIn(f"tag: pre-standard pushed at {self.head[:7]} (kept at the local tag)\n", r.stdout)
+        self.assertEqual(self.origin_git("rev-parse", "refs/tags/pre-standard").strip(), self.head)
+
+    def test_a_local_tag_off_the_default_branch_is_refused(self):
+        self.git("commit", "-q", "--allow-empty", "-m", "unpushed")
+        self.git("tag", "pre-standard")
+        r = self.step(BACKUP, ok=False)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("error: the local tag pre-standard is not on main", r.stderr)
+        self.assertEqual(self.origin_git("tag"), "")
+
+    def test_a_catalogue_edited_by_hand_is_brought_back(self):
+        self.step(BACKUP)
+        self.put("issues.json", [dict(i, body="edited") for i in self.get("issues.json")])
+        r = self.step(BACKUP)
+        self.assertIn("catalogue: #1 updated, 4 skills\n", r.stdout)
+        self.assertIn("| deploy |", self.get("issues.json")[0]["body"])
+        self.assertEqual(len(self.get("issues.json")), 1)
+
+    def test_a_target_changed_since_the_tag_or_untracked_is_not_deleted(self):
+        self.origin_git("tag", "pre-standard", self.head)
+        self.write(".cursor/rules/new.mdc", "newer\n")
+        self.git("add", ".")
+        self.git("commit", "-qm", "newer rule")
+        self.git("push", "-q", "origin", "main")
+        self.write("GEMINI.md", "untracked\n")
+        self.run_script(REPORT, stdin=REPLIES + "finding: agent-config | GEMINI.md | delete | Gemini instructions | high\n")
+        self.run_script(APPROVE, "agent-config=approve", "tests-ci=approve", "security=approve", "workspace=approve",
+                        "files=reject")
+        self.step(BACKUP)
+        r = self.step(CLEANUP, "prepare")
+        self.assertIn("skipped: .cursor changed since the tag pre-standard was set, so the tag cannot restore it", r.stdout)
+        self.assertIn("local: GEMINI.md is not tracked", r.stdout)
+        self.assertIn("deleted: .claude/skills\n", r.stdout)
+        self.assertTrue((self.repo / WT / ".cursor/rules/new.mdc").exists())
+        self.assertTrue((self.repo / "GEMINI.md").exists())
+
+    def test_the_description_follows_the_branch_and_ignores_later_commits_on_main(self):
+        self.through_open()
+        self.write("later.txt", "x\n")  # someone else's change lands on main meanwhile
+        self.git("add", "later.txt")
+        self.git("commit", "-qm", "later")
+        self.git("push", "-q", "origin", "main")
+        self.write("docs/runbook.md", "# Runbook\n", root=self.repo / WT)
+        r = self.step(CLEANUP, "open")
+        self.assertIn("pr: https://github.com/o/r/pull/2 updated\n", r.stdout)
+        pr, = self.get("pulls.json")
+        self.assertIn("- added `docs/runbook.md`", pr["body"])
+        self.assertNotIn("later.txt", pr["body"])
+        self.assertIn("- `.cursor`: Cursor rules that repeat CLAUDE.md.", pr["body"])
+        self.assertEqual(self.step(CLEANUP, "open").stdout.splitlines()[0], "pr: https://github.com/o/r/pull/2 unchanged")
+
+    def test_a_pull_request_closed_without_a_merge_is_refused(self):
+        self.through_open()
+        self.put("pulls.json", [dict(p, state="closed") for p in self.get("pulls.json")])
+        r = self.step(FINALIZE, ok=False)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("error: the cleanup pull request https://github.com/o/r/pull/2 was closed without a merge", r.stderr)
+
+    def test_prepared_changes_without_a_pull_request_hold_the_workspace_back(self):
+        self.step(BACKUP)
+        self.step(CLEANUP, "prepare")
+        r = self.step(FINALIZE, ok=False)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("has changes but no pull request; run cleanup.sh open first", r.stderr)
+
+    def test_a_merged_branch_left_on_origin_is_not_reused(self):
+        self.through_open()
+        self.merge()
+        self.git("worktree", "remove", "--force", str(self.repo / WT))
+        r = self.step(CLEANUP, "prepare", ok=False)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("error: chore/standardize on origin belongs to a merged pull request; run finalize.sh", r.stderr)
+
+    def test_a_workspace_that_fails_halfway_keeps_its_snapshot_on_the_catalogue(self):
+        self.through_open()
+        self.merge()
+        r = self.step(FINALIZE, ok=False, SHIM_WS_FAIL="api --method POST repos/o/r/labels")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("workspace: failed; fix the error above and run finalize.sh again\n", r.stdout)
+        self.assertIn("snapshot: posted to #1\n", r.stdout)
+        comment, = self.get("issues.json")[0]["comments"]
+        self.assertIn('"allow_rebase_merge": true', comment)
+        self.assertTrue(r.stdout.endswith("result: fail\n"), r.stdout)
 
 
 if __name__ == "__main__":
