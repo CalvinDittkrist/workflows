@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # The first step of the apply phase: secure the state before anything changes (ADR 0010).
 # Usage: backup.sh
+# 0. An empty repository (no branch on origin, no commit in the checkout) gets an empty first commit on the
+#    default branch, so the cleanup pull request has a base; the checkout itself stays without a commit.
 # 1. Tag pre-standard on the head of the default branch on GitHub and push it. An existing tag, on GitHub or
 #    local, is kept and never moved.
 # 2. Protect it with the tag ruleset of the standard (the one workspace.sh sets), unless one exists.
@@ -15,6 +17,16 @@ for c in gh jq git; do command -v "$c" >/dev/null 2>&1 || die "$c is required bu
 answers=$(decisions) || exit 1
 err=$(mktemp); tmp=$(mktemp); trap 'rm -f "$err" "$tmp"' EXIT
 github_repo || exit 1
+
+# 0. The first commit of an empty repository. Local commits that were never pushed are not replaced: the
+#    maintainer pushes them, and they are backed up like any other state.
+heads=$(git ls-remote --heads origin 2>"$err") || die "cannot reach origin: $(tail -n1 "$err")"
+if [ -z "$heads" ] && ! git rev-parse -q --verify HEAD >/dev/null; then
+  first=$(git commit-tree "$(git hash-object -w -t tree /dev/null)" -m "chore: start the repository" </dev/null 2>"$err") \
+    || die "cannot create the first commit: $(tail -n1 "$err")"
+  git push -q origin "$first:refs/heads/$default" 2>"$err" || die "cannot push the first commit to $default: $(tail -n1 "$err")"
+  printf 'root: %s pushed as the first commit of %s (the repository was empty)\n' "$(git rev-parse --short "$first")" "$default"
+fi
 
 # 1. The tag.
 remote=$(remote_ref "refs/tags/$WF_TAG") || exit 1
