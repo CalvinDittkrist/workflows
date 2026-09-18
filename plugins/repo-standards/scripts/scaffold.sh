@@ -12,7 +12,7 @@ put() { # put <template> <target> [<name make or GitHub also reads instead>...]
       if [ "${e##*/}" = "${alt##*/}" ]; then printf 'kept: %s\n' "$alt"; return; fi
     done
   done
-  if [ -e "$t" ]; then printf 'kept: %s\n' "$2"; return; fi
+  if [ -e "$t" ]; then printf 'kept: %s (exists with a different case)\n' "$2"; return; fi
   mkdir -p "$(dirname "$t")"
   sed -e "s/{{REPO}}/$repo/g" -e "s/{{RUN_CMD}}/<fill in>/g" "$tpl/$1" > "$t"
   printf 'created: %s\n' "$2"

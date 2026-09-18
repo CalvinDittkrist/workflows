@@ -121,8 +121,7 @@ class StandardsTests(ShimTest):
                      ".cursor/rules/style.mdc", ".cursorrules", ".agents/skills/triage/SKILL.md", ".codex/config.toml",
                      ".github/copilot-instructions.md", "GEMINI.md", "skills-lock.json", "web/.windsurf/rules.md"):
             self.write(path, "x\n")
-        self.write(".claude/settings.local.json", "{}\n")
-        self.write(".gitignore", ".claude/settings.local.json\nignored/\n")
+        self.write(".gitignore", "ignored/\n")
         self.write("ignored/.claude/skills/x/SKILL.md", "x\n")
         r = self.check()
         self.assertEqual(r.returncode, 1)
@@ -139,9 +138,11 @@ class StandardsTests(ShimTest):
         self.git("add", "-A")
         self.git("commit", "-qm", "baseline")
         r = self.check()
+        self.assertEqual(r.returncode, 1)
         self.assertIn("fail: .claude/commands/ship.md:", r.stdout)
         plain = self.base / "plain"
-        self.run_script(STANDARDS / "scaffold.sh", str(plain))
+        r = self.run_script(STANDARDS / "scaffold.sh", str(plain))
+        self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(self.check(plain).returncode, 0)
         (plain / ".claude/skills/x").mkdir(parents=True)
         (plain / ".claude/skills/x/SKILL.md").write_text("x\n")
