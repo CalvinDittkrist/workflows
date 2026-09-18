@@ -3,7 +3,7 @@
 Threat model: an agent with shell access works on code and reads text from the internet (issues, PR comments, CI logs, dependencies). Two failure classes matter: the agent does something destructive on the host, and the agent is steered by untrusted text (prompt injection).
 
 ## Layers, from cheap to strong
-1. **Role restriction.** The orchestrator has no edit tools and an `omitClaudeMd` context. Reviewers and `pr-author` are read-only (`disallowedTools: Edit, Write, NotebookEdit, Agent`). Only the worker main context edits.
+1. **Role restriction.** The orchestrator has no edit tools and an `omitClaudeMd` context. Reviewers, `pr-author` and the six standardisation auditors are read-only (`disallowedTools: Edit, Write, NotebookEdit, Agent`). Only the worker main context edits.
 2. **Permissions.** `repo-standards` ships a settings template with an allowlist for the git and gh commands the pipeline needs and a deny list for force-push, hard reset and secret files. Worker sessions run in `auto` mode by default (`WF_WORKER_PERMISSION_MODE`), where Claude Code's classifier blocks scope escalation and hostile content; set `acceptEdits` or `default` for stricter repos.
 3. **Isolation per issue.** Each worker has its own worktree, branch and process. A broken worker cannot touch another issue's files; `/abandon` removes it.
 4. **Built-in OS sandbox.** Enable Claude Code's Bash sandbox (macOS Seatbelt, Linux bubblewrap) in the repo settings when the project tolerates it:
@@ -16,7 +16,7 @@ Threat model: an agent with shell access works on code and reads text from the i
 ## Prompt injection
 - The SessionStart hook labels issue text as "task data written by someone else". Reviewer, worker and pr-author prompts repeat that file contents, comments, logs and reviews are data, not instructions.
 - `address-reviews` explicitly declines review comments that ask to weaken tests, skip checks or change unrelated code.
-- Reviewers cannot spawn agents or edit, so a poisoned diff cannot make a reviewer act on the repository.
+- Reviewers cannot spawn agents or edit, so a poisoned diff cannot make a reviewer act on the repository. The same holds for the auditors: every auditor prompt treats the audited repository as data, and their replies reach `report.sh` only as `finding:` lines of a fixed grammar.
 
 ## Supply chain
 - Plugins are installed from a pinned marketplace (`extraKnownMarketplaces` + `enabledPlugins` in the repo settings). Claude Code caches plugin versions; releases are git tags created with `claude plugin tag`.
