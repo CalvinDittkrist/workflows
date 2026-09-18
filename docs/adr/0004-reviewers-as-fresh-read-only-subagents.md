@@ -2,6 +2,7 @@
 
 Date: 2026-09-17
 Status: accepted
+Amended by: [0010](0010-standardisation-audits-read-only-and-backs-up-before-deleting.md) (repositories no longer override agent files)
 
 ## Context
 The author of a change is the worst judge of it. Reviews must be independent of the implementation context, cheap to run in parallel, unable to damage the tree, and consistent across repositories. Separate reviewer sessions per worktree would multiply panes and tokens.
