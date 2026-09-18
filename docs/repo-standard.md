@@ -1,6 +1,6 @@
 # Repository standard
 
-The baseline every repository that runs this workflow is held to. `plugins/repo-standards/scripts/check.sh` (or `/repo-standards:docs-check`) verifies the file rules offline and in CI; `/repo-standards:init-repo` creates the baseline in a new repository and never overwrites. `plugins/repo-standards/scripts/workspace.sh` brings the GitHub workspace and its milestones to the standard, and the check reports its differences as warnings when GitHub is reachable. Backup and cleanup are the target state; the run that applies them is not built yet (#7). Terms are defined in the [glossary](glossary.md).
+The baseline every repository that runs this workflow is held to. `plugins/repo-standards/scripts/check.sh` (or `/repo-standards:docs-check`) verifies the file rules offline and in CI; `/repo-standards:standardize` audits a repository with six read-only auditors, one per area, and records the maintainer's approval per category of the findings; on an empty repository every finding is a create action. `plugins/repo-standards/scripts/workspace.sh` brings the GitHub workspace and its milestones to the standard, and the check reports its differences as warnings when GitHub is reachable. Backup and cleanup are the target state; the run that applies them is not built yet (#7). Terms are defined in the [glossary](glossary.md).
 
 ## Profile
 A repository's profile is its visibility plus its branch model. Both are derived from GitHub, never configured per repository ([ADR 0009](adr/0009-profile-derived-from-github-with-two-branch-models.md)).

@@ -6,7 +6,8 @@ printf 'gh %s%s\n' "$*" "${body:+ $body}" >> "${SHIM_LOG:-/dev/null}"
 
 # GitHub workspace (workspace.sh). The state lives as JSON files in the directory $SHIM_WS and every write
 # changes it, so a second run sees what the first one did. Files: repo.json, ruleset-<id>.json, labels.json,
-# automated-security-fixes.json, actions-workflow.json, milestones.json, projects.json; optional:
+# automated-security-fixes.json, actions-workflow.json, milestones.json, projects.json; optional: user.json and
+# org.json (the gh user and the owning organisation, read by facts.sh),
 # vulnerability-alerts (present means on), private-vulnerability-reporting.json, protection-<branch>.json,
 # check-runs (number of runs of the job check on the default branch, default 1); plan-free (branch protection
 # and rulesets need a paid plan); no-project-scope (the token lacks read:project). SHIM_WS_FAIL=<prefix> fails
@@ -22,6 +23,8 @@ if [ -n "${SHIM_WS:-}" ]; then
     | .rules |= map(if .type == "required_status_checks" then .parameters.do_not_enforce_on_create = false else . end)' <<<"$body" > "$ws/ruleset-$1.json"; }
   case "$*" in
     "api repos/o/r") cat "$ws/repo.json"; exit ;;
+    "api user") [ -f "$ws/user.json" ] || nf; cat "$ws/user.json"; exit ;;
+    "api orgs/o") [ -f "$ws/org.json" ] || nf; cat "$ws/org.json"; exit ;;
     "api --method PATCH repos/o/r --input -") jq --argjson b "$body" '. * $b' "$ws/repo.json" > "$ws/t" && mv "$ws/t" "$ws/repo.json"; echo '{}'; exit ;;
     "api --paginate repos/o/r/rulesets?includes_parents=false&per_page=100")
       if ls "$ws"/ruleset-*.json >/dev/null 2>&1; then jq -s 'map({id, name, target, source_type})' "$ws"/ruleset-*.json; else echo '[]'; fi; exit ;;

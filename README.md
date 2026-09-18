@@ -23,7 +23,7 @@ flowchart LR
 | [orchestrator](plugins/orchestrator/README.md) | `/plan`, `/claim`, `/yolo-claim`, `/merge`, `/board` (with frontier), `/abandon`, `/herdr` | main checkout, inside [Herdr](https://herdr.dev) |
 | [planner](plugins/planner/README.md) | `/grill`, `/spec`, `/tickets`, `/triage`, `/research`, `/prototype`, `/finish`; writes agent-ready issues, never code | each planning worktree |
 | [worker](plugins/worker/README.md) | `/work` pipeline, five read-only reviewer agents, fresh-context PR author, CI and review-thread loop, SessionStart hook that loads and assigns the issue | each issue worktree |
-| [repo-standards](plugins/repo-standards/README.md) | `/init-repo`, `/adr`, `/docs-check`; templates for AGENTS.md, CLAUDE.md, Makefile, architecture.md, ADRs, PR template, settings | any repository |
+| [repo-standards](plugins/repo-standards/README.md) | `/standardize` (six read-only auditors, one findings report, approval per category), `/adr`, `/docs-check`; templates for AGENTS.md, CLAUDE.md, Makefile, architecture.md, ADRs, PR template, settings | any repository |
 
 ## Install
 
@@ -37,7 +37,7 @@ claude plugin install repo-standards@workflows
 claude plugin install orchestrator@workflows
 ```
 
-Per repository, once: run `/repo-standards:init-repo` in the repo. It writes `.claude/settings.json` with the marketplace, enabled plugins, workflow env and a permission allowlist, plus the docs baseline. Commit it; teammates then only run the install commands above.
+Per repository, once: run `/repo-standards:standardize` in the repo. It prints the repository's facts, lets six read-only auditors judge it against the [standard](docs/repo-standard.md), shows one findings report and records your approval per category; an empty repository gets a report of create actions only. The audit changes nothing. Applying the approved findings (settings, baseline files, cleanup pull request, GitHub workspace) is the next phase and not built yet; until then `scaffold.sh` in the plugin's `scripts/` creates the baseline files, `.claude/settings.json` included, and never overwrites. Commit them; teammates then only run the install commands above.
 
 Skills also work outside Claude Code: `npx skills add CalvinDittkrist/workflows --skill <name>` (Agent Skills format) or `sbx skills add CalvinDittkrist/workflows` for Docker Sandboxes.
 

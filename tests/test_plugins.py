@@ -46,6 +46,20 @@ class ManifestTests(unittest.TestCase):
             fm = agent.read_text().split("---")[1]
             self.assertIn("model: inherit\n", fm, agent)
 
+    def test_every_auditor_is_read_only_by_its_declared_tools(self):
+        agents = ROOT / "plugins/repo-standards/agents"
+        names = {"files", "agent-config", "docs", "tests-ci", "workspace", "security"}
+        self.assertEqual({p.stem for p in agents.glob("*.md")}, {f"{n}-auditor" for n in names})
+        for agent in agents.glob("*.md"):
+            fields = dict(line.split(": ", 1) for line in agent.read_text().split("---")[1].strip().splitlines())
+            self.assertEqual(fields["tools"].split(", "), ["Read", "Grep", "Glob", "Bash"], agent)
+            self.assertTrue({"Edit", "Write", "NotebookEdit", "Agent"} <= set(fields["disallowedTools"].split(", ")), agent)
+            self.assertNotIn("mcpServers", fields, agent)
+
+    def test_the_standardisation_run_is_user_invoked_only(self):
+        fm = (ROOT / "plugins/repo-standards/skills/standardize/SKILL.md").read_text().split("---")[1]
+        self.assertIn("disable-model-invocation: true\n", fm)
+
     def test_every_inline_command_in_a_skill_is_pre_approved(self):
         # A forked skill's !`command` fails silently without a matching allowed-tools rule (verified on 2.1.274).
         for plugin in PLUGINS:
