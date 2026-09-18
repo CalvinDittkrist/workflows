@@ -1,6 +1,6 @@
 ---
 name: merge
-description: Squash-merge a ready PR and remove its worktree, Herdr workspace and branch.
+description: Squash-merge a ready PR and remove its worktree, Herdr workspace and branch. A promotion PR from dev gets a merge commit and keeps dev.
 argument-hint: <pr> [--allow-unstable] [--ignore-threads]
 disable-model-invocation: true
 ---

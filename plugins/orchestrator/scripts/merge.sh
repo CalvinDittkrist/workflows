@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Squash-merge a ready PR, then remove its worktree, Herdr workspace and branch.
+# A promotion PR from dev (release.sh) gets a merge commit and keeps dev; a fork PR keeps local branches.
 # Usage: merge.sh <pr> [--allow-unstable] [--ignore-threads]
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
@@ -9,7 +10,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --allow-unstable) allow_unstable=1 ;;
     --ignore-threads) ignore_threads=1 ;;
-    -h|--help) sed -n '2,3p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,4p' "$0"; exit 0 ;;
     -*) wf_die "unknown flag $1" ;;
     *) pr="${1#\#}" ;;
   esac

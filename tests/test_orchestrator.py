@@ -328,6 +328,12 @@ class ReleaseTests(ShimTest):
         self.assertIn("another promotion pull request is open (https://github.com/o/r/pull/71)", r.stderr)
         self.assertEqual(self.mutations(), [])
 
+    def test_a_failed_tag_lookup_stops_before_publishing(self):
+        r = self.run_script(ORCH / "release.sh", "v1.2.0", SHIM_MILESTONES_FIXTURE=self.milestones(), SHIM_TAG_ERROR="1")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("error: cannot check whether tag v1.2.0 exists", r.stderr)
+        self.assertEqual(self.mutations(), [])
+
     def test_a_failed_dev_lookup_stops_instead_of_releasing_main_alone(self):
         r = self.run_script(ORCH / "release.sh", "v1.2.0", SHIM_MILESTONES_FIXTURE=self.milestones(), SHIM_BRANCHES="main dev", SHIM_BRANCH_ERROR="dev")
         self.assertNotEqual(r.returncode, 0)

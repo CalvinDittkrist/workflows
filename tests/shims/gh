@@ -41,7 +41,7 @@ case "$*" in
   "api --method POST repos/o/r/milestones -f title="*) echo '{"number":9}' ;;
   "api --method PATCH repos/o/r/milestones/"*" -f state=closed") [ "${SHIM_MILESTONE_CLOSE_FAILS:-0}" = 1 ] && { echo "HTTP 500" >&2; exit 1; }; echo '{}' ;;
   "api repos/o/r/git/ref/tags/"*)
-    t="${2##*/}"; case " ${SHIM_TAGS:-} " in *" $t "*) echo '{"ref":"refs/tags/x"}' ;; *) echo "HTTP 404: Not Found" >&2; exit 1 ;; esac ;;
+    t="${2##*/}"; [ -n "${SHIM_TAG_ERROR:-}" ] && { echo "gh: Server Error (HTTP 502)" >&2; exit 1; }; case " ${SHIM_TAGS:-} " in *" $t "*) echo '{"ref":"refs/tags/x"}' ;; *) echo "gh: Not Found (HTTP 404)" >&2; exit 1 ;; esac ;;
   "api repos/o/r/branches/"*" --jq .commit.sha")
     b=$(printf '%s' "$*" | sed -E 's#.*/branches/([^ ]+) .*#\1#')
     [ "$b" = "${SHIM_BRANCH_ERROR:-}" ] && { echo "gh: Server Error (HTTP 502)" >&2; exit 1; }

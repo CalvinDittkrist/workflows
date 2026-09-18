@@ -26,8 +26,11 @@ ms=$(gh api --paginate "repos/$nwo/milestones?state=all&per_page=100" | jq -s -c
 [ "$(printf '%s' "$ms" | jq -r .state)" = open ] || wf_die "milestone $v is already closed"
 open=$(printf '%s' "$ms" | jq -r .open_issues)
 [ "$open" = 0 ] || wf_die "milestone $v has $open open issue(s); finish them or move them to a later milestone (gh issue list --milestone $v)"
-if gh api "repos/$nwo/git/ref/tags/$v" >/dev/null 2>&1; then
+# Only a 404 means the tag is free; any other failure must not let gh release create reuse an existing tag.
+if out=$(gh api "repos/$nwo/git/ref/tags/$v" 2>&1); then
   wf_die "tag $v already exists; if release $v is already published, close the milestone on GitHub, otherwise release a new version"
+elif ! printf '%s' "$out" | grep -q 'HTTP 404'; then
+  wf_die "cannot check whether tag $v exists: $out"
 fi
 
 # Head sha of branch $1; empty when GitHub answers 404. Any other failure (network, auth, rate limit) is fatal,
@@ -59,6 +62,7 @@ if [ -n "$dev" ]; then
     body="Promotes \`dev\` to \`main\` for milestone $v. After the merge, \`/orchestrator:release $v\` tags the merge commit and publishes the release."
     url=$(wf_run gh pr create --base main --head dev --title "$title" --body "$body") \
       || wf_die "opening the promotion pull request dev -> main failed; check that dev is ahead of main"
+    [ "${WF_DRY_RUN:-0}" != 1 ] || url="(dry run)"
     wf_kv promotion "$url (opened)"
   elif [ "$(printf '%s' "$pr" | jq -r .state)" = OPEN ]; then
     url=$(printf '%s' "$pr" | jq -r .url)
