@@ -4,7 +4,7 @@ on:
     branches: [main]
   pull_request:
 jobs:
-  test:
+  check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -16,14 +16,7 @@ jobs:
       - name: Install shellcheck 0.11.0 (same as brew, so local and CI findings match)
         run: |
           sudo apt-get install -y jq
-          curl -sSL https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz | tar -xJ
-          sudo mv shellcheck-v0.11.0/shellcheck /usr/local/bin/shellcheck
-      - name: Lint scripts
-        run: shellcheck -s bash plugins/*/scripts/*.sh
-      - name: Validate plugins
-        run: |
-          claude plugin validate . --strict
-          for p in plugins/*; do claude plugin validate "$p" --strict; done
-          for d in plugins/*/skills plugins/*/agents; do [ -d "$d" ] && claude plugin validate "$d" --strict; done
-      - name: Unit tests
-        run: python3 -m unittest discover -s tests -v
+          curl -sSL https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz | tar -xJ -C "$RUNNER_TEMP"
+          sudo mv "$RUNNER_TEMP/shellcheck-v0.11.0/shellcheck" /usr/local/bin/shellcheck
+      - name: Gate
+        run: make check
