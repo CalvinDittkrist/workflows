@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Test shim for claude: logs calls and emulates the project-scope plugin commands, which edit
+# .claude/settings.json in the working directory the way Claude Code does (checked against 2.x on 2026-09-18).
+printf 'claude %s\n' "$*" >> "${SHIM_LOG:-/dev/null}"
+s=.claude/settings.json
+edit() { mkdir -p .claude; [ -f "$s" ] || echo '{}' > "$s"; jq "$@" "$s" > "$s.tmp" && mv "$s.tmp" "$s"; }
+case "$*" in
+  "plugin marketplace add "*"/"*" --scope project")
+    r=$4; edit --arg r "$r" --arg n "${r##*/}" '.extraKnownMarketplaces[$n] = {source: {source: "github", repo: $r}}' ;;
+  "plugin install "*"@"*" --scope project") edit --arg p "$3" '.enabledPlugins[$p] = true' ;;
+  "plugin disable "*" --scope project")
+    [ "$(jq -r --arg p "$3" '.enabledPlugins[$p] // false' "$s" 2>/dev/null)" = true ] \
+      || { echo "✘ Failed to disable plugin \"$3\": Plugin \"$3\" is already disabled at project scope" >&2; exit 1; }
+    edit --arg p "$3" '.enabledPlugins[$p] = false' ;;
+  *) echo "claude shim: unhandled: $*" >&2; exit 64 ;;
+esac

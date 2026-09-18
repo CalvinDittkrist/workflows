@@ -1,32 +1,83 @@
 #!/usr/bin/env bash
-# Create the repository baseline. Never overwrites; prints created/kept per file.
-# Usage: scaffold.sh [<repo-root>]
+# Create the repository baseline and bring .claude/settings.json to the template. Never overwrites a file;
+# prints created/kept/updated per file.
+# Usage: scaffold.sh [--skip <category>]... [<repo-root>]
+# --skip leaves the files of a category alone: agent-config (AGENTS.md, CLAUDE.md, .claude/settings.json),
+# docs (docs/, the PR template), tests-ci (Makefile, the CI job check), workspace (.github/dependabot.yml).
+# Settings: the marketplace and the workflow plugins go in through `claude plugin ... --scope project`, every
+# other plugin enabled at project scope is disabled, and the template's attribution, env and permissions
+# are merged in (existing env values win, permission lists are joined).
 set -euo pipefail
-root="${1:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
-tpl="$(cd "$(dirname "$0")/../templates" && pwd)"
-repo=$(basename "$root")
+die() { printf 'error: %s\n' "$*" >&2; exit 1; }
+skip=" " root=""
 # shellcheck source=lib.sh
 . "$(dirname "$0")/lib.sh"
-put() { # put <template> <target> [<name make or GitHub also reads instead>...]
-  local t="$root/$2" alt
-  for alt in "$2" "${@:3}"; do # exact case, so macOS reports the name that is really there
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --skip) [ $# -ge 2 ] || die "--skip needs a category"
+      case " $WF_CATEGORIES " in *" $2 "*) ;; *) die "unknown category $2; use one of $WF_CATEGORIES" ;; esac
+      skip="$skip$2 "; shift ;;
+    -*) die "unknown argument $1; usage: scaffold.sh [--skip <category>]... [<repo-root>]" ;;
+    *) root=$1 ;;
+  esac
+  shift
+done
+root="${root:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
+tpl="$(cd "$(dirname "$0")/../templates" && pwd)"
+repo=$(basename "$root")
+skipped() { case "$skip" in *" $1 "*) return 0 ;; esac; return 1; }
+put() { # put <category> <template> <target> [<name make or GitHub also reads instead>...]
+  local t="$root/$3" alt
+  skipped "$1" && return
+  for alt in "$3" "${@:4}"; do # exact case, so macOS reports the name that is really there
     if has "$(dirname "$root/$alt")" "${alt##*/}"; then printf 'kept: %s\n' "$alt"; return; fi
   done
-  if [ -e "$t" ]; then printf 'kept: %s (exists with a different case)\n' "$2"; return; fi
+  if [ -e "$t" ]; then printf 'kept: %s (exists with a different case)\n' "$3"; return; fi
   mkdir -p "$(dirname "$t")"
-  sed -e "s/{{REPO}}/$repo/g" -e "s/{{RUN_CMD}}/<fill in>/g" "$tpl/$1" > "$t"
-  printf 'created: %s\n' "$2"
+  sed -e "s/{{REPO}}/$repo/g" -e "s/{{RUN_CMD}}/<fill in>/g" "$tpl/$2" > "$t"
+  printf 'created: %s\n' "$3"
 }
-put AGENTS.md.tpl AGENTS.md
-put CLAUDE.md.tpl CLAUDE.md
-put Makefile Makefile GNUmakefile makefile
-put architecture.md docs/architecture.md
-put adr-README.md docs/adr/README.md
-put adr-template.md docs/adr/template.md
-put PULL_REQUEST_TEMPLATE.md .github/PULL_REQUEST_TEMPLATE.md .github/pull_request_template.md
-if [ -e "$root/.claude/settings.json" ]; then
-  printf 'kept: .claude/settings.json (merge templates/settings.json by hand: marketplace, enabledPlugins, env, permissions)\n'
-else
-  mkdir -p "$root/.claude"; cp "$tpl/settings.json" "$root/.claude/settings.json"; printf 'created: .claude/settings.json\n'
+put agent-config AGENTS.md.tpl AGENTS.md
+put agent-config CLAUDE.md.tpl CLAUDE.md
+put tests-ci Makefile Makefile GNUmakefile makefile
+put docs architecture.md docs/architecture.md
+put docs adr-README.md docs/adr/README.md
+put docs adr-template.md docs/adr/template.md
+put docs glossary.md docs/glossary.md
+put docs PULL_REQUEST_TEMPLATE.md .github/PULL_REQUEST_TEMPLATE.md .github/pull_request_template.md
+put workspace dependabot.yml .github/dependabot.yml .github/dependabot.yaml
+# The CI job named check, unless a workflow already has one.
+if ! skipped tests-ci; then
+  gate=""
+  for w in "$root"/.github/workflows/*.yml "$root"/.github/workflows/*.yaml; do
+    [ -f "$w" ] && workflow_jobs "$w" | is_check_job && { gate=${w#"$root"/}; break; }
+  done
+  if [ -n "$gate" ]; then printf 'kept: %s (has the job check)\n' "$gate"; else put tests-ci check.yml .github/workflows/check.yml; fi
 fi
-printf 'next: fill AGENTS.md, the Makefile check target and docs/architecture.md; run check.sh\n'
+
+# Settings through the plugin commands, which write .claude/settings.json of the directory they run in.
+skipped agent-config && { printf 'next: fill the <fill in> placeholders; run check.sh\n'; exit 0; }
+command -v claude >/dev/null 2>&1 || die "claude is not on PATH; install Claude Code (npm install -g @anthropic-ai/claude-code), it registers the marketplace and enables the plugins"
+command -v jq >/dev/null 2>&1 || die "jq is required but not on PATH"
+s="$root/.claude/settings.json"
+[ ! -e "$s" ] || jq -e 'type == "object"' "$s" >/dev/null 2>&1 || die ".claude/settings.json is not a JSON object; fix it by hand, then run scaffold.sh again"
+before=$(cat "$s" 2>/dev/null || true)
+err=$(mktemp); trap 'rm -f "$err"' EXIT
+run() { (cd "$root" && claude plugin "$@" --scope project) >/dev/null 2>"$err" || die "claude plugin $* --scope project failed: $(tail -n1 "$err")"; }
+run marketplace add "$(jq -r '.extraKnownMarketplaces.workflows.source.repo' "$tpl/settings.json")"
+wanted=$(jq -r '.enabledPlugins | keys[]' "$tpl/settings.json")
+for p in $wanted; do
+  [ "$(jq -r --arg p "$p" '.enabledPlugins[$p] // empty' "$s" 2>/dev/null)" = true ] || run install "$p"
+done
+for p in $(jq -r '.enabledPlugins // {} | to_entries[] | select(.value == true) | .key' "$s"); do
+  printf '%s\n' "$wanted" | grep -qxF -- "$p" || run disable "$p"
+done
+jq --slurpfile t "$tpl/settings.json" '$t[0] as $t
+  | .attribution = $t.attribution
+  | .env = ($t.env + (.env // {}))
+  | .permissions.allow = ((.permissions.allow // []) as $a | $a + ($t.permissions.allow - $a))
+  | .permissions.deny = ((.permissions.deny // []) as $d | $d + ($t.permissions.deny - $d))' "$s" > "$s.tmp" && mv "$s.tmp" "$s"
+if [ -z "$before" ]; then printf 'created: .claude/settings.json\n'
+elif [ "$(jq -S . <<<"$before")" = "$(jq -S . "$s")" ]; then printf 'kept: .claude/settings.json\n'
+else printf 'updated: .claude/settings.json\n'; fi
+printf 'next: fill the <fill in> placeholders; run check.sh\n'
