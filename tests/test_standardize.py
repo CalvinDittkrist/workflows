@@ -8,7 +8,7 @@ FACTS = STANDARDS / "facts.sh"
 REPORT = STANDARDS / "report.sh"
 APPROVE = STANDARDS / "approve.sh"
 BASELINE = ("README.md, AGENTS.md, CLAUDE.md, Makefile, docs/architecture.md, docs/adr/README.md, docs/glossary.md, "
-            ".github/PULL_REQUEST_TEMPLATE.md, .claude/settings.json")
+            ".github/PULL_REQUEST_TEMPLATE.md, .github/dependabot.yml, .claude/settings.json")
 
 
 def lines(out, *keys):
@@ -132,12 +132,12 @@ class FactsTests(ShimTest):
             "  .claude/settings.local.json: 1 file, ignored, standard",
             "  .claude/skills/deploy: 2 files, tracked, outside the standard",
             "  .cursor/rules/style.mdc: 1 file, tracked, outside the standard",
-            "  .mcp.json: 1 file, tracked, outside the standard",
+            "  .mcp.json: 1 file, tracked, needs judgement (stays when something in the repository uses it)",
             "  CLAUDE.local.md: 1 file, ignored, outside the standard",
             "  CLAUDE.md: 1 file, tracked, standard",
             "  GEMINI.md: 1 file, untracked, outside the standard",
             "baseline-missing: AGENTS.md, docs/architecture.md, docs/adr/README.md, docs/glossary.md, "
-            ".github/PULL_REQUEST_TEMPLATE.md, LICENSE, SECURITY.md",
+            ".github/PULL_REQUEST_TEMPLATE.md, .github/dependabot.yml, LICENSE, SECURITY.md",
             "files: 19 tracked, 1 untracked, 3 KB",
             "top-dirs: .claude/ 4, src/ 3, api/ 2, .cursor/ 1, .github/ 1, docs/ 1"])
         self.assertIn("largest: docs/big.bin (3 KB), ", out)

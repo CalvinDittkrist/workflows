@@ -11,7 +11,7 @@ A repository's profile is its visibility plus its branch model. Both are derived
 ## Files that stay
 | File | Purpose | Checked |
 | --- | --- | --- |
-| `README.md` | What the repository is and how to use it | fails if missing |
+| `README.md` | What the repository is and how to use it | fails if missing; warns with `<fill in>` left |
 | `AGENTS.md` | Instruction source for every agent: commands and conventions an agent cannot infer; under 200 lines | fails if missing; warns over 200 lines or with `<fill in>` left |
 | `CLAUDE.md` | The line `@AGENTS.md`, optionally a short Claude-only section | fails if missing or without the import; warns over 200 lines |
 | `Makefile` | The gate: a `check` target | fails without a `check` target; warns with `<fill in>` left |

@@ -550,9 +550,6 @@ class ApplyTests(ApplyCase):
         self.assertTrue(r.stdout.endswith("result: fail\n"), r.stdout)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 EMPTY_REPLIES = """finding: docs | README.md | create | the repository has no README | high
 finding: agent-config | AGENTS.md | create | no instruction source | high
@@ -609,3 +606,7 @@ class EmptyRepositoryApplyTests(ApplyCase):
         self.assertIn("error: origin has no branch main", r.stderr)
         self.assertIn("git push -u origin HEAD", r.stderr)
         self.assertEqual(self.origin_git("for-each-ref"), "")
+
+
+if __name__ == "__main__":
+    unittest.main()

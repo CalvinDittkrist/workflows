@@ -22,8 +22,11 @@ files() {
 }
 all=$(files | sort -u)
 
-readme=$(first_of "$root" README.md README.rst README.txt README readme.md)
-if [ -n "$readme" ]; then ok "$readme"; else bad "README.md missing; say what the repository is and how to use it"; fi
+# shellcheck disable=SC2086 # a list of names
+readme=$(first_of "$root" $WF_README_NAMES)
+if [ -n "$readme" ]; then
+  ok "$readme"; grep -q '<fill in>' "$root/$readme" && warn "$readme still has <fill in> placeholders"
+else bad "README.md missing; say what the repository is and how to use it"; fi
 
 # Instruction files: AGENTS.md is the source, CLAUDE.md next to it imports it. Root always; one pair
 # per area in a monorepo. Hidden directories are left to the agent configuration rule below.
@@ -51,13 +54,7 @@ if [ -n "$mk" ] && grep -Eq '^([^:#=[:space:]][^:#=]*[[:space:]])?check([[:space
 else bad "no check target in a Makefile; add one that runs everything CI gates on (make check is the gate)"; fi
 
 # CI runs the gate in a job named check, the one required status check.
-gate=""
-while IFS= read -r w; do
-  case "$w" in .github/workflows/*/*) continue ;; .github/workflows/*.yml|.github/workflows/*.yaml) ;; *) continue ;; esac
-  [ -f "$root/$w" ] && workflow_jobs "$root/$w" | is_check_job && { gate=$w; break; }
-done <<EOF
-$all
-EOF
+gate=$(ci_check_workflow "$root")
 if [ -n "$gate" ]; then ok "$gate has the CI job check"
 else bad "no CI job named check in .github/workflows; add one that runs make check (it is the required status check)"; fi
 
@@ -88,7 +85,8 @@ if command -v gh >/dev/null 2>&1 && command -v jq >/dev/null 2>&1 \
 fi
 case "$vis" in
   public)
-    lic=$(first_of "$root" LICENSE LICENSE.md LICENSE.txt COPYING)
+    # shellcheck disable=SC2086 # a list of names
+    lic=$(first_of "$root" $WF_LICENSE_NAMES)
     if [ -n "$lic" ]; then ok "$lic"; else bad "LICENSE missing; a public repository needs a licence"; fi
     if has "$root" SECURITY.md; then ok "SECURITY.md"
     elif has "$root/.github" SECURITY.md; then ok ".github/SECURITY.md"
@@ -99,18 +97,18 @@ if [ -f "$root/.claude/settings.json" ]; then
   if command -v jq >/dev/null 2>&1; then
     # The workflow plugins of the settings template are enabled at project scope, and nothing else.
     tpl="$(dirname "$0")/../templates/settings.json"
-    for p in $(jq -r '.enabledPlugins | keys[]' "$tpl"); do
+    while IFS= read -r p; do
       if jq -e --arg p "$p" '.enabledPlugins[$p] == true' "$root/.claude/settings.json" >/dev/null 2>&1; then ok "$p enabled"
       else warn "$p not enabled in .claude/settings.json"; fi
-    done
-    for p in $(jq -r --slurpfile t "$tpl" '($t[0].enabledPlugins | keys) as $w
-      | (.enabledPlugins // {}) | to_entries[] | select(.value == true and ([.key] | inside($w) | not)) | .key' "$root/.claude/settings.json" 2>/dev/null); do
-      warn "$p enabled at project scope; the standard enables only the workflow plugins, disable it"
-    done
+    done < <(jq -r '.enabledPlugins | keys[]' "$tpl")
+    while IFS= read -r p; do
+      [ -z "$p" ] || warn "$p enabled at project scope; the standard enables only the workflow plugins, disable it"
+    done < <(jq -r --slurpfile t "$tpl" '($t[0].enabledPlugins | keys) as $w
+      | (.enabledPlugins // {}) | to_entries[] | select(.value == true and (.key | IN($w[]) | not)) | .key' "$root/.claude/settings.json" 2>/dev/null)
     if jq -e 'has("hooks")' "$root/.claude/settings.json" >/dev/null 2>&1; then
       bad ".claude/settings.json has hooks: agent configuration the standard does not define; remove them"
     fi
-    if jq -e 'has("enableAllProjectMcpServers") or has("enabledMcpjsonServers") or has("mcpServers")' "$root/.claude/settings.json" >/dev/null 2>&1; then
+    if jq -e '.enableAllProjectMcpServers == true or ((.enabledMcpjsonServers // []) | length > 0) or ((.mcpServers // {}) | length > 0)' "$root/.claude/settings.json" >/dev/null 2>&1; then
       warn ".claude/settings.json enables MCP servers; keep them only if something in the repository uses them"
     fi
     if jq -e '(.attribution.commit // "x") == ""' "$root/.claude/settings.json" >/dev/null 2>&1; then ok "commit attribution off"; else warn "attribution.commit not empty; agent co-author lines will be added"; fi
@@ -152,7 +150,7 @@ EOF
 ai=$(printf '%s\n' "$all" | grep -E '^\.github/workflows/[^/]+\.ya?ml$' | while IFS= read -r w; do
   [ -f "$root/$w" ] || continue
   sed -nE 's#^[[:space:]-]*uses:[[:space:]]*["'"'"']?((anthropics/claude-code(-base)?-action|openai/codex-action|google-github-actions/run-gemini-cli|coderabbitai/[A-Za-z0-9_.-]+)).*#\1#p' "$root/$w" \
-    | sort -u | sed "s#^#$w: #"
+    | sort -u | while IFS= read -r u; do printf '%s: %s\n' "$w" "$u"; done # the file name is data, never a sed script
 done)
 while IFS= read -r a; do
   [ -z "$a" ] || bad "$a runs an AI reviewer or agent in CI; remove it"

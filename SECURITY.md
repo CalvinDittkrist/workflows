@@ -1,7 +1,7 @@
 # Security policy
 
 ## Reporting a vulnerability
-Report vulnerabilities privately through GitHub: open the repository's **Security** tab and choose **Report a vulnerability**. Do not open a public issue for a vulnerability.
+Report vulnerabilities privately through GitHub: open the repository's **Security** tab and choose **Report a vulnerability**. Do not open a public issue for a vulnerability. If the button is missing, open an issue that asks for a private contact and leave every detail out of it.
 
 Include the plugin and version (`plugins/<name>/.claude-plugin/plugin.json`), the steps to reproduce, and what an attacker gains.
 

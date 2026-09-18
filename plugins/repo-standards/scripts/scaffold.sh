@@ -45,7 +45,8 @@ put() { # put <category> <template> <target> [<name make or GitHub also reads in
   sed -e "s|{{REPO}}|$(esc "$repo")|g" -e "s|{{BRANCHES}}|$(esc "$branches")|g" -e "s|{{RUN_CMD}}|<fill in>|g" "$tpl/$2" > "$t"
   printf 'created: %s\n' "$3"
 }
-put docs README.md.tpl README.md README.rst README.txt README readme.md
+# shellcheck disable=SC2086 # a list of names
+put docs README.md.tpl README.md $WF_README_NAMES
 put agent-config AGENTS.md.tpl AGENTS.md
 put agent-config CLAUDE.md.tpl CLAUDE.md
 put tests-ci Makefile Makefile GNUmakefile makefile
@@ -57,10 +58,7 @@ put docs PULL_REQUEST_TEMPLATE.md .github/PULL_REQUEST_TEMPLATE.md .github/pull_
 put workspace dependabot.yml .github/dependabot.yml .github/dependabot.yaml
 # The CI job named check, unless a workflow already has one.
 if ! skipped tests-ci; then
-  gate=""
-  for w in "$root"/.github/workflows/*.yml "$root"/.github/workflows/*.yaml; do
-    [ -f "$w" ] && workflow_jobs "$w" | is_check_job && { gate=${w#"$root"/}; break; }
-  done
+  gate=$(ci_check_workflow "$root")
   if [ -n "$gate" ]; then printf 'kept: %s (has the job check)\n' "$gate"; else put tests-ci check.yml .github/workflows/check.yml; fi
 fi
 

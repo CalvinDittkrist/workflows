@@ -194,6 +194,22 @@ class StandardsTests(ShimTest):
         self.assertIn("ok: README.rst", r.stdout)
         self.assertIn("ok: .github/workflows/test.yml has the CI job check", r.stdout)
 
+    def test_scaffold_creates_a_readme_only_when_none_exists_and_check_wants_it_filled_in(self):
+        (self.repo / "README.md").unlink()
+        self.write("README.rst", "shop\n")
+        r = self.scaffold()
+        self.assertIn("kept: README.rst", r.stdout)
+        self.assertFalse((self.repo / "README.md").exists())
+        (self.repo / "README.rst").unlink()
+        r = self.run_script(STANDARDS / "scaffold.sh", "--skip", "docs")
+        self.assertNotIn("README", r.stdout)
+        r = self.scaffold()
+        self.assertIn("created: README.md", r.stdout)
+        self.assertTrue((self.repo / "README.md").read_text().startswith(f"# {self.repo.name}\n"))
+        r = self.check()
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertIn("warn: README.md still has <fill in> placeholders", r.stdout)
+
     def test_check_warns_without_a_glossary_or_grouped_version_updates(self):
         self.scaffold()
         (self.repo / "docs/glossary.md").unlink()
@@ -229,7 +245,10 @@ class StandardsTests(ShimTest):
     def test_check_holds_the_settings_to_the_workflow_plugins_without_hooks(self):
         self.scaffold()
         settings = json.loads((self.repo / ".claude/settings.json").read_text())
-        settings["enabledPlugins"].update({"planner@workflows": False, "foo@bar": True, "old@bar": False})
+        settings["enabledPlugins"].update({"planner@workflows": False, "foo@bar": True, "old@bar": False, "a *": True, "worker@workflow": True})
+        settings.update({"enabledMcpjsonServers": [], "enableAllProjectMcpServers": False})
+        self.write(".claude/settings.json", json.dumps(settings))
+        self.assertNotIn("MCP", self.check().stdout)
         settings["enabledMcpjsonServers"] = ["db"]
         self.write(".claude/settings.json", json.dumps(settings))
         r = self.check()
@@ -237,6 +256,8 @@ class StandardsTests(ShimTest):
         self.assertIn("warn: planner@workflows not enabled in .claude/settings.json", r.stdout)
         self.assertIn("warn: foo@bar enabled at project scope; the standard enables only the workflow plugins", r.stdout)
         self.assertNotIn("old@bar", r.stdout)
+        self.assertIn("warn: a * enabled at project scope", r.stdout)
+        self.assertIn("warn: worker@workflow enabled at project scope", r.stdout)
         self.assertIn("warn: .claude/settings.json enables MCP servers", r.stdout)
         settings["hooks"] = {"Stop": []}
         self.write(".claude/settings.json", json.dumps(settings))
@@ -252,13 +273,22 @@ class StandardsTests(ShimTest):
         self.assertIn("warn: .mcp.json: MCP configuration; keep it only if something in the repository uses it", r.stdout)
         self.write(".github/workflows/review.yml", "on: pull_request\njobs:\n  review:\n    runs-on: ubuntu-latest\n"
                    "    steps:\n      - uses: actions/checkout@v5\n      - uses: 'anthropics/claude-code-action@v1'\n"
-                   "      - name: codex\n        uses: openai/codex-action@main\n")
+                   "      - name: codex\n        uses: openai/codex-action@main\n      - uses: anthropics/claude-code-base-action@beta\n"
+                   "      - uses: google-github-actions/run-gemini-cli@v0\n      - uses: coderabbitai/ai-pr-reviewer@latest\n")
+        # A file name is data: one that reads as a sed script (w writes a file) must not run.
+        evil = ".github/workflows/x#;w pwned#.yml"
+        self.write(evil, "jobs:\n  r:\n    steps:\n      - uses: coderabbitai/ai-pr-reviewer@latest\n")
+        r = self.check()
+        self.assertEqual(r.returncode, 1)
+        self.assertFalse(any(p.name.startswith("pwned") for p in self.repo.rglob("*")), "check.sh ran a file name as sed")
+        self.assertIn(f"fail: {evil}: coderabbitai/ai-pr-reviewer runs an AI reviewer or agent in CI; remove it", r.stdout)
+        (self.repo / evil).unlink()
         r = self.check()
         self.assertEqual(r.returncode, 1)
         named = sorted(line for line in r.stdout.splitlines() if "AI reviewer" in line)
-        self.assertEqual(named, [
-            "fail: .github/workflows/review.yml: anthropics/claude-code-action runs an AI reviewer or agent in CI; remove it",
-            "fail: .github/workflows/review.yml: openai/codex-action runs an AI reviewer or agent in CI; remove it"])
+        self.assertEqual(named, [f"fail: .github/workflows/review.yml: {a} runs an AI reviewer or agent in CI; remove it" for a in (
+            "anthropics/claude-code-action", "anthropics/claude-code-base-action", "coderabbitai/ai-pr-reviewer",
+            "google-github-actions/run-gemini-cli", "openai/codex-action")])
 
     def test_check_counts_tracked_files_and_works_outside_git(self):
         self.scaffold()

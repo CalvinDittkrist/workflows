@@ -185,7 +185,8 @@ agent=$(find . \( $prune \) -prune -o \( -type f -o -type l \) -print 2>/dev/nul
       }
       if (i == NF && (c == "CLAUDE.md" || c == "AGENTS.md")) { print $0 "\tstandard\t" $0; next }
       if (c == ".claude-plugin") { print loc(i) "\tplugin source, not loaded as configuration\t" $0; next }
-      if (i == NF && (c == "CLAUDE.local.md" || c == "AGENT.md" || c == ".mcp.json" || c == ".worktreeinclude" || c == ".rules")) { print $0 "\toutside the standard\t" $0; next }
+      if (i == NF && (c == "CLAUDE.local.md" || c == "AGENT.md" || c == ".worktreeinclude" || c == ".rules")) { print $0 "\toutside the standard\t" $0; next }
+      if (i == NF && c == ".mcp.json") { print $0 "\tneeds judgement (stays when something in the repository uses it)\t" $0; next }
       if (c ~ /^\.aider/ || c ~ /^(\.agents|\.amazonq|\.augment|\.clinerules|\.codex|\.continue|\.cursor|\.cursorignore|\.cursorindexingignore|\.cursorrules|\.gemini|\.goose|\.goosehints|\.junie|\.kilocode|\.kiro|\.opencode|\.qwen|\.roo|\.roomodes|\.roorules|\.trae|\.windsurf|\.windsurfrules|GEMINI\.md|opencode\.json|skills-lock\.json|\.skill-lock\.json)$/) { print loc(i) "\toutside the standard\t" $0; next }
       if (i == 1 && c == ".github" && NF > 1 && $2 ~ /^(copilot-instructions\.md|instructions|prompts|chatmodes|agents)$/) { print loc(i) "\toutside the standard\t" $0; next }
     }
@@ -214,7 +215,8 @@ base() { # base <label> <name>...: the first name found, exact case
   for n in "${@:2}"; do d=$(dirname "$n"); [ -d "$d" ] && has "$d" "${n##*/}" && { present="$present$n"$'\n'; return; }; done
   missing="$missing$1"$'\n'
 }
-base README.md README.md
+# shellcheck disable=SC2086 # a list of names
+base README.md $WF_README_NAMES
 base AGENTS.md AGENTS.md
 base CLAUDE.md CLAUDE.md
 base Makefile Makefile GNUmakefile makefile
@@ -222,8 +224,10 @@ base docs/architecture.md docs/architecture.md
 base docs/adr/README.md docs/adr/README.md
 base docs/glossary.md docs/glossary.md
 base .github/PULL_REQUEST_TEMPLATE.md .github/PULL_REQUEST_TEMPLATE.md .github/pull_request_template.md
+base .github/dependabot.yml .github/dependabot.yml .github/dependabot.yaml
 base .claude/settings.json .claude/settings.json
-if [ "$visibility" = public ]; then base LICENSE LICENSE LICENSE.md LICENSE.txt; base SECURITY.md SECURITY.md .github/SECURITY.md; fi
+if [ "$visibility" = public ]; then # shellcheck disable=SC2086 # a list of names
+  base LICENSE $WF_LICENSE_NAMES; base SECURITY.md SECURITY.md .github/SECURITY.md; fi
 kv baseline-present "$(printf '%s' "$present" | join)"
 kv baseline-missing "$(printf '%s' "$missing" | join)"
 
