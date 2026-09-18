@@ -7,8 +7,9 @@ Coordinator session for one repository. Start it in the main checkout inside a H
 | `/orchestrator:plan <idea words \| #issue> [--base b]` | `plan.sh` | branch `plan/<slug>`, topic or issue in the branch description, worktree, Herdr workspace, start `claude --agent planner … /planner:plan` |
 | `/orchestrator:claim <issue> [--sandbox] [--base b]` | `claim.sh` | validate issue, branch `<type>/<n>-<slug>`, worktree in `.claude/worktrees/`, Herdr workspace, start `claude --agent worker … /worker:work` |
 | `/orchestrator:yolo-claim <issue>` | `claim.sh --yolo` | same, worker merges itself when green |
-| `/orchestrator:board` | `board.sh` | table: issue (or `plan`), branch, agent state, PR, checks, review, workspace; then the frontier: open `ready-for-agent` issues with no open blocker, no assignee and no worktree |
-| `/orchestrator:merge <pr>` | `merge.sh` | refuse unless CLEAN, checks pass, no unresolved threads, no changes requested; remove workspace + worktree, squash-merge, delete branches, ff main |
+| `/orchestrator:board` | `board.sh` | table: issue (or `plan`), branch, agent state, PR, checks, review, workspace; then the frontier with each issue's milestone: open `ready-for-agent` issues with no open blocker, no assignee and no worktree |
+| `/orchestrator:merge <pr>` | `merge.sh` | refuse unless CLEAN, checks pass, no unresolved threads, no changes requested; remove workspace + worktree, squash-merge, delete branches, ff main; a promotion PR from `dev` gets a merge commit and keeps `dev` |
+| `/orchestrator:release <vX.Y.Z>` | `release.sh` | refuse while the milestone is missing or has open issues, or the tag exists; with `dev` + `main` open or find the promotion PR and wait for its merge; tag (merge commit or head of `main`), GitHub release with generated notes, close the milestone |
 | `/orchestrator:abandon <issue\|branch> [--force]` | `abandon.sh` | drop worktree; refuses unpushed or dirty work without `--force` |
 | `/orchestrator:herdr` | | loads Herdr's own skill (from `herdr --skill`) for manual pane control |
 

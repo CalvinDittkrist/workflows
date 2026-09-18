@@ -54,6 +54,7 @@ cd my-repo && claude --agent orchestrator       # inside a Herdr pane
 /orchestrator:board              # who is doing what, PR and CI state
 /orchestrator:merge 45           # squash-merge, remove worktree, workspace and branch
 /orchestrator:yolo-claim 124     # worker merges itself when green
+/orchestrator:release v1.2.0     # milestone done: promote dev, tag, release notes, close it
 ```
 
 The worker in each pane reports at decision points only. Talk to it directly in its pane when it asks something.

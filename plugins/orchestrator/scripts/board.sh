@@ -56,7 +56,7 @@ if [ -n "$nwo" ]; then
   printf '%s' "$ready" | jq -r --argjson claimed "$claimed" '
     [.[] | select(.pull_request == null)] as $all
     | [$all[] | select((.assignees|length) == 0 and ((.issue_dependencies_summary.blocked_by // 0) == 0) and (.number as $n | $claimed | index($n) | not))] as $free
-    | "frontier[\($free|length)]{issue,title}:",
-      ($free[] | "  \(.number),\(.title)"),
+    | "frontier[\($free|length)]{issue,milestone,title}:",
+      ($free[] | "  \(.number),\(.milestone.title // "-"),\(.title)"),
       (if ($all|length) > ($free|length) then "waiting: \(($all|length) - ($free|length)) ready-for-agent issue(s) blocked, assigned or claimed" else empty end)'
 fi

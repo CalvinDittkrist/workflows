@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Squash-merge a ready PR, then remove its worktree, Herdr workspace and branch.
+# A promotion PR from dev (release.sh) gets a merge commit and keeps dev; a fork PR keeps local branches.
 # Usage: merge.sh <pr> [--allow-unstable] [--ignore-threads]
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
@@ -9,7 +10,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --allow-unstable) allow_unstable=1 ;;
     --ignore-threads) ignore_threads=1 ;;
-    -h|--help) sed -n '2,3p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,4p' "$0"; exit 0 ;;
     -*) wf_die "unknown flag $1" ;;
     *) pr="${1#\#}" ;;
   esac
@@ -19,7 +20,7 @@ done
 wf_need gh; wf_need jq; wf_need git
 root=$(wf_main_root); cd "$root"
 
-read_pr() { gh pr view "$pr" --json number,title,url,state,isDraft,mergeable,mergeStateStatus,headRefName,baseRefName,reviewDecision,statusCheckRollup; }
+read_pr() { gh pr view "$pr" --json number,title,url,state,isDraft,mergeable,mergeStateStatus,headRefName,baseRefName,isCrossRepository,reviewDecision,statusCheckRollup; }
 json=$(read_pr) || wf_die "PR #$pr not found"
 # After the base moves GitHub recomputes mergeability asynchronously and reports UNKNOWN for a while.
 waited=0
@@ -51,21 +52,28 @@ if [ "$ignore_threads" = 0 ]; then
   [ "$unresolved" = 0 ] || wf_die "PR #$pr has $unresolved unresolved review threads; let the worker address them or pass --ignore-threads"
 fi
 
-# Tear down the worktree before merging so gh can delete the local branch.
-path=$(wf_worktree_path_for_branch "$branch")
-ws=""
-if [ -n "$path" ]; then
-  ws=$(wf_workspace_for_path "$path")
-  if [ -n "$ws" ]; then
-    wf_run herdr worktree remove --workspace "$ws" --force >/dev/null
-  else
-    wf_run git worktree remove --force "$path"
+# A promotion PR (dev -> main, opened by release.sh) gets a merge commit so dev stays an ancestor of main,
+# and dev survives. A PR from a fork has no local worktree or branch; its name may clash with ours, so leave both alone.
+path="" ws="" method=squash keep=""
+if [ "$(printf '%s' "$json" | jq -r .isCrossRepository)" = true ]; then keep="$branch (fork)"
+else case "$branch" in dev|main) method=merge; keep="$branch (long-lived)" ;; esac; fi
+if [ -n "$keep" ]; then
+  wf_run gh pr merge "$pr" "--$method" >/dev/null
+else
+  # Tear down the worktree before merging so gh can delete the local branch.
+  path=$(wf_worktree_path_for_branch "$branch")
+  if [ -n "$path" ]; then
+    ws=$(wf_workspace_for_path "$path")
+    if [ -n "$ws" ]; then
+      wf_run herdr worktree remove --workspace "$ws" --force >/dev/null
+    else
+      wf_run git worktree remove --force "$path"
+    fi
   fi
+  wf_run gh pr merge "$pr" --squash --delete-branch >/dev/null
+  git worktree prune
+  git branch -D "$branch" >/dev/null 2>&1 || true
 fi
-
-wf_run gh pr merge "$pr" --squash --delete-branch >/dev/null
-git worktree prune
-git branch -D "$branch" >/dev/null 2>&1 || true
 git fetch -q --prune origin || true
 current=$(git rev-parse --abbrev-ref HEAD)
 basebr=$(printf '%s' "$json" | jq -r .baseRefName)
@@ -75,8 +83,8 @@ if [ "$current" = "$basebr" ] && [ -z "$(git status --porcelain --untracked-file
 fi
 
 wf_kv pr "#$pr $(printf '%s' "$json" | jq -r .title)"
-wf_kv merged "squash into $basebr"
-wf_kv branch "$branch deleted (remote + local)"
+wf_kv merged "$method into $basebr"
+if [ -n "$keep" ]; then wf_kv branch "$keep kept"; else wf_kv branch "$branch deleted (remote + local)"; fi
 wf_kv worktree "${path:-none} removed"
 wf_kv workspace "${ws:-none} closed"
 wf_notify "Merged #$pr" "$branch → $basebr"

@@ -1,7 +1,7 @@
 # 0011. The GitHub workspace is configured by an idempotent script with rulesets and no bypass
 
 Date: 2026-09-18
-Status: accepted
+Status: accepted; the promotion merge method is superseded by [ADR 0013](0013-promotions-merge-with-a-merge-commit-and-releases-tag-it.md)
 
 ## Context
 Merge settings, branch protection, labels and security features were set by hand per repository and differ in ways nobody chose. Classic branch protection allows admin bypass and cannot protect tags. Spec: #3.

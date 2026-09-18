@@ -43,8 +43,8 @@ Every repository has a `Makefile`, and `make check` runs everything CI gates on 
 ## GitHub workspace
 Set by an idempotent script that shows the difference first and keeps a snapshot of the previous state ([ADR 0011](adr/0011-github-workspace-configured-by-an-idempotent-script.md)). It runs only after the gate exists, because the ruleset requires the `check` status.
 
-- Merges: squash only, PR title as commit title, branches deleted on merge; wiki and discussions off.
-- One branch ruleset on `main`, and on `dev` when present: pull request required, zero approvals, conversations resolved, required check `check`, linear history, no force push, no deletion, no bypass.
+- Merges: squash only, PR title as commit title, branches deleted on merge; wiki and discussions off. With `dev` plus `main`, merge commits are allowed too, and only the promotion pull request uses them, so `dev` stays an ancestor of `main` ([ADR 0013](adr/0013-promotions-merge-with-a-merge-commit-and-releases-tag-it.md)).
+- One branch ruleset on `main`, and on `dev` when present: pull request required, zero approvals, conversations resolved, required check `check`, linear history (except on `main` with `dev` plus `main`), no force push, no deletion, no bypass.
 - One tag ruleset that protects `pre-standard` from deletion and moving.
 - Labels: the workflow vocabulary plus `skill-candidate`.
 - Dependabot alerts, security updates and grouped version updates; read-only default token for Actions.
@@ -54,7 +54,7 @@ Set by an idempotent script that shows the difference first and keeps a snapshot
 One GitHub project per product repository, copied from a template project, with status Triage, Ready, In progress, In review, Done and priority P0 to P3. Settings the API cannot set are printed as manual steps.
 
 ## Milestones and releases
-Milestones are named `vX.Y.Z` and their description states the goal. Tickets are attached to one when they are cut. A release is manual and closes a milestone: it refuses while the milestone has open issues, opens the promotion pull request from `dev` to `main` in the two-level model, then tags, creates the GitHub release with generated notes and closes the milestone ([ADR 0012](adr/0012-releases-are-manual-and-close-a-milestone.md)). Standardisation closes only empty or orphaned milestones.
+Milestones are named `vX.Y.Z` and their description states the goal. Tickets are attached to one when they are cut. A release is manual and closes a milestone: it refuses while the milestone has open issues, opens the promotion pull request from `dev` to `main` in the two-level model, then tags, creates the GitHub release with generated notes and closes the milestone ([ADR 0012](adr/0012-releases-are-manual-and-close-a-milestone.md)). The promotion is merged with a merge commit, and the tag goes on that commit ([ADR 0013](adr/0013-promotions-merge-with-a-merge-commit-and-releases-tag-it.md)). Standardisation closes only empty or orphaned milestones.
 
 ## Backup
 Before standardisation changes anything, it pushes a tag `pre-standard` on the current head, protected against deletion and moving, and opens one catalogue issue labelled `skill-candidate` with one row per removed skill: name, description, origin, files and size, and the command that restores it from the tag. Deletions and new baseline files arrive in one pull request from `chore/standardize` ([ADR 0010](adr/0010-standardisation-audits-read-only-and-backs-up-before-deleting.md)).

@@ -26,13 +26,30 @@ case "$*" in
   "repo view --json name -q .name") echo "r" ;;
   "repo view --json nameWithOwner -q .nameWithOwner") echo "o/r" ;;
   "repo view --json defaultBranchRef -q .defaultBranchRef.name") echo "main" ;;
-  "pr view 7 --json number,title,url,state,isDraft,mergeable,mergeStateStatus,headRefName,baseRefName,reviewDecision,statusCheckRollup")
+  "pr view 7 --json number,title,url,state,isDraft,mergeable,mergeStateStatus,headRefName,baseRefName,isCrossRepository,reviewDecision,statusCheckRollup")
     cat "${SHIM_PR_FIXTURE:?}" ;;
-  "pr merge 7 --squash --delete-branch") exit 0 ;;
+  "pr merge 7 --squash --delete-branch"|"pr merge 7 --squash"|"pr merge 7 --merge") exit 0 ;;
   "pr view 7 --json number,url,state,isDraft,mergeStateStatus,statusCheckRollup,reviews,commits")
     if [ "${SHIM_CHECKS_EMPTY:-0}" = 1 ]; then rollup='[]'; else rollup='[{"name":"test","status":"COMPLETED","conclusion":"SUCCESS","completedAt":"'"${SHIM_CHECK_DONE:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"'"}]'; fi
     echo '{"number":7,"url":"https://github.com/o/r/pull/7","state":"OPEN","isDraft":false,"mergeStateStatus":"CLEAN","statusCheckRollup":'"$rollup"',"reviews":[],"commits":[{"committedDate":"'"${SHIM_HEAD_AT:-2026-09-17T10:00:00Z}"'"}]}' ;;
   "pr list --state open --limit 100 --json"*) echo '[]' ;;
   "api graphql"*) echo "${SHIM_UNRESOLVED:-0}" ;;
+  # Milestones and releases. SHIM_MILESTONES_FIXTURE: JSON array; SHIM_TAGS / SHIM_BRANCHES: space-separated names.
+  "api --paginate repos/o/r/milestones?state=all&per_page=100") cat "${SHIM_MILESTONES_FIXTURE:-/dev/null}"; [ -n "${SHIM_MILESTONES_FIXTURE:-}" ] || echo '[]' ;;
+  "api --paginate repos/o/r/milestones?state=open&per_page=100")
+    if [ -n "${SHIM_MILESTONES_FIXTURE:-}" ]; then jq '[.[] | select(.state == "open")]' "$SHIM_MILESTONES_FIXTURE"; else echo '[]'; fi ;;
+  "api --method POST repos/o/r/milestones -f title="*) echo '{"number":9}' ;;
+  "api --method PATCH repos/o/r/milestones/"*" -f state=closed") [ "${SHIM_MILESTONE_CLOSE_FAILS:-0}" = 1 ] && { echo "HTTP 500" >&2; exit 1; }; echo '{}' ;;
+  "api repos/o/r/git/ref/tags/"*)
+    t="${2##*/}"; [ -n "${SHIM_TAG_ERROR:-}" ] && { echo "gh: Server Error (HTTP 502)" >&2; exit 1; }; case " ${SHIM_TAGS:-} " in *" $t "*) echo '{"ref":"refs/tags/x"}' ;; *) echo "gh: Not Found (HTTP 404)" >&2; exit 1 ;; esac ;;
+  "api repos/o/r/branches/"*" --jq .commit.sha")
+    b=$(printf '%s' "$*" | sed -E 's#.*/branches/([^ ]+) .*#\1#')
+    [ "$b" = "${SHIM_BRANCH_ERROR:-}" ] && { echo "gh: Server Error (HTTP 502)" >&2; exit 1; }
+    case " ${SHIM_BRANCHES:-main} " in *" $b "*) echo "sha-$b" ;; *) echo "gh: Branch not found (HTTP 404)" >&2; exit 1 ;; esac ;;
+  "pr list --base main --head dev --state all --limit 100 --json number,title,state,url,mergeCommit,isCrossRepository")
+    cat "${SHIM_PROMOTION_FIXTURE:-/dev/null}"; [ -n "${SHIM_PROMOTION_FIXTURE:-}" ] || echo '[]' ;;
+  "pr create --base main --head dev "*) echo "https://github.com/o/r/pull/77" ;;
+  "release create "*) echo "https://github.com/o/r/releases/tag/$3" ;;
+  "issue edit "*" --milestone "*) exit 0 ;;
   *) echo "gh shim: unhandled: $*" >&2; exit 64 ;;
 esac
