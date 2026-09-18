@@ -189,6 +189,14 @@ class FactsTests(ShimTest):
             "  AGENTS.md: 1 file, tracked, standard",
             "  CLAUDE.md: 1 file, tracked, standard"])
 
+    def test_a_symlinked_claude_directory_is_listed(self):
+        self.write("shared/claude/skills/x/SKILL.md")
+        (self.repo / ".claude").symlink_to("shared/claude")
+        self.git("add", ".")
+        self.git("commit", "-qm", "link")
+        self.assertIn("agent-config:\n  .claude: 1 file, tracked, outside the standard (a symlinked .claude)\n",
+                      self.facts(github=False))
+
     def test_an_organisation_owner_sees_the_plan(self):
         self.put("repo.json", {"visibility": "private", "default_branch": "main", "owner": {"login": "o", "type": "Organization"}})
         self.put("org.json", {"login": "o", "plan": {"name": "team"}})

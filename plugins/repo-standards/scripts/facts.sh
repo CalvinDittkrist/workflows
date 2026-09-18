@@ -187,6 +187,7 @@ agent=$(find . \( $prune \) -prune -o \( -type f -o -type l \) -print 2>/dev/nul
   {
     for (i = 1; i <= NF; i++) {
       c = $i
+      if (c == ".claude" && i == NF) { print $0 "\toutside the standard (a symlinked .claude)\t" $0; next }
       if (c == ".claude" && i < NF) {
         s = $(i+1)
         std = (i == 1 && (s == "settings.json" || s == "settings.local.json")) ? "standard" : "outside the standard"
