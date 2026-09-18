@@ -1,0 +1,11 @@
+# Grouped version updates: one pull request per ecosystem and week.
+# <fill in> one entry per package manager of the repository (npm, pip, cargo, gomod, ...), grouped like this one.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      github-actions:
+        patterns: ["*"]

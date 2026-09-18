@@ -10,8 +10,9 @@ printf 'gh %s%s\n' "$*" "${body:+ $body}" >> "${SHIM_LOG:-/dev/null}"
 # org.json (the gh user and the owning organisation, read by facts.sh),
 # vulnerability-alerts (present means on), private-vulnerability-reporting.json, protection-<branch>.json,
 # check-runs (number of runs of the job check on the default branch, default 1); plan-free (branch protection
-# and rulesets need a paid plan); no-project-scope (the token lacks read:project). SHIM_WS_FAIL=<prefix> fails
-# the first write whose arguments start with it.
+# and rulesets need a paid plan); no-project-scope (the token lacks read:project); issues.json and pulls.json
+# (issues with their comments, and pull requests; created on the first write, numbered from 1 in one sequence
+# as on GitHub). SHIM_WS_FAIL=<prefix> fails the first write whose arguments start with it.
 if [ -n "${SHIM_WS:-}" ]; then
   ws=$SHIM_WS
   nf() { echo "gh: Not Found (HTTP 404)" >&2; exit 1; }
@@ -21,6 +22,37 @@ if [ -n "${SHIM_WS:-}" ]; then
   # What GitHub adds to a stored ruleset: an id, its source and defaults the request left out.
   store() { jq --argjson id "$1" '. + {id: $id, source_type: "Repository", source: "o/r", current_user_can_bypass: "never"}
     | .rules |= map(if .type == "required_status_checks" then .parameters.do_not_enforce_on_create = false else . end)' <<<"$body" > "$ws/ruleset-$1.json"; }
+  # Issues and pull requests (the apply phase). A new one gets the next number of the shared sequence.
+  list() { if [ -f "$ws/$1" ]; then cat "$ws/$1"; else echo '[]'; fi; }
+  save() { list "$1" | jq "${@:2}" > "$ws/t" && mv "$ws/t" "$ws/$1"; }
+  next() { n=$(( $(list issues.json | jq length) + $(list pulls.json | jq length) + 1 )); }
+  case "$*" in
+    "api --paginate repos/o/r/issues?labels="*"&state=all&per_page=100")
+      l=${3#*labels=}; l=${l%%&*}; list issues.json | jq --arg l "$l" '[.[] | select(any(.labels[]; .name == $l))]'; exit ;;
+    "api --paginate repos/o/r/issues?state=all&per_page=100") list issues.json; exit ;;
+    "api repos/o/r/issues/"[0-9]*) list issues.json | jq -e --argjson n "${2##*/}" '.[] | select(.number == $n)' || nf; exit ;;
+    "api --method POST repos/o/r/issues --input -")
+      next; save issues.json --argjson b "$body" --argjson n "$n" '. + [$b + {number: $n, state: "open", comments: [],
+        html_url: "https://github.com/o/r/issues/\($n)", labels: [($b.labels // [])[] | {name: .}]}]'
+      list issues.json | jq '.[-1]'; exit ;;
+    "api --method PATCH repos/o/r/issues/"*" --input -")
+      save issues.json --argjson b "$body" --argjson n "${4##*/}" 'map(if .number == $n then . + $b else . end)'; echo '{}'; exit ;;
+    "api --method POST repos/o/r/issues/"*"/comments --input -")
+      n=${4#repos/o/r/issues/}; n=${n%/comments}
+      save issues.json --argjson b "$body" --argjson n "$n" 'map(if .number == $n then .comments += [$b.body] else . end)'; echo '{}'; exit ;;
+    # The head sha of an open pull request follows its branch on origin (the remote of the working directory).
+    "api --paginate repos/o/r/pulls?head=o:"*"&state=all&per_page=100")
+      h=${3#*head=o:}; h=${h%%&*}; sha=$(git ls-remote origin "refs/heads/$h" 2>/dev/null | cut -f1)
+      save pulls.json --arg h "$h" --arg s "$sha" 'map(if .head.ref == $h and .state == "open" then .head.sha = $s else . end)'
+      list pulls.json | jq --arg h "$h" '[.[] | select(.head.ref == $h)]'; exit ;;
+    "api --method POST repos/o/r/pulls --input -")
+      next; sha=$(git ls-remote origin "refs/heads/$(jq -r .head <<<"$body")" 2>/dev/null | cut -f1)
+      save pulls.json --argjson b "$body" --argjson n "$n" --arg s "$sha" '. + [{number: $n, state: "open", merged_at: null, title: $b.title,
+        body: $b.body, head: {ref: $b.head, sha: $s}, base: {ref: $b.base}, html_url: "https://github.com/o/r/pull/\($n)"}]'
+      list pulls.json | jq '.[-1]'; exit ;;
+    "api --method PATCH repos/o/r/pulls/"*" --input -")
+      save pulls.json --argjson b "$body" --argjson n "${4##*/}" 'map(if .number == $n then . + $b else . end)'; echo '{}'; exit ;;
+  esac
   case "$*" in
     "api repos/o/r") cat "$ws/repo.json"; exit ;;
     "api user") [ -f "$ws/user.json" ] || nf; cat "$ws/user.json"; exit ;;

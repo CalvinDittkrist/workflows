@@ -1,0 +1,15 @@
+# The gate in CI: the job named check runs make check. It is the one required status check.
+name: check
+on:
+  push:
+    branches: [{{BRANCHES}}]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      # <fill in> the setup steps make check needs (language toolchain, dependencies), or remove this line
+      - run: make check

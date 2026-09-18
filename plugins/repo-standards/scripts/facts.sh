@@ -157,19 +157,9 @@ kv lint "$(printf '%s' "$lints" | awk '!seen[$0]++' | join)"
 ci="" has_check=no
 for w in $(printf '%s\n' "$all" | grep -E '^\.github/workflows/[^/]+\.ya?ml$' || true); do
   [ -f "$w" ] || continue
-  jobs=$(awk '
-    /^jobs:[[:space:]]*$/ { in_jobs = 1; ind = 0; next }
-    in_jobs && /^[^[:space:]#]/ { in_jobs = 0 }
-    !in_jobs || /^[[:space:]]*(#|$)/ { next }
-    { match($0, /^ */); d = RLENGTH }
-    ind == 0 { ind = d }
-    d == ind && /^ *[A-Za-z0-9_-]+:/ { id = $0; sub(/^ */, "", id); sub(/:.*/, "", id); ids[++n] = id; next }
-    n && d > ind && sd[n] == "" { sd[n] = d }
-    n && d == sd[n] && /^ *name:/ { v = $0; sub(/^ *name:[[:space:]]*/, "", v); sub(/[[:space:]]+$/, "", v); gsub(/^["\047]|["\047]$/, "", v); nm[n] = v }
-    END { for (i = 1; i <= n; i++) printf "%s%s%s", (i > 1 ? ", " : ""), ids[i], (nm[i] != "" && nm[i] != ids[i] ? " (\"" nm[i] "\")" : "") }
-  ' "$w")
+  jobs=$(workflow_jobs "$w")
   ci="$ci$w: ${jobs:-no jobs found}"$'\n'
-  printf '%s' "$jobs" | tr ',' '\n' | sed -E 's/^ +//' | grep -Eq '^check$|\("check"\)$' && has_check=yes
+  printf '%s' "$jobs" | is_check_job && has_check=yes
 done
 for o in $(printf '%s\n' "$all" | grep -E '^(\.gitlab-ci\.yml|\.circleci/config\.yml|Jenkinsfile|azure-pipelines\.yml|\.travis\.yml|bitbucket-pipelines\.yml|\.buildkite/pipeline\.yml)$' || true); do
   ci="$ci$o: not GitHub Actions"$'\n'

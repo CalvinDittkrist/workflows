@@ -6,6 +6,8 @@
 # a new temporary file, printed as `snapshot:`), then makes exactly those changes. Run it again to verify.
 # Env: WF_PROJECT_TEMPLATE=<owner>/<number>, the project copied when the repository has none linked.
 set -euo pipefail
+# shellcheck source=lib.sh
+. "$(dirname "$0")/lib.sh"
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 
 apply=0 snap=""
@@ -101,8 +103,7 @@ for b in $branches; do
   if [ "$model" = "dev+main" ] && [ "$b" = main ]; then want_rulesets="$want_rulesets$(ruleset main false '["merge","squash"]')"$'\n'
   else want_rulesets="$want_rulesets$(ruleset "$b" true '["squash"]')"$'\n'; fi
 done
-want_rulesets="$want_rulesets$(jq -cn '{name: "standard: pre-standard", target: "tag", enforcement: "active", bypass_actors: [],
-  conditions: {ref_name: {include: ["refs/tags/pre-standard"], exclude: []}}, rules: [{type: "deletion"}, {type: "update"}]}')"
+want_rulesets="$want_rulesets$(tag_ruleset)"
 # Classic branch protection is replaced by the ruleset; it is removed after the ruleset is in place.
 # GitHub answers 403 when the plan has neither (a private repository on GitHub Free).
 old_protection="{}" protection_plan="" old_rulesets="[]" ruleset_plan="" branch_rules=0 rules=1
@@ -140,24 +141,14 @@ if [ "$branch_rules" = 1 ]; then
   [ "$runs" != 0 ] || block "the default branch $default has no CI job named check; add a CI job named check that runs make check on every push to $default, merge it so it runs on the head of $default, then run workspace.sh --apply again"
 fi
 
-# Labels: the workflow vocabulary (plugins/planner/scripts/labels.sh) plus skill-candidate, lower case; GitHub
-# matches label names ignoring case. name|color|description.
-vocabulary='ready-for-agent|0E8A16|Fully specified; an agent can take it
-needs-triage|FBCA04|A maintainer has to evaluate this
-needs-info|D876E3|Waiting on the reporter
-ready-for-human|1D76DB|Needs a human to implement
-wontfix|FFFFFF|Will not be actioned; the closing comment says why
-spec|5319E7|Spec issue; its tickets carry the work
-bug|D73A4A|Something is broken
-enhancement|A2EEEF|New feature or improvement
-skill-candidate|C5DEF5|A removed skill that could move into the marketplace'
+# Labels: the workflow vocabulary plus skill-candidate (lib.sh); GitHub matches label names ignoring case.
 labels=$(get_all "repos/$nwo/labels?per_page=100")
 label_plan=""
 while IFS='|' read -r name color desc; do
   printf '%s' "$labels" | jq -e --arg n "$name" 'any(.[]; (.name | ascii_downcase) == $n)' >/dev/null && continue
   found "label $name: missing -> create"; label_plan="$label_plan$name|$color|$desc"$'\n'
 done <<EOF
-$vocabulary
+$WF_LABELS
 EOF
 
 # Dependabot alerts (204 when on, 404 when off) and security updates; read-only Actions token.

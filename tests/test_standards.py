@@ -38,6 +38,50 @@ class StandardsTests(ShimTest):
         self.assertIn("result: pass", r.stdout)
         self.assertIn("warn: Makefile still has <fill in> placeholders", r.stdout)
 
+    def test_scaffold_enables_the_workflow_plugins_through_the_plugin_commands_and_disables_the_rest(self):
+        self.write(".claude/settings.json", json.dumps({"enabledPlugins": {"foo@bar": True, "old@bar": False},
+                                                        "env": {"WF_REVIEW_ROUNDS": "5"},
+                                                        "permissions": {"allow": ["Bash(make *)", "Bash(git diff *)"]}}))
+        r = self.scaffold()
+        self.assertIn("updated: .claude/settings.json", r.stdout)
+        self.assertIn("claude plugin marketplace add CalvinDittkrist/workflows --scope project", self.calls())
+        self.assertIn("claude plugin install worker@workflows --scope project", self.calls())
+        self.assertIn("claude plugin disable foo@bar --scope project", self.calls())
+        self.assertNotIn("claude plugin disable old@bar --scope project", self.calls())
+        settings = json.loads((self.repo / ".claude/settings.json").read_text())
+        self.assertEqual(sorted(p for p, on in settings["enabledPlugins"].items() if on),
+                         ["orchestrator@workflows", "planner@workflows", "repo-standards@workflows", "worker@workflows"])
+        self.assertEqual(settings["env"]["WF_REVIEW_ROUNDS"], "5")
+        self.assertEqual(settings["permissions"]["allow"][:3], ["Bash(make *)", "Bash(git diff *)", "Bash(git status *)"])
+        self.assertEqual(settings["permissions"]["allow"].count("Bash(git diff *)"), 1)
+        self.reset_calls()
+        r = self.scaffold()
+        self.assertIn("kept: .claude/settings.json", r.stdout)
+        self.assertEqual([c for c in self.calls() if not c.startswith("claude plugin marketplace add")], [])
+
+    def test_scaffold_skips_the_files_of_a_category(self):
+        r = self.run_script(STANDARDS / "scaffold.sh", "--skip", "agent-config", "--skip", "docs")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual([line for line in r.stdout.splitlines() if not line.startswith("next:")],
+                         ["created: Makefile", "created: .github/dependabot.yml", "created: .github/workflows/check.yml"])
+        self.assertFalse((self.repo / ".claude").exists())
+        self.assertEqual(self.calls(), [])
+        r = self.run_script(STANDARDS / "scaffold.sh", "--skip", "nonsense")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("error: unknown category nonsense", r.stderr)
+
+    def test_scaffold_names_the_repository_and_runs_check_on_the_branches_of_the_model(self):
+        r = self.run_script(STANDARDS / "scaffold.sh", "--name", "shop & co", "--default", "dev")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertTrue((self.repo / "AGENTS.md").read_text().startswith("# shop & co\n"))
+        self.assertIn("    branches: [main, dev]\n", (self.repo / ".github/workflows/check.yml").read_text())
+
+    def test_scaffold_adds_the_ci_job_check_only_when_no_workflow_has_one(self):
+        self.write(".github/workflows/ci.yml", "on: push\njobs:\n  gate:\n    name: check\n    runs-on: ubuntu-latest\n")
+        r = self.scaffold()
+        self.assertIn("kept: .github/workflows/ci.yml (has the job check)", r.stdout)
+        self.assertFalse((self.repo / ".github/workflows/check.yml").exists())
+
     def test_scaffolded_gate_fails_until_filled_in(self):
         self.scaffold()
         r = subprocess.run(["make", "check"], cwd=self.repo, text=True, capture_output=True)
