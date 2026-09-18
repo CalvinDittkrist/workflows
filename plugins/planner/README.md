@@ -7,7 +7,7 @@ Planning session for one topic. The orchestrator starts it with `/orchestrator:p
 | `/planner:plan` | `facts.sh`, `labels.sh` | session facts, label vocabulary, the routes; recommends one and stops |
 | `/planner:grill [topic]` | | question rounds along the decision tree until nothing is open; collects glossary terms and ADR candidates |
 | `/planner:spec` | `issue.sh create --label spec` | one spec issue from the conversation, no new questions |
-| `/planner:tickets [spec]` | `issue.sh create --parent`, `issue.sh block` | vertical-slice issues labelled `ready-for-agent`, sub-issues of the spec, native blocking edges |
+| `/planner:tickets [spec]` | `issue.sh milestones`, `issue.sh milestone`, `issue.sh create --parent --milestone`, `issue.sh block` | asks once for a `vX.Y.Z` milestone (existing, new with the goal as description, or none); vertical-slice issues labelled `ready-for-agent`, sub-issues of the spec, native blocking edges |
 | `/planner:triage [issue]` | `triage-list.sh`, `issue.sh comment|label|close` | three buckets; per issue verify, grill, agent brief, labels; `wontfix` closes with the reason |
 | `/planner:research <question>` | | background subagent, primary sources, answer lands in the issue |
 | `/planner:prototype <question>` | `capture-prototype.sh` | throwaway code, moved to `prototype/<plan>-<name>` and linked |

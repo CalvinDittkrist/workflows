@@ -108,6 +108,51 @@ class IssueScriptTests(PlanWorktree):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("blocked: #42 by #40 (body only", r.stdout)
 
+    def milestones(self):
+        f = self.base / "milestones.json"
+        f.write_text(json.dumps([
+            {"number": 2, "title": "v1.1.0", "state": "closed", "open_issues": 0, "closed_issues": 2, "description": "Old"},
+            {"number": 3, "title": "v1.2.0", "state": "open", "open_issues": 1, "closed_issues": 4, "description": "Offline\nmode"},
+        ]))
+        return str(f)
+
+    def test_milestone_creates_a_new_one_with_the_goal_and_reuses_an_existing_one(self):
+        r = self.run_script(PLANNER / "issue.sh", "milestone", "v1.3.0", "--description", "Sync across devices", SHIM_MILESTONES_FIXTURE=self.milestones())
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("milestone: v1.3.0 (created)", r.stdout)
+        self.assertIn("gh api --method POST repos/o/r/milestones -f title=v1.3.0 -f description=Sync across devices", self.calls())
+        self.reset_calls()
+        r = self.run_script(PLANNER / "issue.sh", "milestone", "v1.2.0", SHIM_MILESTONES_FIXTURE=self.milestones())
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("milestone: v1.2.0 (existing, 1 open, 4 closed)", r.stdout)
+        self.assertFalse([c for c in self.calls() if "--method POST" in c])
+        r = self.run_script(PLANNER / "issue.sh", "milestone", "v1.1.0", SHIM_MILESTONES_FIXTURE=self.milestones())
+        self.assertNotEqual(r.returncode, 0); self.assertIn("closed (released)", r.stderr)
+        r = self.run_script(PLANNER / "issue.sh", "milestone", "1.3")
+        self.assertNotEqual(r.returncode, 0); self.assertIn("vX.Y.Z", r.stderr)
+
+    def test_milestones_lists_only_open_ones(self):
+        r = self.run_script(PLANNER / "issue.sh", "milestones", SHIM_MILESTONES_FIXTURE=self.milestones())
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stdout, "milestones[1]{title,open,closed,description}:\n  v1.2.0,1,4,Offline mode\n")
+
+    def test_tickets_are_attached_to_an_open_milestone_only(self):
+        r = self.run_script(PLANNER / "issue.sh", "create", "--title", "T", "--body-file", self.body(), "--milestone", "v1.2.0", SHIM_MILESTONES_FIXTURE=self.milestones())
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn(f"gh issue create --title T --body-file {self.body()} --milestone v1.2.0", self.calls())
+        self.assertIn("milestone: v1.2.0", r.stdout)
+        r = self.run_script(PLANNER / "issue.sh", "attach", "12", "--milestone", "v1.2.0", SHIM_MILESTONES_FIXTURE=self.milestones())
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("gh issue edit 12 --milestone v1.2.0", self.calls())
+        self.assertIn("milestone: #12 attached to v1.2.0", r.stdout)
+        self.reset_calls()
+        for version, text in (("v1.1.0", "closed (released)"), ("v9.0.0", "does not exist")):
+            r = self.run_script(PLANNER / "issue.sh", "create", "--title", "T", "--body-file", self.body(), "--milestone", version, SHIM_MILESTONES_FIXTURE=self.milestones())
+            self.assertNotEqual(r.returncode, 0); self.assertIn(text, r.stderr)
+            r = self.run_script(PLANNER / "issue.sh", "attach", "12", "--milestone", version, SHIM_MILESTONES_FIXTURE=self.milestones())
+            self.assertNotEqual(r.returncode, 0); self.assertIn(text, r.stderr)
+        self.assertFalse([c for c in self.calls() if c.startswith(("gh issue create", "gh issue edit"))])
+
     def test_label_comment_and_close(self):
         r = self.run_script(PLANNER / "issue.sh", "label", "12", "--add", "ready-for-agent", "--remove", "needs-triage")
         self.assertEqual(r.returncode, 0, r.stderr)

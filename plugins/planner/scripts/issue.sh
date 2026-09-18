@@ -1,35 +1,50 @@
 #!/usr/bin/env bash
 # GitHub issue operations the planner skills need, with the fiddly parts (sub-issues, blocking edges) inside.
-# Usage: issue.sh create --title <t> --body-file <f> [--label <l>]... [--parent <n>]
+# Usage: issue.sh create --title <t> --body-file <f> [--label <l>]... [--parent <n>] [--milestone <vX.Y.Z>]
 #        issue.sh block <n> --by <m>[,<m>...]
+#        issue.sh milestones
+#        issue.sh milestone <vX.Y.Z> [--description <goal>]
+#        issue.sh attach <n> --milestone <vX.Y.Z>
 #        issue.sh label <n> [--add <l>]... [--remove <l>]...
 #        issue.sh comment <n> --body-file <f>
 #        issue.sh close <n> [--comment-file <f>] [--reason completed|not-planned]
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 wf_need gh; wf_need jq
-usage() { sed -n '3,7p' "$0"; exit "${1:-0}"; }
+usage() { sed -n '3,10p' "$0"; exit "${1:-0}"; }
 cmd="${1:-}"; [ -n "$cmd" ] || usage 1; shift
+version() { printf '%s' "$1" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' || wf_die "milestone must be named vX.Y.Z, got '$1'"; printf '%s' "$1"; }
+# The milestone titled $1 as JSON (open or closed), or empty.
+milestone_json() { gh api "repos/$(wf_repo_nwo)/milestones?state=all&per_page=100" | jq -c --arg t "$1" '[.[] | select(.title == $t)] | first // empty'; }
+# Refuse attaching to a milestone that does not exist or was already released (closed).
+open_milestone() {
+  local m; m=$(milestone_json "$1") || wf_die "cannot read milestones"
+  [ -n "$m" ] || wf_die "milestone $1 does not exist; create it with issue.sh milestone $1 --description <goal>"
+  [ "$(printf '%s' "$m" | jq -r .state)" = open ] || wf_die "milestone $1 is closed (released); pick a new version"
+}
 num() { local n="${1#\#}"; printf '%s' "$n" | grep -Eq '^[0-9]+$' || wf_die "issue must be a number, got '$1'"; printf '%s' "$n"; }
 
 case "$cmd" in
   create)
-    title="" body="" parent=""; labels=()
+    title="" body="" parent="" milestone=""; labels=()
     while [ $# -gt 0 ]; do
       case "$1" in
         --title) shift; title="${1:-}" ;;
         --body-file) shift; body="${1:-}" ;;
         --label) shift; labels+=("$1") ;;
         --parent) shift; parent=$(num "${1:-}") ;;
+        --milestone) shift; milestone=$(version "${1:-}") ;;
         *) wf_die "unknown argument $1" ;;
       esac; shift
     done
     if [ -z "$title" ] || [ -z "$body" ]; then wf_die "create needs --title and --body-file"; fi
     [ -f "$body" ] || wf_die "body file $body not found"
     args=(); for l in "${labels[@]+"${labels[@]}"}"; do args+=(--label "$l"); done
+    if [ -n "$milestone" ]; then open_milestone "$milestone"; args+=(--milestone "$milestone"); fi
     url=$(gh issue create --title "$title" --body-file "$body" "${args[@]+"${args[@]}"}") || wf_die "gh issue create failed (missing label? run labels.sh)"
     n="${url##*/}"
     wf_kv issue "#$n"; wf_kv url "$url"
+    [ -z "$milestone" ] || wf_kv milestone "$milestone"
     if [ -n "$parent" ]; then
       id=$(wf_issue_db_id "$n")
       if [ -n "$id" ] && gh api --method POST "repos/$(wf_repo_nwo)/issues/$parent/sub_issues" -F sub_issue_id="$id" >/dev/null 2>&1; then
@@ -51,6 +66,28 @@ case "$cmd" in
         wf_kv blocked "#$n by #$m (body only; dependencies unavailable here)"
       fi
     done ;;
+  milestones)
+    gh api "repos/$(wf_repo_nwo)/milestones?state=open&per_page=100" | jq -r '
+      "milestones[\(length)]{title,open,closed,description}:",
+      (.[] | "  \(.title),\(.open_issues),\(.closed_issues),\(.description // "" | gsub("\n"; " "))")' ;;
+  milestone)
+    v=$(version "${1:-}"); shift; desc=""
+    while [ $# -gt 0 ]; do case "$1" in --description) shift; desc="${1:-}" ;; *) wf_die "unknown argument $1" ;; esac; shift; done
+    m=$(milestone_json "$v") || wf_die "cannot read milestones"
+    if [ -n "$m" ]; then
+      [ "$(printf '%s' "$m" | jq -r .state)" = open ] || wf_die "milestone $v is closed (released); pick a new version"
+      wf_kv milestone "$v (existing, $(printf '%s' "$m" | jq -r '"\(.open_issues) open, \(.closed_issues) closed"'))"
+    else
+      gh api --method POST "repos/$(wf_repo_nwo)/milestones" -f title="$v" -f description="$desc" >/dev/null || wf_die "creating milestone $v failed"
+      wf_kv milestone "$v (created)"
+    fi ;;
+  attach)
+    n=$(num "${1:-}"); shift; milestone=""
+    while [ $# -gt 0 ]; do case "$1" in --milestone) shift; milestone=$(version "${1:-}") ;; *) wf_die "unknown argument $1" ;; esac; shift; done
+    [ -n "$milestone" ] || wf_die "attach needs --milestone <vX.Y.Z>"
+    open_milestone "$milestone"
+    gh issue edit "$n" --milestone "$milestone" >/dev/null || wf_die "gh issue edit failed"
+    wf_kv milestone "#$n attached to $milestone" ;;
   label)
     n=$(num "${1:-}"); shift; args=()
     while [ $# -gt 0 ]; do case "$1" in --add) shift; args+=(--add-label "$1") ;; --remove) shift; args+=(--remove-label "$1") ;; *) wf_die "unknown argument $1" ;; esac; shift; done
