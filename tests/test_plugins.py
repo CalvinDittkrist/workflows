@@ -57,8 +57,9 @@ class ManifestTests(unittest.TestCase):
             self.assertNotIn("mcpServers", fields, agent)
 
     def test_the_standardisation_run_is_user_invoked_only(self):
-        fm = (ROOT / "plugins/repo-standards/skills/standardize/SKILL.md").read_text().split("---")[1]
-        self.assertIn("disable-model-invocation: true\n", fm)
+        for skill in ("standardize", "apply"):
+            fm = (ROOT / f"plugins/repo-standards/skills/{skill}/SKILL.md").read_text().split("---")[1]
+            self.assertIn("disable-model-invocation: true\n", fm, skill)
 
     def test_every_inline_command_in_a_skill_is_pre_approved(self):
         # A forked skill's !`command` fails silently without a matching allowed-tools rule (verified on 2.1.274).
