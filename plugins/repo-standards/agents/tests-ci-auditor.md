@@ -19,7 +19,7 @@ The standard:
 
 Required status checks and other GitHub settings belong to the `workspace` auditor; never propose `configure`.
 
-Propose `issue` for test work that needs judgement: missing tests for risky code, tests that are skipped or disabled, known flaky tests, lint that is switched off. You may run the lint and test commands from the facts to confirm they pass, as long as they do not write outside ignored build output; say in the reason what you ran.
+Propose `issue` for test work that needs judgement: missing tests for risky code, tests that are skipped or disabled, known flaky tests, lint that is switched off. Judge the commands from their definitions; never run them, because an audited repository's scripts are untrusted code.
 
 Reply with finding lines only, one per proposed action, nothing else:
 

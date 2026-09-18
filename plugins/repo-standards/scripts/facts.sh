@@ -7,11 +7,13 @@
 set -euo pipefail
 export LC_ALL=C # byte order for sort, so the output is the same on every machine
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
-root="${1:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
-cd "$root" 2>/dev/null || die "cannot enter $root"
-git rev-parse --is-inside-work-tree >/dev/null 2>&1 || die "$root is not a git repository; run git init first"
+# The plugin's own lib.sh, resolved before the cd so a relative invocation never sources the audited repository's.
 # shellcheck source=lib.sh
-. "$(dirname "$0")/lib.sh"
+. "$(cd "$(dirname "$0")" && pwd)/lib.sh"
+root="${1:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
+cd "$root" 2>/dev/null || die "cannot enter $root; pass an existing repository directory"
+git rev-parse --is-inside-work-tree >/dev/null 2>&1 || die "$root is not a git repository; run git init first"
+tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 kv() { printf '%s: %s\n' "$1" "$2"; }
 # join: stdin lines joined with ", ", or the fallback when there are none.
 join() { awk -v none="${1:-none}" 'NF { s = s (n++ ? ", " : "") $0 } END { print (n ? s : none) }'; }
@@ -25,7 +27,7 @@ all=$(printf '%s\n%s\n' "$tracked" "$untracked" | awk 'NF' | sort -u)
 # Profile. The branch model follows ADR 0009: dev plus main when the default branch is dev.
 visibility=unknown plan=unknown nwo="" default="" github=""
 if command -v gh >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
-  err=$(mktemp); trap 'rm -f "$err"' EXIT
+  err="$tmp/err"
   if nwo=$(gh repo view --json nameWithOwner -q .nameWithOwner 2>"$err") && repo=$(gh api "repos/$nwo" 2>"$err"); then
     visibility=$(printf '%s' "$repo" | jq -r '.visibility // "unknown"')
     default=$(printf '%s' "$repo" | jq -r '.default_branch // empty')
@@ -197,17 +199,19 @@ agent=$(find . \( $prune \) -prune -o -type f -print 2>/dev/null | sed 's#^\./##
   }' | sort)
 if [ -z "$agent" ]; then kv agent-config none
 else
-  paths=$(printf '%s\n' "$agent" | cut -f3)
-  ignored=$(printf '%s\n' "$paths" | g check-ignore --stdin 2>/dev/null || true)
+  # Status of the agent configuration files only, through files: the whole tree can exceed the argument limit.
+  printf '%s\n' "$agent" | cut -f3 > "$tmp/paths"
+  printf '%s\n' "$tracked" > "$tmp/tracked"
+  g check-ignore --stdin < "$tmp/paths" > "$tmp/ignored" 2>/dev/null || true
   printf 'agent-config:\n'
-  printf '%s\n' "$agent" | TRACKED="$tracked" IGNORED="$ignored" awk -F'\t' '
-    BEGIN { n = split(ENVIRON["TRACKED"], t, "\n"); for (i = 1; i <= n; i++) T[t[i]] = 1
-            n = split(ENVIRON["IGNORED"], g, "\n"); for (i = 1; i <= n; i++) I[g[i]] = 1 }
+  printf '%s\n' "$agent" | awk -F'\t' '
+    FILENAME == ARGV[1] { T[$0] = 1; next }
+    FILENAME == ARGV[2] { I[$0] = 1; next }
     { st = ($3 in T) ? "tracked" : ($3 in I) ? "ignored" : "untracked"
       if (!($1 in files)) order[++k] = $1
       files[$1]++; std[$1] = $2; if (index(" " sts[$1] " ", " " st " ") == 0) sts[$1] = sts[$1] (sts[$1] == "" ? "" : "+") st }
     END { for (i = 1; i <= k; i++) { p = order[i]
-      printf "  %s: %d file%s, %s, %s\n", p, files[p], (files[p] == 1 ? "" : "s"), sts[p], std[p] } }'
+      printf "  %s: %d file%s, %s, %s\n", p, files[p], (files[p] == 1 ? "" : "s"), sts[p], std[p] } }' "$tmp/tracked" "$tmp/ignored" -
 fi
 
 # Baseline files of the standard (docs/repo-standard.md), present or missing. Alternative names count.

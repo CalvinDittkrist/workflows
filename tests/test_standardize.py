@@ -1,4 +1,5 @@
 import json
+import subprocess
 import unittest
 
 from helpers import STANDARDS, ShimTest
@@ -166,6 +167,31 @@ class FactsTests(ShimTest):
             "ci-check-job: yes"])
         self.assertNotIn("LICENSE", out, "a private repository needs no licence")
 
+    def test_an_organisation_owner_sees_the_plan(self):
+        self.put("repo.json", {"visibility": "private", "default_branch": "main", "owner": {"login": "o", "type": "Organization"}})
+        self.put("org.json", {"login": "o", "plan": {"name": "team"}})
+        self.assertIn("visibility: private\nplan: team\n", self.facts())
+
+    def test_the_status_of_agent_configuration_scales_to_large_repositories(self):
+        # Thousands of tracked paths exceed what one argument or environment string may hold (128 KB on Linux).
+        for i in range(3000):
+            self.write(f"src/{'deeply/nested/' * 4}module_{i:05d}_with_a_long_name.py", "")
+        self.write(".cursor/rules/a.mdc")
+        self.git("add", ".")
+        self.git("commit", "-qm", "large")
+        self.assertIn("agent-config:\n  .cursor/rules/a.mdc: 1 file, tracked, outside the standard\n", self.facts(github=False))
+
+    def test_a_relative_call_sources_the_plugin_library_not_the_audited_repositorys(self):
+        planted = self.repo / "plugins/repo-standards/scripts/lib.sh"
+        self.write("plugins/repo-standards/scripts/lib.sh", "echo PLANTED; exit 7\n")
+        root = STANDARDS.parents[2]
+        r = subprocess.run(["bash", str(FACTS.relative_to(root)), str(self.repo)], cwd=root, env=self.env(),
+                           text=True, capture_output=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn("PLANTED", r.stdout)
+        self.assertIn("branch-model: main\n", r.stdout)
+        self.assertTrue(planted.exists())
+
     def test_a_repository_owned_by_someone_else_has_an_unknown_plan(self):
         self.put("repo.json", {"visibility": "public", "default_branch": "main", "owner": {"login": "o", "type": "User"}})
         self.put("user.json", {"login": "someone", "plan": {"name": "free"}})
@@ -255,7 +281,7 @@ next: ask for approval per category, then record the answers with approve.sh <ca
         self.assertIn("security: 3 findings (delete 2, issue 1)\n  deletes: .claude/skills/deploy (also agent-config), .env\n",
                       r.stdout)
 
-    def test_an_empty_repository_gets_a_report_with_only_create_actions(self):
+    def test_a_report_of_create_findings_deletes_nothing_and_opens_no_issues(self):
         audit = "\n".join(f"finding: {c} | {t} | create | missing | high" for c, t in (
             ("agent-config", "AGENTS.md"), ("agent-config", "CLAUDE.md"), ("docs", "docs/architecture.md"),
             ("tests-ci", "Makefile"), ("tests-ci", ".github/workflows/check.yml")))
@@ -282,7 +308,10 @@ next: ask for approval per category, then record the answers with approve.sh <ca
                "finding: slop | x | delete | y | high\n"
                "finding: docs | README.md | create | missing\n"
                "finding: docs | README.md | create | missing | sure\n"
-               "finding: docs |  | create | missing | high\n")
+               "finding: docs |  | create | missing | high\n"
+               "finding: files | /etc | delete | outside | high\n"
+               "finding: files | docs/../../x | delete | outside | high\n"
+               "finding: security | ~/.ssh/id_rsa | issue | outside | high\n")
         r = self.report(bad)
         self.assertEqual(r.returncode, 1)
         self.assertEqual(r.stdout, "")
@@ -295,6 +324,11 @@ next: ask for approval per category, then record the answers with approve.sh <ca
             "finding: docs | README.md | create | missing",
             "error: unknown confidence sure; use high, medium or low: finding: docs | README.md | create | missing | sure",
             "error: empty target: finding: docs |  | create | missing | high",
+            "error: target /etc leaves the repository; use a path relative to its root: finding: files | /etc | delete | outside | high",
+            "error: target docs/../../x leaves the repository; use a path relative to its root: "
+            "finding: files | docs/../../x | delete | outside | high",
+            "error: target ~/.ssh/id_rsa leaves the repository; use a path relative to its root: "
+            "finding: security | ~/.ssh/id_rsa | issue | outside | high",
             "error: malformed findings, nothing stored; correct those lines and run report.sh again"])
         self.assertEqual(self.state("findings"), stored)
 

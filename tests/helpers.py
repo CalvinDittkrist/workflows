@@ -10,6 +10,8 @@ ORCH = ROOT / "plugins" / "orchestrator" / "scripts"
 WORKER = ROOT / "plugins" / "worker" / "scripts"
 STANDARDS = ROOT / "plugins" / "repo-standards" / "scripts"
 PLANNER = ROOT / "plugins" / "planner" / "scripts"
+# The host's git configuration (a global ignore file, hooks, aliases) must not change what a test sees.
+GIT_ISOLATION = {"GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"}
 
 
 class ShimTest(unittest.TestCase):
@@ -33,7 +35,8 @@ class ShimTest(unittest.TestCase):
         self.wt_root.mkdir()
 
     def git(self, *args, cwd=None):
-        return subprocess.run(["git", *args], cwd=cwd or self.repo, check=True, text=True, capture_output=True).stdout
+        return subprocess.run(["git", *args], cwd=cwd or self.repo, env={**os.environ, **GIT_ISOLATION}, check=True,
+                              text=True, capture_output=True).stdout
 
     def env(self, **extra):
         env = {k: v for k, v in os.environ.items() if not k.startswith(("WF_", "HERDR_", "SHIM_"))}
@@ -45,6 +48,7 @@ class ShimTest(unittest.TestCase):
             "SHIM_MAIN": str(self.repo),
             "HERDR_ENV": "1",
             "HERDR_WORKSPACE_ID": "wR",
+            **GIT_ISOLATION,
         })
         env.update(extra)
         return env

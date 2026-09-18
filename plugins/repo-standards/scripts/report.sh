@@ -4,7 +4,8 @@
 # Input: the auditors' replies as they are. Only lines of the fixed format count, other text is ignored:
 #   finding: <category> | <target> | <action> | <reason> | <confidence>
 # category: files, agent-config, docs, tests-ci, workspace, security; action: delete, replace, create, configure,
-# issue; confidence: high, medium, low. Any malformed finding line fails the whole report and stores nothing.
+# issue; confidence: high, medium, low. A target other than a GitHub setting (configure) is a path inside the
+# repository: no leading / or ~, no .. segment. Any malformed finding line fails the whole report and stores nothing.
 # The findings go to <git dir>/standardize/findings; earlier approvals are cleared, because they answered
 # another report. Nothing in the working tree or on GitHub changes.
 set -euo pipefail
@@ -29,6 +30,7 @@ parsed=$(cat "$@" | CATS="$WF_CATEGORIES" awk '
     else if (!(f[1] in C)) why = "unknown category " f[1] "; use one of " ENVIRON["CATS"]
     else if (f[2] == "") why = "empty target"
     else if (!(f[3] in A)) why = "unknown action " f[3] "; use delete, replace, create, configure or issue"
+    else if (f[3] != "configure" && (f[2] ~ /^[\/~]/ || f[2] ~ /(^|\/)\.\.(\/|$)/)) why = "target " f[2] " leaves the repository; use a path relative to its root"
     else if (f[4] == "") why = "empty reason"
     else if (!(tolower(f[5]) in K)) why = "unknown confidence " f[5] "; use high, medium or low"
     if (why != "") { print "error: " why ": " line > "/dev/stderr"; bad = 1; next }
