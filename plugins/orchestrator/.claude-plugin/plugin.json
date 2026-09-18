@@ -1,6 +1,6 @@
 {
   "name": "orchestrator",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Coordinator session for parallel issue work: opens planning sessions, claims issues into Herdr worktree workspaces, merges finished PRs, shows the board and the frontier.",
   "author": {
     "name": "Calvin Dittkrist",

@@ -10,3 +10,4 @@ One file per decision, numbered, never edited after acceptance (supersede instea
 | [0004](0004-reviewers-as-fresh-read-only-subagents.md) | Reviewers are fresh-context, read-only subagents | accepted |
 | [0005](0005-sandboxing-strategy.md) | Sandboxing strategy: layered, Docker Sandboxes opt-in | accepted |
 | [0006](0006-planner-session-writes-issues-not-code.md) | Planning is its own session that writes issues, not code | accepted |
+| [0007](0007-releases-are-manual-and-close-a-milestone.md) | Releases are manual and close a milestone | accepted |

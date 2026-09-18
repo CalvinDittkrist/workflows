@@ -51,21 +51,25 @@ if [ "$ignore_threads" = 0 ]; then
   [ "$unresolved" = 0 ] || wf_die "PR #$pr has $unresolved unresolved review threads; let the worker address them or pass --ignore-threads"
 fi
 
-# Tear down the worktree before merging so gh can delete the local branch.
-path=$(wf_worktree_path_for_branch "$branch")
-ws=""
-if [ -n "$path" ]; then
-  ws=$(wf_workspace_for_path "$path")
-  if [ -n "$ws" ]; then
-    wf_run herdr worktree remove --workspace "$ws" --force >/dev/null
-  else
-    wf_run git worktree remove --force "$path"
-  fi
-fi
-
-wf_run gh pr merge "$pr" --squash --delete-branch >/dev/null
-git worktree prune
-git branch -D "$branch" >/dev/null 2>&1 || true
+# A promotion PR (dev -> main, opened by release.sh) comes from a long-lived branch: keep it and its checkout.
+path="" ws=""
+case "$branch" in
+  dev|main) wf_run gh pr merge "$pr" --squash >/dev/null ;;
+  *)
+    # Tear down the worktree before merging so gh can delete the local branch.
+    path=$(wf_worktree_path_for_branch "$branch")
+    if [ -n "$path" ]; then
+      ws=$(wf_workspace_for_path "$path")
+      if [ -n "$ws" ]; then
+        wf_run herdr worktree remove --workspace "$ws" --force >/dev/null
+      else
+        wf_run git worktree remove --force "$path"
+      fi
+    fi
+    wf_run gh pr merge "$pr" --squash --delete-branch >/dev/null
+    git worktree prune
+    git branch -D "$branch" >/dev/null 2>&1 || true ;;
+esac
 git fetch -q --prune origin || true
 current=$(git rev-parse --abbrev-ref HEAD)
 basebr=$(printf '%s' "$json" | jq -r .baseRefName)
@@ -76,7 +80,7 @@ fi
 
 wf_kv pr "#$pr $(printf '%s' "$json" | jq -r .title)"
 wf_kv merged "squash into $basebr"
-wf_kv branch "$branch deleted (remote + local)"
+case "$branch" in dev|main) wf_kv branch "$branch kept (long-lived)" ;; *) wf_kv branch "$branch deleted (remote + local)" ;; esac
 wf_kv worktree "${path:-none} removed"
 wf_kv workspace "${ws:-none} closed"
 wf_notify "Merged #$pr" "$branch → $basebr"
