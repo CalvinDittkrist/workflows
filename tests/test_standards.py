@@ -161,6 +161,11 @@ class StandardsTests(ShimTest):
         r = self.check()
         self.assertIn("ok: ADRs: 2", r.stdout)
 
+    def test_new_adr_cuts_a_long_title_without_a_trailing_hyphen(self):
+        self.scaffold()
+        r = self.run_script(STANDARDS / "new-adr.sh", "make check is the single gate and check the single required status check")
+        self.assertIn("created: docs/adr/0001-make-check-is-the-single-gate-and-check-the-single-required.md", r.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()
