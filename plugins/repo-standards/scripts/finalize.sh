@@ -20,14 +20,24 @@ catalogue=$(catalogue_issue) || exit 1
 [ -n "$catalogue" ] || die "the catalogue issue is missing; run backup.sh and cleanup.sh first"
 
 pr=$(branch_pulls) || exit 1; pr=$(printf '%s' "$pr" | jq -c 'first // empty')
-case "$(printf '%s' "$pr" | jq -r '.state // "none"' 2>/dev/null)" in
+state=$(printf '%s' "$pr" | jq -r '.state // "none"') sha=$(printf '%s' "$pr" | jq -r '.sha // empty')
+git fetch -q origin "refs/heads/$default" 2>"$err" || die "cannot fetch $default from origin: $(tail -n1 "$err")"
+tip=$(git rev-parse FETCH_HEAD)
+# Work in the cleanup worktree that no pull request carries yet: uncommitted changes, or a commit that is neither
+# on the default branch nor the head of the merged pull request (a push or an open that failed).
+wt=$(cleanup_worktree) pending=""
+if [ "$(git -C "$wt" rev-parse --abbrev-ref HEAD 2>/dev/null)" = "$WF_BRANCH" ]; then
+  whead=$(git -C "$wt" rev-parse HEAD)
+  if [ -n "$(git -C "$wt" status --porcelain)" ]; then pending="uncommitted changes"
+  elif [ "$whead" != "$sha" ] && ! git merge-base --is-ancestor "$whead" "$tip"; then pending="a commit"; fi
+fi
+case "$state" in
   open) die "the cleanup pull request $(printf '%s' "$pr" | jq -r .url) is not merged yet; merge it once check passes, then run finalize.sh again" ;;
   closed) die "the cleanup pull request $(printf '%s' "$pr" | jq -r .url) was closed without a merge; reopen and merge it, or run cleanup.sh prepare and open again" ;;
-  merged) printf 'pr: %s merged\n' "$(printf '%s' "$pr" | jq -r .url)" ;;
-  *) [ -z "$(git -C "$(cleanup_worktree)" status --porcelain 2>/dev/null)" ] \
-       || die "the cleanup worktree $(cleanup_worktree) has changes but no pull request; run cleanup.sh open first"
-     printf 'pr: none (the default branch needed no cleanup)\n' ;;
 esac
+[ -z "$pending" ] || die "the cleanup worktree $wt has $pending that no pull request carries; run cleanup.sh open, merge the pull request, then run finalize.sh again"
+if [ "$state" = merged ]; then printf 'pr: %s merged\n' "$(printf '%s' "$pr" | jq -r .url)"
+else printf 'pr: none (the default branch needed no cleanup)\n'; fi
 
 # The workspace, only when approved. The snapshot goes to the catalogue issue before anything else can fail.
 status=0
@@ -53,25 +63,26 @@ case " $(categories "$answers" approve) " in
 esac
 
 # The cleanup branch is done once its pull request is merged: the worktree, the local branch and the branch on
-# origin go, so the next run starts from the default branch.
-wt=$(cleanup_worktree)
-if [ "$(printf '%s' "$pr" | jq -r '.state // empty')" = merged ]; then
+# origin go, so the next run starts from the default branch. Only what the merged pull request carried goes.
+if [ "$state" = merged ]; then
   if [ -e "$wt" ]; then
     if git worktree remove "$wt" 2>"$err"; then
       git branch -q -D "$WF_BRANCH" 2>/dev/null || true
       printf 'worktree: %s removed\n' "$wt"
     else printf 'worktree: %s kept, it has changes the merged pull request does not (%s)\n' "$wt" "$(tail -n1 "$err")"; fi
   fi
-  if [ -n "$(git ls-remote --heads origin "refs/heads/$WF_BRANCH" 2>/dev/null)" ]; then
+  pushed=$(remote_ref "refs/heads/$WF_BRANCH") || exit 1
+  if [ -n "$pushed" ] && [ "$pushed" != "$sha" ]; then
+    printf 'branch: %s kept on origin, it has commits the merged pull request does not\n' "$WF_BRANCH"
+  elif [ -n "$pushed" ]; then
     git push -q origin --delete "$WF_BRANCH" 2>"$err" && printf 'branch: %s deleted on origin\n' "$WF_BRANCH" \
       || printf 'branch: %s kept on origin, deleting it failed (%s)\n' "$WF_BRANCH" "$(tail -n1 "$err")"
   fi
 fi
 
 # The check, on what is on GitHub now, in a temporary worktree so the checkout stays as it is.
-git fetch -q origin "refs/heads/$default" 2>"$err" || die "cannot fetch $default from origin: $(tail -n1 "$err")"
 check=$(mktemp -d); rmdir "$check"
-git worktree add -q --detach "$check" FETCH_HEAD 2>"$err" || die "cannot check out $default for the check: $(tail -n1 "$err")"
+git worktree add -q --detach "$check" "$tip" 2>"$err" || die "cannot check out $default for the check: $(tail -n1 "$err")"
 rc=0; out=$(bash "$here/check.sh" "$check" 2>&1) || rc=$?
 git worktree remove --force "$check" >/dev/null 2>&1 || true
 printf '%s\n' "$out" | grep -E '^(fail|warn|skip): ' | sed 's/^/check: /' || true

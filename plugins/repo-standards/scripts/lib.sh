@@ -98,16 +98,31 @@ catalogue_issue() {
   rm -f "$e"
   printf '%s' "$out" | jq -s -r --arg t "$WF_CATALOGUE" '[add // [] | .[] | select(.title == $t and .pull_request == null)] | sort_by(.number) | first // empty | .number'
 }
-# branch_pulls: the pull requests from the cleanup branch, newest first, as {number, url, body, state}; state is
-# open, closed (without a merge) or merged.
+# branch_pulls: the pull requests from the cleanup branch, newest first, as {number, url, body, state, sha}; state
+# is open, closed (without a merge) or merged, sha the head commit.
 branch_pulls() {
   local e out; e=$(mktemp)
   out=$(gh api --paginate "repos/$nwo/pulls?head=${nwo%%/*}:$WF_BRANCH&state=all&per_page=100" 2>"$e") || { gh_fail "cannot list the pull requests from $WF_BRANCH" "$e"; return 1; }
   rm -f "$e"
-  printf '%s' "$out" | jq -s -c '[add // [] | .[] | {number, url: .html_url, body: (.body // ""),
+  printf '%s' "$out" | jq -s -c '[add // [] | .[] | {number, url: .html_url, body: (.body // ""), sha: .head.sha,
     state: (if .merged_at then "merged" else .state end)}] | sort_by(-.number)'
 }
 # cleanup_worktree: the path of the cleanup worktree, inside the main checkout like every workflow worktree.
 cleanup_worktree() {
   printf '%s/.claude/worktrees/%s' "$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")" "$(printf '%s' "$WF_BRANCH" | tr '/' '-')"
+}
+# remote_ref <ref>: the commit a ref has on origin; empty when origin has no such ref, an error when origin cannot be reached.
+remote_ref() {
+  local e out; e=$(mktemp)
+  out=$(git ls-remote origin "$1" 2>"$e") || { gh_fail "cannot reach origin" "$e"; return 1; }
+  rm -f "$e"; printf '%s' "$out" | head -n1 | cut -f1
+}
+# ensure_label <name>: create a label of the vocabulary unless the repository has it (in any case).
+ensure_label() {
+  local e out; e=$(mktemp)
+  out=$(gh api --paginate "repos/$nwo/labels?per_page=100" 2>"$e") || { gh_fail "cannot read the labels of $nwo" "$e"; return 1; }
+  if ! printf '%s' "$out" | jq -s -e --arg n "$1" 'add // [] | any(.[]; (.name | ascii_downcase) == $n)' >/dev/null; then
+    label_json "$1" | gh api --method POST "repos/$nwo/labels" --input - >/dev/null 2>"$e" || { gh_fail "cannot create the label $1" "$e"; return 1; }
+  fi
+  rm -f "$e"
 }

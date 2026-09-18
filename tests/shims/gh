@@ -40,11 +40,15 @@ if [ -n "${SHIM_WS:-}" ]; then
     "api --method POST repos/o/r/issues/"*"/comments --input -")
       n=${4#repos/o/r/issues/}; n=${n%/comments}
       save issues.json --argjson b "$body" --argjson n "$n" 'map(if .number == $n then .comments += [$b.body] else . end)'; echo '{}'; exit ;;
+    # The head sha of an open pull request follows its branch on origin (the remote of the working directory).
     "api --paginate repos/o/r/pulls?head=o:"*"&state=all&per_page=100")
-      h=${3#*head=o:}; h=${h%%&*}; list pulls.json | jq --arg h "$h" '[.[] | select(.head.ref == $h)]'; exit ;;
+      h=${3#*head=o:}; h=${h%%&*}; sha=$(git ls-remote origin "refs/heads/$h" 2>/dev/null | cut -f1)
+      save pulls.json --arg h "$h" --arg s "$sha" 'map(if .head.ref == $h and .state == "open" then .head.sha = $s else . end)'
+      list pulls.json | jq --arg h "$h" '[.[] | select(.head.ref == $h)]'; exit ;;
     "api --method POST repos/o/r/pulls --input -")
-      next; save pulls.json --argjson b "$body" --argjson n "$n" '. + [{number: $n, state: "open", merged_at: null, title: $b.title,
-        body: $b.body, head: {ref: $b.head}, base: {ref: $b.base}, html_url: "https://github.com/o/r/pull/\($n)"}]'
+      next; sha=$(git ls-remote origin "refs/heads/$(jq -r .head <<<"$body")" 2>/dev/null | cut -f1)
+      save pulls.json --argjson b "$body" --argjson n "$n" --arg s "$sha" '. + [{number: $n, state: "open", merged_at: null, title: $b.title,
+        body: $b.body, head: {ref: $b.head, sha: $s}, base: {ref: $b.base}, html_url: "https://github.com/o/r/pull/\($n)"}]'
       list pulls.json | jq '.[-1]'; exit ;;
     "api --method PATCH repos/o/r/pulls/"*" --input -")
       save pulls.json --argjson b "$body" --argjson n "${4##*/}" 'map(if .number == $n then . + $b else . end)'; echo '{}'; exit ;;

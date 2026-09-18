@@ -107,6 +107,7 @@ class ApplyTests(ShimTest):
 
     def merge(self):
         """GitHub merges the pull request: the branch lands on main and the pull request is marked merged."""
+        self.get("pulls.json") and self.step(CLEANUP, "open")  # refreshes the head sha as GitHub would
         self.origin_git("update-ref", "refs/heads/main", "refs/heads/chore/standardize")
         self.put("pulls.json", [dict(p, state="closed", merged_at="2026-09-18T12:00:00Z") for p in self.get("pulls.json")])
 
@@ -389,6 +390,8 @@ class ApplyTests(ShimTest):
         self.step(BACKUP)
         r = self.step(CLEANUP, "prepare")
         self.assertIn("skipped: .cursor changed since the tag pre-standard was set, so the tag cannot restore it", r.stdout)
+        catalogue = self.get("issues.json")[0]["body"]
+        self.assertIn("| deploy |", catalogue)
         self.assertIn("local: GEMINI.md is not tracked", r.stdout)
         self.assertIn("deleted: .claude/skills\n", r.stdout)
         self.assertTrue((self.repo / WT / ".cursor/rules/new.mdc").exists())
@@ -396,18 +399,65 @@ class ApplyTests(ShimTest):
 
     def test_the_description_follows_the_branch_and_ignores_later_commits_on_main(self):
         self.through_open()
-        self.write("later.txt", "x\n")  # someone else's change lands on main meanwhile
-        self.git("add", "later.txt")
-        self.git("commit", "-qm", "later")
+        self.write("src/app.py", "print('later')\n")  # someone else's change lands on main meanwhile
+        self.git("commit", "-qam", "later")
         self.git("push", "-q", "origin", "main")
         self.write("docs/runbook.md", "# Runbook\n", root=self.repo / WT)
         r = self.step(CLEANUP, "open")
         self.assertIn("pr: https://github.com/o/r/pull/2 updated\n", r.stdout)
         pr, = self.get("pulls.json")
-        self.assertIn("- added `docs/runbook.md`", pr["body"])
-        self.assertNotIn("later.txt", pr["body"])
+        added = pr["body"].split("## Added and changed\n")[1].split("\n\n")[0].splitlines()
+        self.assertEqual(added, ["- changed `.claude/settings.json`", "- added `.github/PULL_REQUEST_TEMPLATE.md`",
+                                 "- added `.github/dependabot.yml`", "- added `.github/workflows/check.yml`",
+                                 "- added `AGENTS.md`", "- changed `CLAUDE.md`", "- added `Makefile`",
+                                 "- added `docs/adr/README.md`", "- added `docs/adr/template.md`",
+                                 "- added `docs/architecture.md`", "- added `docs/glossary.md`", "- added `docs/runbook.md`"])
         self.assertIn("- `.cursor`: Cursor rules that repeat CLAUDE.md.", pr["body"])
         self.assertEqual(self.step(CLEANUP, "open").stdout.splitlines()[0], "pr: https://github.com/o/r/pull/2 unchanged")
+
+    def test_a_failing_commit_hook_stops_open_and_a_second_open_continues(self):
+        self.step(BACKUP)
+        self.fill_in(self.step(CLEANUP, "prepare").stdout)
+        hook = self.repo / ".git/hooks/pre-commit"
+        hook.write_text("#!/bin/sh\necho 'lint: trailing space in AGENTS.md' >&2\nexit 1\n")
+        hook.chmod(0o755)
+        r = self.step(CLEANUP, "open", ok=False)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("lint: trailing space in AGENTS.md", r.stderr)
+        self.assertFalse((self.ws / "pulls.json").exists())
+        self.assertEqual(self.origin_git("branch", "--list", "chore/standardize"), "")
+        hook.unlink()
+        self.assertIn("pr: https://github.com/o/r/pull/2 opened\n", self.step(CLEANUP, "open").stdout)
+
+    def test_a_commit_no_pull_request_carries_is_never_thrown_away(self):
+        self.through_open()
+        self.merge()
+        # A new commit on the old branch whose push failed: no open pull request carries it.
+        self.write("docs/runbook.md", "# Runbook\n", root=self.repo / WT)
+        self.git("add", ".", cwd=self.repo / WT)
+        self.git("commit", "-qm", "more", cwd=self.repo / WT)
+        head = self.git("rev-parse", "HEAD", cwd=self.repo / WT).strip()
+        r = self.step(FINALIZE, ok=False)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("has a commit that no pull request carries; run cleanup.sh open", r.stderr)
+        self.assertEqual(self.git("rev-parse", "chore/standardize").strip(), head)
+        self.assertEqual(self.origin_git("branch", "--list", "chore/standardize").strip(), "chore/standardize")
+        self.assertTrue(self.get("repo.json")["allow_rebase_merge"])  # the workspace waited
+
+    def test_a_workspace_that_refuses_leaves_no_snapshot_and_a_rerun_finishes(self):
+        self.through_open()
+        self.merge()
+        (self.ws / "check-runs").write_text("0")
+        r = self.step(FINALIZE, ok=False)
+        self.assertIn("workspace: failed", r.stdout)
+        self.assertNotIn("snapshot:", r.stdout)
+        self.assertEqual(self.get("issues.json")[0]["comments"], [])
+        self.assertEqual(list((self.repo / ".git/standardize").glob("workspace-snapshot*")), [])
+        self.assertTrue(r.stdout.endswith("result: fail\n"), r.stdout)
+        (self.ws / "check-runs").write_text("1")
+        r = self.step(FINALIZE)
+        self.assertIn("snapshot: posted to #1\n", r.stdout)
+        self.assertTrue(r.stdout.endswith("result: pass\n"), r.stdout)
 
     def test_a_pull_request_closed_without_a_merge_is_refused(self):
         self.through_open()
@@ -421,7 +471,7 @@ class ApplyTests(ShimTest):
         self.step(CLEANUP, "prepare")
         r = self.step(FINALIZE, ok=False)
         self.assertEqual(r.returncode, 1)
-        self.assertIn("has changes but no pull request; run cleanup.sh open first", r.stderr)
+        self.assertIn("has uncommitted changes that no pull request carries; run cleanup.sh open", r.stderr)
 
     def test_a_merged_branch_left_on_origin_is_not_reused(self):
         self.through_open()

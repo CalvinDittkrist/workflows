@@ -36,7 +36,8 @@ placeholders() {
 }
 
 if [ "$step" = prepare ]; then
-  [ -n "$(git ls-remote --tags origin "refs/tags/$WF_TAG" 2>/dev/null)" ] || die "the tag $WF_TAG is not on origin; run backup.sh first, nothing is deleted before the backup"
+  tag=$(remote_ref "refs/tags/$WF_TAG") || exit 1
+  [ -n "$tag" ] || die "the tag $WF_TAG is not on origin; run backup.sh first, nothing is deleted before the backup"
   git rev-parse -q --verify "refs/tags/$WF_TAG" >/dev/null || git fetch -q origin "refs/tags/$WF_TAG:refs/tags/$WF_TAG" 2>"$err" \
     || die "cannot fetch the tag $WF_TAG: $(tail -n1 "$err")"
   catalogue=$(catalogue_issue) || exit 1
@@ -49,7 +50,8 @@ if [ "$step" = prepare ]; then
     printf 'worktree: %s (resumed)\n' "$wt"
   else
     [ ! -e "$wt" ] || die "$wt exists but is not a worktree on $WF_BRANCH; move it away, then run cleanup.sh prepare again"
-    if [ -n "$(git ls-remote --heads origin "refs/heads/$WF_BRANCH" 2>/dev/null)" ]; then
+    pushed=$(remote_ref "refs/heads/$WF_BRANCH") || exit 1
+    if [ -n "$pushed" ]; then
       pulls=$(branch_pulls) || exit 1
       [ "$(printf '%s' "$pulls" | jq -r '.[0].state // empty')" != merged ] \
         || die "$WF_BRANCH on origin belongs to a merged pull request; run finalize.sh, which deletes it, or delete it with git push origin --delete $WF_BRANCH"
@@ -101,9 +103,10 @@ main=$(base)
 g add -A
 left=$(placeholders "$main")
 [ -z "$left" ] || die "<fill in> placeholders are left in $(printf '%s' "$left" | tr '\n' ' ')in $wt; fill them in, then run cleanup.sh open again"
+# The repository's own commit hooks run: they are its gates. A failing hook stops here with the worktree intact.
 if ! g diff --cached --quiet; then
   g commit -q -m "chore: bring the repository to the standard" -m "Removes what the standardisation audit found outside the standard and adds the missing baseline files. The tag $WF_TAG keeps the previous state." \
-    || die "cannot commit in $wt"
+    2>"$err" || die "cannot commit in $wt: $(tail -n3 "$err" | tr '\n' ' '); fix what the repository's commit hooks report there, then run cleanup.sh open again"
 fi
 head=$(g rev-parse HEAD)
 if [ "$(git rev-parse "$main^{tree}")" = "$(git rev-parse "$head^{tree}")" ]; then

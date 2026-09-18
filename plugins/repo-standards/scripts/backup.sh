@@ -17,7 +17,7 @@ err=$(mktemp); tmp=$(mktemp); trap 'rm -f "$err" "$tmp"' EXIT
 github_repo || exit 1
 
 # 1. The tag.
-remote=$(git ls-remote --tags origin "refs/tags/$WF_TAG" 2>"$err" | cut -f1) || die "cannot reach origin: $(tail -n1 "$err")"
+remote=$(remote_ref "refs/tags/$WF_TAG") || exit 1
 if [ -n "$remote" ]; then
   if local=$(git rev-parse -q --verify "refs/tags/$WF_TAG^{commit}" 2>/dev/null); then
     git fetch -q origin "refs/tags/$WF_TAG" 2>"$err" || die "cannot fetch the tag $WF_TAG from origin: $(tail -n1 "$err")"
@@ -61,10 +61,16 @@ front() { # front <key> <blob>: the value of a key of the YAML frontmatter, a fo
       gsub(/^["\047]|["\047]$/, "", v); exit }
     END { print v }'
 }
+# A target the default branch has in another state than the tag is skipped, as cleanup.sh skips it; one the
+# default branch no longer has was removed by an earlier run and stays listed.
+git fetch -q origin "refs/heads/$default" 2>"$err" || die "cannot fetch $default from origin: $(tail -n1 "$err")"
+tip=$(git rev-parse FETCH_HEAD)
 locks=$(git ls-tree -r --name-only "$WF_TAG" | grep -E '(^|/)\.?skills?-lock\.json$' || true)
 rows="" count=0 seen=" "
 while IFS=$'\t' read -r _ target _ reason _; do
   [ -n "$target" ] || continue
+  now=$(git ls-tree -r "$tip" -- ":(literal)$target")
+  [ -z "$now" ] || [ "$now" = "$(git ls-tree -r "$WF_TAG" -- ":(literal)$target")" ] || continue
   while IFS= read -r f; do
     case "$f" in
       SKILL.md|*/SKILL.md) path=$(dirname "$f"); md=$f ;;
@@ -98,10 +104,7 @@ done < <(approved_findings "$answers" delete)
   printf '\nWhen the run configures the GitHub workspace, it adds the previous settings as a comment here.\n'
 } > "$tmp"
 
-labels=$(gh api --paginate "repos/$nwo/labels?per_page=100" 2>"$err") || die "cannot read the labels of $nwo: $(tail -n1 "$err")"
-if ! printf '%s' "$labels" | jq -s -e 'add // [] | any(.[]; (.name | ascii_downcase) == "skill-candidate")' >/dev/null; then
-  label_json skill-candidate | gh api --method POST "repos/$nwo/labels" --input - >/dev/null 2>"$err" || die "cannot create the label skill-candidate: $(tail -n1 "$err")"
-fi
+ensure_label skill-candidate || exit 1
 issue=$(catalogue_issue) || exit 1; how="" current=""
 if [ -z "$issue" ]; then
   issue=$(jq -n --arg t "$WF_CATALOGUE" --rawfile b "$tmp" '{title: $t, body: $b, labels: ["skill-candidate"]}' \

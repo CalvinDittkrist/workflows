@@ -13,10 +13,7 @@ err=$(mktemp); trap 'rm -f "$err"' EXIT
 todo=$(approved_findings "$answers" issue)
 [ -n "$todo" ] || { printf 'issues: none approved\n'; exit 0; }
 github_repo || exit 1
-labels=$(gh api --paginate "repos/$nwo/labels?per_page=100" 2>"$err") || die "cannot read the labels of $nwo: $(tail -n1 "$err")"
-if ! printf '%s' "$labels" | jq -s -e 'add // [] | any(.[]; (.name | ascii_downcase) == "ready-for-agent")' >/dev/null; then
-  label_json ready-for-agent | gh api --method POST "repos/$nwo/labels" --input - >/dev/null 2>"$err" || die "cannot create the label ready-for-agent: $(tail -n1 "$err")"
-fi
+ensure_label ready-for-agent || exit 1
 titles=$(gh api --paginate "repos/$nwo/issues?state=all&per_page=100" 2>"$err" | jq -s -c '[add // [] | .[] | select(.pull_request == null) | {number, title}]') \
   || die "cannot list the issues of $nwo: $(tail -n1 "$err")"
 opened=0 kept=0
