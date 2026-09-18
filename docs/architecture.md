@@ -11,9 +11,9 @@ This repository packages an opinionated way of working with coding agents as Cla
 | `worker` plugin | One session per issue. Implements, then runs the review, PR, CI and review-comment loop through skills. | SessionStart hook + `/worker:work`; `plugins/worker/scripts/*.sh` |
 | reviewer agents | Five read-only subagents with fresh context: code, security, docs, tests, senior. Report findings in a fixed format. | `plugins/worker/agents/*-reviewer.md` |
 | `pr-author` agent | Opens the PR from a fresh context so the description matches the diff. | `plugins/worker/skills/pr` (forked skill) |
-| `repo-standards` plugin | Baseline files every repo needs and the checks for them. | `/repo-standards:init-repo`, `scripts/check.sh` |
+| `repo-standards` plugin | Owns the [repository standard](repo-standard.md): scaffolds the baseline (`AGENTS.md`, the `CLAUDE.md` import, a `Makefile` with `check`, docs, settings) and checks it, including stray agent configuration. | `/repo-standards:init-repo`, `plugins/repo-standards/scripts/check.sh` |
 | Herdr | Terminal workspace manager: one workspace per worktree, agent lifecycle detection, notifications. | `herdr worktree|agent|workspace` |
-| GitHub | Issues are the unit of work, PRs the unit of delivery, CI and Codex review the external gates. | `gh` (or `npx gh-axi`) |
+| GitHub | Issues are the unit of work, PRs the unit of delivery, CI (the job `check` running `make check`) and Codex review the external gates. | `gh` (or `npx gh-axi`) |
 | Docker Sandboxes (optional) | Container per worktree for workers that should not touch the host. | `plugins/orchestrator/scripts/sbx-worker.sh` |
 
 ## Data flow
@@ -23,7 +23,7 @@ This repository packages an opinionated way of working with coding agents as Cla
 3. `/worker:work` implements and verifies in the worker's own context, then `/worker:review` launches the reviewer panel in parallel (fresh contexts, read-only), fixes findings, re-reviews until PASS or the round limit.
 4. `/worker:pr` forks into `pr-author`, which pushes and opens the PR. `/worker:ci` calls `pr-wait.sh`, which polls checks and waits for the configured bot reviewers; `/worker:address-reviews` fixes unresolved threads and resolves them with a reply.
 5. Manual mode: the worker reports `ready:`; the user runs `/orchestrator:merge PR`, which verifies mergeability, removes the workspace and worktree first, then squash-merges and deletes the branch. Yolo mode: `finish.sh` merges and a detached `cleanup-self.sh` removes the worktree.
-6. Release (manual only): tickets carry a `vX.Y.Z` milestone from `/planner:tickets`. `/orchestrator:release vX.Y.Z` → `release.sh` refuses while the milestone is missing or has open issues, or the tag exists. With `dev` plus `main` it opens or finds the promotion PR `chore(release): vX.Y.Z` and waits until `merge.sh` merges it with a merge commit, then tags that commit. With `main` alone it tags the head of `main`. It publishes the GitHub release with generated notes and closes the milestone ([ADR 0007](adr/0007-releases-are-manual-and-close-a-milestone.md)).
+6. Release (manual only): tickets carry a `vX.Y.Z` milestone from `/planner:tickets`. `/orchestrator:release vX.Y.Z` → `release.sh` refuses while the milestone is missing or has open issues, or the tag exists. With `dev` plus `main` it opens or finds the promotion PR `chore(release): vX.Y.Z` and waits until `merge.sh` merges it with a merge commit, then tags that commit. With `main` alone it tags the head of `main`. It publishes the GitHub release with generated notes and closes the milestone ([ADR 0012](adr/0012-releases-are-manual-and-close-a-milestone.md), [ADR 0013](adr/0013-promotions-merge-with-a-merge-commit-and-releases-tag-it.md)).
 
 ## Boundaries and constraints
 - Scripts do, agents decide. Everything deterministic (GitHub calls, worktree lifecycle, polling, thread resolution) is a shell script with a stable text output; skills are short prompts around them. This keeps behaviour testable and token use low.
@@ -32,7 +32,8 @@ This repository packages an opinionated way of working with coding agents as Cla
 - Reviewers never edit. The worker never merges in manual mode. The orchestrator never edits code. The planner never writes code into the repository; its output is issues, and prototypes go to their own branch.
 - Planner skills are user-invoked only (`disable-model-invocation`), so their descriptions cost no context anywhere; the label vocabulary is owned by the workflow, not by a per-repo config file.
 - Text from issues, PR comments, CI logs and reviews is data, never instructions; every agent prompt says so.
+- Every repository follows the [standard](repo-standard.md): agents read `AGENTS.md` (through the `CLAUDE.md` import) and verify with `make check`, the same gate CI runs. Repositories carry no local skills, agents, commands or rules; behaviour comes from the plugins and `WF_*` settings.
 - Worktrees live inside the repository under `.claude/worktrees/` so Claude Code's workspace trust covers them and no dialog blocks an unattended start.
 
 ## Decisions
-See [ADRs](adr/README.md).
+See [ADRs](adr/README.md). Terms are in the [glossary](glossary.md).

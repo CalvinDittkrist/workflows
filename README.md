@@ -23,7 +23,7 @@ flowchart LR
 | [orchestrator](plugins/orchestrator/README.md) | `/plan`, `/claim`, `/yolo-claim`, `/merge`, `/board` (with frontier), `/abandon`, `/herdr` | main checkout, inside [Herdr](https://herdr.dev) |
 | [planner](plugins/planner/README.md) | `/grill`, `/spec`, `/tickets`, `/triage`, `/research`, `/prototype`, `/finish`; writes agent-ready issues, never code | each planning worktree |
 | [worker](plugins/worker/README.md) | `/work` pipeline, five read-only reviewer agents, fresh-context PR author, CI and review-thread loop, SessionStart hook that loads and assigns the issue | each issue worktree |
-| [repo-standards](plugins/repo-standards/README.md) | `/init-repo`, `/adr`, `/docs-check`; templates for CLAUDE.md, architecture.md, ADRs, PR template, settings | any repository |
+| [repo-standards](plugins/repo-standards/README.md) | `/init-repo`, `/adr`, `/docs-check`; templates for AGENTS.md, CLAUDE.md, Makefile, architecture.md, ADRs, PR template, settings | any repository |
 
 ## Install
 
@@ -85,7 +85,7 @@ A worker session takes its model from the first of these that is set:
 
 Subagents resolve separately: an agent file that names a model keeps it — the panel's `docs-reviewer` stays on `sonnet` — and only `model: inherit` follows the session. So `WF_CLAUDE_ARGS="--model sonnet"` pins the worker session per repository, not every reviewer.
 
-Override any agent or skill per repository by placing a file with the same name in `.claude/agents/` or `.claude/skills/`; project definitions win over plugin ones.
+Repositories do not override agents or skills locally: the [repository standard](docs/repo-standard.md) keeps `.claude/` to the settings file, and its check fails on local skills, agents, commands and rules. Tune a repository with the `WF_*` variables and its `AGENTS.md`.
 
 ## Design
 
@@ -98,7 +98,7 @@ Override any agent or skill per repository by placing a file with the same name 
 ## Develop
 
 ```sh
-scripts/test.sh                                   # shellcheck, plugin validate --strict, unit tests
+make check                                        # the gate: shellcheck, plugin validate --strict, standard check, unit tests
 claude --plugin-dir plugins/worker                # try a plugin in a session without installing it
 scripts/dev-orchestrator.sh                       # orchestrator from the checkout, inside a Herdr pane
 ```

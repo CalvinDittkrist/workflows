@@ -1,10 +1,9 @@
 # {{REPO}}
 
-<!-- Keep under 200 lines. Only what an agent cannot infer from the code. -->
+<!-- The instruction source for every agent; CLAUDE.md imports it. Keep under 200 lines. Only what an agent cannot infer from the code. -->
 
 ## Commands
-- Test: `{{TEST_CMD}}`
-- Lint: `{{LINT_CMD}}`
+- Gate: `make check` runs everything CI gates on. Run it before you push.
 - Build/run: `{{RUN_CMD}}`
 
 ## Conventions
