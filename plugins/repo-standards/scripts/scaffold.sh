@@ -5,20 +5,20 @@ set -euo pipefail
 root="${1:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
 tpl="$(cd "$(dirname "$0")/../templates" && pwd)"
 repo=$(basename "$root")
+# shellcheck source=lib.sh
+. "$(dirname "$0")/lib.sh"
 put() { # put <template> <target> [<name make or GitHub also reads instead>...]
-  local t="$root/$2" alt e
+  local t="$root/$2" alt
   for alt in "$2" "${@:3}"; do # exact case, so macOS reports the name that is really there
-    for e in "$(dirname "$root/$alt")"/*; do
-      if [ "${e##*/}" = "${alt##*/}" ]; then printf 'kept: %s\n' "$alt"; return; fi
-    done
+    if has "$(dirname "$root/$alt")" "${alt##*/}"; then printf 'kept: %s\n' "$alt"; return; fi
   done
   if [ -e "$t" ]; then printf 'kept: %s (exists with a different case)\n' "$2"; return; fi
   mkdir -p "$(dirname "$t")"
   sed -e "s/{{REPO}}/$repo/g" -e "s/{{RUN_CMD}}/<fill in>/g" "$tpl/$1" > "$t"
   printf 'created: %s\n' "$2"
 }
-put AGENTS.md AGENTS.md
-put CLAUDE.md CLAUDE.md
+put AGENTS.md.tpl AGENTS.md
+put CLAUDE.md.tpl CLAUDE.md
 put Makefile Makefile GNUmakefile makefile
 put architecture.md docs/architecture.md
 put adr-README.md docs/adr/README.md

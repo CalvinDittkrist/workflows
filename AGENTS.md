@@ -20,3 +20,4 @@ Public repository of Claude Code plugins for agent-driven development: an orches
 - Skill and agent frontmatter is checked by the runtime; unknown fields fail `--strict`.
 - Herdr commands need `HERDR_ENV=1`; the orchestrator scripts refuse outside Herdr by design.
 - A skill's `` !`command` `` runs through the permission system. Forked skills (`context: fork`) fail silently without a matching `allowed-tools: Bash(${CLAUDE_PLUGIN_ROOT}/scripts/x.sh)` rule, so every injection calls a plugin script and lists it there (tested).
+- This repository develops the plugins, so `.claude/settings.json` enables only `repo-standards@workflows` and `make standard` warns that `worker@workflows` is off; sessions load the other plugins from the checkout with `--plugin-dir` (see `scripts/dev-orchestrator.sh`).

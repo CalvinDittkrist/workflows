@@ -8,9 +8,8 @@ ok()   { printf 'ok: %s\n' "$*"; }
 bad()  { printf 'fail: %s\n' "$*"; fail=1; }
 warn() { printf 'warn: %s\n' "$*"; }
 lines() { wc -l < "$1" | tr -d ' '; }
-# has <dir> <name>: the file exists with exactly this case (macOS file systems ignore case)
-has() { local e; for e in "$1"/*; do [ "${e##*/}" = "$2" ] && [ -f "$e" ] && return 0; done; return 1; }
-first_of() { local dir=$1 n; shift; for n in "$@"; do has "$dir" "$n" && { printf '%s' "$n"; return; }; done; }
+# shellcheck source=lib.sh
+. "$(dirname "$0")/lib.sh"
 
 # Every file of the repository, relative to root: tracked plus untracked-but-not-ignored, so local
 # ignored files (settings.local.json, worktrees) never count. Outside git, every file but .git.
