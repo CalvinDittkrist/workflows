@@ -167,6 +167,28 @@ class FactsTests(ShimTest):
             "ci-check-job: yes"])
         self.assertNotIn("LICENSE", out, "a private repository needs no licence")
 
+    def test_symlinked_agent_configuration_is_listed_and_deleted_files_are_skipped(self):
+        self.write("AGENTS.md", "# rules\n")
+        (self.repo / "CLAUDE.md").symlink_to("AGENTS.md")
+        self.write("shared/skills/x/SKILL.md")
+        (self.repo / ".claude/skills").mkdir(parents=True)
+        (self.repo / ".claude/skills/x").symlink_to(self.repo / "shared/skills/x")
+        self.write("Makefile", "test:\n\ttrue\n")
+        self.write(".github/workflows/ci.yml", "jobs:\n  check:\n    runs-on: x\n")
+        self.git("add", ".")
+        self.git("commit", "-qm", "links")
+        (self.repo / "Makefile").unlink()
+        (self.repo / ".github/workflows/ci.yml").unlink()
+        r = self.run_script(FACTS)
+        self.assertEqual((r.returncode, r.stderr), (0, ""))
+        self.assertEqual(lines(r.stdout, "agent-config:", "test:", "ci:"), [
+            "test: none",
+            "ci: none",
+            "agent-config:",
+            "  .claude/skills/x: 1 file, tracked, outside the standard",
+            "  AGENTS.md: 1 file, tracked, standard",
+            "  CLAUDE.md: 1 file, tracked, standard"])
+
     def test_an_organisation_owner_sees_the_plan(self):
         self.put("repo.json", {"visibility": "private", "default_branch": "main", "owner": {"login": "o", "type": "Organization"}})
         self.put("org.json", {"login": "o", "plan": {"name": "team"}})
@@ -311,7 +333,9 @@ next: ask for approval per category, then record the answers with approve.sh <ca
                "finding: docs |  | create | missing | high\n"
                "finding: files | /etc | delete | outside | high\n"
                "finding: files | docs/../../x | delete | outside | high\n"
-               "finding: security | ~/.ssh/id_rsa | issue | outside | high\n")
+               "finding: security | ~/.ssh/id_rsa | issue | outside | high\n"
+               "finding: files | /etc | configure | outside | high\n"
+               "finding: files | -rf | delete | option | high\n")
         r = self.report(bad)
         self.assertEqual(r.returncode, 1)
         self.assertEqual(r.stdout, "")
@@ -329,6 +353,9 @@ next: ask for approval per category, then record the answers with approve.sh <ca
             "finding: files | docs/../../x | delete | outside | high",
             "error: target ~/.ssh/id_rsa leaves the repository; use a path relative to its root: "
             "finding: security | ~/.ssh/id_rsa | issue | outside | high",
+            "error: configure is for GitHub settings, which only the workspace category proposes: "
+            "finding: files | /etc | configure | outside | high",
+            "error: target -rf starts with -; name the path without a leading dash: finding: files | -rf | delete | option | high",
             "error: malformed findings, nothing stored; correct those lines and run report.sh again"])
         self.assertEqual(self.state("findings"), stored)
 

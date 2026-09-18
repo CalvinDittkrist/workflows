@@ -92,7 +92,7 @@ tests="" lints="" gate=""
 add_test() { tests="$tests$1 ($2)"$'\n'; }
 add_lint() { lints="$lints$1 ($2)"$'\n'; }
 while IFS= read -r m; do
-  [ -n "$m" ] || continue
+  [ -f "$m" ] || continue # tracked but deleted from the working tree
   d=$(dirname "$m"); f=${m##*/}; at=""; [ "$d" = . ] || at=" -C $d"
   case "$f" in
     Makefile|GNUmakefile|makefile)
@@ -156,6 +156,7 @@ kv lint "$(printf '%s' "$lints" | awk '!seen[$0]++' | join)"
 # plus the configuration files of other CI systems.
 ci="" has_check=no
 for w in $(printf '%s\n' "$all" | grep -E '^\.github/workflows/[^/]+\.ya?ml$' || true); do
+  [ -f "$w" ] || continue
   jobs=$(awk '
     /^jobs:[[:space:]]*$/ { in_jobs = 1; ind = 0; next }
     in_jobs && /^[^[:space:]#]/ { in_jobs = 0 }
@@ -180,7 +181,8 @@ kv ci-check-job "$has_check"
 # included, one line per location with its file count, git status and whether the standard defines it.
 prune='-name .git -o -name node_modules -o -name .venv -o -name venv -o -name vendor -o -name target -o -name __pycache__ -o -path ./.claude/worktrees'
 # shellcheck disable=SC2086 # $prune is a list of find operators
-agent=$(find . \( $prune \) -prune -o -type f -print 2>/dev/null | sed 's#^\./##' | awk -F/ '
+# Symlinks count too: CLAUDE.md -> AGENTS.md is common, and a linked skill directory is configuration all the same.
+agent=$(find . \( $prune \) -prune -o \( -type f -o -type l \) -print 2>/dev/null | sed 's#^\./##' | awk -F/ '
   function loc(i,   j, n, p) { n = i + 2; if (n > NF) n = NF; p = $1; for (j = 2; j <= n; j++) p = p "/" $j; return p }
   {
     for (i = 1; i <= NF; i++) {
