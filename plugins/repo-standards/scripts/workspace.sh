@@ -18,6 +18,7 @@ while [ $# -gt 0 ]; do
   esac
   shift
 done
+[ -z "$snap" ] || [ "$apply" = 1 ] || die "--snapshot is written by --apply only; add --apply or drop --snapshot"
 for c in gh jq; do command -v "$c" >/dev/null 2>&1 || die "$c is required but not on PATH"; done
 tpl="${WF_PROJECT_TEMPLATE:-}"
 if [ -n "$tpl" ] && ! printf '%s' "$tpl" | grep -Eq '^[A-Za-z0-9-]+/[0-9]+$'; then
@@ -25,17 +26,21 @@ if [ -n "$tpl" ] && ! printf '%s' "$tpl" | grep -Eq '^[A-Za-z0-9-]+/[0-9]+$'; th
 fi
 
 err=$(mktemp); trap 'rm -f "$err"' EXIT
-# get <path>: a GitHub API GET; every page of a list merged into one array. Any failure is fatal.
-get() {
+# get <path>: a GitHub API GET. Any failure is fatal.
+get() { gh api "$1" 2>"$err" || die "cannot read $1: $(tail -n1 "$err")"; }
+# get_all <path>: every page of a list, merged into one array.
+get_all() {
   local out
   out=$(gh api --paginate "$1" 2>"$err") || die "cannot read $1: $(tail -n1 "$err")"
-  printf '%s' "$out" | jq -s 'if length > 1 then add else (.[0] // null) end'
+  printf '%s' "$out" | jq -s 'add // []'
 }
-# get_opt <path>: like get, but GitHub's 404 prints nothing instead of failing.
+# get_opt <path>: like get, but a 404 prints nothing (an empty 2xx prints true), and a 403 because the
+# account's plan lacks the feature returns 3.
 get_opt() {
   local out
   if out=$(gh api "$1" 2>"$err"); then printf '%s' "${out:-true}"
   elif grep -q 'HTTP 404' "$err"; then return 0
+  elif grep -q 'HTTP 403' "$err" && grep -qi 'upgrade' "$err"; then return 3
   else die "cannot read $1: $(tail -n1 "$err")"; fi
 }
 # send <method> <path> [<json body>]: one change; the body goes to gh on stdin.
@@ -53,9 +58,13 @@ default=$(printf '%s' "$repo" | jq -r .default_branch)
 # The profile (ADR 0009): dev plus main when the default branch is dev, otherwise main alone.
 if [ "$default" = dev ]; then model="dev+main"; branches="main dev"; else model=main; branches=main; fi
 
-diffs="" n=0 manual=""
+diffs="" n=0 manual="" blocked=""
 found() { diffs="$diffs$*"$'\n'; n=$((n + 1)); } # one difference to the standard
 step() { manual="$manual$*"$'\n'; }          # something only a person can change
+block() { blocked="$blocked$*"$'\n'; }       # a reason --apply refuses
+case "$default" in main|dev) ;; *)
+  block "the default branch is $default, but the standard knows main alone or dev plus main; rename it to main (Settings > Branches, or gh api --method POST repos/$nwo/branches/$default/rename -f new_name=main), then run workspace.sh again" ;;
+esac
 
 # Merge settings, wiki and discussions. With dev plus main the promotion needs merge commits.
 merge_commit=false; [ "$model" = main ] || merge_commit=true
@@ -94,9 +103,22 @@ for b in $branches; do
 done
 want_rulesets="$want_rulesets$(jq -cn '{name: "standard: pre-standard", target: "tag", enforcement: "active", bypass_actors: [],
   conditions: {ref_name: {include: ["refs/tags/pre-standard"], exclude: []}}, rules: [{type: "deletion"}, {type: "update"}]}')"
-existing=$(get "repos/$nwo/rulesets?includes_parents=false&per_page=100")
-old_rulesets="[]" ruleset_plan="" branch_rules=0
+# Classic branch protection is replaced by the ruleset; it is removed after the ruleset is in place.
+# GitHub answers 403 when the plan has neither (a private repository on GitHub Free).
+old_protection="{}" protection_plan="" old_rulesets="[]" ruleset_plan="" branch_rules=0 rules=1
+for b in $branches; do
+  rc=0; p=$(get_opt "repos/$nwo/branches/$b/protection") || rc=$?
+  [ "$rc" = 0 ] || { [ "$rc" = 3 ] && rules=0 && break; exit 1; }
+  [ -n "$p" ] || continue
+  old_protection=$(printf '%s' "$old_protection" | jq -c --arg b "$b" --argjson p "$p" '.[$b] = $p')
+  found "branch-protection $b: classic -> removed (the ruleset replaces it)"; protection_plan="$protection_plan $b"
+done
+if [ "$rules" = 0 ]; then
+  step "rulesets: not offered for this private repository on its account's plan; upgrade the account to GitHub Pro or make the repository public, then run workspace.sh again"
+  want_rulesets=""
+else existing=$(get_all "repos/$nwo/rulesets?includes_parents=false&per_page=100"); fi
 while IFS= read -r want; do
+  [ -n "$want" ] || continue
   name=$(printf '%s' "$want" | jq -r .name)
   id=$(printf '%s' "$existing" | jq -r --arg n "$name" '[.[] | select(.name == $n)] | first | .id // empty')
   if [ -z "$id" ]; then
@@ -112,23 +134,13 @@ done <<EOF
 $want_rulesets
 EOF
 
-# Classic branch protection is replaced by the ruleset; it is removed after the ruleset is in place.
-old_protection="{}" protection_plan=""
-for b in $branches; do
-  p=$(get_opt "repos/$nwo/branches/$b/protection")
-  [ -n "$p" ] || continue
-  old_protection=$(printf '%s' "$old_protection" | jq -c --arg b "$b" --argjson p "$p" '.[$b] = $p')
-  found "branch-protection $b: classic -> removed (the ruleset replaces it)"; protection_plan="$protection_plan $b"
-done
-
 # The required check must exist before a ruleset requires it, or nothing could merge.
-blocked=""
 if [ "$branch_rules" = 1 ]; then
   runs=$(get "repos/$nwo/commits/$default/check-runs?check_name=check&per_page=1" | jq -r '.total_count // 0')
-  [ "$runs" != 0 ] || blocked="the default branch $default has no CI job named check; add a CI job named check that runs make check, merge it into $default so it runs there, then run workspace.sh --apply again"
+  [ "$runs" != 0 ] || block "the default branch $default has no CI job named check; add a CI job named check that runs make check, merge it into $default so it runs there, then run workspace.sh --apply again"
 fi
 
-# Labels: the workflow vocabulary (plugins/planner/scripts/labels.sh) plus skill-candidate. name|color|description.
+# Labels: the workflow vocabulary, lower case; GitHub matches label names ignoring case (plugins/planner/scripts/labels.sh) plus skill-candidate. name|color|description.
 vocabulary='ready-for-agent|0E8A16|Fully specified; an agent can take it
 needs-triage|FBCA04|A maintainer has to evaluate this
 needs-info|D876E3|Waiting on the reporter
@@ -138,10 +150,10 @@ spec|5319E7|Spec issue; its tickets carry the work
 bug|D73A4A|Something is broken
 enhancement|A2EEEF|New feature or improvement
 skill-candidate|C5DEF5|A removed skill that could move into the marketplace'
-labels=$(get "repos/$nwo/labels?per_page=100")
+labels=$(get_all "repos/$nwo/labels?per_page=100")
 label_plan=""
 while IFS='|' read -r name color desc; do
-  printf '%s' "$labels" | jq -e --arg n "$name" 'any(.[]; .name == $n)' >/dev/null && continue
+  printf '%s' "$labels" | jq -e --arg n "$name" 'any(.[]; (.name | ascii_downcase) == $n)' >/dev/null && continue
   found "label $name: missing -> create"; label_plan="$label_plan$name|$color|$desc"$'\n'
 done <<EOF
 $vocabulary
@@ -150,10 +162,14 @@ EOF
 # Dependabot alerts (204 when on, 404 when off) and security updates; read-only Actions token.
 alerts=$(get_opt "repos/$nwo/vulnerability-alerts"); if [ -n "$alerts" ]; then alerts=on; else alerts=off; fi
 [ "$alerts" = on ] || found "dependabot alerts: off -> on"
-fixes=$(get "repos/$nwo/automated-security-fixes" | jq -r 'if .enabled then "on" else "off" end')
+fixes=$(get_opt "repos/$nwo/automated-security-fixes")
+fixes=$(printf '%s' "${fixes:-null}" | jq -r 'if .enabled == true then "on" else "off" end')
 [ "$fixes" = on ] || found "dependabot security-updates: off -> on"
-token=$(get "repos/$nwo/actions/permissions/workflow" | jq -r .default_workflow_permissions)
+actions=$(get "repos/$nwo/actions/permissions/workflow")
+token=$(printf '%s' "$actions" | jq -r .default_workflow_permissions)
 [ "$token" = read ] || found "actions default-token: $token -> read"
+approves=$(printf '%s' "$actions" | jq -r '.can_approve_pull_request_reviews // false')
+[ "$approves" = false ] || found "actions token-approves-pull-requests: true -> false"
 
 # Public repositories: secret scanning, push protection, private vulnerability reporting.
 sa_patch="{}" pvr=""
@@ -172,7 +188,7 @@ fi
 
 # Milestones: close open ones that are empty, or orphaned (not named vX.Y.Z, so never released, and
 # nothing open). Never creates one.
-close=$(get "repos/$nwo/milestones?state=open&per_page=100" | jq -c '[.[] | select(.open_issues == 0 and
+close=$(get_all "repos/$nwo/milestones?state=open&per_page=100" | jq -c '[.[] | select(.open_issues == 0 and
   (.closed_issues == 0 or (.title | test("^v[0-9]+\\.[0-9]+\\.[0-9]+$") | not)))
   | {number, title, open_issues, closed_issues, why: (if .closed_issues == 0 then "empty" else "orphaned" end)}] | sort_by(.number)')
 while IFS= read -r l; do [ -z "$l" ] || found "$l"; done <<EOF
@@ -182,11 +198,16 @@ EOF
 # Project: copy the template when none is linked. The API cannot create or turn on project workflows.
 q='query($o: String!, $n: String!) { repository(owner: $o, name: $n) { projectsV2(first: 20) { nodes {
   number title url closed workflows(first: 50) { nodes { name enabled } } } } } }'
-projects=$(gh api graphql -f query="$q" -f o="$owner" -f n="${nwo#*/}" 2>"$err") || die "cannot read the projects of $nwo: $(tail -n1 "$err")"
-projects=$(printf '%s' "$projects" | jq -c '[.data.repository.projectsV2.nodes[] | select(.closed | not)]')
 autoadd="turn on Workflows > Auto-add to project with the filter is:issue,pr is:open for $nwo (the API cannot create or turn on project workflows)"
 project_plan=""
-if [ "$(printf '%s' "$projects" | jq length)" = 0 ]; then
+if ! projects=$(gh api graphql -f query="$q" -f o="$owner" -f n="${nwo#*/}" 2>"$err"); then
+  grep -q 'read:project' "$err" || die "cannot read the projects of $nwo: $(tail -n1 "$err")"
+  projects="[]"; step "project: not checked, the gh token cannot read projects; run gh auth refresh -s project, then run workspace.sh again"
+else
+  projects=$(printf '%s' "$projects" | jq -c '[.data.repository.projectsV2.nodes[] | select(.closed | not)]')
+fi
+if printf '%s' "$manual" | grep -q '^project: not checked'; then :
+elif [ "$(printf '%s' "$projects" | jq length)" = 0 ]; then
   if [ -n "$tpl" ]; then found "project: none linked -> copy of $tpl"; project_plan=1; step "project (the copy): $autoadd"
   else step "project: none linked; set WF_PROJECT_TEMPLATE=<owner>/<number> and run again to copy the template project, or create one by hand"; fi
 else
@@ -199,25 +220,25 @@ printf 'repository: %s\n' "$nwo"
 printf 'profile: %s, %s\n' "$visibility" "$model"
 printf '%s' "$diffs" | sed 's/^/diff: /'
 printf '%s' "$manual" | sed 's/^/manual: /'
-[ -z "$blocked" ] || printf 'blocked: %s\n' "$blocked"
+printf '%s' "$blocked" | sed 's/^/blocked: /'
 printf 'differences: %s\n' "$n"
 if [ "$apply" = 0 ]; then
   [ "$n" = 0 ] || [ -n "$blocked" ] || printf 'next: run workspace.sh --apply to make these changes\n'
   exit 0
 fi
 [ "$n" != 0 ] || { printf 'applied: 0\n'; exit 0; }
-[ -z "$blocked" ] || die "refusing to apply: $blocked"
+[ -z "$blocked" ] || die "refusing to apply: $(printf '%s' "$blocked" | head -n1)"
 
 # The snapshot holds everything this run replaces, written before the first change.
 [ -n "$snap" ] || snap=$(mktemp "${TMPDIR:-/tmp}/workspace-snapshot.XXXXXX")
 jq -n --arg nwo "$nwo" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --argjson repo "$repo" --argjson rs "$old_rulesets" \
-  --argjson bp "$old_protection" --argjson labels "$labels" --arg alerts "$alerts" --arg fixes "$fixes" --arg token "$token" \
+  --argjson bp "$old_protection" --argjson labels "$labels" --arg alerts "$alerts" --arg fixes "$fixes" --arg token "$token" --argjson approves "$approves" \
   --arg pvr "$pvr" --argjson ms "$close" --argjson projects "$projects" \
   '{repository: $nwo, taken_at: $at,
     repo: ($repo | {visibility, default_branch, allow_squash_merge, allow_merge_commit, allow_rebase_merge, delete_branch_on_merge,
       squash_merge_commit_title, squash_merge_commit_message, has_wiki, has_discussions, security_and_analysis}),
     rulesets: $rs, branch_protection: $bp, labels: [$labels[].name], dependabot: {alerts: $alerts, security_updates: $fixes},
-    actions_default_token: $token, private_vulnerability_reporting: (if $pvr == "" then null else $pvr end),
+    actions_default_token: $token, actions_token_approves_pull_requests: $approves, private_vulnerability_reporting: (if $pvr == "" then null else $pvr end),
     milestones_closed: $ms, projects: [$projects[] | {number, title, url}]}' > "$snap" || die "cannot write the snapshot to $snap; nothing changed"
 printf 'snapshot: %s\n' "$snap"
 
@@ -239,7 +260,8 @@ $label_plan
 EOF
 [ "$alerts" = on ] || send PUT "repos/$nwo/vulnerability-alerts"
 [ "$fixes" = on ] || send PUT "repos/$nwo/automated-security-fixes"
-[ "$token" = read ] || send PUT "repos/$nwo/actions/permissions/workflow" '{"default_workflow_permissions":"read"}'
+[ "$token" = read ] && [ "$approves" = false ] \
+  || send PUT "repos/$nwo/actions/permissions/workflow" '{"default_workflow_permissions":"read","can_approve_pull_request_reviews":false}'
 [ "$sa_patch" = "{}" ] || send PATCH "repos/$nwo" "$(jq -cn --argjson s "$sa_patch" '{security_and_analysis: $s}')"
 [ -z "$pvr" ] || [ "$pvr" = on ] || send PUT "repos/$nwo/private-vulnerability-reporting"
 for num in $(printf '%s' "$close" | jq -r '.[].number'); do send PATCH "repos/$nwo/milestones/$num" '{"state":"closed"}'; done
