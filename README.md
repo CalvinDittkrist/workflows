@@ -23,7 +23,7 @@ flowchart LR
 | [orchestrator](plugins/orchestrator/README.md) | `/plan`, `/claim`, `/yolo-claim`, `/merge`, `/board` (with frontier), `/abandon`, `/herdr` | main checkout, inside [Herdr](https://herdr.dev) |
 | [planner](plugins/planner/README.md) | `/grill`, `/spec`, `/tickets`, `/triage`, `/research`, `/prototype`, `/finish`; writes agent-ready issues, never code | each planning worktree |
 | [worker](plugins/worker/README.md) | `/work` pipeline, five read-only reviewer agents, fresh-context PR author, CI and review-thread loop, SessionStart hook that loads and assigns the issue | each issue worktree |
-| [repo-standards](plugins/repo-standards/README.md) | `/standardize` (six read-only auditors, one findings report, approval per category), `/apply` (backup tag, skill catalogue, cleanup pull request, issues, GitHub workspace), `/adr`, `/docs-check`; templates for AGENTS.md, CLAUDE.md, Makefile, architecture.md, ADRs, PR template, settings | any repository |
+| [repo-standards](plugins/repo-standards/README.md) | `/standardize` (six read-only auditors, one findings report, approval per category), `/apply` (backup tag, skill catalogue, cleanup pull request, issues, GitHub workspace), `/adr`, `/docs-check`; templates for README.md, AGENTS.md, CLAUDE.md, Makefile, the CI job `check`, architecture.md, ADRs, glossary, PR template, Dependabot, settings | any repository |
 
 ## Install
 

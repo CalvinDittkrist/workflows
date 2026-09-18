@@ -11,17 +11,19 @@ A repository's profile is its visibility plus its branch model. Both are derived
 ## Files that stay
 | File | Purpose | Checked |
 | --- | --- | --- |
-| `README.md` | What the repository is and how to use it | no |
+| `README.md` | What the repository is and how to use it | fails if missing |
 | `AGENTS.md` | Instruction source for every agent: commands and conventions an agent cannot infer; under 200 lines | fails if missing; warns over 200 lines or with `<fill in>` left |
 | `CLAUDE.md` | The line `@AGENTS.md`, optionally a short Claude-only section | fails if missing or without the import; warns over 200 lines |
 | `Makefile` | The gate: a `check` target | fails without a `check` target; warns with `<fill in>` left |
+| `.github/workflows/*.yml` | A job named `check` that runs `make check` | fails without one |
 | `docs/architecture.md` | One-page map: components, data flow, boundaries | fails if missing or under 15 lines |
 | `docs/adr/README.md` + `NNNN-title.md` | Decisions, MADR-trimmed, numbered, each with a Status line | fails on a missing index, duplicate numbers or a missing Status |
-| `docs/glossary.md` | Terms the code and issues use | no |
+| `docs/glossary.md` | Terms the code and issues use | warns if missing |
 | `.github/PULL_REQUEST_TEMPLATE.md` | Closes, what and why, verification, limits | warns if missing |
-| `.claude/settings.json` | Marketplace, enabled plugins, `WF_*` env, permission allowlist, attribution off | warns on missing plugins or attribution |
+| `.github/dependabot.yml` | Grouped version updates, one entry per package manager | warns if missing |
+| `.claude/settings.json` | Marketplace, enabled plugins, `WF_*` env, permission allowlist, attribution off | warns on a missing workflow plugin, any other plugin enabled, MCP servers enabled or attribution on; fails on hooks |
 | Operational docs | Pages that describe the present state (runbooks, local setup) | no |
-| `LICENSE`, `SECURITY.md` | Public repositories only | no |
+| `LICENSE`, `SECURITY.md` | Public repositories only | fails if missing on a public repository; skipped when GitHub is unreachable |
 
 ## Files that go
 Everything below is removed unless the standard defines it; there is no allowlist per repository.
@@ -32,7 +34,7 @@ Everything below is removed unless the standard defines it; there is no allowlis
 - Context, resume and review notes; dated audit reports; planning material such as feature specs, user stories, personas and research notes. Plans live in issues.
 - GitHub Actions that run an AI reviewer or agent.
 
-The check fails on every tracked or untracked, not ignored path under `.claude/` other than `settings.json`, `settings.local.json` and `worktrees/`, on the configuration of other agent tools and on skill lock files, and names each one (`.claude/skills/<name>`, `.cursor/rules/<file>`). The other categories need judgement and are not checked by the script.
+The check fails on every tracked or untracked, not ignored path under `.claude/` other than `settings.json`, `settings.local.json` and `worktrees/`, on `CLAUDE.local.md`, `AGENT.md`, `.rules` and `.worktreeinclude`, on the configuration of other agent tools, on skill lock files and on workflow steps that use a known AI reviewer or agent action (`anthropics/claude-code-action`, `openai/codex-action`, `google-github-actions/run-gemini-cli`, `coderabbitai/*`), and names each one (`.claude/skills/<name>`, `.cursor/rules/<file>`). An `.mcp.json` only warns, because it stays when something uses it. Notes, planning material and dated reports need judgement and are left to the auditors.
 
 ## Instruction files
 `AGENTS.md` is the source; `CLAUDE.md` imports it with `@AGENTS.md`, because Claude Code reads `CLAUDE.md` and not `AGENTS.md` ([ADR 0007](adr/0007-agents-md-is-the-instruction-source.md)). Both stay under 200 lines. A monorepo may keep one such pair per area (`services/api/AGENTS.md` and `services/api/CLAUDE.md`); an area's pair loads only when an agent works there, and the check holds each pair to the same rules. Claude Code loads every nested `CLAUDE.md` it passes, so a `CLAUDE.md` or `AGENTS.md` kept as data (a template, a fixture) is instructions too and must form a valid pair or be renamed.

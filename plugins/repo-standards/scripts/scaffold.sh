@@ -5,7 +5,7 @@
 # --name and --default default to the directory name and the branch origin/HEAD names (else the current one);
 # the apply phase passes both, because it scaffolds a worktree.
 # --skip leaves the files of a category alone: agent-config (AGENTS.md, CLAUDE.md, .claude/settings.json),
-# docs (docs/, the PR template), tests-ci (Makefile, the CI job check), workspace (.github/dependabot.yml).
+# docs (README.md, docs/, the PR template), tests-ci (Makefile, the CI job check), workspace (.github/dependabot.yml).
 # Settings: the marketplace and the workflow plugins go in through `claude plugin ... --scope project`, every
 # other plugin enabled at project scope is disabled, and the template's attribution, env and permissions
 # are merged in (existing env values win, permission lists are joined).
@@ -45,6 +45,7 @@ put() { # put <category> <template> <target> [<name make or GitHub also reads in
   sed -e "s|{{REPO}}|$(esc "$repo")|g" -e "s|{{BRANCHES}}|$(esc "$branches")|g" -e "s|{{RUN_CMD}}|<fill in>|g" "$tpl/$2" > "$t"
   printf 'created: %s\n' "$3"
 }
+put docs README.md.tpl README.md README.rst README.txt README readme.md
 put agent-config AGENTS.md.tpl AGENTS.md
 put agent-config CLAUDE.md.tpl CLAUDE.md
 put tests-ci Makefile Makefile GNUmakefile makefile

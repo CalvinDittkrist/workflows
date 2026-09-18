@@ -163,7 +163,8 @@ class StandardsTests(ShimTest):
         for path in (".claude/skills/tdd/SKILL.md", ".claude/skills/tdd/ref.md", ".claude/skills/grill/SKILL.md",
                      ".claude/commands/ship.md", ".claude/agents/reviewer.md", ".claude/rules/api.md",
                      ".cursor/rules/style.mdc", ".cursorrules", ".agents/skills/triage/SKILL.md", ".codex/config.toml",
-                     ".github/copilot-instructions.md", "GEMINI.md", "skills-lock.json", "web/.windsurf/rules.md"):
+                     ".github/copilot-instructions.md", "GEMINI.md", "skills-lock.json", "web/.windsurf/rules.md",
+                     "CLAUDE.local.md", "api/AGENT.md", ".rules", ".worktreeinclude"):
             self.write(path, "x\n")
         self.write(".gitignore", "ignored/\n")
         self.write("ignored/.claude/skills/x/SKILL.md", "x\n")
@@ -174,7 +175,90 @@ class StandardsTests(ShimTest):
             ".claude/skills/tdd", ".claude/skills/grill", ".claude/commands/ship.md", ".claude/agents/reviewer.md",
             ".claude/rules/api.md", ".cursor/rules/style.mdc", ".cursorrules", ".agents/skills/triage",
             ".codex/config.toml", ".github/copilot-instructions.md", "GEMINI.md", "skills-lock.json",
-            "web/.windsurf/rules.md"]))
+            "web/.windsurf/rules.md", "CLAUDE.local.md", "api/AGENT.md", ".rules", ".worktreeinclude"]))
+
+    def test_check_fails_without_a_readme_or_a_ci_job_named_check(self):
+        self.scaffold()
+        (self.repo / "README.md").unlink()
+        (self.repo / ".github/workflows/check.yml").unlink()
+        self.write(".github/workflows/nested/ci.yml", "jobs:\n  check:\n    runs-on: ubuntu-latest\n")
+        self.write(".github/workflows/test.yml", "jobs:\n  test:\n    runs-on: ubuntu-latest\n")
+        r = self.check()
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("fail: README.md missing", r.stdout)
+        self.assertIn("fail: no CI job named check in .github/workflows", r.stdout)
+        self.write("README.rst", "shop\n")
+        self.write(".github/workflows/test.yml", "jobs:\n  test:\n    name: check\n    runs-on: ubuntu-latest\n")
+        r = self.check()
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertIn("ok: README.rst", r.stdout)
+        self.assertIn("ok: .github/workflows/test.yml has the CI job check", r.stdout)
+
+    def test_check_warns_without_a_glossary_or_grouped_version_updates(self):
+        self.scaffold()
+        (self.repo / "docs/glossary.md").unlink()
+        (self.repo / ".github/dependabot.yml").unlink()
+        r = self.check()
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertIn("warn: docs/glossary.md missing", r.stdout)
+        self.assertIn("warn: .github/dependabot.yml missing", r.stdout)
+
+    def test_a_public_repository_needs_a_licence_and_a_security_policy(self):
+        self.scaffold()
+        ws = self.base / "github"
+        ws.mkdir()
+        (ws / "repo.json").write_text(json.dumps({"visibility": "public", "default_branch": "main"}))
+        r = self.run_script(STANDARDS / "check.sh", SHIM_WS=str(ws))
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("fail: LICENSE missing", r.stdout)
+        self.assertIn("fail: SECURITY.md missing", r.stdout)
+        self.write("LICENSE", "MIT\n")
+        self.write(".github/SECURITY.md", "report privately\n")
+        r = self.run_script(STANDARDS / "check.sh", SHIM_WS=str(ws))
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertIn("ok: .github/SECURITY.md", r.stdout)
+        (self.repo / "LICENSE").unlink()
+        (ws / "repo.json").write_text(json.dumps({"visibility": "private", "default_branch": "main"}))
+        r = self.run_script(STANDARDS / "check.sh", SHIM_WS=str(ws))
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertNotIn("LICENSE", r.stdout)
+        r = self.check()
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertIn("skip: licence and security policy not checked (visibility unknown without GitHub)", r.stdout)
+
+    def test_check_holds_the_settings_to_the_workflow_plugins_without_hooks(self):
+        self.scaffold()
+        settings = json.loads((self.repo / ".claude/settings.json").read_text())
+        settings["enabledPlugins"].update({"planner@workflows": False, "foo@bar": True, "old@bar": False})
+        settings["enabledMcpjsonServers"] = ["db"]
+        self.write(".claude/settings.json", json.dumps(settings))
+        r = self.check()
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertIn("warn: planner@workflows not enabled in .claude/settings.json", r.stdout)
+        self.assertIn("warn: foo@bar enabled at project scope; the standard enables only the workflow plugins", r.stdout)
+        self.assertNotIn("old@bar", r.stdout)
+        self.assertIn("warn: .claude/settings.json enables MCP servers", r.stdout)
+        settings["hooks"] = {"Stop": []}
+        self.write(".claude/settings.json", json.dumps(settings))
+        r = self.check()
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("fail: .claude/settings.json has hooks", r.stdout)
+
+    def test_mcp_configuration_warns_and_an_ai_reviewer_action_fails(self):
+        self.scaffold()
+        self.write(".mcp.json", "{}\n")
+        r = self.check()
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertIn("warn: .mcp.json: MCP configuration; keep it only if something in the repository uses it", r.stdout)
+        self.write(".github/workflows/review.yml", "on: pull_request\njobs:\n  review:\n    runs-on: ubuntu-latest\n"
+                   "    steps:\n      - uses: actions/checkout@v5\n      - uses: 'anthropics/claude-code-action@v1'\n"
+                   "      - name: codex\n        uses: openai/codex-action@main\n")
+        r = self.check()
+        self.assertEqual(r.returncode, 1)
+        named = sorted(line for line in r.stdout.splitlines() if "AI reviewer" in line)
+        self.assertEqual(named, [
+            "fail: .github/workflows/review.yml: anthropics/claude-code-action runs an AI reviewer or agent in CI; remove it",
+            "fail: .github/workflows/review.yml: openai/codex-action runs an AI reviewer or agent in CI; remove it"])
 
     def test_check_counts_tracked_files_and_works_outside_git(self):
         self.scaffold()
