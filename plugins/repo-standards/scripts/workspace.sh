@@ -34,13 +34,13 @@ get_all() {
   out=$(gh api --paginate "$1" 2>"$err") || die "cannot read $1: $(tail -n1 "$err")"
   printf '%s' "$out" | jq -s 'add // []'
 }
-# get_opt <path>: like get, but a 404 prints nothing (an empty 2xx prints true), and a 403 because the
-# account's plan lacks the feature returns 3.
+# get_opt <path> [plan]: like get, but a 404 prints nothing (an empty 2xx prints true). With plan, a 403
+# because the account's plan lacks the feature returns 3 instead of failing.
 get_opt() {
   local out
   if out=$(gh api "$1" 2>"$err"); then printf '%s' "${out:-true}"
   elif grep -q 'HTTP 404' "$err"; then return 0
-  elif grep -q 'HTTP 403' "$err" && grep -qi 'upgrade' "$err"; then return 3
+  elif [ -n "${2:-}" ] && grep -q 'HTTP 403' "$err" && grep -qi 'upgrade' "$err"; then return 3
   else die "cannot read $1: $(tail -n1 "$err")"; fi
 }
 # send <method> <path> [<json body>]: one change; the body goes to gh on stdin.
@@ -107,7 +107,7 @@ want_rulesets="$want_rulesets$(jq -cn '{name: "standard: pre-standard", target: 
 # GitHub answers 403 when the plan has neither (a private repository on GitHub Free).
 old_protection="{}" protection_plan="" old_rulesets="[]" ruleset_plan="" branch_rules=0 rules=1
 for b in $branches; do
-  rc=0; p=$(get_opt "repos/$nwo/branches/$b/protection") || rc=$?
+  rc=0; p=$(get_opt "repos/$nwo/branches/$b/protection" plan) || rc=$?
   [ "$rc" = 0 ] || { [ "$rc" = 3 ] && rules=0 && break; exit 1; }
   [ -n "$p" ] || continue
   old_protection=$(printf '%s' "$old_protection" | jq -c --arg b "$b" --argjson p "$p" '.[$b] = $p')
@@ -137,10 +137,11 @@ EOF
 # The required check must exist before a ruleset requires it, or nothing could merge.
 if [ "$branch_rules" = 1 ]; then
   runs=$(get "repos/$nwo/commits/$default/check-runs?check_name=check&per_page=1" | jq -r '.total_count // 0')
-  [ "$runs" != 0 ] || block "the default branch $default has no CI job named check; add a CI job named check that runs make check, merge it into $default so it runs there, then run workspace.sh --apply again"
+  [ "$runs" != 0 ] || block "the default branch $default has no CI job named check; add a CI job named check that runs make check on every push to $default, merge it so it runs on the head of $default, then run workspace.sh --apply again"
 fi
 
-# Labels: the workflow vocabulary, lower case; GitHub matches label names ignoring case (plugins/planner/scripts/labels.sh) plus skill-candidate. name|color|description.
+# Labels: the workflow vocabulary (plugins/planner/scripts/labels.sh) plus skill-candidate, lower case; GitHub
+# matches label names ignoring case. name|color|description.
 vocabulary='ready-for-agent|0E8A16|Fully specified; an agent can take it
 needs-triage|FBCA04|A maintainer has to evaluate this
 needs-info|D876E3|Waiting on the reporter
@@ -199,14 +200,14 @@ EOF
 q='query($o: String!, $n: String!) { repository(owner: $o, name: $n) { projectsV2(first: 20) { nodes {
   number title url closed workflows(first: 50) { nodes { name enabled } } } } } }'
 autoadd="turn on Workflows > Auto-add to project with the filter is:issue,pr is:open for $nwo (the API cannot create or turn on project workflows)"
-project_plan=""
+project_plan="" projects_read=1
 if ! projects=$(gh api graphql -f query="$q" -f o="$owner" -f n="${nwo#*/}" 2>"$err"); then
   grep -q 'read:project' "$err" || die "cannot read the projects of $nwo: $(tail -n1 "$err")"
-  projects="[]"; step "project: not checked, the gh token cannot read projects; run gh auth refresh -s project, then run workspace.sh again"
+  projects="[]" projects_read=0; step "project: not checked, the gh token cannot read projects; run gh auth refresh -s project, then run workspace.sh again"
 else
   projects=$(printf '%s' "$projects" | jq -c '[.data.repository.projectsV2.nodes[] | select(.closed | not)]')
 fi
-if printf '%s' "$manual" | grep -q '^project: not checked'; then :
+if [ "$projects_read" = 0 ]; then :
 elif [ "$(printf '%s' "$projects" | jq length)" = 0 ]; then
   if [ -n "$tpl" ]; then found "project: none linked -> copy of $tpl"; project_plan=1; step "project (the copy): $autoadd"
   else step "project: none linked; set WF_PROJECT_TEMPLATE=<owner>/<number> and run again to copy the template project, or create one by hand"; fi

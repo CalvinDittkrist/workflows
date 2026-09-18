@@ -263,7 +263,8 @@ class WorkspaceTests(ShimTest):
         r = self.ws_run()
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("blocked: the default branch main has no CI job named check; add a CI job named check that runs "
-                      "make check, merge it into main so it runs there, then run workspace.sh --apply again", r.stdout)
+                      "make check on every push to main, merge it so it runs on the head of main, then run workspace.sh "
+                      "--apply again", r.stdout)
         snap = self.base / "snapshot.json"
         r = self.ws_run("--apply", "--snapshot", str(snap))
         self.assertEqual(r.returncode, 1)
