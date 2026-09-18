@@ -93,5 +93,18 @@ $extra
 EOF
 fi
 
+# GitHub workspace drift, when GitHub is reachable (gh authenticated with admin rights). Differences warn and
+# never fail, so the gate stays usable offline and in CI; manual steps are left to workspace.sh itself.
+if ws=$(cd "$root" && bash "$(dirname "$0")/workspace.sh" 2>&1); then
+  drift=$(printf '%s\n' "$ws" | sed -n 's/^diff: //p')
+  if [ -z "$drift" ]; then ok "GitHub workspace matches the standard"
+  else
+    while IFS= read -r d; do warn "GitHub workspace: $d"; done <<EOF
+$drift
+EOF
+    warn "GitHub workspace differs from the standard; plugins/repo-standards/scripts/workspace.sh shows why, --apply fixes it"
+  fi
+else printf 'skip: GitHub workspace not checked (%s)\n' "$(printf '%s\n' "$ws" | { grep '^error: ' || printf '%s\n' "$ws"; } | tail -n1 | sed 's/^error: //')"; fi
+
 if [ "$fail" = 0 ]; then printf 'result: pass\n'; else printf 'result: fail\n'; fi
 exit $fail
