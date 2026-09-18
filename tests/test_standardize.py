@@ -167,6 +167,18 @@ class FactsTests(ShimTest):
             "ci-check-job: yes"])
         self.assertNotIn("LICENSE", out, "a private repository needs no licence")
 
+    def test_each_of_the_four_profiles_comes_from_github_not_from_the_checkout(self):
+        # The checkout is on main in every case; visibility and branch model are GitHub's.
+        for visibility, default, model, public_files in [("public", "main", "main", True), ("public", "dev", "dev+main", True),
+                                                          ("private", "main", "main", False), ("private", "dev", "dev+main", False)]:
+            with self.subTest(visibility=visibility, default=default):
+                self.put("repo.json", {"visibility": visibility, "default_branch": default, "owner": {"login": "o", "type": "User"}})
+                out = self.facts()
+                self.assertEqual(lines(out, "visibility:", "default-branch:", "branch-model:"),
+                                 [f"visibility: {visibility}", f"default-branch: {default}", f"branch-model: {model}"])
+                missing = lines(out, "baseline-missing:")[0]
+                self.assertEqual("LICENSE, SECURITY.md" in missing, public_files, missing)
+
     def test_symlinked_agent_configuration_is_listed_and_deleted_files_are_skipped(self):
         self.write("AGENTS.md", "# rules\n")
         (self.repo / "CLAUDE.md").symlink_to("AGENTS.md")
