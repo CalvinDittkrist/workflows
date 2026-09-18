@@ -11,7 +11,7 @@ This repository packages an opinionated way of working with coding agents as Cla
 | `worker` plugin | One session per issue. Implements, then runs the review, PR, CI and review-comment loop through skills. | SessionStart hook + `/worker:work`; `plugins/worker/scripts/*.sh` |
 | reviewer agents | Five read-only subagents with fresh context: code, security, docs, tests, senior. Report findings in a fixed format. | `plugins/worker/agents/*-reviewer.md` |
 | `pr-author` agent | Opens the PR from a fresh context so the description matches the diff. | `plugins/worker/skills/pr` (forked skill) |
-| `repo-standards` plugin | Owns the [repository standard](repo-standard.md): scaffolds the baseline (`AGENTS.md`, the `CLAUDE.md` import, a `Makefile` with `check`, docs, settings) and checks it, including stray agent configuration. | `/repo-standards:init-repo`, `plugins/repo-standards/scripts/check.sh` |
+| `repo-standards` plugin | Owns the [repository standard](repo-standard.md): scaffolds the baseline (`AGENTS.md`, the `CLAUDE.md` import, a `Makefile` with `check`, docs, settings) and checks it, including stray agent configuration; brings the GitHub workspace to the standard with a dry-run-first script. | `/repo-standards:init-repo`, `plugins/repo-standards/scripts/check.sh`, `workspace.sh` |
 | Herdr | Terminal workspace manager: one workspace per worktree, agent lifecycle detection, notifications. | `herdr worktree|agent|workspace` |
 | GitHub | Issues are the unit of work, PRs the unit of delivery, CI (the job `check` running `make check`) and Codex review the external gates. | `gh` (or `npx gh-axi`) |
 | Docker Sandboxes (optional) | Container per worktree for workers that should not touch the host. | `plugins/orchestrator/scripts/sbx-worker.sh` |
