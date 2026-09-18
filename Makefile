@@ -1,5 +1,5 @@
 # The gate: `make check` runs everything CI gates on, locally and in the CI job named `check`.
-SCRIPTS := $(wildcard plugins/*/scripts/*.sh scripts/*.sh)
+SCRIPTS := $(wildcard plugins/*/scripts/*.sh scripts/*.sh) $(wildcard tests/shims/*)
 
 .PHONY: check lint validate standard test
 check: lint validate standard test
