@@ -1,0 +1,11 @@
+# Grouped version updates: one pull request per ecosystem and week. The repository has no package manifest;
+# its only dependencies are the GitHub Actions of the CI workflow.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      github-actions:
+        patterns: ["*"]

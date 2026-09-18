@@ -1,4 +1,5 @@
 import json
+import subprocess
 import unittest
 
 from helpers import STANDARDS, ShimTest
@@ -40,20 +41,14 @@ finding: workspace | merge settings | configure | rebase merges are allowed | hi
 """
 
 
-class ApplyTests(ShimTest):
+class ApplyCase(ShimTest):
     """The apply phase against a bare origin, the stateful gh shim ($SHIM_WS) and the claude shim."""
 
-    def setUp(self):
-        super().setUp()
+    def github(self):
+        """An empty bare origin as the remote, and the GitHub side of a private repository on main."""
         self.origin = self.base / "origin.git"
         self.git("init", "-q", "--bare", str(self.origin))
         self.git("remote", "add", "origin", str(self.origin))
-        for path, text in FILES.items():
-            self.write(path, text)
-        self.git("add", ".")
-        self.git("commit", "-qm", "messy")
-        self.git("push", "-q", "origin", "main")
-        self.head = self.git("rev-parse", "HEAD").strip()
         self.ws = self.base / "github"
         self.ws.mkdir()
         self.put("repo.json", {
@@ -68,10 +63,11 @@ class ApplyTests(ShimTest):
         self.put("automated-security-fixes.json", {"enabled": True})
         self.put("milestones.json", [])
         self.put("projects.json", [])
-        r = self.run_script(REPORT, stdin=REPLIES)
+
+    def audit(self, replies, *answers):
+        r = self.run_script(REPORT, stdin=replies)
         self.assertEqual(r.returncode, 0, r.stderr)
-        r = self.run_script(APPROVE, "agent-config=approve", "tests-ci=approve", "security=approve",
-                            "workspace=approve", "files=reject")
+        r = self.run_script(APPROVE, *answers)
         self.assertEqual(r.returncode, 0, r.stderr)
 
     def write(self, path, text, root=None):
@@ -119,6 +115,19 @@ class ApplyTests(ShimTest):
         self.step(BACKUP)
         self.fill_in(self.step(CLEANUP, "prepare").stdout)
         return self.step(CLEANUP, "open")
+
+
+class ApplyTests(ApplyCase):
+    def setUp(self):
+        super().setUp()
+        self.github()
+        for path, text in FILES.items():
+            self.write(path, text)
+        self.git("add", ".")
+        self.git("commit", "-qm", "messy")
+        self.git("push", "-q", "origin", "main")
+        self.head = self.git("rev-parse", "HEAD").strip()
+        self.audit(REPLIES, "agent-config=approve", "tests-ci=approve", "security=approve", "workspace=approve", "files=reject")
 
     def test_backup_tags_the_head_protects_the_tag_and_catalogues_each_removed_skill(self):
         before = self.git("status", "--porcelain", "--ignored")
@@ -539,6 +548,64 @@ class ApplyTests(ShimTest):
         comment, = self.get("issues.json")[0]["comments"]
         self.assertIn('"allow_rebase_merge": true', comment)
         self.assertTrue(r.stdout.endswith("result: fail\n"), r.stdout)
+
+
+
+EMPTY_REPLIES = """finding: docs | README.md | create | the repository has no README | high
+finding: agent-config | AGENTS.md | create | no instruction source | high
+finding: tests-ci | Makefile | create | no gate | high
+finding: workspace | merge settings | configure | rebase merges are allowed | high
+"""
+
+
+class EmptyRepositoryApplyTests(ApplyCase):
+    """A repository without a commit, here or on GitHub: the init case of the same run."""
+
+    def setUp(self):
+        super().setUp()
+        self.git("update-ref", "-d", "HEAD")  # the base repository's first commit is undone: nothing is committed
+        self.git("rm", "-q", "--cached", "README.md")
+        (self.repo / "README.md").unlink()
+        self.write("src/main.py", "print('draft')\n")  # work the maintainer has not committed yet
+        self.github()
+        self.audit(EMPTY_REPLIES, "docs=approve", "agent-config=approve", "tests-ci=approve", "workspace=approve")
+
+    def test_the_run_starts_the_default_branch_and_brings_the_standard_through_one_pull_request(self):
+        r = self.step(BACKUP)
+        root = self.origin_git("rev-parse", "refs/heads/main").strip()
+        self.assertIn(f"root: {root[:7]} pushed as the first commit of main (the repository was empty)\n", r.stdout)
+        self.assertEqual(self.origin_git("ls-tree", "-r", "--name-only", root), "")
+        self.assertEqual(self.origin_git("rev-parse", "refs/tags/pre-standard^{commit}").strip(), root)
+        self.assertIn("No skills are removed.", self.get("issues.json")[0]["body"])
+        self.fill_in(self.step(CLEANUP, "prepare").stdout)
+        r = self.step(CLEANUP, "open")
+        self.assertIn("pr: https://github.com/o/r/pull/2 opened\n", r.stdout)
+        added = self.origin_git("diff", "--name-only", root, "refs/heads/chore/standardize").split()
+        for f in ("README.md", "AGENTS.md", "CLAUDE.md", "Makefile", ".github/workflows/check.yml", ".claude/settings.json"):
+            self.assertIn(f, added)
+        self.merge()
+        r = self.step(FINALIZE)
+        self.assertIn("workspace: diff: repo allow_rebase_merge: true -> false\n", r.stdout)
+        self.assertIn("next: the checkout has no commit yet; git pull origin main brings the standard into it\n", r.stdout)
+        self.assertTrue(r.stdout.endswith("result: pass\n"), r.stdout)
+        # The checkout is untouched: still without a commit, the maintainer's draft still there.
+        self.assertEqual(subprocess.run(["git", "rev-parse", "-q", "--verify", "HEAD"], cwd=self.repo,
+                                        capture_output=True).returncode, 1)
+        self.assertEqual((self.repo / "src/main.py").read_text(), "print('draft')\n")
+        # A second run finds the first commit and the tag and starts nothing new.
+        r = self.step(BACKUP)
+        self.assertNotIn("root:", r.stdout)
+        self.assertIn(f"tag: pre-standard kept at {root[:7]} (pushed before)\n", r.stdout)
+
+    def test_local_commits_that_were_never_pushed_are_not_replaced(self):
+        self.write("README.md", "mine\n")
+        self.git("add", "README.md")
+        self.git("commit", "-qm", "first")
+        r = self.step(BACKUP, ok=False)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("error: origin has no branch main", r.stderr)
+        self.assertIn("git push -u origin HEAD", r.stderr)
+        self.assertEqual(self.origin_git("for-each-ref"), "")
 
 
 if __name__ == "__main__":

@@ -93,4 +93,6 @@ git worktree remove --force "$check" >/dev/null 2>&1 || true
 printf '%s\n' "$out" | grep -E '^(fail|warn|skip): ' | sed 's/^/check: /' || true
 rejected=$(categories "$answers" reject)
 [ -z "$rejected" ] || printf 'untouched: %s (rejected in the audit)\n' "$(printf '%s' "$rejected" | sed 's/ /, /g')"
+# A repository that started empty: the checkout still has no commit, and pulling is the maintainer's step.
+git rev-parse -q --verify HEAD >/dev/null || printf 'next: the checkout has no commit yet; git pull origin %s brings the standard into it\n' "$default"
 if [ "$rc" = 0 ] && [ "$status" = 0 ]; then printf 'result: pass\n'; else printf 'result: fail\n'; exit 1; fi

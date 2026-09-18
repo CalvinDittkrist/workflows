@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Release milestone vX.Y.Z: tag main, publish the GitHub release with generated notes, close the milestone.
 # Usage: release.sh <vX.Y.Z>
+# The branch model comes from the default branch: main means main alone, dev means dev plus main.
 # With dev plus main it first opens (or finds) the promotion PR dev -> main and tags its merge commit
 # once it is merged; until then it prints status: waiting. Run it again after the merge.
 set -euo pipefail
@@ -33,20 +34,25 @@ elif ! printf '%s' "$out" | grep -q 'HTTP 404'; then
   wf_die "cannot check whether tag $v exists: $out"
 fi
 
-# Head sha of branch $1; empty when GitHub answers 404. Any other failure (network, auth, rate limit) is fatal,
-# so a failed dev lookup can never fall back to the main-only model and release without the promotion.
+# Head sha of branch $1; empty when GitHub answers 404. Any other failure (network, auth, rate limit) is fatal.
 branch_sha() {
   local out
   if out=$(gh api "repos/$nwo/branches/$1" --jq .commit.sha 2>&1); then printf '%s' "$out"
   elif printf '%s' "$out" | grep -q 'HTTP 404'; then return 0
   else wf_die "cannot read branch $1 of $nwo: $out"; fi
 }
+# The default branch decides the model, as everywhere in the standard; a stray dev beside main changes nothing.
+default=$(gh repo view --json defaultBranchRef -q .defaultBranchRef.name 2>&1) \
+  || wf_die "cannot read the default branch of $nwo: $default"
+case "$default" in
+  main|dev) ;;
+  *) wf_die "default branch $default is neither main nor dev; the standard knows main alone or dev plus main (docs/repo-standard.md)" ;;
+esac
 main=$(branch_sha main)
 [ -n "$main" ] || wf_die "$nwo has no main branch; releases are tagged on main"
-dev=$(branch_sha dev)
 wf_kv milestone "$v ($(printf '%s' "$ms" | jq -r .closed_issues) closed issues)"
 
-if [ -n "$dev" ]; then
+if [ "$default" = dev ]; then
   wf_kv model "dev+main"
   title="chore(release): $v"
   # --head cannot tell a fork's dev from ours, so pull requests from other repositories are ignored.

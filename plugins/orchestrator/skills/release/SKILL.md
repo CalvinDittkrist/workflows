@@ -1,6 +1,6 @@
 ---
 name: release
-description: Release a milestone vX.Y.Z. Promotes dev to main through a pull request when both exist, then tags main, publishes the GitHub release with generated notes and closes the milestone.
+description: Release a milestone vX.Y.Z. Promotes dev to main through a pull request when the default branch is dev, then tags main, publishes the GitHub release with generated notes and closes the milestone.
 argument-hint: <vX.Y.Z>
 disable-model-invocation: true
 ---
@@ -10,4 +10,4 @@ Run this exact command and relay its output:
 "${CLAUDE_PLUGIN_ROOT}/scripts/release.sh" $ARGUMENTS
 ```
 
-The script refuses when the milestone does not exist, is closed, still has open issues, or the tag already exists. Quote the `error:` line and stop. On `status: waiting`, relay the `next:` line; do not merge the promotion pull request unless the user asks.
+The script refuses when the milestone does not exist, is closed, still has open issues, the tag already exists, or the default branch is neither `main` nor `dev`. Quote the `error:` line and stop. On `status: waiting`, relay the `next:` line; do not merge the promotion pull request unless the user asks.

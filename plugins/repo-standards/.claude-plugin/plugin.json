@@ -1,7 +1,7 @@
 {
   "name": "repo-standards",
-  "version": "0.1.0",
-  "description": "The repository standard: AGENTS.md with a CLAUDE.md import, the make check gate, architecture.md, ADRs, PR template, workflow settings, and a check that fails on stray agent configuration. Skills: /standardize (six read-only auditors, one findings report), /adr, /docs-check.",
+  "version": "0.2.0",
+  "description": "The repository standard: AGENTS.md with a CLAUDE.md import, the make check gate, architecture.md, ADRs, PR template, workflow settings, and a check that fails on stray agent configuration. Skills: /standardize (six read-only auditors, one findings report), /apply (backup, cleanup pull request, issues, GitHub workspace), /adr, /docs-check.",
   "author": { "name": "Calvin Dittkrist", "url": "https://github.com/CalvinDittkrist" },
   "repository": "https://github.com/CalvinDittkrist/workflows",
   "license": "MIT",
