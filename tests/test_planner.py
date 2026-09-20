@@ -100,9 +100,10 @@ class FactsAndLabelsTests(PlanWorktree):
         r = self.run_script(PLANNER / "accept-due.sh", SHIM_SPEC_FIXTURE=self.specs())
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(r.stdout, "", "an issue that is not a spec gets no acceptance line")
-        r = self.run_script(PLANNER / "accept-due.sh", WF_PLAN_ISSUE="19", SHIM_SPEC_FIXTURE=self.specs(), SHIM_GH_DOWN="1")
-        self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertEqual(r.stdout, "", "without GitHub the state is unknown, not guessed")
+        for outage in (dict(SHIM_GH_DOWN="1"), dict(SHIM_NO_SUBISSUES="1")):
+            r = self.run_script(PLANNER / "accept-due.sh", WF_PLAN_ISSUE="19", SHIM_SPEC_FIXTURE=self.specs(), **outage)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertEqual(r.stdout, "", "a read that fails is not a state the driver may recommend from")
         self.plan("offline-mode")
         self.reset_calls()
         r = self.run_script(PLANNER / "accept-due.sh", SHIM_SPEC_FIXTURE=self.specs())
@@ -573,6 +574,27 @@ class AcceptReportTests(AcceptanceSpec):
         self.assertIn("correct their format and run accept-report.sh again", r.stderr)
         self.assertEqual(r.stdout, "", "a reply with one bad line produces no report")
 
+    def test_an_item_line_behind_any_list_marker_still_counts(self):
+        r = self.report("1. item: Decisions | The checker is read-only | met | spec-checker.md:5 | high\n"
+                        "**item: Testing | The report has a test | met | tests/test_planner.py:1 | high**\n"
+                        "2) item: Vocabulary | acceptance is defined | missing | not in docs/glossary.md | high\n")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("items: 3 in 3 section(s); 2 met, 1 open", r.stdout)
+
+    def test_a_verdict_that_cannot_be_read_as_an_item_line_fails_the_report(self):
+        r = self.report("item: Decisions | The checker is read-only | met | spec-checker.md:5 | high\n"
+                        "Also, item: Decisions | The report counts | missing | nothing found | high\n")
+        self.assertNotEqual(r.returncode, 0, "a verdict is never dropped in silence")
+        self.assertIn("error: not readable as an item line", r.stderr)
+        self.assertEqual(r.stdout, "")
+
+    def test_two_reply_files_stay_separate_without_a_trailing_newline(self):
+        second = self.base / "second.txt"
+        second.write_text("item: Testing | The report has a test | met | tests/test_planner.py:1 | high\n")
+        r = self.report("item: Decisions | The checker is read-only | met | spec-checker.md:5 | high", str(second))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("items: 2 in 2 section(s); 2 met, 0 open", r.stdout)
+
     def test_a_reply_without_item_lines_is_refused(self):
         r = self.report("Everything looks fine to me.\n")
         self.assertNotEqual(r.returncode, 0)
@@ -625,10 +647,26 @@ class AcceptReportTests(AcceptanceSpec):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(r.stderr, "", "a section whose bullet says none needs no item")
 
+    def test_two_replies_are_reported_together_and_the_same_statement_counts_once(self):
+        second = self.base / "second.txt"
+        second.write_text("item: Testing | The report script has a test | met | tests/test_planner.py:1 | high\n"
+                          "item: Decisions | The checker is read-only | met | spec-checker.md:5 | high\n")
+        r = self.report("item: Decisions | The checker is read-only | met | spec-checker.md:5 | high\n", str(second))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("items: 2 in 2 section(s); 2 met, 0 open", r.stdout)
+        self.assertIn("warning: 1 repeated item line(s) ignored", r.stderr)
+
     def test_the_reply_can_arrive_on_stdin(self):
         r = self.run_script(PLANNER / "accept-report.sh", "19", stdin=self.REPLY, SHIM_SPEC_FIXTURE=self.db())
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("items: 4 in 3 section(s); 2 met, 2 open", r.stdout)
+
+    def test_the_report_writes_nothing(self):
+        r = self.report(self.REPLY)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertFalse([c for c in self.calls() if "--method" in c or c.startswith(("gh issue", "gh pr"))],
+                         "the report only reads the spec")
+        self.assertEqual(self.git("status", "--porcelain"), "", "nothing in the repository changes")
 
     def test_a_missing_reply_file_is_named(self):
         r = self.run_script(PLANNER / "accept-report.sh", "19", str(self.base / "gone.txt"), SHIM_SPEC_FIXTURE=self.db())

@@ -18,14 +18,20 @@ for f in "$@"; do [ -f "$f" ] || wf_die "$f not found; pass the file the checker
 SECTIONS='User stories|Decisions|Testing|Vocabulary|ADRs to write'
 
 # Parse and validate: one tab-separated record per item, in the checker's order.
-parsed=$(cat "$@" | SECTIONS="$SECTIONS" awk '
+# awk 1 instead of cat: a reply file without a trailing newline would merge its last item into the next file.
+parsed=$(awk 1 "$@" | SECTIONS="$SECTIONS" awk '
   function trim(s) { gsub(/^[[:space:]]+|[[:space:]]+$/, "", s); gsub(/\t/, " ", s); return s }
   BEGIN { n = split(ENVIRON["SECTIONS"], s, "|"); for (i = 1; i <= n; i++) S[tolower(s[i])] = s[i]
           split("met missing deviates untested", v, " "); for (i in v) V[v[i]] = 1
           split("high medium low", k, " "); for (i in k) K[k[i]] = 1 }
-  { line = $0; sub(/\r$/, "", line); sub(/^[[:space:]]*([-*][[:space:]]+)?`?/, "", line); sub(/`[[:space:]]*$/, "", line)
-    gsub(/[[:cntrl:]]/, " ", line) }
-  line !~ /^item:/ { next }
+  { line = $0; sub(/\r$/, "", line); gsub(/[[:cntrl:]]/, " ", line); sub(/^[[:space:]]+/, "", line)
+    sub(/^([-*+][[:space:]]+|[0-9]+[.)][[:space:]]+)/, "", line)   # a list marker of any kind
+    sub(/^[`*]+/, "", line); sub(/[`*[:space:]]+$/, "", line) }    # a code span or bold around the line
+  # A line that carries a verdict but no readable item line is never dropped in silence.
+  line !~ /^item:/ {
+    if (line ~ /item:[[:space:]]/) { print "error: not readable as an item line; it must start with item: and have five fields: " line > "/dev/stderr"; bad = 1 }
+    next
+  }
   {
     body = line; sub(/^item:[[:space:]]*/, "", body)
     n = split(body, f, "|"); for (i = 1; i <= n; i++) f[i] = trim(f[i])
@@ -37,9 +43,14 @@ parsed=$(cat "$@" | SECTIONS="$SECTIONS" awk '
     else if (f[4] == "") why = "empty evidence"
     else if (!(tolower(f[5]) in K)) why = "unknown confidence " f[5] "; use high, medium or low"
     if (why != "") { print "error: " why ": " line > "/dev/stderr"; bad = 1; next }
+    # Several replies can be reported together, so the same statement must not be counted twice.
+    key = tolower(f[1]) "\t" tolower(f[2])
+    if (key in seen) { repeats++; next }
+    seen[key] = 1
     print S[tolower(f[1])] "\t" f[2] "\t" tolower(f[3]) "\t" f[4] "\t" tolower(f[5])
   }
-  END { exit bad }') || wf_die "malformed item line(s), no report; correct their format and run accept-report.sh again"
+  END { if (repeats) printf "warning: %d repeated item line(s) ignored; the first verdict per statement counts\n", repeats > "/dev/stderr"
+        exit bad }') || wf_die "malformed item line(s), no report; correct their format and run accept-report.sh again"
 [ -n "$parsed" ] || wf_die "no item: lines in the reply; the checker must answer in the fixed format, one line per checkable statement"
 
 # The checkable sections of the spec itself, so a section the checker left out is visible. A section that is

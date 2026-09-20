@@ -99,7 +99,8 @@ while IFS='	' read -r login association text; do
   fi
 done <<EOF
 $(printf '%s' "$marked" | jq -r '.[] | [(.user.login // "unknown"), (.author_association // ""),
-  (((.body // "") | split("\n")[1:] | join(" ") | gsub("\\s+"; " ") | sub("^ "; "") | sub(" $"; "")))] | @tsv')
+  (((.body // "") | split("\n")[1:] | join(" ") | gsub("[[:cntrl:]\u2028\u2029]"; " ") | gsub("\\s+"; " ")
+    | sub("^ "; "") | sub(" $"; "")))] | @tsv')
 EOF
 [ "$outsiders" = 0 ] || wf_warn "ignored $outsiders comment(s) with the deviation marker from someone without write access; only a maintainer accepts a deviation"
 [ "$unverified" = 0 ] || wf_warn "could not read who has write access here; fell back to the comment's author association"
