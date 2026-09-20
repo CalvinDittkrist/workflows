@@ -34,26 +34,41 @@ SHELL_TOOLS = {"Bash", "BashOutput"}
 
 # A shell segment that prints file content instead of using the read tool.
 FILE_READERS = re.compile(r"^(cat|bat|head|tail|less|more|sed\s+-n)\b")
-HEREDOC = re.compile(r"<<-?\s*[\"']?(\w+)[\"']?")
+# `<<TAG`, `<<-TAG`, `<<'TAG'`: a here-string (`<<<`) and a shift (`1 << 2`) are neither.
+HEREDOC = re.compile(r"<<(?!<)-?\s*([\"']?)([A-Za-z_]\w*)\1")
 SLEEP = re.compile(r"^sleep\b")
+# What a shell keyword puts in front of the command it runs, and the wrappers that pass it on.
+SEGMENT_PREFIX = re.compile(r"^(do|then|else|elif|if|while|until|!|time|nohup|command|exec|eval)\s+")
 
 
 class FormatError(Exception):
-    """The transcript is not in a format this script understands."""
+    """The transcript is not in a format this script understands.
+
+    `unreadable` separates a truncated or half-written file, which says nothing about the
+    format, from a transcript whose shape has changed, which asks for a change to this script.
+    """
+
+    def __init__(self, detail, version=None, unreadable=False):
+        super().__init__(detail)
+        self.detail, self.version, self.unreadable = detail, version, unreadable
 
 
 def strip_heredocs(command):
-    """Drop heredoc bodies, so a script passed to python or jq cannot look like a shell read."""
+    """Drop heredoc bodies, so a script passed to python or jq cannot look like a shell read.
+
+    A `<<TAG` whose terminator never comes is not a heredoc (it is a quoted `<<` somewhere in
+    the command), and the lines after it are kept: dropping them would hide real shell reads.
+    """
     out, lines, i = [], command.split("\n"), 0
     while i < len(lines):
-        line = lines[i]
-        out.append(line)
-        match = HEREDOC.search(line)
+        out.append(lines[i])
+        match = HEREDOC.search(lines[i])
         i += 1
-        if match:
-            while i < len(lines) and lines[i].strip() != match.group(1):
-                i += 1
-            i += 1  # the delimiter line itself
+        if not match:
+            continue
+        end = next((j for j in range(i, len(lines)) if lines[j].strip() == match.group(2)), None)
+        if end is not None:
+            i = end + 1  # skip the body and the delimiter line
     return "\n".join(out)
 
 
@@ -61,7 +76,9 @@ def commands(command):
     """The commands a shell call runs, without the ones that only receive a pipe.
 
     `git log | cat` reads no file and `grep sleep x` is no sleep: only what stands at the head
-    of a segment counts.
+    of a segment counts, after the shell keyword that may precede it (`do sleep 5`). The split
+    does not know about quoting, so a separator inside a quoted argument starts a segment of
+    its own; the report is a diagnostic over thousands of calls, where that is noise.
     """
     piped_into = False
     for part in re.split(r"(\|\||&&|[|;&\n])", strip_heredocs(command)):
@@ -69,7 +86,13 @@ def commands(command):
             piped_into = part == "|"
             continue
         if not piped_into:
-            yield part.strip().lstrip("({ ")
+            segment = part.strip().lstrip("({ ")
+            while True:
+                stripped = SEGMENT_PREFIX.sub("", segment)
+                if stripped == segment:
+                    break
+                segment = stripped
+            yield segment
 
 
 def reads_files(command):
@@ -123,7 +146,7 @@ def invocations(record):
 def load(path):
     """Parse one transcript into a row, or return None when it is not a worker session."""
     records = []
-    # split("\n"), not splitlines(): a record may carry \x0b, \x1e or   inside a string,
+    # split("\n"), not splitlines(): a record may carry \x0b, \x1e or U+2028 inside a string,
     # and splitlines() would break it into two halves that are both invalid JSON.
     for number, line in enumerate(path.read_text(errors="replace").split("\n"), 1):
         if not line.strip():
@@ -131,9 +154,9 @@ def load(path):
         try:
             records.append(json.loads(line))
         except json.JSONDecodeError:
-            raise FormatError(f"line {number} is not JSON") from None
+            raise FormatError(f"line {number} is not JSON", unreadable=True) from None
     if not records:
-        raise FormatError("the file holds no records")
+        return None  # an empty file: a session that wrote nothing
 
     version = next((r["version"] for r in records if r.get("version")), None)
     if not version:
@@ -231,41 +254,52 @@ def tokens(value):
     return "-" if value is None else f"{value / 1000:.1f}k"
 
 
+COLUMNS = [
+    ("session", lambda row: row["session"]),
+    ("version", lambda row: row["version"]),
+    ("turns", lambda row: str(row["turns"])),
+    ("review", lambda row: tokens(row["review"])),
+    ("pr", lambda row: tokens(row["pr"])),
+    ("peak", lambda row: tokens(row["peak"])),
+    ("shellread", lambda row: f"{row['shellread'] * 100:.0f}%"),
+    ("read", lambda row: str(row["read"])),
+    ("edit", lambda row: str(row["edit"])),
+    ("write", lambda row: str(row["write"])),
+    ("shell", lambda row: str(row["shell"])),
+    ("sleep", lambda row: str(row["sleep"])),
+    ("label", lambda row: row["label"]),
+]
+
+
 def render(rows):
-    columns = [("session", "session"), ("version", "version"), ("turns", "turns"), ("review", "review"),
-               ("pr", "pr"), ("peak", "peak"), ("shellread", "shellread"), ("read", "read"), ("edit", "edit"),
-               ("write", "write"), ("shell", "shell"), ("sleep", "sleep"), ("label", "label")]
-    table = []
-    for row in rows:
-        table.append([row["session"], row["version"], str(row["turns"]), tokens(row["review"]), tokens(row["pr"]),
-                      tokens(row["peak"]), f"{row['shellread'] * 100:.0f}%", str(row["read"]), str(row["edit"]),
-                      str(row["write"]), str(row["shell"]), str(row["sleep"]), row["label"]])
-    heads = [head for _, head in columns]
-    widths = [max(len(head), *(len(line[i]) for line in table)) if table else len(head)
-              for i, head in enumerate(heads)]
-    lines = ["  ".join(head.ljust(width) for head, width in zip(heads, widths)).rstrip()]
-    for line in table:
-        lines.append("  ".join(cell.ljust(width) for cell, width in zip(line, widths)).rstrip())
-    return lines
+    heads = [head for head, _ in COLUMNS]
+    table = [[cell(row) for _, cell in COLUMNS] for row in rows]
+    widths = [max([len(head)] + [len(line[i]) for line in table]) for i, head in enumerate(heads)]
+    return ["  ".join(cell.ljust(width) for cell, width in zip(line, widths)).rstrip()
+            for line in [heads, *table]]
 
 
 def main(argv):
-    paths = transcripts(argv)
-    rows = []
-    for path in paths:
+    rows, failed = [], False
+    for path in transcripts(argv):
         try:
             row = load(path)
         except FormatError as error:
-            version = error.args[1] if len(error.args) > 1 else "unknown"
-            print(f"error: {path}: transcript format not understood ({error.args[0]}); "
-                  f"the Claude Code session transcript format is internal and has changed "
-                  f"(transcript written by Claude Code {version}, this report is written against "
-                  f"{KNOWN_VERSION}); update scripts/context-report.py", file=sys.stderr)
-            return 1
+            if error.unreadable:
+                print(f"error: {path}: unreadable transcript ({error.detail}); a truncated or half-written "
+                      f"session file, skipped", file=sys.stderr)
+            else:
+                print(f"error: {path}: transcript format not understood ({error.detail}); the Claude Code "
+                      f"session transcript format is internal and has changed (transcript written by Claude "
+                      f"Code {error.version or 'unknown'}, this report is written against {KNOWN_VERSION}); "
+                      f"update scripts/context-report.py", file=sys.stderr)
+            failed = True
+            continue
         except OSError as error:
             print(f"error: {path}: cannot be read ({error.strerror}); pass a transcript file or a directory "
                   f"of transcripts", file=sys.stderr)
-            return 1
+            failed = True
+            continue
         if row:
             rows.append(row)
     print(f"# context report: a diagnostic over Claude Code's internal session transcript format "
@@ -274,10 +308,10 @@ def main(argv):
           "shellread: share of tool output read from files through the shell.")
     if not rows:
         print("# no worker session found")
-        return 0
+        return 1 if failed else 0
     for line in render(sorted(rows, key=lambda row: (row["start"], row["session"]))):
         print(line)
-    return 0
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":

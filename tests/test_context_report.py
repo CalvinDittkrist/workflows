@@ -18,14 +18,43 @@ class ContextReportTests(unittest.TestCase):
     """The maintainer's diagnostic over worker transcripts. Fixture in, one line per session out."""
 
     def report(self, *args, **env):
-        return subprocess.run(["python3", str(REPORT), *args], cwd=ROOT, text=True, capture_output=True,
+        """Run it the way the README documents it: the script itself, not `python3 <path>`."""
+        return subprocess.run([str(REPORT), *args], cwd=ROOT, text=True, capture_output=True,
                               env={**os.environ, **env})
 
-    def row(self, stdout):
-        """The header row and the one session row, each split into fields."""
+    def rows(self, stdout):
+        """Every session line, split into fields by column."""
         lines = [line for line in stdout.splitlines() if not line.startswith("#")]
-        self.assertEqual(len(lines), 2, stdout)
-        return dict(zip(lines[0].split(), lines[1].split()))
+        heads = lines[0].split() if lines else []
+        return [dict(zip(heads, line.split())) for line in lines[1:]]
+
+    def row(self, stdout):
+        """The one session line, split into fields."""
+        rows = self.rows(stdout)
+        self.assertEqual(len(rows), 1, stdout)
+        return rows[0]
+
+    def shell_session(self, directory, commands, name="0badc0de-0000-4000-8000-000000000005.jsonl"):
+        """A transcript of one worker turn per command, each answering with 100 characters."""
+        base = {"version": "2.1.278", "isSidechain": False, "gitBranch": "feat/42-file-tools",
+                "timestamp": "2026-09-20T12:00:00.000Z"}
+        records = []
+        for number, command in enumerate(commands, 1):
+            call = {"type": "tool_use", "id": f"t{number}", "name": "Bash", "input": {"command": command}}
+            records.append({**base, "type": "assistant", "uuid": f"a{number}", "requestId": f"r{number}",
+                            "message": {"role": "assistant", "content": [call],
+                                        "usage": {"input_tokens": 1000, "cache_read_input_tokens": 9000}}})
+            records.append({**base, "type": "user", "uuid": f"u{number}",
+                            "message": {"role": "user", "content": [
+                                {"type": "tool_result", "tool_use_id": f"t{number}", "content": "x" * 100}]}})
+        records.append({**base, "type": "assistant", "uuid": "az", "requestId": "rz",
+                        "message": {"role": "assistant",
+                                    "content": [{"type": "tool_use", "id": "tz", "name": "Skill",
+                                                 "input": {"skill": "worker:review"}}],
+                                    "usage": {"input_tokens": 0, "cache_read_input_tokens": 10000}}})
+        path = Path(directory) / name
+        path.write_text("".join(json.dumps(record) + "\n" for record in records))
+        return path
 
     def test_reports_one_line_per_session_with_stage_contexts_and_tool_mix(self):
         result = self.report(str(WORKER_SESSION))
@@ -43,6 +72,7 @@ class ContextReportTests(unittest.TestCase):
         })
 
     def test_header_says_it_is_a_diagnostic_over_an_internal_format(self):
+        # The header is what tells a reader not to build on the numbers; the issue asks for it.
         stdout = self.report(str(WORKER_SESSION)).stdout
         header = "\n".join(line for line in stdout.splitlines() if line.startswith("#"))
         self.assertIn("internal", header)
@@ -55,7 +85,35 @@ class ContextReportTests(unittest.TestCase):
         self.assertIn("9.9.9", result.stderr)  # the Claude Code version that wrote the transcript
         self.assertIn("internal", result.stderr)
         self.assertIn("changed", result.stderr)
-        self.assertEqual(result.stdout, "")
+        self.assertEqual(self.rows(result.stdout), [])
+
+    def test_one_unreadable_transcript_does_not_hide_the_other_sessions(self):
+        # A directory argument reads every transcript in it; a half-written one is named and skipped,
+        # the run still exits non-zero, and the sessions that parsed are still reported.
+        with tempfile.TemporaryDirectory(prefix="wf-report-") as tmp:
+            shutil.copy(WORKER_SESSION, tmp)
+            (Path(tmp) / "beef0000-0000-4000-8000-000000000006.jsonl").write_text('{"type": "assis')
+            result = self.report(tmp)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("unreadable transcript", result.stderr)
+        self.assertNotIn("has changed", result.stderr)  # a truncated file is no format change
+        self.assertEqual(self.row(result.stdout)["session"], "f1a7e3aa")
+
+    def test_counts_a_sleep_in_a_loop_and_ignores_a_heredoc_body(self):
+        with tempfile.TemporaryDirectory(prefix="wf-report-") as tmp:
+            path = self.shell_session(tmp, [
+                "while true; do sleep 5; done",             # the polling loop ADR 0017 forbids
+                "python3 - <<'PY'\ncat /etc/hosts\nPY",     # a heredoc body is not a shell read
+                "grep -c '<<EOF' setup.sh\ncat AGENTS.md",  # a quoted `<<` must not swallow the cat
+                'grep x <<< "foo"; cat README.md',          # a here-string is not a heredoc either
+            ])
+            result = self.report(str(path))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        row = self.row(result.stdout)
+        self.assertEqual(row["sleep"], "1")
+        self.assertEqual(row["shell"], "4")
+        self.assertEqual(row["shellread"], "50%")  # the two `cat` calls, 200 of 400 characters
+        self.assertEqual(row["label"], "feat/42-file-tools")  # no agent name: the branch names the session
 
     def test_scans_the_worktree_projects_and_skips_sessions_that_are_not_workers(self):
         with tempfile.TemporaryDirectory(prefix="wf-report-") as tmp:
