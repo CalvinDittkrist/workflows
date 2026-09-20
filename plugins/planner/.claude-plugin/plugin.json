@@ -1,6 +1,6 @@
 {
   "name": "planner",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Planning session that turns an idea or an issue into agent-ready GitHub issues: question rounds, spec, tickets with blocking edges, triage, research and prototypes. Skills load only when invoked.",
   "author": {
     "name": "Calvin Dittkrist",

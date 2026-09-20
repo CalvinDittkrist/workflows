@@ -372,10 +372,17 @@ class ReleaseTests(ShimTest):
         ])
         self.assertIn("status: released", r.stdout)
 
-    def test_refuses_a_missing_milestone_open_issues_and_an_existing_tag(self):
+    def test_an_open_issue_such_as_the_spec_holds_the_release_back(self):
+        # release.sh counts open issues and knows nothing about specs, which is why the planner puts the spec on
+        # the milestone: with every ticket closed, that one open issue is what holds the release back.
+        r = self.run_script(ORCH / "release.sh", "v1.2.0", SHIM_MILESTONES_FIXTURE=self.milestones(open_issues=1, closed_issues=4))
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("error: milestone v1.2.0 has 1 open issue(s)", r.stderr)
+        self.assertEqual(self.mutations(), [])
+
+    def test_refuses_a_missing_milestone_and_an_existing_tag(self):
         cases = [
             (dict(), "milestone v1.2.0 does not exist"),
-            (dict(SHIM_MILESTONES_FIXTURE=self.milestones(open_issues=2)), "milestone v1.2.0 has 2 open issue(s)"),
             (dict(SHIM_MILESTONES_FIXTURE=self.milestones(), SHIM_TAGS="v1.2.0"), "tag v1.2.0 already exists"),
         ]
         for env, text in cases:
