@@ -79,6 +79,23 @@ wf_check_claude_args() {
   done
 }
 
+# Refuse a WF_PLANNER_LANGUAGE that cannot travel safely on the launch command line.
+# The value goes into the --settings JSON as claude's native `language` setting; claude does not
+# check it, so only a plain language name or locale code is accepted here.
+wf_check_planner_language() {
+  local v="${WF_PLANNER_LANGUAGE:-}" rest
+  [ -n "$v" ] || return 0
+  # The trailing x keeps a newline in $v visible: command substitution would strip it otherwise.
+  rest=$(printf '%s' "$v" | LC_ALL=C tr -d '[:alnum:] ._-'; printf x)
+  if [ "$rest" != x ] || [ ${#v} -gt 32 ]; then
+    wf_die "WF_PLANNER_LANGUAGE: '$v' is not a plain language name. Use a name or a locale code of at most 32 letters, digits, spaces, '.', '_' or '-', e.g. WF_PLANNER_LANGUAGE=german or WF_PLANNER_LANGUAGE=pt-br"
+  fi
+  case "$v" in
+    [A-Za-z]*) ;;
+    *) wf_die "WF_PLANNER_LANGUAGE: '$v' must start with a letter, e.g. WF_PLANNER_LANGUAGE=german" ;;
+  esac
+}
+
 # Create a worktree and Herdr workspace for branch $1 from ref $2 with label $3.
 # Sets ws, pane and path. Under WF_DRY_RUN=1 it only logs and leaves them empty.
 wf_create_worktree() {

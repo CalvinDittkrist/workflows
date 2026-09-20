@@ -132,6 +132,51 @@ class PlanTests(ShimTest):
         r = self.run_script(ORCH / "plan.sh", "Other topic", WF_PLANNER_CLAUDE_ARGS="--plugin-dir")
         self.assertNotEqual(r.returncode, 0); self.assertIn("WF_PLANNER_CLAUDE_ARGS", r.stderr)
 
+    def test_planner_language_is_the_sessions_language_and_reaches_nothing_else(self):
+        home = self.base / "home"; home.mkdir()
+        r = self.run_script(ORCH / "plan.sh", "Offline mode", WF_PLANNER_LANGUAGE="german", HOME=str(home))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        start = [c for c in self.argv_calls() if c[1:3] == ["agent", "start"]][0]
+        settings = json.loads(start[start.index("--settings") + 1])
+        self.assertEqual(settings["language"], "german")
+        self.assertEqual(settings["env"], {"WF_PLAN": "offline-mode"})
+        # Session-scoped: no settings file anywhere, and the worker start carries no language.
+        self.assertEqual(list(home.rglob("settings*.json")), [])
+        wt = self.repo / ".claude/worktrees/plan-offline-mode"
+        self.assertEqual(sorted(p.name for p in (self.repo / ".claude").glob("*")), ["worktrees"])
+        self.assertFalse((wt / ".claude").exists())
+        self.reset_calls()
+        r = self.run_script(ORCH / "claim.sh", "12", WF_PLANNER_LANGUAGE="german", HOME=str(home))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        start = [c for c in self.argv_calls() if c[1:3] == ["agent", "start"]][0]
+        self.assertNotIn("language", json.loads(start[start.index("--settings") + 1]))
+
+    def test_without_the_language_the_launch_is_unchanged(self):
+        for topic, env in (("Unset topic", {}), ("Empty topic", {"WF_PLANNER_LANGUAGE": ""})):
+            self.reset_calls()
+            r = self.run_script(ORCH / "plan.sh", topic, **env)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            start = [c for c in self.argv_calls() if c[1:3] == ["agent", "start"]][0]
+            self.assertNotIn("language", json.loads(start[start.index("--settings") + 1]), env)
+
+    def test_language_composes_with_the_claude_args_that_follow_it(self):
+        r = self.run_script(ORCH / "plan.sh", "Offline mode", WF_PLANNER_LANGUAGE="pt-br",
+                            WF_CLAUDE_ARGS="--verbose", WF_PLANNER_CLAUDE_ARGS="--model opus")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        start = [c for c in self.argv_calls() if c[1:3] == ["agent", "start"]][0]
+        self.assertEqual(json.loads(start[start.index("--settings") + 1])["language"], "pt-br")
+        self.assertEqual(start[start.index("--model") + 1], "opus"); self.assertIn("--verbose", start)
+        # Documented precedence: claude keeps the last --settings, and the user's args come after ours.
+        self.assertLess(start.index("--settings"), start.index("--verbose"))
+
+    def test_an_unsafe_language_is_refused_before_anything_is_created(self):
+        for bad in ("german; rm -rf /", "german\nEnglish", '"', "-german", "a" * 33):
+            r = self.run_script(ORCH / "plan.sh", "Offline mode", WF_PLANNER_LANGUAGE=bad)
+            self.assertNotEqual(r.returncode, 0, bad)
+            self.assertIn("error: WF_PLANNER_LANGUAGE", r.stderr, bad)
+            self.assertIn("WF_PLANNER_LANGUAGE=german", r.stderr, bad)
+            self.assertFalse([c for c in self.calls() if "worktree create" in c], bad)
+
     def test_long_topics_get_a_valid_herdr_agent_name(self):
         words = "Füge einen Map-Skill zum Planner hinzu, wie wayfinder von mattpocock".split()
         r = self.run_script(ORCH / "plan.sh", *words)
