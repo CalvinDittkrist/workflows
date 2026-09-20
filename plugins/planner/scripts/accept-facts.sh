@@ -12,30 +12,28 @@ spec=$(wf_issue_num "$1"); shift
 tickets=""
 for t in "$@"; do tickets="$tickets $(wf_issue_num "$t")"; done
 
+# The checker judges the code on the base branch as it is now, so this worktree must carry it.
+base=$(wf_base_branch)
+wf_require_base_up_to_date "$base"
+
 nwo=$(wf_repo_nwo) || wf_die "cannot read the repository; is gh authenticated here?"
-issue_json() { gh api "repos/$nwo/issues/$1" 2>/dev/null || wf_die "could not read issue #$1 in $nwo; does it exist, and is gh authenticated for this repository?"; }
 
 # The spec itself: it must be a spec issue, and an open one.
-sj=$(issue_json "$spec")
-labels=$(printf '%s' "$sj" | jq -r '[.labels[]?.name] | join(",")')
-case ",$labels," in
-  *,spec,*) ;;
-  *) wf_die "#$spec is not labelled spec (labels: ${labels:--}); an acceptance judges a spec against the code. Open a planning session on the issue to triage it." ;;
-esac
-[ "$(printf '%s' "$sj" | jq -r .state)" = open ] || wf_die "#$spec is closed; it was accepted already. Reopen it to accept it again."
+sj=$(wf_issue_json "$nwo" "$spec")
+wf_require_open_spec "$spec" "$sj"
 
 # The tickets: the arguments, or the native sub-issues.
 if [ -z "$tickets" ]; then
-  subs=$(gh api --paginate "repos/$nwo/issues/$spec/sub_issues?per_page=100" 2>/dev/null) \
+  subs=$(wf_sub_issues "$nwo" "$spec") \
     || wf_die "could not read the sub-issues of #$spec; pass the ticket numbers as further arguments: accept-facts.sh $spec <ticket>..."
-  tickets=$(printf '%s' "$subs" | jq -s -r '[add // [] | .[]?.number] | join(" ")')
+  tickets=$(printf '%s' "$subs" | jq -r '[.[]?.number] | join(" ")')
   [ -n "$tickets" ] || wf_die "#$spec has no native sub-issues; pass the ticket numbers as further arguments: accept-facts.sh $spec <ticket>..."
 fi
 
 # One line per ticket first, so an open one is refused before any pull request is read.
 rows=""; open_tickets=""
 for t in $tickets; do
-  tj=$(issue_json "$t")
+  tj=$(wf_issue_json "$nwo" "$t")
   state=$(printf '%s' "$tj" | jq -r .state)
   if [ "$state" = open ]; then open_tickets="$open_tickets #$t"; fi
   rows="$rows$t	$state	$(printf '%s' "$tj" | jq -r '.title | gsub("[[:cntrl:]\u2028\u2029]"; " ")')
@@ -101,7 +99,8 @@ while IFS='	' read -r login association text; do
   fi
 done <<EOF
 $(printf '%s' "$marked" | jq -r '.[] | [(.user.login // "unknown"), (.author_association // ""),
-  (((.body // "") | split("\n")[1:] | join(" ") | gsub("\\s+"; " ") | sub("^ "; "") | sub(" $"; "")))] | @tsv')
+  (((.body // "") | split("\n")[1:] | join(" ") | gsub("[[:cntrl:]\u2028\u2029]"; " ") | gsub("\\s+"; " ")
+    | sub("^ "; "") | sub(" $"; "")))] | @tsv')
 EOF
 [ "$outsiders" = 0 ] || wf_warn "ignored $outsiders comment(s) with the deviation marker from someone without write access; only a maintainer accepts a deviation"
 [ "$unverified" = 0 ] || wf_warn "could not read who has write access here; fell back to the comment's author association"
@@ -111,7 +110,7 @@ wf_kv repo "$nwo"
 # Every title is printed control-character free: the block has a fixed shape the checker reads line by line.
 wf_kv spec "#$spec $(printf '%s' "$sj" | jq -r '.title | gsub("[[:cntrl:]\u2028\u2029]"; " ")')"
 wf_kv milestone "$(printf '%s' "$sj" | jq -r '.milestone.title // "-" | gsub("[[:cntrl:]\u2028\u2029]"; " ")')"
-wf_kv base "$(wf_base_branch)"
+wf_kv base "$base"
 printf 'tickets[%s]{issue,state,prs,title}:\n' "$(printf '%s' "$tickets" | wc -w | tr -d ' ')"
 printf '%s' "$ticket_rows"
 LC_ALL=C sort -u "$files" > "$files.u" && mv "$files.u" "$files"   # stable order on every machine

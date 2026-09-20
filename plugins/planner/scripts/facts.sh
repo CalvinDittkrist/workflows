@@ -2,6 +2,7 @@
 # Print the session facts a planner skill needs as key: value lines.
 set -uo pipefail
 . "$(dirname "$0")/lib.sh"
+
 slug=$(wf_plan_slug)
 wf_kv plan "${slug:-none (not a plan/<slug> worktree)}"
 issue=$(wf_plan_issue); topic=$(wf_plan_topic)

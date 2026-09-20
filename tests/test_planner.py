@@ -1,6 +1,7 @@
 import json
 import time
 import unittest
+from pathlib import Path
 
 from helpers import PLANNER, ShimTest
 
@@ -70,6 +71,53 @@ class FactsAndLabelsTests(PlanWorktree):
         self.assertIn("issue: #12", r.stdout)
         self.assertIn("glossary: missing", r.stdout)
         self.assertIn("adrs: missing", r.stdout)
+
+    def specs(self):
+        """A spec whose tickets are all closed, one with an open ticket, and one nobody cut up."""
+        path = self.base / "specs.json"
+        path.write_text(json.dumps([
+            {"number": 19, "title": "Ready", "state": "open", "labels": [{"name": "spec"}], "sub_issues": [20, 21]},
+            {"number": 20, "title": "Done", "state": "closed", "labels": []},
+            {"number": 21, "title": "Also done", "state": "closed", "labels": []},
+            {"number": 30, "title": "Half done", "state": "open", "labels": [{"name": "spec"}], "sub_issues": [20, 31]},
+            {"number": 31, "title": "Open", "state": "open", "labels": []},
+            {"number": 32, "title": "Uncut", "state": "open", "labels": [{"name": "spec"}]},
+            {"number": 34, "title": "A ticket", "state": "open", "labels": [{"name": "ready-for-agent"}]},
+        ]))
+        return str(path)
+
+    def test_the_driver_learns_whether_the_session_spec_is_ready_for_acceptance(self):
+        self.plan("accept-a-spec", "issue: #19")
+        for issue, line in (("19", "acceptance: #19 is a spec with 2 ticket(s), all closed; run /planner:accept"),
+                            ("30", "acceptance: #30 is a spec with 1 of 2 ticket(s) open"),
+                            ("32", "acceptance: #32 is a spec without native sub-issues")):
+            r = self.run_script(PLANNER / "accept-due.sh", WF_PLAN_ISSUE=issue, SHIM_SPEC_FIXTURE=self.specs())
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn(line, r.stdout)
+
+    def test_no_acceptance_line_where_none_is_due_and_none_where_github_is_silent(self):
+        self.plan("fix-login-timeout", "issue: #34")
+        r = self.run_script(PLANNER / "accept-due.sh", SHIM_SPEC_FIXTURE=self.specs())
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stdout, "", "an issue that is not a spec gets no acceptance line")
+        for outage in (dict(SHIM_GH_DOWN="1"), dict(SHIM_NO_SUBISSUES="1")):
+            r = self.run_script(PLANNER / "accept-due.sh", WF_PLAN_ISSUE="19", SHIM_SPEC_FIXTURE=self.specs(), **outage)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertEqual(r.stdout, "", "a read that fails is not a state the driver may recommend from")
+        self.plan("offline-mode")
+        self.reset_calls()
+        r = self.run_script(PLANNER / "accept-due.sh", SHIM_SPEC_FIXTURE=self.specs())
+        self.assertEqual(r.stdout, "", "a topic session reads no issue")
+        self.assertFalse(self.calls(), "a session without an issue asks GitHub nothing")
+
+    def test_the_session_facts_stay_local_git_and_ask_github_nothing_about_the_issue(self):
+        self.plan("accept-a-spec", "issue: #19")
+        self.reset_calls()
+        r = self.run_script(PLANNER / "facts.sh", SHIM_SPEC_FIXTURE=self.specs())
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("issue: #19", r.stdout)
+        self.assertFalse([c for c in self.calls() if "/issues/" in c],
+                         "the facts block is injected by every stage; the acceptance lookup is the driver's")
 
     def test_labels_creates_only_the_missing_ones(self):
         r = self.run_script(PLANNER / "labels.sh")
@@ -275,6 +323,25 @@ class PrototypeAndFinishTests(PlanWorktree):
 class AcceptFactsTests(ShimTest):
     """accept-facts.sh against the gh shim: the block, the refusals and the ticket numbers as arguments."""
 
+    def setUp(self):
+        """A planning worktree with an origin, so the check against the base branch runs for real."""
+        super().setUp()
+        self.origin = self.base / "origin.git"
+        self.git("init", "-q", "--bare", str(self.origin), cwd=self.base)
+        self.git("remote", "add", "origin", str(self.origin))
+        self.git("push", "-q", "-u", "origin", "main")
+
+    def move_the_base_branch_on(self):
+        """A ticket merged elsewhere: one commit on origin/main this worktree has not even heard of."""
+        clone = self.base / "clone"
+        self.git("clone", "-q", "--branch", "main", str(self.origin), str(clone), cwd=self.base)
+        self.git("config", "user.email", "t@example.com", cwd=clone)
+        self.git("config", "user.name", "t", cwd=clone)
+        (clone / "ticket.txt").write_text("what a ticket merged\n")
+        self.git("add", ".", cwd=clone)
+        self.git("commit", "-qm", "feat: a merged ticket", cwd=clone)
+        self.git("push", "-q", "origin", "main", cwd=clone)
+
     DEVIATION = ("> Accepted deviation (spec acceptance).\n"
                  "The release command reads the default branch, not a dev branch.\n"
                  "Kept: that is the better rule.")
@@ -329,6 +396,48 @@ class AcceptFactsTests(ShimTest):
         self.assertNotIn("Org member says", r.stdout, "an organisation member without write access is not a maintainer")
         self.assertIn("warning: ignored 2 comment(s) with the deviation marker from someone without write access", r.stderr)
         self.assertIn("warning: pull request(s) #25 changed more than 100 files", r.stderr)
+
+    def test_a_worktree_behind_the_base_branch_is_refused_before_anything_is_read(self):
+        self.move_the_base_branch_on()
+        self.assertEqual(self.git("rev-list", "--count", "HEAD..origin/main").strip(), "0",
+                         "the worktree does not know yet; only the script's own fetch can tell")
+        r = self.facts("19")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("this worktree is 1 commit(s) behind origin/main", r.stderr)
+        self.assertIn("git merge --ff-only origin/main", r.stderr)
+        self.assertFalse([c for c in self.calls() if "/issues/" in c], "no issue is read before the refusal")
+        self.git("merge", "--ff-only", "origin/main")
+        r = self.facts("19")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("base: main\n", r.stdout)
+        self.assertNotIn("behind", r.stderr)
+
+    def test_a_diverged_worktree_is_refused_with_a_fix_that_works(self):
+        (self.repo / "scratch.txt").write_text("prototype\n")
+        self.git("add", ".")
+        self.git("commit", "-qm", "wip")
+        self.move_the_base_branch_on()
+        r = self.facts("19")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("is 1 commit(s) behind origin/main and has 1 of its own", r.stderr)
+        self.assertIn("git rebase origin/main", r.stderr)
+        self.assertNotIn("--ff-only", r.stderr, "a diverged branch cannot fast-forward")
+
+    def test_without_a_reachable_base_branch_the_facts_say_so_and_still_run(self):
+        self.git("remote", "remove", "origin")
+        r = self.facts("19")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("could not fetch origin/main", r.stderr)
+        self.assertIn("no origin/main here; the code the checker reads may be older", r.stderr)
+        self.assertIn("spec: #19 Accept a spec against the code", r.stdout)
+
+    def test_a_worktree_with_commits_of_its_own_is_reported_but_not_refused(self):
+        (self.repo / "scratch.txt").write_text("prototype\n")
+        self.git("add", ".")
+        self.git("commit", "-qm", "wip")
+        r = self.facts("19")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("warning: this worktree has 1 commit(s) that origin/main does not", r.stderr)
 
     def test_facts_refuse_a_non_spec_a_closed_spec_and_open_tickets(self):
         r = self.facts("34")
@@ -387,6 +496,260 @@ class AcceptFactsTests(ShimTest):
         self.assertIn("warning: could not read the pull requests that closed #20", r.stderr)
         self.assertIn("  20,closed,-,Refuse to claim a raw issue\n", r.stdout)
         self.assertIn("files[0]:\n", r.stdout)
+
+
+class AcceptanceSpec(ShimTest):
+    """A spec with the five checkable sections and one closed ticket, for the report and the closing step."""
+
+    BODY = ("## Problem\nStale specs.\n\n## User stories\n1. As a maintainer, I want an acceptance.\n\n"
+            "## Decisions\n- The checker is read-only.\n\n## Testing\nThe report script against the shims.\n\n"
+            "## Vocabulary\n- `acceptance`: the check of a whole spec.\n\n## ADRs to write\nnone\n\n"
+            "## Open questions\nNone.\n")
+
+    def db(self, spec_state="open", spec_labels=({"name": "spec"},), ticket_state="closed", sub_issues=(20,)):
+        issues = [
+            {"number": 19, "title": "Accept a spec", "state": spec_state, "labels": list(spec_labels),
+             "body": self.BODY, "sub_issues": list(sub_issues)},
+            {"number": 20, "title": "The first ticket", "state": ticket_state, "labels": []},
+            {"number": 21, "title": "A gap ticket", "state": "open", "labels": [{"name": "ready-for-agent"}]},
+        ]
+        path = self.base / "specs.json"
+        path.write_text(json.dumps(issues))
+        return str(path)
+
+    def reply(self, text):
+        path = self.base / "reply.txt"
+        path.write_text(text)
+        return str(path)
+
+
+class AcceptReportTests(AcceptanceSpec):
+    REPLY = ("The spec is mostly implemented.\n\n"
+             "item: User stories | The board lists specs ready for acceptance | met | plugins/orchestrator/scripts/board.sh:67 | high\n"
+             "item: User stories | A claim refuses an issue without the label | missing | searched claim.sh for ready-for-agent | medium\n"
+             "- `item: Decisions | The checker is read-only | MET | plugins/planner/agents/spec-checker.md:5 | High`\n"
+             "item: Vocabulary | acceptance is defined | deviates | docs/glossary.md:15 defines it for the board only | low\n")
+
+    MET_ONLY = ("item: User stories | A maintainer accepts a spec | met | plugins/planner/skills/accept/SKILL.md:1 | high\n"
+                "item: Decisions | The checker is read-only | met | spec-checker.md:5 | high\n"
+                "item: Testing | The report has a test | met | tests/test_planner.py:1 | high\n"
+                "item: Vocabulary | acceptance is defined | met | docs/glossary.md:15 | high\n")
+
+    def report(self, reply, *args, **extra):
+        fixture = extra.pop("fixture", None) or self.db()
+        return self.run_script(PLANNER / "accept-report.sh", "19", self.reply(reply), *args,
+                               SHIM_SPEC_FIXTURE=fixture, **extra)
+
+    def test_the_report_counts_per_section_and_verdict_and_lists_every_open_item(self):
+        r = self.report(self.REPLY)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("items: 4 in 3 section(s); 2 met, 2 open\n"
+                      "verdicts: met 2, missing 1, deviates 1, untested 0\n"
+                      "User stories: 2 item(s) (met 1, missing 1)\n"
+                      "Decisions: 1 item(s) (met 1)\n"
+                      "Vocabulary: 1 item(s) (deviates 1)\n", r.stdout)
+        self.assertIn("open[2]{verdict,confidence,section,statement,evidence}:\n"
+                      "  missing (medium) User stories | A claim refuses an issue without the label | "
+                      "searched claim.sh for ready-for-agent\n"
+                      "  deviates (low) Vocabulary | acceptance is defined | docs/glossary.md:15 defines it for the board only\n",
+                      r.stdout)
+        self.assertNotIn("The spec is mostly implemented", r.stdout, "prose around the item lines is ignored")
+
+    def test_a_checkable_section_without_an_item_is_named_and_none_is_not_one(self):
+        r = self.report(self.REPLY)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("warning: section Testing of #19 has no item; the checker left it out", r.stderr)
+        self.assertNotIn("ADRs to write", r.stderr, "a section that says none needs no item")
+
+    def test_a_malformed_item_line_fails_the_report_and_names_it(self):
+        r = self.report("item: Decisions | The checker is read-only | maybe | agents/spec-checker.md:5 | high\n"
+                        "item: Testing | two fields only\n"
+                        "item: Roadmap | Ship it | met | nowhere | high\n"
+                        "item: Decisions | The report script counts | met | accept-report.sh:1 | certain\n")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("error: unknown verdict maybe", r.stderr)
+        self.assertIn("error: has 2 field(s), needs 5", r.stderr)
+        self.assertIn("error: unknown section Roadmap", r.stderr)
+        self.assertIn("error: unknown confidence certain", r.stderr)
+        self.assertIn("correct their format and run accept-report.sh again", r.stderr)
+        self.assertEqual(r.stdout, "", "a reply with one bad line produces no report")
+
+    def test_an_item_line_behind_any_list_marker_still_counts(self):
+        r = self.report("1. item: Decisions | The checker is read-only | met | spec-checker.md:5 | high\n"
+                        "**item: Testing | The report has a test | met | tests/test_planner.py:1 | high**\n"
+                        "2) item: Vocabulary | acceptance is defined | missing | not in docs/glossary.md | high\n")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("items: 3 in 3 section(s); 2 met, 1 open", r.stdout)
+
+    def test_a_verdict_that_cannot_be_read_as_an_item_line_fails_the_report(self):
+        r = self.report("item: Decisions | The checker is read-only | met | spec-checker.md:5 | high\n"
+                        "Also, item: Decisions | The report counts | missing | nothing found | high\n")
+        self.assertNotEqual(r.returncode, 0, "a verdict is never dropped in silence")
+        self.assertIn("error: not readable as an item line", r.stderr)
+        self.assertEqual(r.stdout, "")
+
+    def test_two_reply_files_stay_separate_without_a_trailing_newline(self):
+        second = self.base / "second.txt"
+        second.write_text("item: Testing | The report has a test | met | tests/test_planner.py:1 | high\n")
+        r = self.report("item: Decisions | The checker is read-only | met | spec-checker.md:5 | high", str(second))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("items: 2 in 2 section(s); 2 met, 0 open", r.stdout)
+
+    def test_a_reply_without_item_lines_is_refused(self):
+        r = self.report("Everything looks fine to me.\n")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("no item: lines in the reply", r.stderr)
+
+    def test_a_met_only_reply_says_the_spec_can_be_closed(self):
+        r = self.report(self.MET_ONLY)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("items: 4 in 4 section(s); 4 met, 0 open", r.stdout)
+        self.assertNotIn("open[", r.stdout)
+        self.assertIn("next: nothing is open; the spec can be closed with accept-close.sh", r.stdout)
+        self.assertEqual(r.stderr, "", "every checkable section has an item")
+
+    def test_an_unreadable_spec_still_reports_but_says_the_comparison_is_gone(self):
+        r = self.report(self.REPLY, SHIM_GH_DOWN="1")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("warning: could not read #19; the report cannot say whether the checker left a section", r.stderr)
+        self.assertIn("items: 4 in 3 section(s); 2 met, 2 open", r.stdout)
+
+    def test_a_verdict_nobody_used_counts_as_zero(self):
+        r = self.report("item: Decisions | The checker is read-only | missing | nothing in agents/ | high\n")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("items: 1 in 1 section(s); 0 met, 1 open\n"
+                      "verdicts: met 0, missing 1, deviates 0, untested 0\n", r.stdout)
+
+    def test_a_section_that_says_none_in_a_sentence_needs_no_item(self):
+        db = self.db()
+        body = json.loads(Path(db).read_text())
+        body[0]["body"] = self.BODY.replace("## ADRs to write\nnone", "## ADRs to write\nNone, nothing here is hard to reverse.")
+        Path(db).write_text(json.dumps(body))
+        r = self.report(self.MET_ONLY, fixture=db)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stderr, "", "a section whose answer is none needs no item")
+
+    def test_a_sub_heading_inside_a_section_does_not_hide_it(self):
+        db = self.db()
+        spec = json.loads(Path(db).read_text())
+        spec[0]["body"] = self.BODY.replace("## Vocabulary\n", "## Vocabulary\n### Terms\n")
+        Path(db).write_text(json.dumps(spec))
+        r = self.report("item: Decisions | The checker is read-only | met | spec-checker.md:5 | high\n", fixture=db)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("warning: section Vocabulary of #19 has no item", r.stderr)
+
+    def test_a_section_answered_as_a_bullet_needs_no_item(self):
+        db = self.db()
+        spec = json.loads(Path(db).read_text())
+        spec[0]["body"] = self.BODY.replace("## ADRs to write\nnone", "## ADRs to write\n- none")
+        Path(db).write_text(json.dumps(spec))
+        r = self.report(self.MET_ONLY, fixture=db)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stderr, "", "a section whose bullet says none needs no item")
+
+    def test_two_replies_are_reported_together_and_the_same_statement_counts_once(self):
+        second = self.base / "second.txt"
+        second.write_text("item: Testing | The report script has a test | met | tests/test_planner.py:1 | high\n"
+                          "item: Decisions | The checker is read-only | met | spec-checker.md:5 | high\n")
+        r = self.report("item: Decisions | The checker is read-only | met | spec-checker.md:5 | high\n", str(second))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("items: 2 in 2 section(s); 2 met, 0 open", r.stdout)
+        self.assertIn("warning: 1 repeated item line(s) ignored", r.stderr)
+
+    def test_the_reply_can_arrive_on_stdin(self):
+        r = self.run_script(PLANNER / "accept-report.sh", "19", stdin=self.REPLY, SHIM_SPEC_FIXTURE=self.db())
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("items: 4 in 3 section(s); 2 met, 2 open", r.stdout)
+
+    def test_the_report_writes_nothing(self):
+        r = self.report(self.REPLY)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertFalse([c for c in self.calls() if "--method" in c or c.startswith(("gh issue", "gh pr"))],
+                         "the report only reads the spec")
+        self.assertEqual(self.git("status", "--porcelain"), "", "nothing in the repository changes")
+
+    def test_a_missing_reply_file_is_named(self):
+        r = self.run_script(PLANNER / "accept-report.sh", "19", str(self.base / "gone.txt"), SHIM_SPEC_FIXTURE=self.db())
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("gone.txt not found", r.stderr)
+
+
+class AcceptCloseTests(AcceptanceSpec):
+    def comment(self, text="## Acceptance\nUser stories 4 met.\n"):
+        path = self.base / "closing.md"
+        path.write_text(text)
+        return str(path)
+
+    def close(self, *args, **extra):
+        fixture = extra.pop("fixture", None) or self.db()
+        return self.run_script(PLANNER / "accept-close.sh", "19", "--comment-file", self.comment(), *args,
+                               SHIM_SPEC_FIXTURE=fixture, **extra)
+
+    def test_the_spec_is_closed_as_completed_with_the_comment(self):
+        r = self.close()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("closed: #19 (completed)", r.stdout)
+        self.assertIn("tickets: 1 checked, all closed", r.stdout)
+        self.assertIn("gh issue close 19 --comment ## Acceptance", self.log.read_text())
+        self.assertIn("User stories 4 met. --reason completed", self.log.read_text())
+
+    def test_an_open_sub_issue_refuses_the_close(self):
+        r = self.close(fixture=self.db(sub_issues=(20, 21)))
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("#19 still has open sub-issues: #21", r.stderr)
+        self.assertIn("the acceptance runs again once they are closed", r.stderr)
+        self.assertFalse([c for c in self.calls() if c.startswith("gh issue close")])
+
+    def test_a_non_spec_a_closed_spec_and_an_empty_comment_are_refused(self):
+        r = self.close(fixture=self.db(spec_labels=({"name": "ready-for-agent"},)))
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("not labelled spec (labels: ready-for-agent)", r.stderr)
+        r = self.close(fixture=self.db(spec_state="closed"))
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("#19 is closed; it was accepted already", r.stderr)
+        r = self.run_script(PLANNER / "accept-close.sh", "19", "--comment-file", self.comment(""), SHIM_SPEC_FIXTURE=self.db())
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("is empty; the closing comment records what was checked", r.stderr)
+        r = self.run_script(PLANNER / "accept-close.sh", "19", SHIM_SPEC_FIXTURE=self.db())
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("needs --comment-file", r.stderr)
+        self.assertFalse([c for c in self.calls() if c.startswith("gh issue close")])
+
+    def test_without_native_sub_issues_it_takes_the_ticket_numbers(self):
+        r = self.close(SHIM_NO_SUBISSUES="1")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("could not read the sub-issues of #19", r.stderr)
+        self.assertIn("accept-close.sh 19 --comment-file", r.stderr)
+        r = self.close(fixture=self.db(sub_issues=()))
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("#19 has no native sub-issues", r.stderr)
+        r = self.close("20", "#21", SHIM_NO_SUBISSUES="1")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("#19 still has open sub-issues: #21", r.stderr)
+        r = self.close("20", SHIM_NO_SUBISSUES="1")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("closed: #19 (completed)", r.stdout)
+        self.assertIn("warning: could not read the sub-issues of #19; only the ticket numbers passed were checked",
+                      r.stderr, "a degraded read is never a silent all-clear")
+
+    def test_the_ticket_arguments_add_to_the_sub_issues_they_do_not_replace_them(self):
+        r = self.close("20", fixture=self.db(sub_issues=(20, 21)))
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("#19 still has open sub-issues: #21", r.stderr,
+                      "a gap ticket the caller left out still refuses the close")
+        self.assertFalse([c for c in self.calls() if c.startswith("gh issue close")])
+
+    def test_a_ticket_whose_state_cannot_be_read_stops_the_close(self):
+        r = self.close("99")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("could not read issue #99", r.stderr)
+        self.assertFalse([c for c in self.calls() if c.startswith("gh issue close")],
+                         "an unreadable ticket is never counted as closed")
+
+    def test_comment_file_without_a_value_is_refused_with_the_fix(self):
+        r = self.run_script(PLANNER / "accept-close.sh", "19", "--comment-file", SHIM_SPEC_FIXTURE=self.db())
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("error: --comment-file needs the file with the closing comment", r.stderr)
 
 
 if __name__ == "__main__":
