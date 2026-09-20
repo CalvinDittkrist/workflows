@@ -1,0 +1,2 @@
+{"type": "user", "version": "9.9.9", "sessionId": "deadbeef-0000-4000-8000-000000000002", "uuid": "u0", "isSidechain": false, "message": {"role": "user", "content": [{"type": "text", "text": "/worker:work"}]}}
+{"type": "assistant", "version": "9.9.9", "sessionId": "deadbeef-0000-4000-8000-000000000002", "uuid": "a1", "isSidechain": false, "requestId": "req_1", "message": {"role": "assistant", "content": [{"type": "text", "text": "hello"}], "tokens": {"context": 1234}}}
