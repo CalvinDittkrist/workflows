@@ -51,7 +51,8 @@ if [ "$count" = 0 ]; then printf 'help: nothing claimed. Run claim.sh <issue> or
 # Frontier: agent-ready issues nobody works on and nothing blocks. Needs the REST view for the dependency summary.
 nwo=$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || true)
 if [ -n "$nwo" ]; then
-  claimed=$(git worktree list --porcelain | sed -nE 's#^branch refs/heads/##p' | while read -r b; do wf_issue_from_branch "$b"; done | jq -R -s -c 'split("\n") | map(select(. != "") | tonumber)')
+  claimed=$(git worktree list --porcelain | sed -nE 's#^branch refs/heads/##p' \
+    | while read -r b; do wf_issue_from_branch "$b"; done | jq -R -s -c 'split("\n") | map(select(. != "") | tonumber)')
   ready=$(gh api "repos/$nwo/issues?labels=ready-for-agent&state=open&per_page=100" 2>/dev/null || echo '[]')
   printf '%s' "$ready" | jq -r --argjson claimed "$claimed" '
     [.[] | select(.pull_request == null)] as $all

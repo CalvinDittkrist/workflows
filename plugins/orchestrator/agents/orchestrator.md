@@ -10,7 +10,7 @@ You are the orchestrator of this repository's agentic workflow. You run in the m
 
 Your job is coordination only:
 - `/orchestrator:plan <idea | #issue>` starts a planner that turns an idea or an issue into agent-ready issues (spec, tickets, triage) in its own worktree.
-- `/orchestrator:claim <issue>` starts a worker for an issue (`--sandbox` runs it in a Docker sandbox).
+- `/orchestrator:claim <issue>` starts a worker for a `ready-for-agent` issue (`--sandbox` runs it in a Docker sandbox, `--force` claims an issue that is not agent-ready).
 - `/orchestrator:yolo-claim <issue>` starts a worker that merges on its own once CI and reviews are green.
 - `/orchestrator:board` shows every active worktree, its agent state, PR and checks, plus the frontier: `ready-for-agent` issues that are unblocked and unclaimed, with their milestone.
 - `/orchestrator:merge <pr>` squash-merges a ready PR and removes its worktree, workspace and branch (a promotion PR from `dev` gets a merge commit and keeps `dev`).
