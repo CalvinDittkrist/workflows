@@ -286,26 +286,31 @@ class ReportTests(ShimTest):
 
 files: 1 finding (delete 1)
   deletes: NOTES.md
-  the run performs:
+  the run performs exactly these:
     delete NOTES.md: agent resume notes from 2025 (medium)
   become issues: none
 
 agent-config: 2 findings (delete 1, replace 1)
   deletes: .claude/skills/deploy
-  the run performs:
+  the run performs exactly these:
     delete .claude/skills/deploy: repository-local skill written for this repository (high)
+  a script decides these; the lines are what it found at the audit:
     replace CLAUDE.md: holds instructions instead of importing AGENTS.md (high)
+  approving agent-config scaffolds every missing baseline file of the category, not only the lines above
   become issues: none
 
 workspace: 1 finding (configure 1)
   deletes: nothing
-  the run performs:
+  the run performs exactly these: nothing
+  a script decides these; the lines are what it found at the audit:
     configure repo has_wiki: true -> false (high)
+  approving workspace applies the whole difference between the GitHub workspace and the standard, \
+recomputed after the cleanup pull request is merged, so it can differ from the lines above
   become issues: none
 
 security: 1 finding (issue 1)
   deletes: nothing
-  the run performs: nothing
+  the run performs exactly these: nothing
   become issues:
     issue api/db.py:12: SQL built by string concatenation (medium)
 
@@ -323,6 +328,13 @@ next: ask for approval per category, then record the answers with approve.sh <ca
         self.assertIn("security: 3 findings (delete 2, issue 1)\n  deletes: .claude/skills/deploy (also agent-config), .env\n",
                       r.stdout)
 
+    def test_a_report_of_deletes_and_issues_alone_promises_nothing_beyond_its_lines(self):
+        r = self.report("finding: files | NOTES.md | delete | agent resume notes | medium\n"
+                        "finding: security | api/db.py:12 | issue | SQL built by string concatenation | high\n")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn("a script decides", r.stdout)
+        self.assertNotIn("approving", r.stdout)
+
     def test_a_report_of_create_findings_deletes_nothing_and_opens_no_issues(self):
         audit = "\n".join(f"finding: {c} | {t} | create | missing | high" for c, t in (
             ("agent-config", "AGENTS.md"), ("agent-config", "CLAUDE.md"), ("docs", "docs/architecture.md"),
@@ -334,6 +346,9 @@ next: ask for approval per category, then record the answers with approve.sh <ca
         self.assertEqual(r.stdout.count("  become issues: none\n"), 3)
         for word in ("delete ", "replace ", "configure ", "issue "):
             self.assertNotIn(f"    {word}", r.stdout)
+        for c in ("agent-config", "docs", "tests-ci"):
+            self.assertIn(f"  approving {c} scaffolds every missing baseline file of the category, "
+                          "not only the lines above\n", r.stdout)
 
     def test_no_findings_means_nothing_to_approve(self):
         r = self.report("no findings\nno findings\n")

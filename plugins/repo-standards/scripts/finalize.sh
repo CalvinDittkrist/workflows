@@ -4,13 +4,35 @@
 # Usage: finalize.sh
 # Refuses while the pull request from chore/standardize is open or was closed without a merge, because the
 # rulesets require the job check that the pull request brings. workspace.sh --apply runs only when the
-# workspace category was approved; its snapshot is posted as a comment on the catalogue issue. The check
+# workspace category was approved; it applies the whole difference, recomputed now, so one line names where
+# that differs from the audit. Its snapshot is posted as a comment on the catalogue issue. The check
 # (check.sh) runs on the head of the default branch on origin. Exit 1 when the check or the workspace fails.
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 # shellcheck source=lib.sh
 . "$here/lib.sh"
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
+# workspace_deviation <workspace.sh output>: one line naming how the difference workspace.sh applied differs
+# from the `configure` findings the report recorded, in both directions. It recomputes the difference when it
+# runs, after the cleanup pull request is merged, so it can be another one than the audit saw (ADR 0016).
+# Nothing is skipped or aborted because of a deviation; the line is there to be read. Silent when they match.
+workspace_deviation() {
+  { printf '%s\n' "$1" | sed -n 's/^diff: //p' | sed 's/: [^:]*$//' | sed 's/^/applied	/'
+    awk -F'\t' '$1 == "workspace" && $3 == "configure" { print "audited\t" $2 }' "$dir/findings"; } \
+  | awk -F'\t' '
+      $2 == "" { next }
+      $1 == "applied" { if (!($2 in A)) { A[$2] = 1; al[++na] = $2 } ; next }
+      { if (!($2 in R)) { R[$2] = 1; rl[++nr] = $2 } }
+      END {
+        for (i = 1; i <= na; i++) if (!(al[i] in R)) extra = extra (extra == "" ? "" : ", ") al[i]
+        for (i = 1; i <= nr; i++) if (!(rl[i] in A)) gone = gone (gone == "" ? "" : ", ") rl[i]
+        if (extra == "" && gone == "") exit
+        line = "workspace: the applied difference is not the audited one"
+        if (extra != "") line = line "; changed without a finding: " extra
+        if (gone != "") line = line "; in the report but no longer needed: " gone
+        print line
+      }'
+}
 for c in gh jq git; do command -v "$c" >/dev/null 2>&1 || die "$c is required but not on PATH"; done
 answers=$(decisions) || exit 1
 dir=$(state_dir)
@@ -51,6 +73,7 @@ case " $(categories "$answers" approve) " in
     snap=$(mktemp "$dir/workspace-snapshot.XXXXXX")
     rc=0; out=$(bash "$here/workspace.sh" --apply --snapshot "$snap" 2>&1) || rc=$?
     printf '%s\n' "$out" | sed 's/^/workspace: /'
+    [ "$rc" != 0 ] || workspace_deviation "$out"
     if printf '%s\n' "$out" | grep -qxF "snapshot: $snap"; then
       { printf 'Snapshot of the GitHub workspace before `workspace.sh --apply` on %s, for undoing a change by hand.\n\nChanged:\n```\n%s\n```\n\n<details><summary>Previous state</summary>\n\n```json\n' \
           "$(date -u +%Y-%m-%d)" "$(printf '%s\n' "$out" | grep '^diff: ' || true)"

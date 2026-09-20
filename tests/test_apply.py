@@ -37,7 +37,7 @@ finding: files | NOTES.md | delete | agent handover notes | medium
 finding: tests-ci | Makefile | create | no check target | high
 finding: tests-ci | src | issue | src/app.py has no tests | medium
 finding: security | src/app.py | issue | prints instead of logging | low
-finding: workspace | merge settings | configure | rebase merges are allowed | high
+finding: workspace | repo allow_rebase_merge | configure | rebase merges are allowed | high
 """
 
 
@@ -325,6 +325,47 @@ class ApplyTests(ApplyCase):
         self.assertEqual(self.get("repo.json"), repo)
         self.assertEqual(self.get("issues.json")[0]["comments"], [])
 
+    def workspace_deviation(self, stdout):
+        lines = [l for l in stdout.splitlines() if l.startswith("workspace: the applied difference")]
+        self.assertLessEqual(len(lines), 1, stdout)
+        return lines[0] if lines else ""
+
+    def test_the_workspace_names_the_settings_it_changed_that_no_finding_recorded(self):
+        self.through_open()
+        self.merge()
+        r = self.step(FINALIZE)
+        line = self.workspace_deviation(r.stdout)
+        self.assertIn("changed without a finding: ", line)
+        self.assertIn("ruleset standard: main", line)  # applied, and the audit recorded no finding for it
+        self.assertNotIn("repo allow_rebase_merge", line)  # audited, so not named
+        self.assertNotIn("no longer needed", line)
+        self.assertTrue(r.stdout.endswith("result: pass\n"), r.stdout)
+
+    def test_the_workspace_names_an_audited_setting_it_no_longer_needed_to_change(self):
+        self.audit(REPLIES + "finding: workspace | repo has_wiki | configure | the wiki is on | high\n",
+                   "agent-config=approve", "tests-ci=approve", "security=approve", "workspace=approve", "files=reject")
+        self.through_open()
+        self.merge()
+        r = self.step(FINALIZE)  # the wiki is off on GitHub, so the difference no longer holds that setting
+        self.assertIn("; in the report but no longer needed: repo has_wiki", self.workspace_deviation(r.stdout))
+        self.assertTrue(r.stdout.endswith("result: pass\n"), r.stdout)
+
+    def test_the_workspace_says_nothing_when_it_applied_what_the_audit_recorded(self):
+        self.through_open()
+        self.merge()
+        self.step(FINALIZE)
+        self.git("pull", "-q", "origin", "main")
+        self.put("repo.json", dict(self.get("repo.json"), allow_rebase_merge=True))  # drifted again after the run
+        self.audit("finding: workspace | repo allow_rebase_merge | configure | rebase merges are allowed | high\n",
+                   "workspace=approve")
+        self.step(BACKUP)
+        self.step(CLEANUP, "prepare")
+        self.step(CLEANUP, "open")
+        r = self.step(FINALIZE)
+        self.assertIn("workspace: applied: 1\n", r.stdout)
+        self.assertEqual(self.workspace_deviation(r.stdout), "")
+        self.assertFalse(self.get("repo.json")["allow_rebase_merge"])
+
     def test_a_second_run_changes_nothing(self):
         self.through_open()
         self.step(ISSUES)
@@ -554,7 +595,7 @@ class ApplyTests(ApplyCase):
 EMPTY_REPLIES = """finding: docs | README.md | create | the repository has no README | high
 finding: agent-config | AGENTS.md | create | no instruction source | high
 finding: tests-ci | Makefile | create | no gate | high
-finding: workspace | merge settings | configure | rebase merges are allowed | high
+finding: workspace | repo allow_rebase_merge | configure | rebase merges are allowed | high
 """
 
 

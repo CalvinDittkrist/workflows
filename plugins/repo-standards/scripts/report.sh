@@ -6,6 +6,9 @@
 # category: files, agent-config, docs, tests-ci, workspace, security; action: delete, replace, create, configure,
 # issue; confidence: high, medium, low. A target other than a GitHub setting (configure) is a path inside the
 # repository: no leading / or ~, no .. segment; only the workspace category configures; no target starts with -. Any malformed finding line fails the whole report and stores nothing.
+# Per category the report keeps the findings the run performs one by one (delete, and issue apart) away from
+# the ones that only describe what a script works out when it runs (configure, create, replace), and says what
+# approving the category triggers for them; approval stays per category (ADR 0016).
 # The findings go to <git dir>/standardize/findings; earlier approvals are cleared, because they answered
 # another report. Nothing in the working tree or on GitHub changes.
 set -euo pipefail
@@ -56,7 +59,11 @@ CATS="$WF_CATEGORIES" awk -F'\t' '
   FNR == NR { if ($3 == "delete") by[$2] = by[$2] (by[$2] == "" ? "" : ", ") $1; next }
   { total++; n[$1]++; act[$1, $3]++; if ($3 == "issue") issues++; else runs++
     r = "    " $3 " " $2 ": " $4 " (" $5 ")"
-    if ($3 == "issue") iss[$1] = iss[$1] r "\n"; else per[$1] = per[$1] r "\n"
+    # The action decides the group, not the category: delete and issue are performed as listed, while
+    # configure, create and replace describe what a script works out for itself when it runs (ADR 0016).
+    if ($3 == "issue") iss[$1] = iss[$1] r "\n"
+    else if ($3 == "delete") per[$1] = per[$1] r "\n"
+    else { dec[$1] = dec[$1] r "\n"; if ($3 == "configure") conf[$1] = 1; else scaf[$1] = 1 }
     if ($3 == "delete") { o = by[$2]; gsub("(^|, )" $1 "(, |$)", ", ", o); gsub(/^, |, $/, "", o)
       del[$1] = del[$1] (del[$1] == "" ? "" : ", ") $2 (o == "" ? "" : " (also " o ")") } }
   END {
@@ -68,7 +75,12 @@ CATS="$WF_CATEGORIES" awk -F'\t' '
       counts = ""; for (j = 1; j <= 5; j++) if ((c, acts[j]) in act) counts = counts (counts == "" ? "" : ", ") acts[j] " " act[c, acts[j]]
       printf "\n%s: %d finding%s (%s)\n", c, n[c], (n[c] == 1 ? "" : "s"), counts
       printf "  deletes: %s\n", (c in del) ? del[c] : "nothing"
-      if (c in per) printf "  the run performs:\n%s", per[c]; else print "  the run performs: nothing"
+      if (c in per) printf "  the run performs exactly these:\n%s", per[c]; else print "  the run performs exactly these: nothing"
+      if (c in dec) {
+        printf "  a script decides these; the lines are what it found at the audit:\n%s", dec[c]
+        if (c in scaf) printf "  approving %s scaffolds every missing baseline file of the category, not only the lines above\n", c
+        if (c in conf) printf "  approving %s applies the whole difference between the GitHub workspace and the standard, recomputed after the cleanup pull request is merged, so it can differ from the lines above\n", c
+      }
       if (c in iss) printf "  become issues:\n%s", iss[c]; else print "  become issues: none"
     }
   }' "$dir/findings" "$dir/findings"
