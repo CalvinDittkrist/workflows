@@ -111,15 +111,21 @@ case "$*" in
     spec_db | jq --argjson n "$(spec_num "$*")" '. as $db | [$db[] | select(.number == $n) | .sub_issues[]?] as $subs
       | [$db[] | select(.number as $m | $subs | index($m) != null)]' ;;
   "api repos/o/r/issues/"[0-9]*"/comments?per_page=100")
-    spec_db | jq --argjson n "$(spec_num "$*")" '[.[] | select(.number == $n) | .comments[]? | {body: .}]' ;;
+    # A comment is a body string from a maintainer, or an object that sets author_association and user.
+    spec_db | jq --argjson n "$(spec_num "$*")" '[.[] | select(.number == $n) | .comments[]?
+      | (if type == "string" then {body: .} else . end)
+      | {body, author_association: (.author_association // "OWNER"), user: {login: (.user.login // "maintainer")}}]' ;;
   "api repos/o/r/issues/"[0-9]*)
+    # Only the issue itself; any other sub-resource is unstubbed and must fail loudly.
+    case "${2#repos/o/r/issues/}" in */*) echo "gh shim: unhandled: $*" >&2; exit 64 ;; esac
+    [ -n "${SHIM_SPEC_FIXTURE:-}" ] || { echo "gh shim: unhandled: $*" >&2; exit 64; }
     spec_db | jq -e --argjson n "$(spec_num "$*")" '.[] | select(.number == $n)' || { echo "gh: Not Found (HTTP 404)" >&2; exit 1; } ;;
   "api graphql"*closedByPullRequestsReferences*)
     [ "${SHIM_CLOSED_BY_FAIL:-0}" = 1 ] && { echo "gh: Field 'closedByPullRequestsReferences' doesn't exist" >&2; exit 1; }
     spec_db | jq --argjson n "$(spec_gql_num "$*")" '{data: {repository: {issue:
       {closedByPullRequestsReferences: {nodes: [.[] | select(.number == $n) | .closed_by[]?
         | {number, url: "https://github.com/o/r/pull/\(.number)", merged,
-           files: {totalCount: (.files | length), nodes: [.files[] | {path: .}]}}]}}}}}' ;;
+           files: {totalCount: (.total_count // (.files | length)), nodes: [.files[] | {path: .}]}}]}}}}}' ;;
   "api --method POST repos/o/r/issues/"*"/sub_issues -F sub_issue_id="*) [ "${SHIM_NO_SUBISSUES:-0}" = 1 ] && { echo "HTTP 404" >&2; exit 1; }; echo '{}' ;;
   "api --method POST repos/o/r/issues/"*"/dependencies/blocked_by -F issue_id="*) [ "${SHIM_NO_DEPS:-0}" = 1 ] && { echo "HTTP 404" >&2; exit 1; }; echo '{}' ;;
   "api repos/o/r/issues?labels=ready-for-agent&state=open&per_page=100") cat "${SHIM_FRONTIER_FIXTURE:-/dev/null}"; [ -n "${SHIM_FRONTIER_FIXTURE:-}" ] || echo '[]' ;;

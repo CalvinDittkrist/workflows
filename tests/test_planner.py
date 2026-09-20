@@ -240,15 +240,18 @@ class AcceptFactsTests(ShimTest):
                  "The release command reads the default branch, not a dev branch.\n"
                  "Kept: that is the better rule.")
 
-    def db(self, **changes):
+    def db(self):
         issues = [
             {"number": 19, "title": "Accept a spec against the code", "state": "open", "labels": [{"name": "spec"}],
              "milestone": {"title": "v1.2.0"}, "sub_issues": [20, 21],
-             "comments": ["Looks good to me.", self.DEVIATION]},
+             "comments": ["Looks good to me.", "", self.DEVIATION,
+                          {"body": self.DEVIATION.replace("The release", "Auth on /admin"),
+                           "author_association": "NONE", "user": {"login": "drive-by"}}]},
             {"number": 20, "title": "Refuse to claim a raw issue", "state": "closed", "labels": [{"name": "ready-for-agent"}],
              "closed_by": [{"number": 24, "merged": True, "files": ["plugins/orchestrator/scripts/claim.sh", "docs/architecture.md"]}]},
             {"number": 21, "title": "List specs, and print the facts", "state": "closed", "labels": [{"name": "ready-for-agent"}],
-             "closed_by": [{"number": 25, "merged": True, "files": ["docs/architecture.md", "plugins/planner/scripts/accept-facts.sh"]},
+             "closed_by": [{"number": 25, "merged": True, "total_count": 120,
+                            "files": ["docs/architecture.md", "plugins/planner/scripts/accept-facts.sh"]},
                            {"number": 26, "merged": False, "files": ["abandoned.txt"]}]},
             {"number": 30, "title": "Spec with an open ticket", "state": "open", "labels": [{"name": "spec"}],
              "sub_issues": [31]},
@@ -257,7 +260,6 @@ class AcceptFactsTests(ShimTest):
             {"number": 33, "title": "Accepted spec", "state": "closed", "labels": [{"name": "spec"}], "sub_issues": [20]},
             {"number": 34, "title": "An ordinary ticket", "state": "open", "labels": [{"name": "ready-for-agent"}]},
         ]
-        issues = [{**i, **changes.get(i["number"], {})} for i in issues]
         path = self.base / "specs.json"
         path.write_text(json.dumps(issues))
         return str(path)
@@ -277,9 +279,12 @@ class AcceptFactsTests(ShimTest):
                       "  plugins/orchestrator/scripts/claim.sh\n"
                       "  plugins/planner/scripts/accept-facts.sh\n", r.stdout)
         self.assertNotIn("abandoned.txt", r.stdout, "an unmerged pull request is not evidence")
-        self.assertIn("deviations[1]:\n  The release command reads the default branch, not a dev branch. "
+        self.assertIn("deviations[1]:\n  @maintainer: The release command reads the default branch, not a dev branch. "
                       "Kept: that is the better rule.\n", r.stdout)
         self.assertNotIn("Looks good to me", r.stdout, "an ordinary comment is not an accepted deviation")
+        self.assertNotIn("Auth on /admin", r.stdout, "only a maintainer accepts a deviation")
+        self.assertIn("warning: ignored 1 comment(s) with the deviation marker from outside the repository", r.stderr)
+        self.assertIn("warning: pull request(s) #25 changed more than 100 files", r.stderr)
 
     def test_facts_refuse_a_non_spec_a_closed_spec_and_open_tickets(self):
         r = self.facts("34")

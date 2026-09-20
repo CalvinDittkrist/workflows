@@ -38,14 +38,15 @@ while IFS= read -r line; do
     else
       prn="-"; checks="-"; review="-"
     fi
-    rows="$rows  $issue,$branch,${agent:-none},$prn,$checks,$review,${ws:--}\n"
+    rows="$rows  $issue,$branch,${agent:-none},$prn,$checks,$review,${ws:--}
+"
     count=$((count+1));;
   esac
 done < <(git worktree list --porcelain)
 
 wf_kv repo "$(basename "$root") ($(git rev-parse --abbrev-ref HEAD))"
 printf 'worktrees[%s]{issue,branch,agent,pr,checks,review,workspace}:\n' "$count"
-printf "%b" "$rows"
+printf '%s' "$rows"
 if [ "$count" = 0 ]; then printf 'help: nothing claimed. Run claim.sh <issue> or plan.sh <idea>.\n'; fi
 
 # Frontier: agent-ready issues nobody works on and nothing blocks. Needs the REST view for the dependency summary.
@@ -57,7 +58,7 @@ if [ -n "$nwo" ]; then
     [.[] | select(.pull_request == null)] as $all
     | [$all[] | select((.assignees|length) == 0 and ((.issue_dependencies_summary.blocked_by // 0) == 0) and (.number as $n | $claimed | index($n) | not))] as $free
     | "frontier[\($free|length)]{issue,milestone,title}:",
-      ($free[] | "  \(.number),\(.milestone.title // "-"),\(.title)"),
+      ($free[] | "  \(.number),\(.milestone.title // "-"),\(.title | gsub("[\\n\\r\\t]"; " "))"),
       (if ($all|length) > ($free|length) then "waiting: \(($all|length) - ($free|length)) ready-for-agent issue(s) blocked, assigned or claimed" else empty end)'
 
   # Ready for acceptance: open specs with native sub-issues, all of them closed. Derived per run, no state.
@@ -68,10 +69,11 @@ if [ -n "$nwo" ]; then
     subs=$(gh api "repos/$nwo/issues/$spec/sub_issues?per_page=100" 2>/dev/null || echo '[]')
     tally=$(printf '%s' "$subs" | jq -r 'if type == "array" then "\(length) \([.[] | select(.state == "open")] | length)" else "0 0" end' 2>/dev/null || echo '0 0')
     [ "${tally% *}" -gt 0 ] && [ "${tally#* }" -eq 0 ] || continue
-    acc_rows="$acc_rows  $(printf '%s' "$specs" | jq -r --argjson n "$spec" '.[] | select(.number == $n) | "\(.number),\(.milestone.title // "-"),\(.title)"')\n"
+    acc_rows="$acc_rows$(printf '%s' "$specs" | jq -r --argjson n "$spec" '.[] | select(.number == $n) | "  \(.number),\(.milestone.title // "-"),\(.title | gsub("[\\n\\r\\t]"; " "))"')
+"
     acc_count=$((acc_count+1)); [ -n "$acc_first" ] || acc_first="$spec"
   done < <(printf '%s' "$specs" | jq -r '.[] | select(.pull_request == null) | .number')
   printf 'acceptance[%s]{issue,milestone,title}:\n' "$acc_count"
-  printf "%b" "$acc_rows"
+  printf '%s' "$acc_rows"
   if [ "$acc_count" != 0 ]; then printf 'help: every ticket is closed; accept the spec in a planning session, e.g. /orchestrator:plan #%s.\n' "$acc_first"; fi
 fi

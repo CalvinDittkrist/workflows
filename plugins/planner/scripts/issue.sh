@@ -22,7 +22,6 @@ open_milestone() {
   [ -n "$m" ] || wf_die "milestone $1 does not exist; create it with issue.sh milestone $1 --description <goal>"
   [ "$(printf '%s' "$m" | jq -r .state)" = open ] || wf_die "milestone $1 is closed (released); pick a new version"
 }
-num() { local n="${1#\#}"; printf '%s' "$n" | grep -Eq '^[0-9]+$' || wf_die "issue must be a number, got '$1'"; printf '%s' "$n"; }
 
 case "$cmd" in
   create)
@@ -32,7 +31,7 @@ case "$cmd" in
         --title) shift; title="${1:-}" ;;
         --body-file) shift; body="${1:-}" ;;
         --label) shift; labels+=("$1") ;;
-        --parent) shift; parent=$(num "${1:-}") ;;
+        --parent) shift; parent=$(wf_issue_num "${1:-}") ;;
         --milestone) shift; milestone=$(version "${1:-}") ;;
         *) wf_die "unknown argument $1" ;;
       esac; shift
@@ -54,12 +53,12 @@ case "$cmd" in
       fi
     fi ;;
   block)
-    n=$(num "${1:-}"); shift; by=""
+    n=$(wf_issue_num "${1:-}"); shift; by=""
     while [ $# -gt 0 ]; do case "$1" in --by) shift; by="${1:-}" ;; *) wf_die "unknown argument $1" ;; esac; shift; done
     [ -n "$by" ] || wf_die "block needs --by <m>[,<m>...]"
     nwo=$(wf_repo_nwo)
     for m in $(printf '%s' "$by" | tr ',' ' '); do
-      m=$(num "$m"); id=$(wf_issue_db_id "$m")
+      m=$(wf_issue_num "$m"); id=$(wf_issue_db_id "$m")
       if [ -n "$id" ] && gh api --method POST "repos/$nwo/issues/$n/dependencies/blocked_by" -F issue_id="$id" >/dev/null 2>&1; then
         wf_kv blocked "#$n by #$m (native)"
       else
@@ -82,26 +81,26 @@ case "$cmd" in
       wf_kv milestone "$v (created)"
     fi ;;
   attach)
-    n=$(num "${1:-}"); shift; milestone=""
+    n=$(wf_issue_num "${1:-}"); shift; milestone=""
     while [ $# -gt 0 ]; do case "$1" in --milestone) shift; milestone=$(version "${1:-}") ;; *) wf_die "unknown argument $1" ;; esac; shift; done
     [ -n "$milestone" ] || wf_die "attach needs --milestone <vX.Y.Z>"
     open_milestone "$milestone"
     gh issue edit "$n" --milestone "$milestone" >/dev/null || wf_die "gh issue edit failed"
     wf_kv milestone "#$n attached to $milestone" ;;
   label)
-    n=$(num "${1:-}"); shift; args=()
+    n=$(wf_issue_num "${1:-}"); shift; args=()
     while [ $# -gt 0 ]; do case "$1" in --add) shift; args+=(--add-label "$1") ;; --remove) shift; args+=(--remove-label "$1") ;; *) wf_die "unknown argument $1" ;; esac; shift; done
     [ "${#args[@]}" -gt 0 ] || wf_die "label needs --add or --remove"
     gh issue edit "$n" "${args[@]}" >/dev/null || wf_die "gh issue edit failed (missing label? run labels.sh)"
     wf_kv labels "#$n updated" ;;
   comment)
-    n=$(num "${1:-}"); shift; body=""
+    n=$(wf_issue_num "${1:-}"); shift; body=""
     while [ $# -gt 0 ]; do case "$1" in --body-file) shift; body="${1:-}" ;; *) wf_die "unknown argument $1" ;; esac; shift; done
     [ -f "$body" ] || wf_die "comment needs --body-file <existing file>"
     gh issue comment "$n" --body-file "$body" >/dev/null || wf_die "gh issue comment failed"
     wf_kv comment "#$n posted" ;;
   close)
-    n=$(num "${1:-}"); shift; body="" reason=""
+    n=$(wf_issue_num "${1:-}"); shift; body="" reason=""
     while [ $# -gt 0 ]; do case "$1" in --comment-file) shift; body="${1:-}" ;; --reason) shift; reason="${1:-}" ;; *) wf_die "unknown argument $1" ;; esac; shift; done
     args=(); [ -n "$body" ] && args+=(--comment "$(cat "$body")"); [ -n "$reason" ] && args+=(--reason "$reason")
     gh issue close "$n" "${args[@]+"${args[@]}"}" >/dev/null || wf_die "gh issue close failed"
