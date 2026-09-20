@@ -12,7 +12,8 @@ first_of() { local dir=$1 n; shift; for n in "$@"; do has "$dir" "$n" && { print
 WF_CATEGORIES="files agent-config docs tests-ci workspace security"
 # The categories scaffold.sh has templates for. Approving one of them creates every baseline file of it that
 # is missing, whether a finding lists it or not, so the report says so (ADR 0016). Keep it in step with the
-# `put` calls in scaffold.sh; a test scaffolds with all of them skipped and expects nothing to be created.
+# `put` calls in scaffold.sh; a test scaffolds each category on its own, with every other one skipped, and
+# expects files from exactly these.
 # shellcheck disable=SC2034
 WF_SCAFFOLD_CATEGORIES="agent-config docs tests-ci workspace"
 state_dir() {
