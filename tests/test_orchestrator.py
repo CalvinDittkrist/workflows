@@ -108,10 +108,11 @@ class PlanTests(ShimTest):
 
     def test_broken_claude_args_are_refused_before_anything_is_created(self):
         for args in ("--plugin-dir", "--plugin-dir --model sonnet", "--plugin-dir /nonexistent/dir",
-                     "--plugin-dir=", "--plugin-dir=/nonexistent/dir"):
+                     "--plugin-dir=", "--plugin-dir=--model", "--plugin-dir=/nonexistent/dir"):
             r = self.run_script(ORCH / "plan.sh", "Offline mode", WF_CLAUDE_ARGS=args)
             self.assertNotEqual(r.returncode, 0, args)
             self.assertIn("WF_CLAUDE_ARGS", r.stderr)
+            self.assertIn("--plugin-dir", r.stderr, args)
             self.assertFalse([c for c in self.calls() if "worktree create" in c], args)
         r = self.run_script(ORCH / "claim.sh", "12", WF_CLAUDE_ARGS="--plugin-dir")
         self.assertNotEqual(r.returncode, 0)

@@ -80,7 +80,7 @@ wf_check_claude_args() {
     case "$w" in
       --plugin-dir=*)
         dir="${w#--plugin-dir=}"
-        [ -n "$dir" ] || wf_die "WF_CLAUDE_ARGS/$var: --plugin-dir needs a path (got '$w'). Use absolute paths, e.g. WF_PLANNER_CLAUDE_ARGS=\"--plugin-dir /repo/plugins/planner\"" ;;
+        if [ -z "$dir" ] || [ "${dir#-}" != "$dir" ]; then wf_die "WF_CLAUDE_ARGS/$var: --plugin-dir needs a path (got '$w'). Use absolute paths, e.g. WF_PLANNER_CLAUDE_ARGS=\"--plugin-dir /repo/plugins/planner\""; fi ;;
       # claude keeps only the last --settings and does not merge, and these flags come after the ones
       # the script builds, so one here replaces the whole object. Warn: it is a legitimate override.
       --settings|--settings=*)
