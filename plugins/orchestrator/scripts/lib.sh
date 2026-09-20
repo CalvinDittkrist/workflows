@@ -31,6 +31,9 @@ wf_slug() {
 # Branch convention: <type>/<issue>-<slug>. The issue number is the only contract the worker hook relies on.
 wf_issue_from_branch() { printf '%s\n' "$1" | sed -nE 's#^[a-z]+/([0-9]+)-.*#\1#p'; }
 
+# True when the comma separated label list $1 contains the label $2.
+wf_has_label() { case ",$1," in *",$2,"*) return 0 ;; esac; return 1; }
+
 # Map issue labels (comma separated) to a branch type.
 wf_branch_type() {
   case ",$1," in

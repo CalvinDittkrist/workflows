@@ -54,6 +54,50 @@ class ClaimTests(ShimTest):
             self.assertIn(text, r.stderr)
         self.assertEqual(self.git("worktree", "list").count("\n"), 1)
 
+    def test_claim_refuses_an_issue_that_is_not_ready_for_an_agent(self):
+        for issue, labels in (("14", "needs-triage,enhancement"), ("17", "none")):
+            r = self.run_script(ORCH / "claim.sh", issue)
+            self.assertNotEqual(r.returncode, 0, r.stdout)
+            self.assertIn(f"(labels: {labels})", r.stderr)
+            self.assertIn(f"/orchestrator:plan #{issue}", r.stderr)
+            self.assertIn("--force", r.stderr)
+            # Nothing was created: no worktree, no branch, no Herdr call, and no write to GitHub.
+            self.assertEqual(self.git("worktree", "list").count("\n"), 1)
+            self.assertEqual(self.git("branch", "--list", f"*/{issue}-*"), "")
+            for call in self.calls():
+                self.assertRegex(call, r"^gh (repo|issue) view ", "the refusal must only read, never create or assign")
+            self.reset_calls()
+
+    def test_claim_of_a_spec_points_at_its_tickets(self):
+        r = self.run_script(ORCH / "claim.sh", "15")
+        self.assertNotEqual(r.returncode, 0, r.stdout)
+        self.assertIn("(labels: spec)", r.stderr)
+        self.assertIn("Claim its tickets instead", r.stderr)
+        self.assertIn("/orchestrator:plan #15", r.stderr)
+        self.assertEqual(self.git("worktree", "list").count("\n"), 1)
+
+    def test_a_spec_labelled_ready_for_agent_is_claimed(self):
+        r = self.run_script(ORCH / "claim.sh", "16")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("branch: feat/16-small-spec", r.stdout)
+        self.assertEqual(len([c for c in self.calls() if c.startswith("herdr agent start")]), 1)
+
+    def test_force_claims_an_issue_that_is_not_ready_and_says_so(self):
+        r = self.run_script(ORCH / "claim.sh", "14", "--force", "--yolo")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("--force", r.stderr)
+        self.assertIn("(labels: needs-triage,enhancement)", r.stderr)
+        self.assertIn("branch: feat/14-dark-mode", r.stdout)
+        start = [c for c in self.calls() if c.startswith("herdr agent start")][0]
+        self.assertIn('"WF_MODE":"yolo"', start)
+
+    def test_a_claimed_issue_stays_already_claimed_without_the_label(self):
+        self.run_script(ORCH / "claim.sh", "14", "--force")
+        self.reset_calls()
+        r = self.run_script(ORCH / "claim.sh", "14")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("status: already-claimed", r.stdout)
+
     def test_claim_refuses_outside_herdr(self):
         r = self.run_script(ORCH / "claim.sh", "12", HERDR_ENV="")
         self.assertNotEqual(r.returncode, 0)

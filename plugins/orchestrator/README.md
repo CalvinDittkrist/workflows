@@ -5,13 +5,15 @@ Coordinator session for one repository. Start it in the main checkout inside a H
 | Skill | Script | Effect |
 | --- | --- | --- |
 | `/orchestrator:plan <idea words \| #issue> [--base b]` | `plan.sh` | branch `plan/<slug>`, topic or issue in the branch description, worktree, Herdr workspace, start `claude --agent planner … /planner:plan` |
-| `/orchestrator:claim <issue> [--sandbox] [--base b]` | `claim.sh` | validate issue, branch `<type>/<n>-<slug>`, worktree in `.claude/worktrees/`, Herdr workspace, start `claude --agent worker … /worker:work` |
-| `/orchestrator:yolo-claim <issue>` | `claim.sh --yolo` | same, worker merges itself when green |
+| `/orchestrator:claim <issue> [--sandbox] [--force] [--base b]` | `claim.sh` | validate issue (open and `ready-for-agent`, or `--force`), branch `<type>/<n>-<slug>`, worktree in `.claude/worktrees/`, Herdr workspace, start `claude --agent worker … /worker:work` |
+| `/orchestrator:yolo-claim <issue> [--force]` | `claim.sh --yolo` | same, worker merges itself when green |
 | `/orchestrator:board` | `board.sh` | table: issue (or `plan`), branch, agent state, PR, checks, review, workspace; then the frontier with each issue's milestone: open `ready-for-agent` issues with no open blocker, no assignee and no worktree |
 | `/orchestrator:merge <pr>` | `merge.sh` | refuse unless CLEAN, checks pass, no unresolved threads, no changes requested; remove workspace + worktree, squash-merge, delete branches, ff main; a promotion PR from `dev` gets a merge commit and keeps `dev` |
 | `/orchestrator:release <vX.Y.Z>` | `release.sh` | refuse while the milestone is missing or has open issues, or the tag exists; when the default branch is `dev` (`dev` + `main`) open or find the promotion PR and wait for its merge; tag (merge commit or head of `main`), GitHub release with generated notes, close the milestone |
 | `/orchestrator:abandon <issue\|branch> [--force]` | `abandon.sh` | drop worktree; refuses unpushed or dirty work without `--force` |
 | `/orchestrator:herdr` | | loads Herdr's own skill (from `herdr --skill`) for manual pane control |
+
+An issue without the `ready-for-agent` label is refused before anything is created; the error names its labels and the fix (triage it in a planning session, or for a `spec` claim its tickets). `--force` claims it anyway ([ADR 0014](../../docs/adr/0014-claims-require-ready-for-agent.md)).
 
 Hook: `SessionStart` (startup only) prints the gh-axi dashboard (repo, open issues, open PRs) in GitHub repositories, via `gh-axi` or `npx -y gh-axi`. Both plugins ship a `gh-axi` discovery skill so agents prefer it over raw `gh`.
 

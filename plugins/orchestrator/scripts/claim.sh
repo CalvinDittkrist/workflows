@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
 # Claim a GitHub issue: create a worktree + Herdr workspace and start a worker session in it.
-# Usage: claim.sh <issue> [--yolo] [--sandbox] [--base <branch>]
+# Usage: claim.sh <issue> [--yolo] [--sandbox] [--force] [--base <branch>]
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
-issue="" mode="manual" sandbox=0 base=""
+issue="" mode="manual" sandbox=0 force=0 base=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --yolo) mode="yolo" ;;
     --sandbox) sandbox=1 ;;
+    --force) force=1 ;;
     --base) shift; base="${1:-}" ;;
     -h|--help) sed -n '2,3p' "$0"; exit 0 ;;
     -*) wf_die "unknown flag $1" ;;
@@ -16,7 +17,7 @@ while [ $# -gt 0 ]; do
   esac
   shift
 done
-[ -n "$issue" ] || wf_die "usage: claim.sh <issue> [--yolo] [--sandbox] [--base <branch>]"
+[ -n "$issue" ] || wf_die "usage: claim.sh <issue> [--yolo] [--sandbox] [--force] [--base <branch>]"
 printf '%s' "$issue" | grep -Eq '^[0-9]+$' || wf_die "issue must be a number, got '$issue'"
 [ "${HERDR_ENV:-}" = 1 ] || wf_die "claim needs a Herdr-managed pane (HERDR_ENV=1). Start the orchestrator inside Herdr."
 wf_need gh; wf_need jq; wf_need herdr; wf_need git
@@ -41,6 +42,19 @@ if [ -n "$existing" ]; then
   wf_kv status "already-claimed"
   wf_kv next "Talk to the worker in workspace ${ws:-?} or run abandon.sh $issue to drop it."
   exit 0
+fi
+
+# Only an agent-ready issue reaches a worker. Without the brief a planner writes, a worker decides the scope
+# itself and answers a whole spec with one bulk pull request. Checked after the worktree lookup above, so an
+# issue claimed earlier stays reportable whatever its labels are now, and before anything is created.
+if ! wf_has_label "$labels" ready-for-agent; then
+  if [ "$force" = 1 ]; then
+    wf_warn "issue #$issue is not ready-for-agent (labels: ${labels:-none}); claiming it anyway because --force was given"
+  elif wf_has_label "$labels" spec; then
+    wf_die "issue #$issue is a spec (labels: $labels), not ready for an agent. Claim its tickets instead, or open a planning session on the spec when all of them are closed: /orchestrator:plan #$issue. --force claims it anyway."
+  else
+    wf_die "issue #$issue is not ready for an agent (labels: ${labels:-none}). Open a planning session on it to triage it: /orchestrator:plan #$issue. --force claims it anyway."
+  fi
 fi
 
 git fetch -q origin "$base" 2>/dev/null || wf_warn "could not fetch origin/$base; branching from local $base"
