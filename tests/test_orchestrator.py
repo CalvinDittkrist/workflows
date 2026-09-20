@@ -372,7 +372,7 @@ class ReleaseTests(ShimTest):
         ])
         self.assertIn("status: released", r.stdout)
 
-    def test_refuses_a_milestone_whose_only_open_issue_is_the_spec(self):
+    def test_an_open_issue_such_as_the_spec_holds_the_release_back(self):
         # release.sh counts open issues and knows nothing about specs, which is why the planner puts the spec on
         # the milestone: with every ticket closed, that one open issue is what holds the release back.
         r = self.run_script(ORCH / "release.sh", "v1.2.0", SHIM_MILESTONES_FIXTURE=self.milestones(open_issues=1, closed_issues=4))
