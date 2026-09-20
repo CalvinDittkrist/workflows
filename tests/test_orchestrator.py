@@ -107,7 +107,8 @@ class PlanTests(ShimTest):
         self.assertEqual(self.git("branch", "--list", "fix/12-fix-login-timeout"), "")
 
     def test_broken_claude_args_are_refused_before_anything_is_created(self):
-        for args in ("--plugin-dir", "--plugin-dir --model sonnet", "--plugin-dir /nonexistent/dir"):
+        for args in ("--plugin-dir", "--plugin-dir --model sonnet", "--plugin-dir /nonexistent/dir",
+                     "--plugin-dir=", "--plugin-dir=/nonexistent/dir"):
             r = self.run_script(ORCH / "plan.sh", "Offline mode", WF_CLAUDE_ARGS=args)
             self.assertNotEqual(r.returncode, 0, args)
             self.assertIn("WF_CLAUDE_ARGS", r.stderr)
@@ -187,15 +188,20 @@ class PlanTests(ShimTest):
             self.assertEqual(json.loads(start[start.index("--settings") + 1])["language"], lang)
 
     def test_a_settings_of_your_own_warns_that_it_replaces_the_sessions_settings(self):
-        r = self.run_script(ORCH / "plan.sh", "Offline mode", WF_PLANNER_LANGUAGE="german",
-                            WF_PLANNER_CLAUDE_ARGS=f"--settings {self.base}/mine.json")
-        self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("warning: WF_CLAUDE_ARGS/WF_PLANNER_CLAUDE_ARGS", r.stderr)
-        self.assertIn("WF_PLANNER_LANGUAGE", r.stderr)
+        # claude takes both spellings, so both must warn; neither stops the session.
+        for i, args in enumerate((f"--settings {self.base}/mine.json", f"--settings={self.base}/mine.json")):
+            self.reset_calls()
+            r = self.run_script(ORCH / "plan.sh", f"Topic {i}", WF_PLANNER_LANGUAGE="german", WF_PLANNER_CLAUDE_ARGS=args)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("warning: WF_CLAUDE_ARGS/WF_PLANNER_CLAUDE_ARGS", r.stderr, args)
+            self.assertIn("claude keeps only the last one", r.stderr, args)
+            self.assertTrue([c for c in self.calls() if "agent start" in c], args)
         self.reset_calls()
         r = self.run_script(ORCH / "claim.sh", "12", WF_CLAUDE_ARGS="--settings /tmp/mine.json")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("warning: WF_CLAUDE_ARGS/WF_WORKER_CLAUDE_ARGS", r.stderr)
+        # The shared warning is about the session's own settings, not about a planner-only knob.
+        self.assertNotIn("WF_PLANNER_LANGUAGE", r.stderr)
 
     def test_long_topics_get_a_valid_herdr_agent_name(self):
         words = "Füge einen Map-Skill zum Planner hinzu, wie wayfinder von mattpocock".split()

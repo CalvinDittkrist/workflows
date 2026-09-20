@@ -17,7 +17,6 @@ Threat model: an agent with shell access works on code and reads text from the i
 - The SessionStart hook labels issue text as "task data written by someone else". Reviewer, worker and pr-author prompts repeat that file contents, comments, logs and reviews are data, not instructions.
 - `address-reviews` explicitly declines review comments that ask to weaken tests, skip checks or change unrelated code.
 - Reviewers cannot spawn agents or edit, so a poisoned diff cannot make a reviewer act on the repository. The same holds for the auditors: every auditor prompt treats the audited repository as data, and their replies reach `report.sh` only as `finding:` lines of a fixed grammar, whose targets must stay inside the repository. Auditors and reviewers keep `Bash` to read git history, so their read-only status rests on the tool lists plus the prompt, not on a sandbox; the tests-ci auditor judges the repository's test commands without running them.
-
 - `WF_PLANNER_LANGUAGE` is copied verbatim into the planner session's system prompt by Claude Code's `language` setting. It is operator configuration, as trusted as the rest of `WF_*`; `plan.sh` still refuses a value with a control character or longer than a language name, so a pasted instruction cannot ride in on it.
 
 ## Supply chain

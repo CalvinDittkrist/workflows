@@ -64,23 +64,29 @@ wf_run() {
   "$@"
 }
 
-# Refuse a WF_CLAUDE_ARGS that would make every started session exit at once.
-# wf_check_claude_args <VAR>: WF_CLAUDE_ARGS and the per-session VAR (WF_PLANNER_CLAUDE_ARGS or
-# WF_WORKER_CLAUDE_ARGS) are word-split into claude flags; a truncated --plugin-dir would kill the session at start.
+# Check WF_CLAUDE_ARGS and the per-session VAR (WF_PLANNER_CLAUDE_ARGS or WF_WORKER_CLAUDE_ARGS)
+# before a session is started. They are word-split into claude flags, and claude takes both the
+# "--flag value" and the "--flag=value" spelling, so both are handled here.
 wf_check_claude_args() {
-  local var="$1" prev="" w
+  local var="$1" prev="" w dir
   # shellcheck disable=SC2086
   for w in ${WF_CLAUDE_ARGS:-} ${!var:-} ""; do
+    # A truncated --plugin-dir would kill the session at start, so it is refused, not warned about.
+    dir=""
     if [ "$prev" = "--plugin-dir" ]; then
       if [ -z "$w" ] || [ "${w#-}" != "$w" ]; then wf_die "WF_CLAUDE_ARGS/$var: --plugin-dir needs a path (got '$w'). Use absolute paths, e.g. WF_PLANNER_CLAUDE_ARGS=\"--plugin-dir /repo/plugins/planner\""; fi
-      [ -d "$w" ] || wf_die "WF_CLAUDE_ARGS/$var: --plugin-dir $w is not a directory"
+      dir="$w"
     fi
-    # claude keeps only the last --settings and does not merge, and these flags come after the ones
-    # the script builds. A --settings here therefore drops the session's plugin isolation, its WF_*
-    # environment and WF_PLANNER_LANGUAGE. Warn instead of refusing: it is a legitimate override.
-    if [ "$w" = "--settings" ]; then
-      wf_warn "WF_CLAUDE_ARGS/$var: your --settings replaces the settings this script builds (plugin isolation, WF_* environment, WF_PLANNER_LANGUAGE), because claude keeps only the last one. Put those keys into your own JSON."
-    fi
+    case "$w" in
+      --plugin-dir=*)
+        dir="${w#--plugin-dir=}"
+        [ -n "$dir" ] || wf_die "WF_CLAUDE_ARGS/$var: --plugin-dir needs a path (got '$w'). Use absolute paths, e.g. WF_PLANNER_CLAUDE_ARGS=\"--plugin-dir /repo/plugins/planner\"" ;;
+      # claude keeps only the last --settings and does not merge, and these flags come after the ones
+      # the script builds, so one here replaces the whole object. Warn: it is a legitimate override.
+      --settings|--settings=*)
+        wf_warn "WF_CLAUDE_ARGS/$var: your --settings replaces the settings this script builds for the session (plugin isolation, its WF_* environment and every other key it sets), because claude keeps only the last one. Put those keys into your own JSON." ;;
+    esac
+    [ -z "$dir" ] || [ -d "$dir" ] || wf_die "WF_CLAUDE_ARGS/$var: --plugin-dir $dir is not a directory"
     prev="$w"
   done
 }
