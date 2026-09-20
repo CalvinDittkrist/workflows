@@ -57,7 +57,8 @@ class ClaimTests(ShimTest):
         self.assertEqual(self.git("worktree", "list").count("\n"), 1)
 
     def test_claim_refuses_an_issue_that_is_not_ready_for_an_agent(self):
-        for issue, labels in (("14", "needs-triage,enhancement"), ("17", "none")):
+        # 18 carries one label whose name contains a comma: a joined label list would match it as a substring.
+        for issue, labels in (("14", "needs-triage,enhancement"), ("17", "none"), ("18", "needs,ready-for-agent")):
             r = self.run_script(ORCH / "claim.sh", issue)
             self.assertNotEqual(r.returncode, 0, r.stdout)
             self.assertIn(f"(labels: {labels})", r.stderr)
@@ -472,6 +473,25 @@ class BoardAndAbandonTests(ShimTest):
         self.assertNotIn("41,", r.stdout); self.assertNotIn("43,", r.stdout); self.assertNotIn("12,Fix", r.stdout)
         self.assertIn("waiting: 3 ready-for-agent issue(s)", r.stdout)
 
+    def test_a_plan_worktree_whose_slug_starts_with_a_number_is_not_a_claim(self):
+        self.run_script(ORCH / "plan.sh", "12", "factor", "app")
+        self.assertIn("plan/12-factor-app", self.git("branch", "--list"))
+        # Neither the claim nor the abandon of issue #12 may take that planner worktree for its own.
+        r = self.run_script(ORCH / "abandon.sh", "12")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("no worktree branch for issue #12", r.stderr)
+        self.assertTrue((self.repo / ".claude/worktrees/plan-12-factor-app").exists())
+        fixture = self.base / "frontier.json"
+        fixture.write_text(json.dumps([
+            {"number": 12, "title": "Fix login timeout", "assignees": [], "issue_dependencies_summary": {"blocked_by": 0}},
+        ]))
+        r = self.run_script(ORCH / "board.sh", SHIM_FRONTIER_FIXTURE=str(fixture))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("  12,-,Fix login timeout\n", r.stdout, "the plan worktree must not count as a claim")
+        r = self.run_script(ORCH / "claim.sh", "12")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("branch: fix/12-fix-login-timeout", r.stdout)
+
     def test_abandon_names_an_issue_without_a_worktree(self):
         r = self.run_script(ORCH / "abandon.sh", "12")
         self.assertNotEqual(r.returncode, 0)
@@ -488,7 +508,6 @@ class BoardAndAbandonTests(ShimTest):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertFalse(path.exists())
         self.assertNotIn("fix/12", self.git("branch", "--list"))
-
 
 
 class GhAxiContextHookTests(ShimTest):

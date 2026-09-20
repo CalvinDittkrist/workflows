@@ -101,6 +101,8 @@ case "$*" in
     echo '{"number":15,"title":"Offline mode","state":"OPEN","labels":[{"name":"spec"}],"url":"https://github.com/o/r/issues/15"}' ;;
   "issue view 16 --json number,title,state,labels,url")
     echo '{"number":16,"title":"Small spec","state":"OPEN","labels":[{"name":"spec"},{"name":"ready-for-agent"}],"url":"https://github.com/o/r/issues/16"}' ;;
+  "issue view 18 --json number,title,state,labels,url")
+    echo '{"number":18,"title":"Comma label","state":"OPEN","labels":[{"name":"needs,ready-for-agent"}],"url":"https://github.com/o/r/issues/18"}' ;;
   "issue view 17 --json number,title,state,labels,url")
     echo '{"number":17,"title":"Unlabelled report","state":"OPEN","labels":[],"url":"https://github.com/o/r/issues/17"}' ;;
   "label list --json name --limit 100") echo '[{"name":"bug"},{"name":"enhancement"},{"name":"ready-for-agent"}]' ;;
