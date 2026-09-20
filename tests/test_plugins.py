@@ -110,6 +110,8 @@ class LabelVocabularyTests(ShimTest):
     STANDARDS_FILE = str((STANDARDS / "lib.sh").relative_to(ROOT))
     PLANNER_FILE = str((PLANNER / "labels.sh").relative_to(ROOT))
     PRIVATE = "skill-candidate"
+    # The whole point of the test is the failure message, so it prints the differing label, not an elision.
+    maxDiff = None
 
     def standards_vocabulary(self):
         """WF_LABELS as workspace.sh feeds it into its label loop. Sourced outside a git repository, because
@@ -118,7 +120,14 @@ class LabelVocabularyTests(ShimTest):
         r = subprocess.run(["bash", "-c", r'. "$1/lib.sh"; printf "%s\n" "$WF_LABELS"', "_", str(STANDARDS)],
                            cwd=self.base, text=True, capture_output=True)
         self.assertEqual(r.returncode, 0, r.stderr)
-        return [tuple(line.split("|", 2)) for line in r.stdout.splitlines() if line]
+        vocabulary = []
+        for line in r.stdout.splitlines():
+            if not line:
+                continue
+            entry = tuple(line.split("|", 2))
+            self.assertEqual(len(entry), 3, f"{self.STANDARDS_FILE} has a label that is not name|color|description: {line!r}")
+            vocabulary.append(entry)
+        return vocabulary
 
     def planner_vocabulary(self):
         """The labels labels.sh creates in a repository that has none, with the colour and description it gives them."""
