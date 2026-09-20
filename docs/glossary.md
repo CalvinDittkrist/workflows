@@ -16,5 +16,5 @@
 | acceptance | The check of a whole spec against the code on the base branch after its tickets are closed; it ends with gap tickets or with the spec closed ([ADR 0014](adr/0014-a-spec-with-tickets-is-closed-by-an-acceptance.md)). |
 | spec checker | The read-only subagent that judges each checkable statement of a spec during an acceptance. |
 | item | One checkable statement of a spec with its verdict, in the fixed format `item: <section> \| <statement> \| <verdict> \| <evidence> \| <confidence>`. |
-| accepted deviation | A difference between spec and code the maintainer keeps, recorded as a comment on the spec, by someone with write access, that opens with `> Accepted deviation (spec acceptance).`; an acceptance does not report it again. |
+| accepted deviation | A difference between spec and code the maintainer keeps, recorded as a comment on the spec, by someone with write access, that opens with `> Accepted deviation (spec acceptance).`; where write access cannot be read the author association decides, with a warning; an acceptance does not report it again. |
 | gap ticket | A `ready-for-agent` sub-issue an acceptance creates for an item that is not met. |

@@ -111,12 +111,14 @@ case "$*" in
     login=$(printf '%s' "$2" | sed -E 's#.*/collaborators/([^/]+)/permission#\1#')
     case " ${SHIM_WRITERS:-maintainer} " in *" $login "*) echo '{"permission":"admin"}' ;; *) echo '{"permission":"read"}' ;; esac ;;
   "api --paginate repos/o/r/issues?labels=spec&state=open&per_page=100")
+    [ "${SHIM_SPECS_FAIL:-0}" = 1 ] && { echo "gh: Server Error (HTTP 502)" >&2; exit 1; }
     spec_db | jq '[.[] | select(.state == "open" and any(.labels[]?; .name == "spec"))]' ;;
   "api --paginate repos/o/r/issues/"[0-9]*"/sub_issues?per_page=100")
     [ "${SHIM_NO_SUBISSUES:-0}" = 1 ] && { echo "gh: Not Found (HTTP 404)" >&2; exit 1; }
     spec_db | jq --argjson n "$(spec_num "$*")" '. as $db | [$db[] | select(.number == $n) | .sub_issues[]?] as $subs
       | [$db[] | select(.number as $m | $subs | index($m) != null)]' ;;
   "api --paginate repos/o/r/issues/"[0-9]*"/comments?per_page=100")
+    [ "${SHIM_COMMENTS_FAIL:-0}" = 1 ] && { echo "gh: Server Error (HTTP 502)" >&2; exit 1; }
     # A comment is a body string from a maintainer, or an object that sets author_association and user.
     spec_db | jq --argjson n "$(spec_num "$*")" '[.[] | select(.number == $n) | .comments[]?
       | (if type == "string" then {body: .} else . end)

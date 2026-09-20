@@ -468,6 +468,12 @@ class BoardAndAbandonTests(ShimTest):
         self.assertNotIn("frontier[", r.stdout)
         self.assertNotIn("acceptance[", r.stdout)
 
+    def test_board_says_so_when_it_cannot_read_the_open_specs(self):
+        r = self.run_script(ORCH / "board.sh", SHIM_SPEC_FIXTURE=self.specs(), SHIM_SPECS_FAIL="1")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("acceptance[0]{issue,milestone,title}:\n", r.stdout)
+        self.assertIn("note: could not read the open specs; the section is empty, not idle.", r.stdout)
+
     def test_abandon_refuses_dirty_or_unpushed_without_force(self):
         self.run_script(ORCH / "claim.sh", "12")
         path = self.repo / ".claude/worktrees/fix-12-fix-login-timeout"
