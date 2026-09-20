@@ -297,6 +297,8 @@ agent-config: 2 findings (delete 1, replace 1)
     replace CLAUDE.md: holds instructions instead of importing AGENTS.md (high)
   approving agent-config also creates every baseline file of the category that is missing, \
 whether a finding above lists it or not
+  approving agent-config also brings .claude/settings.json to the template: the workflow plugins enabled, \
+every other project plugin disabled, the template permissions and env merged
   become issues: none
 
 workspace: 1 finding (configure 1)
@@ -348,8 +350,8 @@ next: ask for approval per category, then record the answers with approve.sh <ca
         r = self.report("finding: files | NOTES.md | delete | agent resume notes | medium\n")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("\nalso: agent-config, docs, tests-ci, workspace have no findings, so the report does not ask about them; "
-                      "the apply phase still creates their missing baseline files, because only a rejected category is left alone\n",
-                      r.stdout)
+                      "the apply phase still creates their missing baseline files and brings .claude/settings.json to the template, "
+                      "because only a rejected category is left alone\n", r.stdout)
         r = self.report("finding: files | NOTES.md | delete | agent resume notes | medium\n"
                         "finding: agent-config | AGENTS.md | create | missing | high\n"
                         "finding: tests-ci | Makefile | create | missing | high\n"

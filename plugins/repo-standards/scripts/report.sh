@@ -84,13 +84,16 @@ CATS="$WF_CATEGORIES" SCAFFOLDED="$WF_SCAFFOLD_CATEGORIES" awk -F'\t' '
       }
       if (c in S) printf "  approving %s %screates every baseline file of the category that is missing, whether a finding above lists it or not\n",
                          c, ((c in per) || (c in dec)) ? "also " : ""
+      # scaffold.sh writes the settings of the agent-config category through the plugin commands, existing file or not.
+      if (c == "agent-config") print "  approving agent-config also brings .claude/settings.json to the template: the workflow plugins enabled, every other project plugin disabled, the template permissions and env merged"
       if (c in iss) printf "  become issues:\n%s", iss[c]; else print "  become issues: none"
     }
     # A category is left alone only when it is rejected, and a category without findings cannot be answered at
     # all, so the apply phase scaffolds it. The report names it; what the apply phase applies is unchanged.
     miss = ""; mn = 0
-    for (i = 1; i <= nc; i++) { c = order[i]; if ((c in S) && !(c in n)) { miss = miss (mn++ ? ", " : "") c } }
-    if (miss != "") printf "\nalso: %s %s no findings, so the report does not ask about %s; the apply phase still creates %s missing baseline files, because only a rejected category is left alone\n",
-                           miss, (mn == 1 ? "has" : "have"), (mn == 1 ? "it" : "them"), (mn == 1 ? "its" : "their")
+    for (i = 1; i <= nc; i++) { c = order[i]; if ((c in S) && !(c in n)) { miss = miss (mn++ ? ", " : "") c; if (c == "agent-config") mac = 1 } }
+    if (miss != "") printf "\nalso: %s %s no findings, so the report does not ask about %s; the apply phase still creates %s missing baseline files%s, because only a rejected category is left alone\n",
+                           miss, (mn == 1 ? "has" : "have"), (mn == 1 ? "it" : "them"), (mn == 1 ? "its" : "their"),
+                           mac ? " and brings .claude/settings.json to the template" : ""
   }' "$dir/findings" "$dir/findings"
 printf '\nnext: ask for approval per category, then record the answers with approve.sh <category>=approve|reject ...\n'
