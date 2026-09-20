@@ -19,3 +19,4 @@ One file per decision, numbered, never edited after acceptance (supersede instea
 | [0013](0013-promotions-merge-with-a-merge-commit-and-releases-tag-it.md) | Promotions merge with a merge commit, and the release tags it | accepted |
 | [0014](0014-claims-require-ready-for-agent.md) | Claiming requires ready-for-agent, with --force as the only exception | accepted |
 | [0015](0015-a-spec-with-tickets-is-closed-by-an-acceptance.md) | A spec with tickets is closed by an acceptance | accepted |
+| [0016](0016-worker-subagents-run-in-the-foreground.md) | Worker sessions run subagents in the foreground, and the agent never waits by polling | accepted |
