@@ -51,7 +51,8 @@ class StandardsTests(ShimTest):
         settings = json.loads((self.repo / ".claude/settings.json").read_text())
         self.assertEqual(sorted(p for p, on in settings["enabledPlugins"].items() if on),
                          ["orchestrator@workflows", "planner@workflows", "repo-standards@workflows", "worker@workflows"])
-        self.assertEqual(settings["env"]["WF_REVIEW_ROUNDS"], "5")
+        self.assertEqual(settings["env"]["WF_REVIEW_ROUNDS"], "5", "a value the repository set is kept")
+        self.assertEqual(settings["env"]["WF_PROJECT_TEMPLATE"], "", "the project template has a place to be set in")
         self.assertEqual(settings["permissions"]["allow"][:3], ["Bash(make *)", "Bash(git diff *)", "Bash(git status *)"])
         self.assertEqual(settings["permissions"]["allow"].count("Bash(git diff *)"), 1)
         self.reset_calls()
