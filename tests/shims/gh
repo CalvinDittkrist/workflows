@@ -4,6 +4,15 @@
 body=""; case " $* " in *" --input - "*) body=$(jq -c .) ;; esac
 printf 'gh %s%s\n' "$*" "${body:+ $body}" >> "${SHIM_LOG:-/dev/null}"
 
+# SHIM_GH_DOWN=1: every call fails as if GitHub were unreachable.
+if [ "${SHIM_GH_DOWN:-0}" = 1 ]; then echo "gh: error connecting to api.github.com" >&2; exit 1; fi
+
+# Specs and their acceptance (board.sh, accept-facts.sh). SHIM_SPEC_FIXTURE is one array of issues:
+# {number,title,state,labels,milestone,sub_issues:[<number>],comments:[<body>],closed_by:[{number,merged,files:[<path>]}]}.
+spec_db() { if [ -n "${SHIM_SPEC_FIXTURE:-}" ]; then cat "$SHIM_SPEC_FIXTURE"; else echo '[]'; fi; }
+spec_num() { printf '%s' "$*" | tr '\n' ' ' | sed -E 's#.*/issues/([0-9]+).*#\1#'; }
+spec_gql_num() { printf '%s' "$*" | tr '\n' ' ' | sed -E 's/.*-F n=([0-9]+).*/\1/'; }
+
 # GitHub workspace (workspace.sh). The state lives as JSON files in the directory $SHIM_WS and every write
 # changes it, so a second run sees what the first one did. Files: repo.json, ruleset-<id>.json, labels.json,
 # automated-security-fixes.json, actions-workflow.json, milestones.json, projects.json; optional: user.json and
@@ -95,6 +104,22 @@ case "$*" in
   "label create "*) exit 0 ;;
   "issue create --title "*) echo "https://github.com/o/r/issues/${SHIM_NEW_ISSUE:-42}" ;;
   "api repos/o/r/issues/"[0-9]*" --jq .id") n=$(printf '%s' "$*" | sed -E 's#.*/issues/([0-9]+).*#\1#'); echo $((1000 + n)) ;;
+  "api repos/o/r/issues?labels=spec&state=open&per_page=100")
+    spec_db | jq '[.[] | select(.state == "open" and any(.labels[]?; .name == "spec"))]' ;;
+  "api repos/o/r/issues/"[0-9]*"/sub_issues?per_page=100")
+    [ "${SHIM_NO_SUBISSUES:-0}" = 1 ] && { echo "gh: Not Found (HTTP 404)" >&2; exit 1; }
+    spec_db | jq --argjson n "$(spec_num "$*")" '. as $db | [$db[] | select(.number == $n) | .sub_issues[]?] as $subs
+      | [$db[] | select(.number as $m | $subs | index($m) != null)]' ;;
+  "api repos/o/r/issues/"[0-9]*"/comments?per_page=100")
+    spec_db | jq --argjson n "$(spec_num "$*")" '[.[] | select(.number == $n) | .comments[]? | {body: .}]' ;;
+  "api repos/o/r/issues/"[0-9]*)
+    spec_db | jq -e --argjson n "$(spec_num "$*")" '.[] | select(.number == $n)' || { echo "gh: Not Found (HTTP 404)" >&2; exit 1; } ;;
+  "api graphql"*closedByPullRequestsReferences*)
+    [ "${SHIM_CLOSED_BY_FAIL:-0}" = 1 ] && { echo "gh: Field 'closedByPullRequestsReferences' doesn't exist" >&2; exit 1; }
+    spec_db | jq --argjson n "$(spec_gql_num "$*")" '{data: {repository: {issue:
+      {closedByPullRequestsReferences: {nodes: [.[] | select(.number == $n) | .closed_by[]?
+        | {number, url: "https://github.com/o/r/pull/\(.number)", merged,
+           files: {totalCount: (.files | length), nodes: [.files[] | {path: .}]}}]}}}}}' ;;
   "api --method POST repos/o/r/issues/"*"/sub_issues -F sub_issue_id="*) [ "${SHIM_NO_SUBISSUES:-0}" = 1 ] && { echo "HTTP 404" >&2; exit 1; }; echo '{}' ;;
   "api --method POST repos/o/r/issues/"*"/dependencies/blocked_by -F issue_id="*) [ "${SHIM_NO_DEPS:-0}" = 1 ] && { echo "HTTP 404" >&2; exit 1; }; echo '{}' ;;
   "api repos/o/r/issues?labels=ready-for-agent&state=open&per_page=100") cat "${SHIM_FRONTIER_FIXTURE:-/dev/null}"; [ -n "${SHIM_FRONTIER_FIXTURE:-}" ] || echo '[]' ;;

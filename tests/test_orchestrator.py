@@ -421,6 +421,42 @@ class BoardAndAbandonTests(ShimTest):
         self.assertNotIn("41,", r.stdout); self.assertNotIn("43,", r.stdout); self.assertNotIn("12,Fix", r.stdout)
         self.assertIn("waiting: 3 ready-for-agent issue(s)", r.stdout)
 
+    def specs(self):
+        """Four open specs on the shim: one accepted-ready, one with an open ticket, one without sub-issues, one closed."""
+        fixture = self.base / "specs.json"
+        fixture.write_text(json.dumps([
+            {"number": 19, "title": "Accept a spec against the code", "state": "open", "labels": [{"name": "spec"}],
+             "milestone": {"title": "v1.2.0"}, "sub_issues": [20, 21]},
+            {"number": 20, "title": "Refuse to claim a raw issue", "state": "closed", "labels": []},
+            {"number": 21, "title": "List the specs", "state": "closed", "labels": []},
+            {"number": 30, "title": "Spec with an open ticket", "state": "open", "labels": [{"name": "spec"}],
+             "milestone": None, "sub_issues": [31]},
+            {"number": 31, "title": "Still open", "state": "open", "labels": []},
+            {"number": 32, "title": "Spec nobody cut up", "state": "open", "labels": [{"name": "spec"}]},
+            {"number": 33, "title": "Accepted spec", "state": "closed", "labels": [{"name": "spec"}], "sub_issues": [20]},
+        ]))
+        return str(fixture)
+
+    def test_board_lists_the_specs_whose_tickets_are_all_closed(self):
+        r = self.run_script(ORCH / "board.sh", SHIM_SPEC_FIXTURE=self.specs())
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("acceptance[1]{issue,milestone,title}:\n  19,v1.2.0,Accept a spec against the code\n", r.stdout)
+        self.assertIn("help: every ticket is closed; accept the spec in a planning session, e.g. /orchestrator:plan #19.", r.stdout)
+        for absent in ("30,", "32,", "33,"):
+            self.assertNotIn(absent, r.stdout, "only an open spec with sub-issues and none of them open is due")
+        self.assertLess(r.stdout.index("frontier["), r.stdout.index("acceptance["), "the section follows the frontier")
+
+    def test_board_without_a_spec_ready_and_with_github_unreachable(self):
+        r = self.run_script(ORCH / "board.sh")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("acceptance[0]{issue,milestone,title}:\n", r.stdout)
+        self.assertNotIn("help: every ticket is closed", r.stdout)
+        r = self.run_script(ORCH / "board.sh", SHIM_GH_DOWN="1")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("worktrees[0]", r.stdout)
+        self.assertNotIn("frontier[", r.stdout)
+        self.assertNotIn("acceptance[", r.stdout)
+
     def test_abandon_refuses_dirty_or_unpushed_without_force(self):
         self.run_script(ORCH / "claim.sh", "12")
         path = self.repo / ".claude/worktrees/fix-12-fix-login-timeout"

@@ -59,4 +59,19 @@ if [ -n "$nwo" ]; then
     | "frontier[\($free|length)]{issue,milestone,title}:",
       ($free[] | "  \(.number),\(.milestone.title // "-"),\(.title)"),
       (if ($all|length) > ($free|length) then "waiting: \(($all|length) - ($free|length)) ready-for-agent issue(s) blocked, assigned or claimed" else empty end)'
+
+  # Ready for acceptance: open specs with native sub-issues, all of them closed. Derived per run, no state.
+  specs=$(gh api "repos/$nwo/issues?labels=spec&state=open&per_page=100" 2>/dev/null || echo '[]')
+  acc_rows=""; acc_count=0; acc_first=""
+  while IFS= read -r spec; do
+    [ -n "$spec" ] || continue
+    subs=$(gh api "repos/$nwo/issues/$spec/sub_issues?per_page=100" 2>/dev/null || echo '[]')
+    tally=$(printf '%s' "$subs" | jq -r 'if type == "array" then "\(length) \([.[] | select(.state == "open")] | length)" else "0 0" end' 2>/dev/null || echo '0 0')
+    [ "${tally% *}" -gt 0 ] && [ "${tally#* }" -eq 0 ] || continue
+    acc_rows="$acc_rows  $(printf '%s' "$specs" | jq -r --argjson n "$spec" '.[] | select(.number == $n) | "\(.number),\(.milestone.title // "-"),\(.title)"')\n"
+    acc_count=$((acc_count+1)); [ -n "$acc_first" ] || acc_first="$spec"
+  done < <(printf '%s' "$specs" | jq -r '.[] | select(.pull_request == null) | .number')
+  printf 'acceptance[%s]{issue,milestone,title}:\n' "$acc_count"
+  printf "%b" "$acc_rows"
+  if [ "$acc_count" != 0 ]; then printf 'help: every ticket is closed; accept the spec in a planning session, e.g. /orchestrator:plan #%s.\n' "$acc_first"; fi
 fi

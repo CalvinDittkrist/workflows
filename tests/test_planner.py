@@ -233,5 +233,87 @@ class PrototypeAndFinishTests(PlanWorktree):
         self.assertTrue(gone(), "worktree or branch still present after cleanup")
 
 
+class AcceptFactsTests(ShimTest):
+    """accept-facts.sh against the gh shim: the block, the refusals and the ticket numbers as arguments."""
+
+    DEVIATION = ("> Accepted deviation (spec acceptance).\n"
+                 "The release command reads the default branch, not a dev branch.\n"
+                 "Kept: that is the better rule.")
+
+    def db(self, **changes):
+        issues = [
+            {"number": 19, "title": "Accept a spec against the code", "state": "open", "labels": [{"name": "spec"}],
+             "milestone": {"title": "v1.2.0"}, "sub_issues": [20, 21],
+             "comments": ["Looks good to me.", self.DEVIATION]},
+            {"number": 20, "title": "Refuse to claim a raw issue", "state": "closed", "labels": [{"name": "ready-for-agent"}],
+             "closed_by": [{"number": 24, "merged": True, "files": ["plugins/orchestrator/scripts/claim.sh", "docs/architecture.md"]}]},
+            {"number": 21, "title": "List specs, and print the facts", "state": "closed", "labels": [{"name": "ready-for-agent"}],
+             "closed_by": [{"number": 25, "merged": True, "files": ["docs/architecture.md", "plugins/planner/scripts/accept-facts.sh"]},
+                           {"number": 26, "merged": False, "files": ["abandoned.txt"]}]},
+            {"number": 30, "title": "Spec with an open ticket", "state": "open", "labels": [{"name": "spec"}],
+             "sub_issues": [31]},
+            {"number": 31, "title": "Still open", "state": "open", "labels": [{"name": "ready-for-agent"}]},
+            {"number": 32, "title": "Spec nobody cut up", "state": "open", "labels": [{"name": "spec"}]},
+            {"number": 33, "title": "Accepted spec", "state": "closed", "labels": [{"name": "spec"}], "sub_issues": [20]},
+            {"number": 34, "title": "An ordinary ticket", "state": "open", "labels": [{"name": "ready-for-agent"}]},
+        ]
+        issues = [{**i, **changes.get(i["number"], {})} for i in issues]
+        path = self.base / "specs.json"
+        path.write_text(json.dumps(issues))
+        return str(path)
+
+    def facts(self, *args, **extra):
+        return self.run_script(PLANNER / "accept-facts.sh", *args, SHIM_SPEC_FIXTURE=self.db(), **extra)
+
+    def test_facts_print_the_spec_its_tickets_the_files_and_the_deviations(self):
+        r = self.facts("19")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("spec: #19 Accept a spec against the code\nmilestone: v1.2.0\nbase: main\n", r.stdout)
+        self.assertIn("tickets[2]{issue,state,prs,title}:\n"
+                      "  20,closed,#24,Refuse to claim a raw issue\n"
+                      "  21,closed,#25,List specs, and print the facts\n", r.stdout)
+        self.assertIn("files[3]:\n"
+                      "  docs/architecture.md\n"
+                      "  plugins/orchestrator/scripts/claim.sh\n"
+                      "  plugins/planner/scripts/accept-facts.sh\n", r.stdout)
+        self.assertNotIn("abandoned.txt", r.stdout, "an unmerged pull request is not evidence")
+        self.assertIn("deviations[1]:\n  The release command reads the default branch, not a dev branch. "
+                      "Kept: that is the better rule.\n", r.stdout)
+        self.assertNotIn("Looks good to me", r.stdout, "an ordinary comment is not an accepted deviation")
+
+    def test_facts_refuse_a_non_spec_a_closed_spec_and_open_tickets(self):
+        r = self.facts("34")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("not labelled spec (labels: ready-for-agent)", r.stderr)
+        r = self.facts("33")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("#33 is closed", r.stderr)
+        r = self.facts("30")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("#30 still has open tickets: #31", r.stderr)
+        self.assertFalse([c for c in self.calls() if "graphql" in c], "no pull request is read before the refusal")
+
+    def test_without_native_sub_issues_it_says_so_and_takes_the_ticket_numbers(self):
+        r = self.facts("32")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("#32 has no native sub-issues", r.stderr)
+        self.assertIn("accept-facts.sh 32 <ticket>", r.stderr)
+        self.reset_calls()
+        r = self.facts("32", "20", "#21")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("tickets[2]{issue,state,prs,title}:\n  20,closed,#24,", r.stdout)
+        self.assertFalse([c for c in self.calls() if "sub_issues" in c], "the arguments replace the sub-issue lookup")
+
+    def test_a_missing_spec_and_an_unreadable_closing_pull_request_are_reported(self):
+        r = self.facts("77")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("issue #77 does not exist", r.stderr)
+        r = self.facts("19", SHIM_CLOSED_BY_FAIL="1")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("warning: could not read the pull requests that closed #20", r.stderr)
+        self.assertIn("  20,closed,-,Refuse to claim a raw issue\n", r.stdout)
+        self.assertIn("files[0]:\n", r.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()
