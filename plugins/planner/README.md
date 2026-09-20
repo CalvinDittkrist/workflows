@@ -19,4 +19,6 @@ Hook: `SessionStart` injects the topic (from the branch description `plan.sh` wr
 
 Labels the plugin owns and creates on demand: `ready-for-agent`, `needs-triage`, `needs-info`, `ready-for-human`, `wontfix`, `spec`, `bug`, `enhancement`. Sub-issues and blocking edges use GitHub's native APIs and fall back to body text where a repository lacks them.
 
-The agent has eight tools (Bash, Read, Write, Edit, Grep, Glob, Agent, WebFetch) and no Skill tool: you type the stage skills. Requires `gh`, `jq`, `git`. `WF_PLANNER_PERMISSION_MODE` (default `auto`), `WF_CLAUDE_ARGS` and `WF_PLANNER_CLAUDE_ARGS` apply at start.
+The agent has eight tools (Bash, Read, Write, Edit, Grep, Glob, Agent, WebFetch) and no Skill tool: you type the stage skills. Requires `gh`, `jq`, `git`. `WF_PLANNER_PERMISSION_MODE` (default `auto`), `WF_PLANNER_LANGUAGE`, `WF_CLAUDE_ARGS` and `WF_PLANNER_CLAUDE_ARGS` apply at start.
+
+`WF_PLANNER_LANGUAGE` (for example `german`) sets the conversation language: the planner talks to you in it from the first turn, because the orchestrator passes it as claude's `language` setting for this session only. What the planner writes for others stays English, whatever the conversation language is: issues, triage comments and briefs, glossary terms, ADR candidates, milestone descriptions and prototype branch names. Any name claude can read works, accents and non-Latin scripts included; a control character or a value longer than a name is refused before the session is created. Unset or empty changes nothing.

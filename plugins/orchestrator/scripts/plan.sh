@@ -18,6 +18,7 @@ done
 [ "${HERDR_ENV:-}" = 1 ] || wf_die "plan needs a Herdr-managed pane (HERDR_ENV=1). Start the orchestrator inside Herdr."
 wf_need gh; wf_need jq; wf_need herdr; wf_need git
 wf_check_claude_args WF_PLANNER_CLAUDE_ARGS
+wf_check_planner_language
 
 root=$(wf_main_root); cd "$root"
 [ -n "$base" ] || base=$(wf_base_branch)
@@ -55,7 +56,8 @@ fi
 if [ -n "$issue" ]; then git config "branch.$branch.description" "issue: #$issue"; else git config "branch.$branch.description" "topic: $topic"; fi
 
 # The planner session disables the other plugins so their skills and agents stay out of its context.
-settings=$(jq -cn --arg s "$slug" --arg i "$issue" '{env:{WF_PLAN:$s}, enabledPlugins:{"worker@workflows":false, "orchestrator@workflows":false, "repo-standards@workflows":false}} | if $i != "" then .env.WF_PLAN_ISSUE = $i else . end')
+# WF_PLANNER_LANGUAGE rides along as claude's native `language` setting: this session only, no settings file.
+settings=$(jq -cn --arg s "$slug" --arg i "$issue" --arg lang "${WF_PLANNER_LANGUAGE:-}" '{env:{WF_PLAN:$s}, enabledPlugins:{"worker@workflows":false, "orchestrator@workflows":false, "repo-standards@workflows":false}} | if $i != "" then .env.WF_PLAN_ISSUE = $i else . end | if $lang != "" then .language = $lang else . end')
 perm="${WF_PLANNER_PERMISSION_MODE:-auto}"
 name=$(wf_agent_name "plan-$slug")
 extra="${WF_CLAUDE_ARGS:-} ${WF_PLANNER_CLAUDE_ARGS:-}"
