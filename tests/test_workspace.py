@@ -432,7 +432,7 @@ class WorkspaceTests(ShimTest):
         self.assertEqual(self.ws_run("--apply").returncode, 0)
         self.assertFalse([c for c in self.writes() if "graphql" in c], "an existing field is never rewritten")
 
-    def test_more_than_one_open_project_is_a_manual_step_and_every_one_is_checked(self):
+    def test_more_than_one_open_project_is_a_manual_step_and_every_one_is_checked_but_none_is_written(self):
         self.private_dev_main()
         self.put("projects.json", [project(3), project(4, fields=[select("Status", STATUS)], autoadd=True),
                                    project(5, closed=True, fields=[])])
@@ -442,10 +442,35 @@ class WorkspaceTests(ShimTest):
                       "https://github.com/users/o/projects/4); the standard wants one; unlink or close the others by hand",
                       r.stdout)
         self.assertNotIn("projects/5", r.stdout, "a closed project is not checked")
-        self.assertIn("diff: project https://github.com/users/o/projects/4 field Priority: missing -> create "
-                      "single-select with P0, P1, P2, P3", r.stdout)
+        # The missing field is reported, but creating it would write into a project the run just asked to unlink.
+        self.assertIn("manual: project https://github.com/users/o/projects/4 field Priority: missing; the run creates "
+                      "it only while one project is linked, so unlink the others and run again, or create the "
+                      "single-select with P0, P1, P2, P3 by hand", r.stdout)
         self.assertNotIn("projects/3 field", r.stdout)
+        self.assertNotIn("diff: project", r.stdout)
+        self.assertIn("differences: 3", r.stdout)
+        self.assertEqual(self.ws_run("--apply").returncode, 0)
+        self.assertFalse([c for c in self.writes() if "graphql" in c], "no field is created")
+
+    def test_a_field_type_the_query_cannot_read_does_not_hide_the_other_fields(self):
+        self.private_dev_main()
+        # A field type that implements none of the query's fragments comes back as an empty node.
+        self.put("projects.json", [project(3, fields=[{}, select("Status", STATUS)])])
+        r = self.ws_run()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("diff: project https://github.com/users/o/projects/3 field Priority: missing -> create "
+                      "single-select with P0, P1, P2, P3", r.stdout)
         self.assertIn("differences: 4", r.stdout)
+
+    def test_a_failed_field_creation_stops_the_run_and_names_the_project(self):
+        self.private_dev_main()
+        self.put("projects.json", [project(3, fields=[select("Status", STATUS)])])
+        snap = self.base / "snapshot.json"
+        r = self.ws_run("--apply", "--snapshot", str(snap), SHIM_WS_FAIL="api graphql --input -")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("error: creating the field Priority on https://github.com/users/o/projects/3 failed: gh: "
+                      "Validation Failed (HTTP 422); the snapshot has the state before this run", r.stderr)
+        self.assertEqual(json.loads(snap.read_text())["projects"][0]["fields"][-1]["name"], "Status")
 
     def test_check_reports_workspace_drift_and_skips_it_when_github_is_unreachable(self):
         self.assertEqual(self.run_script(STANDARDS / "scaffold.sh").returncode, 0)

@@ -191,7 +191,7 @@ EOF
 # Status and Priority fields. The API cannot create or turn on project workflows.
 # The fields of a project are a union; the interface ProjectV2FieldCommon gives the name and the type of
 # every member, so a field type GitHub adds later is read too instead of looking like a missing field.
-# A project holds at most 50 fields, so one page is all of them.
+# GitHub caps a project at 50 fields, so the one page of 100 the query asks for is always all of them.
 q='query($o: String!, $n: String!) { repository(owner: $o, name: $n) { projectsV2(first: 20) { nodes {
   id number title url closed workflows(first: 50) { nodes { name enabled } }
   fields(first: 100) { nodes { ... on ProjectV2FieldCommon { name dataType }
@@ -233,19 +233,23 @@ $(printf '%s' "$projects" | jq -r '.[] | select(any(.workflows.nodes[]; .name ==
 EOF
   # One verdict line per project and required field: the kind, the project (its node id and its url), the
   # field, the line to print. Every column is filled, because read collapses repeated tabs. A field that is
-  # there but differs is never rewritten: replacing an option list clears that field on every item.
+  # there but differs is never rewritten: replacing an option list clears that field on every item. A missing
+  # one is created only while a single project is linked, so no write lands in a project the run just asked
+  # the maintainer to unlink.
+  single=false; [ "$open_projects" != 1 ] || single=true
   while IFS=$'\t' read -r kind pid url field line; do
     case "$kind" in
       diff) found "$line"; field_plan="$field_plan$pid"$'\t'"$field"$'\t'"$url"$'\n' ;;
       manual) step "$line" ;;
     esac
   done <<EOF
-$(printf '%s' "$projects" | jq -r --argjson want "$want_fields" '
+$(printf '%s' "$projects" | jq -r --argjson want "$want_fields" --argjson single "$single" '
   def names: [.[].name | ascii_downcase] | sort;
   def list: [.[].name] | join(", ");
-  .[] as $p | $want[] as $w | ([$p.fields.nodes[] | select((.name | ascii_downcase) == ($w.name | ascii_downcase))] | first) as $f
+  .[] as $p | $want[] as $w | ([$p.fields.nodes[] | select(((.name // "") | ascii_downcase) == ($w.name | ascii_downcase))] | first) as $f
   | "project \($p.url) field \($w.name)" as $where | ($w.options | list) as $wants | "\($p.id)\t\($p.url)\t\($w.name)" as $cols
-  | if $f == null then "diff\t\($cols)\t\($where): missing -> create single-select with \($wants)"
+  | if $f == null then (if $single then "diff\t\($cols)\t\($where): missing -> create single-select with \($wants)"
+      else "manual\t\($cols)\t\($where): missing; the run creates it only while one project is linked, so unlink the others and run again, or create the single-select with \($wants) by hand" end)
     elif $f.dataType != "SINGLE_SELECT" then "manual\t\($cols)\t\($where): a \($f.dataType | ascii_downcase | gsub("_"; " ")) field, but the standard wants a single-select with \($wants); change it by hand"
     elif ($f.options | names) != ($w.options | names) then "manual\t\($cols)\t\($where): options \($f.options | list), but the standard wants \($wants); change them by hand (replacing an option list clears the field on every item)"
     else empty end')
