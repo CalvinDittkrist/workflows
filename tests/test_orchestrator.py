@@ -1,4 +1,5 @@
 import json
+import shlex
 import unittest
 
 from helpers import ORCH, ShimTest
@@ -17,13 +18,36 @@ class ClaimTests(ShimTest):
         self.assertIn("--agent worker", start[0])
         self.assertIn("/worker:work", start[0])
         settings = json.loads(start[0].split("--settings ")[1].split(" --name")[0])
-        self.assertEqual(settings["env"], {"WF_MODE": "manual", "WF_ISSUE": "12"})
+        self.assertEqual(settings["env"], {"WF_MODE": "manual", "WF_ISSUE": "12", "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1"})
         self.assertTrue((self.repo / ".claude/worktrees/fix-12-fix-login-timeout/README.md").exists())
         self.assertIn(".claude/worktrees/", (self.repo / ".git/info/exclude").read_text())
         self.assertEqual(self.git("status", "--porcelain"), "", "worktree dir must not show up as untracked")
         self.assertIn("herdr workspace focus wR", self.calls())
         self.assertIn("agent_status: working", r.stdout)
         self.assertIn("next: board.sh shows progress; merge.sh <pr> when the PR is ready", r.stdout)
+
+    def assert_foreground_subagents(self, words):
+        """Without this the reviewer panel is launched in the background and the worker fills the gap with
+        sleep calls in a loop: 328 of them in one measured session, context 120k -> 412k (issue #34)."""
+        settings = json.loads(words[words.index("--settings") + 1])
+        self.assertEqual(settings["env"]["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"], "1")
+        self.assertEqual(words[-1], "/worker:work")
+
+    def test_worker_sessions_run_their_subagents_in_the_foreground(self):
+        r = self.run_script(ORCH / "claim.sh", "12")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assert_foreground_subagents([c for c in self.argv_calls() if c[1:3] == ["agent", "start"]][0])
+
+    def test_the_sandboxed_worker_session_runs_its_subagents_in_the_foreground_too(self):
+        r = self.run_script(ORCH / "claim.sh", "12", "--sandbox")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("sandbox: docker", r.stdout)
+        run = [c for c in self.argv_calls() if c[1:3] == ["pane", "run"]][0]
+        # This start passes the session settings inside the pane's command line, so read that line the way a
+        # shell would: a quoting regression there would hand claude a broken settings object.
+        words = shlex.split(run[-1])
+        self.assertIn("sbx-worker.sh", words[0])
+        self.assert_foreground_subagents(words)
 
     def test_yolo_flag_is_passed_to_the_worker_session(self):
         r = self.run_script(ORCH / "claim.sh", "12", "--yolo")
@@ -139,6 +163,14 @@ class PlanTests(ShimTest):
         start = [c for c in self.argv_calls() if c[1:3] == ["agent", "start"]][0]
         settings = json.loads(start[start.index("--settings") + 1])
         self.assertEqual(settings["env"], {"WF_PLAN": "fix-login-timeout", "WF_PLAN_ISSUE": "12"})
+
+    def test_planning_sessions_keep_their_background_subagents(self):
+        # The planner's research stage works while a subagent runs; only workers wait for their subagents.
+        r = self.run_script(ORCH / "plan.sh", "Offline mode")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        start = [c for c in self.argv_calls() if c[1:3] == ["agent", "start"]][0]
+        settings = json.loads(start[start.index("--settings") + 1])
+        self.assertNotIn("CLAUDE_CODE_DISABLE_BACKGROUND_TASKS", settings["env"])
 
     def test_plan_slug_transliterates_umlauts_and_drops_urls(self):
         r = self.run_script(ORCH / "plan.sh", "Füge", "einen", "Map-Skill", "hinzu,", "wie", "https://github.com/mattpocock/skills")
