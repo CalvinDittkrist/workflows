@@ -64,19 +64,46 @@ wf_run() {
   "$@"
 }
 
-# Refuse a WF_CLAUDE_ARGS that would make every started session exit at once.
-# wf_check_claude_args <VAR>: WF_CLAUDE_ARGS and the per-session VAR (WF_PLANNER_CLAUDE_ARGS or
-# WF_WORKER_CLAUDE_ARGS) are word-split into claude flags; a truncated --plugin-dir would kill the session at start.
+# Check WF_CLAUDE_ARGS and the per-session VAR (WF_PLANNER_CLAUDE_ARGS or WF_WORKER_CLAUDE_ARGS)
+# before a session is started. They are word-split into claude flags, and claude takes both the
+# "--flag value" and the "--flag=value" spelling, so both are handled here.
 wf_check_claude_args() {
-  local var="$1" prev="" w
+  local var="$1" prev="" w dir
   # shellcheck disable=SC2086
   for w in ${WF_CLAUDE_ARGS:-} ${!var:-} ""; do
+    # A truncated --plugin-dir would kill the session at start, so it is refused, not warned about.
+    dir=""
     if [ "$prev" = "--plugin-dir" ]; then
       if [ -z "$w" ] || [ "${w#-}" != "$w" ]; then wf_die "WF_CLAUDE_ARGS/$var: --plugin-dir needs a path (got '$w'). Use absolute paths, e.g. WF_PLANNER_CLAUDE_ARGS=\"--plugin-dir /repo/plugins/planner\""; fi
-      [ -d "$w" ] || wf_die "WF_CLAUDE_ARGS/$var: --plugin-dir $w is not a directory"
+      dir="$w"
     fi
+    case "$w" in
+      --plugin-dir=*)
+        dir="${w#--plugin-dir=}"
+        if [ -z "$dir" ] || [ "${dir#-}" != "$dir" ]; then wf_die "WF_CLAUDE_ARGS/$var: --plugin-dir needs a path (got '$w'). Use absolute paths, e.g. WF_PLANNER_CLAUDE_ARGS=\"--plugin-dir /repo/plugins/planner\""; fi ;;
+      # claude keeps only the last --settings and does not merge, and these flags come after the ones
+      # the script builds, so one here replaces the whole object. Warn: it is a legitimate override.
+      --settings|--settings=*)
+        wf_warn "WF_CLAUDE_ARGS/$var: your --settings replaces the settings this script builds for the session (plugin isolation, its WF_* environment and every other key it sets), because claude keeps only the last one. Put those keys into your own JSON." ;;
+    esac
+    [ -z "$dir" ] || [ -d "$dir" ] || wf_die "WF_CLAUDE_ARGS/$var: --plugin-dir $dir is not a directory"
     prev="$w"
   done
+}
+
+# Sanity-check WF_PLANNER_LANGUAGE before a planning session is created.
+# Quoting is not the risk: jq escapes the value into the --settings JSON and herdr passes that as one
+# argv element. What matters is that claude copies the value verbatim into the session's system prompt,
+# so a control character would corrupt the prompt and a long value is a pasted sentence, not a language.
+# Any name claude can read is accepted, `francais` and non-Latin names included.
+wf_check_planner_language() {
+  local v="${WF_PLANNER_LANGUAGE:-}" ctrl
+  [ -n "$v" ] || return 0
+  # -dc keeps only control characters; the trailing x makes a trailing one visible, because command
+  # substitution strips trailing newlines.
+  ctrl=$(printf '%s' "$v" | LC_ALL=C tr -dc '[:cntrl:]'; printf x)
+  [ "$ctrl" = x ] || wf_die "WF_PLANNER_LANGUAGE contains a line break or a control character. Use a plain language name or locale code, e.g. WF_PLANNER_LANGUAGE=german"
+  [ ${#v} -le 32 ] || wf_die "WF_PLANNER_LANGUAGE is ${#v} characters long, which is a sentence, not a language. Use a name or a locale code of at most 32, e.g. WF_PLANNER_LANGUAGE=german or WF_PLANNER_LANGUAGE=pt-br"
 }
 
 # Create a worktree and Herdr workspace for branch $1 from ref $2 with label $3.

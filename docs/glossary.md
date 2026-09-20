@@ -12,6 +12,7 @@
 | catalogue issue | The issue, labelled `skill-candidate`, that lists the skills standardisation removed and how to restore each from the `pre-standard` tag. |
 | drift | A difference between a repository's GitHub workspace and the standard; `workspace.sh` prints one `diff:` line per difference. |
 | snapshot | The JSON file `workspace.sh --apply` writes before its first change: the previous value of everything it changes, for posting to an issue and undoing by hand. |
+| conversation language | The language the planner talks to the user in, set with `WF_PLANNER_LANGUAGE`; issues, comments and glossary terms stay English. |
 | promotion | The pull request from `dev` to `main` that carries a release in the two-level branch model. |
 | acceptance | The check of a whole spec against the code on the base branch after its tickets are closed; it ends with gap tickets or with the spec closed ([ADR 0014](adr/0014-a-spec-with-tickets-is-closed-by-an-acceptance.md)). |
 | spec checker | The read-only subagent that judges each checkable statement of a spec during an acceptance. |
