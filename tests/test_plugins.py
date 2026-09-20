@@ -5,7 +5,7 @@ import subprocess
 import unittest
 from pathlib import Path
 
-from helpers import ROOT
+from helpers import PLANNER, ROOT, STANDARDS, ShimTest
 
 PLUGINS = sorted(p for p in (ROOT / "plugins").iterdir() if (p / ".claude-plugin/plugin.json").exists())
 
@@ -92,6 +92,49 @@ class ManifestTests(unittest.TestCase):
         for path in [ROOT, *PLUGINS]:
             r = subprocess.run(["claude", "plugin", "validate", str(path), "--strict"], text=True, capture_output=True)
             self.assertEqual(r.returncode, 0, f"{path}\n{r.stdout}{r.stderr}")
+
+
+class LabelVocabularyTests(ShimTest):
+    """repo-standards and planner each define the label vocabulary; drift between the copies is a bug."""
+
+    # The two files that define the vocabulary, and the one label repo-standards has that the planner has not.
+    STANDARDS_FILE = "plugins/repo-standards/scripts/lib.sh"
+    PLANNER_FILE = "plugins/planner/scripts/labels.sh"
+    PRIVATE = "skill-candidate"
+
+    def standards_vocabulary(self):
+        """WF_LABELS as workspace.sh feeds it into its label loop. Sourced outside a git repository, because
+        reading the vocabulary must not need one."""
+        r = subprocess.run(["bash", "-c", f'. "{STANDARDS}/lib.sh"; printf "%s\n" "$WF_LABELS"'],
+                           cwd=self.base, text=True, capture_output=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return [tuple(line.split("|")) for line in r.stdout.splitlines() if line]
+
+    def planner_vocabulary(self):
+        """The labels labels.sh creates in a repository that has none, with the colour and description it gives them."""
+        r = self.run_script(PLANNER / "labels.sh", SHIM_NO_LABELS="1")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        vocabulary = []
+        for call in self.argv_calls():
+            if call[1:3] != ["label", "create"]:
+                continue
+            options = dict(zip(call[4::2], call[5::2]))
+            vocabulary.append((call[3], options["--color"], options["--description"]))
+        return vocabulary
+
+    def test_the_two_definitions_of_the_label_vocabulary_are_identical(self):
+        standards, planner = self.standards_vocabulary(), self.planner_vocabulary()
+        self.assertTrue(standards, f"no labels read from {self.STANDARDS_FILE}")
+        self.assertTrue(planner, f"no labels created by {self.PLANNER_FILE}")
+        names = [name for name, _, _ in standards]
+        self.assertIn(self.PRIVATE, names, f"{self.STANDARDS_FILE} no longer defines {self.PRIVATE}, the one label "
+                      f"{self.PLANNER_FILE} is allowed to omit; decide what this test should exempt instead")
+        self.assertNotIn(self.PRIVATE, [name for name, _, _ in planner],
+                         f"{self.PLANNER_FILE} creates {self.PRIVATE}, which belongs to {self.STANDARDS_FILE} alone")
+        self.assertEqual([entry for entry in standards if entry[0] != self.PRIVATE], planner,
+                         f"the label vocabulary of {self.STANDARDS_FILE} (WF_LABELS, minus {self.PRIVATE}) and of "
+                         f"{self.PLANNER_FILE} differ in name, colour, description or order. One of the two copies "
+                         f"was changed and the other has to follow; do not adjust this test.")
 
 
 if __name__ == "__main__":

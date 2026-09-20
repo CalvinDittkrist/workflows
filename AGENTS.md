@@ -10,7 +10,7 @@ Public repository of Claude Code plugins for agent-driven development: an orches
 ## Conventions
 - Scripts do, agents decide: anything deterministic lives in `plugins/*/scripts/*.sh` (bash 3.2 compatible, `set -euo pipefail`, `error:` lines on stderr with the fix). Skills are short prompts that call scripts.
 - Every user-facing behaviour has a test in `tests/` that runs the real script with the `gh`/`herdr` shims in `tests/shims/`. Tests assert observable behaviour, never grep prompt text.
-- Plugins are self-contained (no shared code across plugin directories); duplicated helpers in `lib.sh` are intentional.
+- Plugins are self-contained (no shared code across plugin directories); duplicated helpers in `lib.sh` are intentional. The label vocabulary is duplicated the same way, and a test in `tests/test_plugins.py` fails when the two copies drift apart.
 - Docs: `docs/architecture.md` is the map, decisions are ADRs in `docs/adr/`, terms are in `docs/glossary.md`, the standard every repository follows is `docs/repo-standard.md`. Update them with the change that makes them stale.
 - `AGENTS.md` is the instruction source for every agent; `CLAUDE.md` only imports it. No repository-local skills, agents, commands or rules (the standard check fails on them).
 - No agent co-authors in commits. Conventional commits.

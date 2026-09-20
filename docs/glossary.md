@@ -19,3 +19,4 @@
 | item | One checkable statement of a spec with its verdict, in the fixed format `item: <section> \| <statement> \| <verdict> \| <evidence> \| <confidence>`. |
 | accepted deviation | A difference between spec and code the maintainer keeps, recorded as a comment on the spec, by someone with write access, that opens with `> Accepted deviation (spec acceptance).`; where write access cannot be read the author association decides, with a warning; an acceptance does not report it again. |
 | gap ticket | A `ready-for-agent` sub-issue an acceptance creates for an item that is not met. |
+| label vocabulary | The fixed set of GitHub labels the workflow uses, each with a name, a colour and a description. Every plugin that creates labels defines it itself; a test in `tests/test_plugins.py` keeps the copies identical, `skill-candidate` being the one label only `repo-standards` creates. |
