@@ -34,11 +34,17 @@ class ContextReportTests(unittest.TestCase):
         self.assertEqual(len(rows), 1, stdout)
         return rows[0]
 
-    def shell_session(self, directory, commands, name="0badc0de-0000-4000-8000-000000000005.jsonl"):
+    def write(self, directory, name, records):
+        path = Path(directory) / name
+        path.write_text("".join(json.dumps(record) + "\n" for record in records))
+        return path
+
+    def shell_session(self, directory, commands, extra=(), timestamp="2026-09-20T12:00:00.000Z",
+                      name="0badc0de-0000-4000-8000-000000000005.jsonl"):
         """A transcript of one worker turn per command, each answering with 100 characters."""
         base = {"version": "2.1.278", "isSidechain": False, "gitBranch": "feat/42-file-tools",
-                "timestamp": "2026-09-20T12:00:00.000Z"}
-        records = []
+                "timestamp": timestamp}
+        records = [{**base, **record} for record in extra]
         for number, command in enumerate(commands, 1):
             call = {"type": "tool_use", "id": f"t{number}", "name": "Bash", "input": {"command": command}}
             records.append({**base, "type": "assistant", "uuid": f"a{number}", "requestId": f"r{number}",
@@ -52,9 +58,7 @@ class ContextReportTests(unittest.TestCase):
                                     "content": [{"type": "tool_use", "id": "tz", "name": "Skill",
                                                  "input": {"skill": "worker:review"}}],
                                     "usage": {"input_tokens": 0, "cache_read_input_tokens": 10000}}})
-        path = Path(directory) / name
-        path.write_text("".join(json.dumps(record) + "\n" for record in records))
-        return path
+        return self.write(directory, name, records)
 
     def test_reports_one_line_per_session_with_stage_contexts_and_tool_mix(self):
         result = self.report(str(WORKER_SESSION))
@@ -106,13 +110,14 @@ class ContextReportTests(unittest.TestCase):
                 "python3 - <<'PY'\ncat /etc/hosts\nPY",     # a heredoc body is not a shell read
                 "grep -c '<<EOF' setup.sh\ncat AGENTS.md",  # a quoted `<<` must not swallow the cat
                 'grep x <<< "foo"; cat README.md',          # a here-string is not a heredoc either
+                'git commit -m "one\nsleep calls; cat is mentioned"',  # a quoted separator is text
             ])
             result = self.report(str(path))
         self.assertEqual(result.returncode, 0, result.stderr)
         row = self.row(result.stdout)
         self.assertEqual(row["sleep"], "1")
-        self.assertEqual(row["shell"], "4")
-        self.assertEqual(row["shellread"], "50%")  # the two `cat` calls, 200 of 400 characters
+        self.assertEqual(row["shell"], "5")
+        self.assertEqual(row["shellread"], "40%")  # the two `cat` calls, 200 of 500 characters
         self.assertEqual(row["label"], "feat/42-file-tools")  # no agent name: the branch names the session
 
     def test_scans_the_worktree_projects_and_skips_sessions_that_are_not_workers(self):
@@ -142,6 +147,64 @@ class ContextReportTests(unittest.TestCase):
             result = self.report(CLAUDE_CONFIG_DIR=tmp)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("no worker session found", result.stdout)
+
+    def test_a_stage_the_maintainer_types_as_a_slash_command_starts_it(self):
+        # Claude Code writes a typed command as plain string content, with the command in a marker.
+        typed = {"type": "user", "uuid": "ut", "message": {
+            "role": "user", "content": "<command-message>worker:pr</command-message>"
+                                       "<command-name>/worker:pr</command-name>"}}
+        with tempfile.TemporaryDirectory(prefix="wf-report-") as tmp:
+            path = self.shell_session(tmp, ["ls"], extra=[typed])
+            result = self.report(str(path))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.row(result.stdout)["pr"], "10.0k")
+
+    def test_a_session_attributed_to_the_worker_plugin_counts_without_a_skill_call(self):
+        # A worker whose stages were all invoked before a handover still belongs in the report.
+        with tempfile.TemporaryDirectory(prefix="wf-report-") as tmp:
+            records = [json.loads(line) for line in
+                       self.shell_session(tmp, ["ls"]).read_text().splitlines()]
+            records = [record for record in records
+                       if "Skill" not in json.dumps(record.get("message", {}))]
+            records[0]["attributionPlugin"] = "worker"
+            path = self.write(tmp, "0badc0de-0000-4000-8000-000000000007.jsonl", records)
+            result = self.report(str(path))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.row(result.stdout)["review"], "-")  # no review stage, but a row
+
+    def test_sessions_are_reported_oldest_first(self):
+        with tempfile.TemporaryDirectory(prefix="wf-report-") as tmp:
+            self.shell_session(tmp, ["ls"], timestamp="2026-09-20T09:00:00.000Z",
+                               name="0000aaaa-0000-4000-8000-000000000008.jsonl")
+            self.shell_session(tmp, ["ls"], timestamp="2026-09-19T09:00:00.000Z",
+                               name="1111bbbb-0000-4000-8000-000000000009.jsonl")
+            result = self.report(tmp)
+        self.assertEqual([row["session"] for row in self.rows(result.stdout)], ["1111bbbb", "0000aaaa"])
+
+    def test_a_record_shape_the_report_cannot_read_is_an_error_not_a_traceback(self):
+        with tempfile.TemporaryDirectory(prefix="wf-report-") as tmp:
+            records = [json.loads(line) for line in
+                       self.shell_session(tmp, ["cat AGENTS.md"]).read_text().splitlines()]
+            records[0]["message"] = "a message that is no longer an object"
+            path = self.write(tmp, "0badc0de-0000-4000-8000-00000000000a.jsonl", records)
+            result = self.report(str(path))
+        self.assertEqual(result.returncode, 1)
+        self.assertTrue(result.stderr.startswith("error:"), result.stderr)
+        self.assertIn("2.1.278", result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+
+    def test_a_renamed_tool_block_is_reported_instead_of_silently_zero(self):
+        # The numbers come from tool_use and tool_result; if either is renamed, the report must say so
+        # rather than print a row of zeroes.
+        with tempfile.TemporaryDirectory(prefix="wf-report-") as tmp:
+            text = self.shell_session(tmp, ["cat AGENTS.md"]).read_text()
+            path = self.write(tmp, "0badc0de-0000-4000-8000-00000000000b.jsonl", [])
+            path.write_text(text.replace('"tool_result"', '"toolResult"'))
+            result = self.report(str(path))
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("tool_result", result.stderr)
+        self.assertIn("has changed", result.stderr)
+        self.assertEqual(self.rows(result.stdout), [])
 
     def test_a_missing_transcript_is_an_error_not_a_traceback(self):
         result = self.report(str(FIXTURES / "does-not-exist.jsonl"))
