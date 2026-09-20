@@ -36,5 +36,7 @@ wf_notify() {
   [ "${HERDR_ENV:-}" = 1 ] || return 0
   herdr notification show "$1" --body "${2:-}" --sound "${3:-done}" >/dev/null 2>&1 || true
 }
+# An issue number with an optional leading #, or a refusal naming what was passed.
+wf_issue_num() { local n="${1#\#}"; printf '%s' "$n" | grep -Eq '^[0-9]+$' || wf_die "issue must be a number, got '$1'"; printf '%s' "$n"; }
 # GitHub's numeric database id of issue $1 (dependency and sub-issue APIs want it, not the number).
 wf_issue_db_id() { gh api "repos/$(wf_repo_nwo)/issues/$1" --jq .id 2>/dev/null; }

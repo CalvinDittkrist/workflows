@@ -38,14 +38,15 @@ while IFS= read -r line; do
     else
       prn="-"; checks="-"; review="-"
     fi
-    rows="$rows  $issue,$branch,${agent:-none},$prn,$checks,$review,${ws:--}\n"
+    rows="$rows  $issue,$branch,${agent:-none},$prn,$checks,$review,${ws:--}
+"
     count=$((count+1));;
   esac
 done < <(git worktree list --porcelain)
 
 wf_kv repo "$(basename "$root") ($(git rev-parse --abbrev-ref HEAD))"
 printf 'worktrees[%s]{issue,branch,agent,pr,checks,review,workspace}:\n' "$count"
-printf "%b" "$rows"
+printf '%s' "$rows"
 if [ "$count" = 0 ]; then printf 'help: nothing claimed. Run claim.sh <issue> or plan.sh <idea>.\n'; fi
 
 # Frontier: agent-ready issues nobody works on and nothing blocks. Needs the REST view for the dependency summary.
@@ -53,11 +54,34 @@ nwo=$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || true)
 if [ -n "$nwo" ]; then
   claimed=$(git worktree list --porcelain | sed -nE 's#^branch refs/heads/##p' \
     | while read -r b; do wf_issue_from_branch "$b"; done | jq -R -s -c 'split("\n") | map(select(. != "") | tonumber)')
-  ready=$(gh api "repos/$nwo/issues?labels=ready-for-agent&state=open&per_page=100" 2>/dev/null || echo '[]')
+  ready_unreadable=0
+  ready=$(gh api "repos/$nwo/issues?labels=ready-for-agent&state=open&per_page=100" 2>/dev/null) || { ready='[]'; ready_unreadable=1; }
   printf '%s' "$ready" | jq -r --argjson claimed "$claimed" '
     [.[] | select(.pull_request == null)] as $all
     | [$all[] | select((.assignees|length) == 0 and ((.issue_dependencies_summary.blocked_by // 0) == 0) and (.number as $n | $claimed | index($n) | not))] as $free
     | "frontier[\($free|length)]{issue,milestone,title}:",
-      ($free[] | "  \(.number),\(.milestone.title // "-"),\(.title)"),
+      ($free[] | "  \(.number),\(.milestone.title // "-" | gsub("[[:cntrl:]\u2028\u2029]"; " ")),\(.title | gsub("[[:cntrl:]\u2028\u2029]"; " "))"),
       (if ($all|length) > ($free|length) then "waiting: \(($all|length) - ($free|length)) ready-for-agent issue(s) blocked, assigned or claimed" else empty end)'
+  if [ "$ready_unreadable" != 0 ]; then printf 'note: could not read the agent-ready issues; the frontier is empty, not idle.\n'; fi
+
+  # Ready for acceptance: open specs with native sub-issues, all of them closed. Derived per run, no state.
+  acc_rows=""; acc_count=0; acc_first=""; acc_unknown=0; specs_unreadable=0
+  specs=$(gh api --paginate "repos/$nwo/issues?labels=spec&state=open&per_page=100" 2>/dev/null | jq -s -c 'add // []') \
+    || { specs='[]'; specs_unreadable=1; }
+  while IFS= read -r spec; do
+    [ -n "$spec" ] || continue
+    if ! subs=$(gh api --paginate "repos/$nwo/issues/$spec/sub_issues?per_page=100" 2>/dev/null | jq -s -c 'add // []'); then
+      acc_unknown=$((acc_unknown+1)); continue   # a failed read is not the same as a spec without tickets
+    fi
+    tally=$(printf '%s' "$subs" | jq -r '"\(length) \([.[] | select(.state == "open")] | length)"' 2>/dev/null || echo '0 0')
+    [ "${tally% *}" -gt 0 ] && [ "${tally#* }" -eq 0 ] || continue
+    acc_rows="$acc_rows$(printf '%s' "$specs" | jq -r --argjson n "$spec" '.[] | select(.number == $n) | "  \(.number),\(.milestone.title // "-" | gsub("[[:cntrl:]\u2028\u2029]"; " ")),\(.title | gsub("[[:cntrl:]\u2028\u2029]"; " "))"')
+"
+    acc_count=$((acc_count+1)); [ -n "$acc_first" ] || acc_first="$spec"
+  done < <(printf '%s' "$specs" | jq -r '.[] | select(.pull_request == null) | .number')
+  printf 'acceptance[%s]{issue,milestone,title}:\n' "$acc_count"
+  printf '%s' "$acc_rows"
+  if [ "$acc_count" != 0 ]; then printf 'help: every ticket is closed; accept the spec in a planning session, e.g. /orchestrator:plan #%s.\n' "$acc_first"; fi
+  if [ "$acc_unknown" != 0 ]; then printf 'note: could not read the sub-issues of %s spec(s); they are not listed.\n' "$acc_unknown"; fi
+  if [ "$specs_unreadable" != 0 ]; then printf 'note: could not read the open specs; the section is empty, not idle.\n'; fi
 fi
