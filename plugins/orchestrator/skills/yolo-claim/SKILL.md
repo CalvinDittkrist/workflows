@@ -1,6 +1,6 @@
 ---
 name: yolo-claim
-description: Claim a GitHub issue in yolo mode. The worker merges its own PR once CI and reviewers are green, then cleans up its worktree.
+description: Claim a ready-for-agent GitHub issue in yolo mode. The worker merges its own PR once CI and reviewers are green, then cleans up its worktree.
 argument-hint: <issue> [--sandbox] [--force] [--base <branch>]
 disable-model-invocation: true
 ---

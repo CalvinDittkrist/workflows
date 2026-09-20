@@ -5,7 +5,7 @@ Coordinator session for one repository. Start it in the main checkout inside a H
 | Skill | Script | Effect |
 | --- | --- | --- |
 | `/orchestrator:plan <idea words \| #issue> [--base b]` | `plan.sh` | branch `plan/<slug>`, topic or issue in the branch description, worktree, Herdr workspace, start `claude --agent planner … /planner:plan` |
-| `/orchestrator:claim <issue> [--sandbox] [--force] [--base b]` | `claim.sh` | validate issue (open and `ready-for-agent`, or `--force`), branch `<type>/<n>-<slug>`, worktree in `.claude/worktrees/`, Herdr workspace, start `claude --agent worker … /worker:work` |
+| `/orchestrator:claim <issue> [--sandbox] [--force] [--base b]` | `claim.sh` | validate issue (open, and `ready-for-agent` unless `--force`), branch `<type>/<n>-<slug>`, worktree in `.claude/worktrees/`, Herdr workspace, start `claude --agent worker … /worker:work` |
 | `/orchestrator:yolo-claim <issue> [--force]` | `claim.sh --yolo` | same, worker merges itself when green |
 | `/orchestrator:board` | `board.sh` | table: issue (or `plan`), branch, agent state, PR, checks, review, workspace; then the frontier with each issue's milestone: open `ready-for-agent` issues with no open blocker, no assignee and no worktree |
 | `/orchestrator:merge <pr>` | `merge.sh` | refuse unless CLEAN, checks pass, no unresolved threads, no changes requested; remove workspace + worktree, squash-merge, delete branches, ff main; a promotion PR from `dev` gets a merge commit and keeps `dev` |

@@ -31,8 +31,9 @@ wf_slug() {
 # Branch convention: <type>/<issue>-<slug>. The issue number is the only contract the worker hook relies on.
 wf_issue_from_branch() { printf '%s\n' "$1" | sed -nE 's#^[a-z]+/([0-9]+)-.*#\1#p'; }
 
-# True when the comma separated label list $1 contains the label $2.
-wf_has_label() { case ",$1," in *",$2,"*) return 0 ;; esac; return 1; }
+# True when the issue JSON $1 (as gh prints it) carries the label $2. Compared name by name, because a
+# GitHub label may itself contain a comma and a joined list would then match on a substring.
+wf_issue_has_label() { printf '%s' "$1" | jq -e --arg l "$2" 'any(.labels[]?; .name == $l)' >/dev/null 2>&1; }
 
 # Map issue labels (comma separated) to a branch type.
 wf_branch_type() {
@@ -53,6 +54,14 @@ wf_notify() {
 wf_workspace_for_path() {
   [ "${HERDR_ENV:-}" = 1 ] || return 0
   herdr workspace list 2>/dev/null | jq -r --arg p "$1" '.result.workspaces[]? | select(.worktree.checkout_path == $p) | .workspace_id' | head -n1
+}
+
+# Branch of the linked worktree that belongs to issue $1, or empty. Derived from the branch names, not from
+# the issue's labels, so a claim or an abandon still finds the worktree after the labels changed. Plan branches
+# (plan/<slug>) are skipped: their slug can start with a number without belonging to that issue.
+wf_branch_for_issue() {
+  git worktree list --porcelain | sed -nE 's#^branch refs/heads/##p' \
+    | awk -v n="$1" '$0 !~ "^plan/" && $0 ~ "^[a-z]+/" n "-" { print; exit }'
 }
 
 # Path of the linked worktree checked out on branch $1 (from the main root), or empty.

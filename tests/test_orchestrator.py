@@ -23,12 +23,14 @@ class ClaimTests(ShimTest):
         self.assertEqual(self.git("status", "--porcelain"), "", "worktree dir must not show up as untracked")
         self.assertIn("herdr workspace focus wR", self.calls())
         self.assertIn("agent_status: working", r.stdout)
+        self.assertIn("next: board.sh shows progress; merge.sh <pr> when the PR is ready", r.stdout)
 
     def test_yolo_flag_is_passed_to_the_worker_session(self):
         r = self.run_script(ORCH / "claim.sh", "12", "--yolo")
         self.assertEqual(r.returncode, 0, r.stderr)
         start = [c for c in self.calls() if c.startswith("herdr agent start")][0]
         self.assertIn('"WF_MODE":"yolo"', start)
+        self.assertIn("this worker merges its own PR", r.stdout)
 
     def test_claude_args_are_word_split_into_the_worker_session_argv(self):
         r = self.run_script(ORCH / "claim.sh", "12", WF_CLAUDE_ARGS=f"--model sonnet --plugin-dir {self.base}")
@@ -91,12 +93,17 @@ class ClaimTests(ShimTest):
         start = [c for c in self.calls() if c.startswith("herdr agent start")][0]
         self.assertIn('"WF_MODE":"yolo"', start)
 
-    def test_a_claimed_issue_stays_already_claimed_without_the_label(self):
+    def test_a_claimed_issue_stays_already_claimed_after_its_labels_changed(self):
         self.run_script(ORCH / "claim.sh", "14", "--force")
-        self.reset_calls()
         r = self.run_script(ORCH / "claim.sh", "14")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("status: already-claimed", r.stdout)
+        # Relabelling the issue would derive feat/12-… today, but the worktree on fix/12-… is still its own.
+        self.run_script(ORCH / "claim.sh", "12")
+        r = self.run_script(ORCH / "claim.sh", "12", SHIM_ISSUE_12_LABELS="enhancement")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("status: already-claimed", r.stdout)
+        self.assertIn("branch: fix/12-fix-login-timeout", r.stdout)
 
     def test_claim_refuses_outside_herdr(self):
         r = self.run_script(ORCH / "claim.sh", "12", HERDR_ENV="")
@@ -465,6 +472,11 @@ class BoardAndAbandonTests(ShimTest):
         self.assertNotIn("41,", r.stdout); self.assertNotIn("43,", r.stdout); self.assertNotIn("12,Fix", r.stdout)
         self.assertIn("waiting: 3 ready-for-agent issue(s)", r.stdout)
 
+    def test_abandon_names_an_issue_without_a_worktree(self):
+        r = self.run_script(ORCH / "abandon.sh", "12")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("no worktree branch for issue #12", r.stderr)
+
     def test_abandon_refuses_dirty_or_unpushed_without_force(self):
         self.run_script(ORCH / "claim.sh", "12")
         path = self.repo / ".claude/worktrees/fix-12-fix-login-timeout"
@@ -477,9 +489,6 @@ class BoardAndAbandonTests(ShimTest):
         self.assertFalse(path.exists())
         self.assertNotIn("fix/12", self.git("branch", "--list"))
 
-
-if __name__ == "__main__":
-    unittest.main()
 
 
 class GhAxiContextHookTests(ShimTest):
@@ -506,3 +515,5 @@ class GhAxiContextHookTests(ShimTest):
         self.assertEqual(self.hook(source="resume", remote=None), "", "resume")
         self.assertEqual(self.hook(agent_id="a1", remote=None), "", "subagent")
         self.assertFalse([c for c in self.calls() if c.startswith("gh-axi")])
+if __name__ == "__main__":
+    unittest.main()
