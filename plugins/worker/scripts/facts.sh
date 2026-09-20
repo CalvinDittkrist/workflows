@@ -7,3 +7,11 @@ wf_kv issue "#$(wf_issue)"
 wf_kv base "$(wf_base_branch)"
 wf_kv reviewers "${WF_REVIEWERS:-code,security,docs,tests,senior}"
 wf_kv max_rounds "${WF_REVIEW_ROUNDS:-3}"
+
+# A claim starts a worker with background tasks disabled, so a subagent's report is the result of the Agent
+# call; a session started or restarted by hand has no such setting and its subagents run in the background,
+# where ending the turn is how the agent waits (ADR 0016). Claude Code reads the variable as a boolean.
+case "$(printf '%s' "${CLAUDE_CODE_DISABLE_BACKGROUND_TASKS:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" in
+  1|true|yes|on) wf_kv subagents "foreground" ;;
+  *) wf_kv subagents "background" ;;
+esac
