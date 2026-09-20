@@ -294,8 +294,27 @@ class ReleaseTests(ShimTest):
         self.assertIn("release: https://github.com/o/r/releases/tag/v1.2.0", r.stdout)
         self.assertIn("status: released", r.stdout)
 
+    def test_a_dev_branch_beside_the_default_main_is_not_a_promotion_model(self):
+        r = self.run_script(ORCH / "release.sh", "v1.2.0", SHIM_MILESTONES_FIXTURE=self.milestones(), SHIM_BRANCHES="main dev")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("model: main\n", r.stdout)
+        self.assertEqual(self.mutations(), [
+            "gh release create v1.2.0 --target sha-main --title v1.2.0 --generate-notes",
+            "gh api --method PATCH repos/o/r/milestones/3 -f state=closed",
+        ])
+
+    def test_a_default_branch_outside_the_two_models_or_unreadable_stops_before_anything_changes(self):
+        for env, text in [(dict(SHIM_DEFAULT_BRANCH="trunk"), "default branch trunk is neither main nor dev"),
+                          (dict(SHIM_DEFAULT_BRANCH="dev", SHIM_BRANCHES="dev"), "o/r has no main branch"),
+                          (dict(SHIM_DEFAULT_ERROR="1"), "cannot read the default branch of o/r"),
+                          (dict(SHIM_BRANCH_ERROR="main"), "cannot read branch main of o/r")]:
+            r = self.run_script(ORCH / "release.sh", "v1.2.0", SHIM_MILESTONES_FIXTURE=self.milestones(), **env)
+            self.assertNotEqual(r.returncode, 0, env)
+            self.assertIn(f"error: {text}", r.stderr)
+        self.assertEqual(self.mutations(), [])
+
     def test_dev_and_main_open_the_promotion_pr_and_wait_without_tagging(self):
-        env = dict(SHIM_MILESTONES_FIXTURE=self.milestones(), SHIM_BRANCHES="main dev")
+        env = dict(SHIM_MILESTONES_FIXTURE=self.milestones(), SHIM_BRANCHES="main dev", SHIM_DEFAULT_BRANCH="dev")
         r = self.run_script(ORCH / "release.sh", "v1.2.0", **env)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("model: dev+main", r.stdout)
@@ -314,7 +333,7 @@ class ReleaseTests(ShimTest):
         self.assertEqual(self.mutations(), [])
 
     def test_promotion_ignores_fork_prs_and_refuses_while_another_promotion_is_open(self):
-        env = dict(SHIM_MILESTONES_FIXTURE=self.milestones(), SHIM_BRANCHES="main dev")
+        env = dict(SHIM_MILESTONES_FIXTURE=self.milestones(), SHIM_BRANCHES="main dev", SHIM_DEFAULT_BRANCH="dev")
         fork = {"number": 66, "title": "chore(release): v1.2.0", "state": "MERGED", "url": "https://github.com/o/r/pull/66",
                 "mergeCommit": {"oid": "evil"}, "isCrossRepository": True}
         r = self.run_script(ORCH / "release.sh", "v1.2.0", SHIM_PROMOTION_FIXTURE=self.promotions(fork), **env)
@@ -334,12 +353,6 @@ class ReleaseTests(ShimTest):
         self.assertIn("error: cannot check whether tag v1.2.0 exists", r.stderr)
         self.assertEqual(self.mutations(), [])
 
-    def test_a_failed_dev_lookup_stops_instead_of_releasing_main_alone(self):
-        r = self.run_script(ORCH / "release.sh", "v1.2.0", SHIM_MILESTONES_FIXTURE=self.milestones(), SHIM_BRANCHES="main dev", SHIM_BRANCH_ERROR="dev")
-        self.assertNotEqual(r.returncode, 0)
-        self.assertIn("error: cannot read branch dev of o/r", r.stderr)
-        self.assertEqual(self.mutations(), [])
-
     def test_a_failed_milestone_close_says_the_release_is_already_published(self):
         r = self.run_script(ORCH / "release.sh", "v1.2.0", SHIM_MILESTONES_FIXTURE=self.milestones(), SHIM_MILESTONE_CLOSE_FAILS="1")
         self.assertNotEqual(r.returncode, 0)
@@ -349,7 +362,7 @@ class ReleaseTests(ShimTest):
         older = {"number": 60, "title": "chore(release): v1.1.0", "state": "MERGED", "url": "https://github.com/o/r/pull/60", "mergeCommit": {"oid": "old"}}
         closed = {"number": 70, "title": "chore(release): v1.2.0", "state": "CLOSED", "url": "https://github.com/o/r/pull/70", "mergeCommit": None}
         merged = {"number": 77, "title": "chore(release): v1.2.0", "state": "MERGED", "url": "https://github.com/o/r/pull/77", "mergeCommit": {"oid": "abc123"}}
-        r = self.run_script(ORCH / "release.sh", "v1.2.0", SHIM_MILESTONES_FIXTURE=self.milestones(), SHIM_BRANCHES="main dev",
+        r = self.run_script(ORCH / "release.sh", "v1.2.0", SHIM_MILESTONES_FIXTURE=self.milestones(), SHIM_BRANCHES="main dev", SHIM_DEFAULT_BRANCH="dev",
                             SHIM_PROMOTION_FIXTURE=self.promotions(older, closed, merged))
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("promotion: https://github.com/o/r/pull/77 (merged)", r.stdout)
@@ -366,7 +379,7 @@ class ReleaseTests(ShimTest):
             (dict(SHIM_MILESTONES_FIXTURE=self.milestones(), SHIM_TAGS="v1.2.0"), "tag v1.2.0 already exists"),
         ]
         for env, text in cases:
-            r = self.run_script(ORCH / "release.sh", "v1.2.0", SHIM_BRANCHES="main dev", **env)
+            r = self.run_script(ORCH / "release.sh", "v1.2.0", SHIM_BRANCHES="main dev", SHIM_DEFAULT_BRANCH="dev", **env)
             self.assertNotEqual(r.returncode, 0, env)
             self.assertIn(f"error: {text}", r.stderr)
         r = self.run_script(ORCH / "release.sh", "1.2", SHIM_MILESTONES_FIXTURE=self.milestones())

@@ -110,7 +110,8 @@ case "$*" in
   "repo view --json owner -q .owner.login") echo "o" ;;
   "repo view --json name -q .name") echo "r" ;;
   "repo view --json nameWithOwner -q .nameWithOwner") echo "o/r" ;;
-  "repo view --json defaultBranchRef -q .defaultBranchRef.name") echo "main" ;;
+  "repo view --json defaultBranchRef -q .defaultBranchRef.name")
+    [ -z "${SHIM_DEFAULT_ERROR:-}" ] || { echo "gh: Server Error (HTTP 502)" >&2; exit 1; }; echo "${SHIM_DEFAULT_BRANCH:-main}" ;;
   "pr view 7 --json number,title,url,state,isDraft,mergeable,mergeStateStatus,headRefName,baseRefName,isCrossRepository,reviewDecision,statusCheckRollup")
     cat "${SHIM_PR_FIXTURE:?}" ;;
   "pr merge 7 --squash --delete-branch"|"pr merge 7 --squash"|"pr merge 7 --merge") exit 0 ;;
@@ -119,7 +120,8 @@ case "$*" in
     echo '{"number":7,"url":"https://github.com/o/r/pull/7","state":"OPEN","isDraft":false,"mergeStateStatus":"CLEAN","statusCheckRollup":'"$rollup"',"reviews":[],"commits":[{"committedDate":"'"${SHIM_HEAD_AT:-2026-09-17T10:00:00Z}"'"}]}' ;;
   "pr list --state open --limit 100 --json"*) echo '[]' ;;
   "api graphql"*) echo "${SHIM_UNRESOLVED:-0}" ;;
-  # Milestones and releases. SHIM_MILESTONES_FIXTURE: JSON array; SHIM_TAGS / SHIM_BRANCHES: space-separated names.
+  # Milestones and releases. SHIM_MILESTONES_FIXTURE: JSON array; SHIM_TAGS / SHIM_BRANCHES: space-separated names;
+  # SHIM_DEFAULT_BRANCH: the default branch (main).
   "api --paginate repos/o/r/milestones?state=all&per_page=100") cat "${SHIM_MILESTONES_FIXTURE:-/dev/null}"; [ -n "${SHIM_MILESTONES_FIXTURE:-}" ] || echo '[]' ;;
   "api --paginate repos/o/r/milestones?state=open&per_page=100")
     if [ -n "${SHIM_MILESTONES_FIXTURE:-}" ]; then jq '[.[] | select(.state == "open")]' "$SHIM_MILESTONES_FIXTURE"; else echo '[]'; fi ;;

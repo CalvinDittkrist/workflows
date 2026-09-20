@@ -33,6 +33,20 @@ workflow_jobs() {
 }
 # is_check_job: the workflow_jobs output on stdin has a job GitHub reports as the check `check`.
 is_check_job() { tr ',' '\n' | sed -E 's/^ +//' | grep -Eq '^check$|\("check"\)$'; }
+# ci_check_workflow <root>: the first workflow, relative to root, with the job check; empty when none has one.
+# It reads the file system, like the other baseline lookups, so an ignored workflow counts too.
+ci_check_workflow() {
+  local w
+  for w in "$1"/.github/workflows/*.yml "$1"/.github/workflows/*.yaml; do
+    [ -f "$w" ] && workflow_jobs "$w" | is_check_job && { printf '%s' "${w#"$1"/}"; return; }
+  done; return 0
+}
+
+# The names the README and the licence may have, the standard's name first. facts.sh, check.sh and scaffold.sh
+# accept exactly these, so the audit, the check and the scaffold agree on what exists. The other baseline files
+# have one or two names each, listed where they are used (the Makefile in make's order of precedence).
+# shellcheck disable=SC2034
+WF_README_NAMES="README.md README.rst README.txt README readme.md" WF_LICENSE_NAMES="LICENSE LICENSE.md LICENSE.txt COPYING"
 
 # The apply phase. Everything it creates on GitHub is found again by these names, so a second run updates
 # instead of duplicating: the tag, its ruleset, the catalogue issue, the cleanup branch.

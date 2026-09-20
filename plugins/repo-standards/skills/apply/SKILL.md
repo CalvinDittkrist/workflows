@@ -1,6 +1,6 @@
 ---
 name: apply
-description: Apply the findings approved in /repo-standards:standardize. Pushes the protected pre-standard tag, opens the skill catalogue issue, the cleanup pull request and agent-ready issues, and after the merge configures the GitHub workspace and runs the check. Run it again to continue after a stop.
+description: Apply the findings approved in /repo-standards:standardize, in an existing or an empty repository. Pushes the protected pre-standard tag, opens the skill catalogue issue, the cleanup pull request and agent-ready issues, and after the merge configures the GitHub workspace and runs the check. Run it again to continue after a stop.
 disable-model-invocation: true
 allowed-tools: Bash(${CLAUDE_PLUGIN_ROOT}/scripts/approve.sh), Bash(${CLAUDE_PLUGIN_ROOT}/scripts/backup.sh), Bash(${CLAUDE_PLUGIN_ROOT}/scripts/cleanup.sh *), Bash(${CLAUDE_PLUGIN_ROOT}/scripts/issues.sh), Bash(${CLAUDE_PLUGIN_ROOT}/scripts/finalize.sh)
 ---

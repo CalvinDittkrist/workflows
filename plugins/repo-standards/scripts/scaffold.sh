@@ -5,7 +5,7 @@
 # --name and --default default to the directory name and the branch origin/HEAD names (else the current one);
 # the apply phase passes both, because it scaffolds a worktree.
 # --skip leaves the files of a category alone: agent-config (AGENTS.md, CLAUDE.md, .claude/settings.json),
-# docs (docs/, the PR template), tests-ci (Makefile, the CI job check), workspace (.github/dependabot.yml).
+# docs (README.md, docs/, the PR template), tests-ci (Makefile, the CI job check), workspace (.github/dependabot.yml).
 # Settings: the marketplace and the workflow plugins go in through `claude plugin ... --scope project`, every
 # other plugin enabled at project scope is disabled, and the template's attribution, env and permissions
 # are merged in (existing env values win, permission lists are joined).
@@ -45,6 +45,8 @@ put() { # put <category> <template> <target> [<name make or GitHub also reads in
   sed -e "s|{{REPO}}|$(esc "$repo")|g" -e "s|{{BRANCHES}}|$(esc "$branches")|g" -e "s|{{RUN_CMD}}|<fill in>|g" "$tpl/$2" > "$t"
   printf 'created: %s\n' "$3"
 }
+# shellcheck disable=SC2086 # a list of names
+put docs README.md.tpl README.md $WF_README_NAMES
 put agent-config AGENTS.md.tpl AGENTS.md
 put agent-config CLAUDE.md.tpl CLAUDE.md
 put tests-ci Makefile Makefile GNUmakefile makefile
@@ -56,10 +58,7 @@ put docs PULL_REQUEST_TEMPLATE.md .github/PULL_REQUEST_TEMPLATE.md .github/pull_
 put workspace dependabot.yml .github/dependabot.yml .github/dependabot.yaml
 # The CI job named check, unless a workflow already has one.
 if ! skipped tests-ci; then
-  gate=""
-  for w in "$root"/.github/workflows/*.yml "$root"/.github/workflows/*.yaml; do
-    [ -f "$w" ] && workflow_jobs "$w" | is_check_job && { gate=${w#"$root"/}; break; }
-  done
+  gate=$(ci_check_workflow "$root")
   if [ -n "$gate" ]; then printf 'kept: %s (has the job check)\n' "$gate"; else put tests-ci check.yml .github/workflows/check.yml; fi
 fi
 

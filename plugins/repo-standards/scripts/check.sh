@@ -22,6 +22,12 @@ files() {
 }
 all=$(files | sort -u)
 
+# shellcheck disable=SC2086 # a list of names
+readme=$(first_of "$root" $WF_README_NAMES)
+if [ -n "$readme" ]; then
+  ok "$readme"; grep -q '<fill in>' "$root/$readme" && warn "$readme still has <fill in> placeholders"
+else bad "README.md missing; say what the repository is and how to use it"; fi
+
 # Instruction files: AGENTS.md is the source, CLAUDE.md next to it imports it. Root always; one pair
 # per area in a monorepo. Hidden directories are left to the agent configuration rule below.
 pair_dirs=$( { printf '.\n'; printf '%s\n' "$all" | grep -E '(^|/)(AGENTS|CLAUDE)\.md$' | grep -Ev '(^|/)\.' | sed -E 's#(^|/)[^/]+$##; s#^$#.#'; } | sort -u)
@@ -47,6 +53,11 @@ if [ -n "$mk" ] && grep -Eq '^([^:#=[:space:]][^:#=]*[[:space:]])?check([[:space
   grep -q '<fill in>' "$root/$mk" && warn "$mk still has <fill in> placeholders"
 else bad "no check target in a Makefile; add one that runs everything CI gates on (make check is the gate)"; fi
 
+# CI runs the gate in a job named check, the one required status check.
+gate=$(ci_check_workflow "$root")
+if [ -n "$gate" ]; then ok "$gate has the CI job check"
+else bad "no CI job named check in .github/workflows; add one that runs make check (it is the required status check)"; fi
+
 if [ -f "$root/docs/architecture.md" ]; then
   if [ "$(lines "$root/docs/architecture.md")" -ge 15 ]; then ok "docs/architecture.md"; else bad "docs/architecture.md is a stub ($(lines "$root/docs/architecture.md") lines)"; fi
 else bad "docs/architecture.md missing"; fi
@@ -62,9 +73,44 @@ if [ -d "$root/docs/adr" ]; then
 else bad "docs/adr/ missing"; fi
 pr=$(first_of "$root/.github" PULL_REQUEST_TEMPLATE.md pull_request_template.md)
 if [ -n "$pr" ]; then ok ".github/$pr"; else warn ".github/PULL_REQUEST_TEMPLATE.md missing"; fi
+if [ -f "$root/docs/glossary.md" ]; then ok "docs/glossary.md"; else warn "docs/glossary.md missing; define the terms the code and issues use"; fi
+dep=$(first_of "$root/.github" dependabot.yml dependabot.yaml)
+if [ -n "$dep" ]; then ok ".github/$dep"; else warn ".github/dependabot.yml missing; add grouped version updates per package manager"; fi
+
+# Public repositories add a licence and a security policy. Visibility needs GitHub, so offline this is skipped.
+vis=""
+if command -v gh >/dev/null 2>&1 && command -v jq >/dev/null 2>&1 \
+  && nwo=$(cd "$root" && gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null); then
+  vis=$(cd "$root" && gh api "repos/$nwo" 2>/dev/null | jq -r '.visibility // empty' 2>/dev/null || true)
+fi
+case "$vis" in
+  public)
+    # shellcheck disable=SC2086 # a list of names
+    lic=$(first_of "$root" $WF_LICENSE_NAMES)
+    if [ -n "$lic" ]; then ok "$lic"; else bad "LICENSE missing; a public repository needs a licence"; fi
+    if has "$root" SECURITY.md; then ok "SECURITY.md"
+    elif has "$root/.github" SECURITY.md; then ok ".github/SECURITY.md"
+    else bad "SECURITY.md missing; a public repository needs a security policy"; fi ;;
+  "") printf 'skip: licence and security policy not checked (visibility unknown without GitHub)\n' ;;
+esac
 if [ -f "$root/.claude/settings.json" ]; then
   if command -v jq >/dev/null 2>&1; then
-    if jq -e '.enabledPlugins["worker@workflows"] == true' "$root/.claude/settings.json" >/dev/null 2>&1; then ok "worker plugin enabled"; else warn "worker@workflows not enabled in .claude/settings.json"; fi
+    # The workflow plugins of the settings template are enabled at project scope, and nothing else.
+    tpl="$(dirname "$0")/../templates/settings.json"
+    while IFS= read -r p; do
+      if jq -e --arg p "$p" '.enabledPlugins[$p] == true' "$root/.claude/settings.json" >/dev/null 2>&1; then ok "$p enabled"
+      else warn "$p not enabled in .claude/settings.json"; fi
+    done < <(jq -r '.enabledPlugins | keys[]' "$tpl")
+    while IFS= read -r p; do
+      [ -z "$p" ] || warn "$p enabled at project scope; the standard enables only the workflow plugins, disable it"
+    done < <(jq -r --slurpfile t "$tpl" '($t[0].enabledPlugins | keys) as $w
+      | (.enabledPlugins // {}) | to_entries[] | select(.value == true and (.key | IN($w[]) | not)) | .key' "$root/.claude/settings.json" 2>/dev/null)
+    if jq -e 'has("hooks")' "$root/.claude/settings.json" >/dev/null 2>&1; then
+      bad ".claude/settings.json has hooks: agent configuration the standard does not define; remove them"
+    fi
+    if jq -e '.enableAllProjectMcpServers == true or ((.enabledMcpjsonServers // []) | length > 0) or ((.mcpServers // {}) | length > 0)' "$root/.claude/settings.json" >/dev/null 2>&1; then
+      warn ".claude/settings.json enables MCP servers; keep them only if something in the repository uses them"
+    fi
     if jq -e '(.attribution.commit // "x") == ""' "$root/.claude/settings.json" >/dev/null 2>&1; then ok "commit attribution off"; else warn "attribution.commit not empty; agent co-author lines will be added"; fi
   fi
 else warn ".claude/settings.json missing (workflow plugins not configured)"; fi
@@ -84,6 +130,7 @@ extra=$(printf '%s\n' "$all" | awk -F/ '
       }
       if (c ~ /^\.aider/ || c ~ /^(\.agents|\.amazonq|\.augment|\.clinerules|\.codex|\.continue|\.cursor|\.cursorignore|\.cursorindexingignore|\.cursorrules|\.gemini|\.goose|\.goosehints|\.junie|\.kilocode|\.kiro|\.opencode|\.qwen|\.roo|\.roomodes|\.roorules|\.trae|\.windsurf|\.windsurfrules|GEMINI\.md|opencode\.json|skills-lock\.json|\.skill-lock\.json)$/) { name(i); next }
       if (i == 1 && c == ".github" && NF > 1 && $2 ~ /^(copilot-instructions\.md|instructions|prompts|chatmodes|agents)$/) { name(i); next }
+      if (i == NF && (c == "CLAUDE.local.md" || c == "AGENT.md" || c == ".rules" || c == ".worktreeinclude")) { print $0; next }
     }
   }' | sort -u)
 if [ -z "$extra" ]; then ok "no agent configuration outside the standard"
@@ -92,6 +139,24 @@ else
 $extra
 EOF
 fi
+
+# MCP configuration needs judgement: it stays when something in the repository uses it.
+while IFS= read -r m; do
+  [ -z "$m" ] || warn "$m: MCP configuration; keep it only if something in the repository uses it"
+done <<EOF
+$(printf '%s\n' "$all" | grep -E '(^|/)\.mcp\.json$' || true)
+EOF
+# GitHub Actions that run an AI reviewer or agent go. Bot reviewers installed as GitHub apps are not workflows.
+ai=$(printf '%s\n' "$all" | grep -E '^\.github/workflows/[^/]+\.ya?ml$' | while IFS= read -r w; do
+  [ -f "$root/$w" ] || continue
+  sed -nE 's#^[[:space:]-]*uses:[[:space:]]*["'"'"']?((anthropics/claude-code(-base)?-action|openai/codex-action|google-github-actions/run-gemini-cli|coderabbitai/[A-Za-z0-9_.-]+)).*#\1#p' "$root/$w" \
+    | sort -u | while IFS= read -r u; do printf '%s: %s\n' "$w" "$u"; done # the file name is data, never a sed script
+done)
+while IFS= read -r a; do
+  [ -z "$a" ] || bad "$a runs an AI reviewer or agent in CI; remove it"
+done <<EOF
+$ai
+EOF
 
 # GitHub workspace drift, when GitHub is reachable (gh authenticated with admin rights). Differences warn and
 # never fail, so the gate stays usable offline and in CI; manual steps are left to workspace.sh itself.
