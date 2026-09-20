@@ -41,13 +41,17 @@ wf_issue_num() { local n="${1#\#}"; printf '%s' "$n" | grep -Eq '^[0-9]+$' || wf
 # GitHub's numeric database id of issue $1 (dependency and sub-issue APIs want it, not the number).
 wf_issue_db_id() { gh api "repos/$(wf_repo_nwo)/issues/$1" --jq .id 2>/dev/null; }
 
-# --- The acceptance of a spec (accept-facts.sh, accept-report.sh, accept-close.sh) ---
+# --- The acceptance of a spec (accept-facts.sh, accept-close.sh, accept-due.sh) ---
 
 # Issue $2 of repository $1 as JSON, or a refusal naming it.
 wf_issue_json() { gh api "repos/$1/issues/$2" 2>/dev/null || wf_die "could not read issue #$2 in $1; does it exist, and is gh authenticated for this repository?"; }
 # The native sub-issues of issue $2 of repository $1 as one JSON array, empty where there are none.
 # Fails (non-zero, no output) where the API is unavailable, which is not the same as a spec without tickets.
-wf_sub_issues() { gh api --paginate "repos/$1/issues/$2/sub_issues?per_page=100" 2>/dev/null | jq -s -c 'add // []'; }
+wf_sub_issues() {
+  local raw   # captured first: through a pipe the status would be jq's, which turns an outage into "no tickets"
+  raw=$(gh api --paginate "repos/$1/issues/$2/sub_issues?per_page=100" 2>/dev/null) || return 1
+  printf '%s' "$raw" | jq -s -c 'add // []'
+}
 # Refuse anything but an open spec issue. $1 the number, $2 its JSON.
 wf_require_open_spec() {
   local labels; labels=$(printf '%s' "$2" | jq -r '[.labels[]?.name] | join(",")')
@@ -69,5 +73,8 @@ wf_require_base_up_to_date() {
   behind=$(git rev-list --count "HEAD..$ref" 2>/dev/null || echo 0)
   ahead=$(git rev-list --count "$ref..HEAD" 2>/dev/null || echo 0)
   [ "$ahead" = 0 ] || wf_warn "this worktree has $ahead commit(s) that $ref does not; the checker reads them as if they were merged"
-  [ "$behind" = 0 ] || wf_die "this worktree is $behind commit(s) behind $ref, so the checker would judge the spec against old code. Update it first: git merge --ff-only $ref"
+  [ "$behind" = 0 ] && return 0
+  # A planning branch carries no commits, so a fast-forward is the normal fix; a diverged one needs a rebase.
+  [ "$ahead" = 0 ] || wf_die "this worktree is $behind commit(s) behind $ref and has $ahead of its own, so the checker would judge the spec against old code. Capture the commits (/planner:prototype) or drop them, then: git rebase $ref"
+  wf_die "this worktree is $behind commit(s) behind $ref, so the checker would judge the spec against old code. Update it first: git merge --ff-only $ref"
 }

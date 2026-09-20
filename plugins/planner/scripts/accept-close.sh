@@ -33,6 +33,8 @@ if subs=$(wf_sub_issues "$nwo" "$spec"); then
   tickets="$tickets $(printf '%s' "$subs" | jq -r '[.[]?.number] | join(" ")')"
 elif [ -z "$tickets" ]; then
   wf_die "could not read the sub-issues of #$spec; $hint"
+else
+  wf_warn "could not read the sub-issues of #$spec; only the ticket numbers passed were checked, a gap ticket outside them stays unseen"
 fi
 tickets=$(printf '%s' "$tickets" | tr ' ' '\n' | grep -E '^[0-9]+$' | sort -un | tr '\n' ' ' || true)
 [ -n "$tickets" ] || wf_die "#$spec has no native sub-issues; $hint"
@@ -46,7 +48,6 @@ for t in $tickets; do
 done
 [ -z "$open_tickets" ] || wf_die "#$spec still has open sub-issues:$open_tickets; the acceptance runs again once they are closed"
 
-gh issue close "$spec" --comment "$(cat "$comment")" --reason completed >/dev/null \
+"$(dirname "$0")/issue.sh" close "$spec" --comment-file "$comment" --reason completed \
   || wf_die "closing #$spec failed; close it on GitHub with the comment in $comment"
-wf_kv closed "#$spec (completed)"
 wf_kv tickets "$(printf '%s' "$tickets" | wc -w | tr -d ' ') checked, all closed"

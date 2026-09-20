@@ -2,10 +2,11 @@
 name: plan
 description: Driver of a planning session. Shows the session facts and the routes, recommends one, then hands over to the stage skills the user invokes.
 disable-model-invocation: true
-allowed-tools: Bash(${CLAUDE_PLUGIN_ROOT}/scripts/facts.sh), Bash(${CLAUDE_PLUGIN_ROOT}/scripts/labels.sh)
+allowed-tools: Bash(${CLAUDE_PLUGIN_ROOT}/scripts/facts.sh), Bash(${CLAUDE_PLUGIN_ROOT}/scripts/labels.sh), Bash(${CLAUDE_PLUGIN_ROOT}/scripts/accept-due.sh)
 ---
 Session:
 !`${CLAUDE_PLUGIN_ROOT}/scripts/facts.sh`
+!`${CLAUDE_PLUGIN_ROOT}/scripts/accept-due.sh`
 !`${CLAUDE_PLUGIN_ROOT}/scripts/labels.sh`
 
 Routes:
@@ -18,4 +19,4 @@ Routes:
 Do now:
 1. Read AGENTS.md, docs/architecture.md and docs/glossary.md when they exist. Nothing else yet.
 2. If the session starts from an issue, summarize it in three lines. Otherwise restate the topic in one line.
-3. Recommend one route in one sentence and stop. When the facts say the session's issue is a spec whose tickets are all closed, the route is `/planner:accept`. The user invokes the stage skills; you never start a stage on your own.
+3. Recommend one route in one sentence and stop. When an `acceptance:` line above says the session's issue is a spec whose tickets are all closed, the route is `/planner:accept`. The user invokes the stage skills; you never start a stage on your own.

@@ -51,8 +51,8 @@ if [ -n "$nwo" ] && sj=$(gh api "repos/$nwo/issues/$spec" 2>/dev/null); then
   present=$(printf '%s' "$sj" | jq -r '.body // ""' | SECTIONS="$SECTIONS" awk '
     function trim(s) { gsub(/^[[:space:]\r]+|[[:space:]\r]+$/, "", s); return s }
     BEGIN { n = split(ENVIRON["SECTIONS"], s, "|"); for (i = 1; i <= n; i++) S[tolower(s[i])] = s[i] }
-    /^#+ / { sec = trim(substr($0, index($0, " ") + 1)); first[tolower(sec)] = ""; next }
-    { t = trim($0)
+    /^##?[[:space:]]/ { sec = trim(substr($0, index($0, " ") + 1)); first[tolower(sec)] = ""; next }   # deeper headings are content
+    { t = trim($0); sub(/^([-*][[:space:]]+)/, "", t)   # "- none" answers the section as much as "none"
       if (t != "" && tolower(sec) in S && first[tolower(sec)] == "") first[tolower(sec)] = t }
     END { for (k in first) if (first[k] != "" && tolower(first[k]) !~ /^none([[:space:][:punct:]]|$)/) print S[k] }')
 else

@@ -17,7 +17,7 @@ The spec is $ARGUMENTS, or the issue this session started on (the `issue:` line 
 
        "${CLAUDE_PLUGIN_ROOT}/scripts/accept-report.sh" <spec> <file>
 
-   On `error:` lines, correct only the format of those lines in the file and run it again. Never add, drop or reword an item. Show the report as it is. A section the report warns about was left out: ask the checker for it in the same context and add its reply to the file.
+   The verdicts are the checker's: never write, reword or drop an item to make the report pass. When it names malformed lines, delete exactly those lines, start one more `planner:spec-checker` with the same brief and the malformed lines quoted, ask it to send those items again in the format, save its reply as a second file and run the report with both files. When it warns that a section has no item, start one more `planner:spec-checker` for that section alone and add its reply as a further file. If a second run still names lines, show them and stop. Show the report as it is.
 5. Ask the user, per open item, for one of three outcomes; one answer may cover several items. Nothing is written before they answer.
    - **Gap ticket.** Write it like `/planner:tickets` does: a vertical slice with acceptance criteria, from [../tickets/template.md](../tickets/template.md), `Refines #<spec>` at the top. Show the tickets as a numbered list (title, blocked by, what it delivers) and wait for approval before publishing anything. Then, per ticket, with the spec's milestone from the facts block (omit `--milestone` when it has none):
 
