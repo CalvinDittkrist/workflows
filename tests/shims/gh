@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Test shim for gh: logs every call to $SHIM_LOG and answers from canned fixtures.
+# Test shim for gh: logs every call to $SHIM_LOG, its argv to $SHIM_ARGV_LOG, and answers from canned fixtures.
 # A request body sent with --input - is logged on the same line, so tests can assert the payload.
 body=""; case " $* " in *" --input - "*) body=$(jq -c .) ;; esac
 printf 'gh %s%s\n' "$*" "${body:+ $body}" >> "${SHIM_LOG:-/dev/null}"
+{ printf 'gh'; for a in "$@"; do printf '\037%s' "${a//$'\n'/$'\036'}"; done; printf '\n'; } >> "${SHIM_ARGV_LOG:-/dev/null}"
 
 # SHIM_GH_DOWN=1: every call fails as if GitHub were unreachable.
 if [ "${SHIM_GH_DOWN:-0}" = 1 ]; then echo "gh: error connecting to api.github.com" >&2; exit 1; fi
@@ -114,7 +115,10 @@ case "$*" in
     echo '{"number":18,"title":"Comma label","state":"OPEN","labels":[{"name":"needs,ready-for-agent"}],"url":"https://github.com/o/r/issues/18"}' ;;
   "issue view 17 --json number,title,state,labels,url")
     echo '{"number":17,"title":"Unlabelled report","state":"OPEN","labels":[],"url":"https://github.com/o/r/issues/17"}' ;;
-  "label list --json name --limit 100") echo '[{"name":"bug"},{"name":"enhancement"},{"name":"ready-for-agent"}]' ;;
+  # SHIM_NO_LABELS=1: a repository without a single label, so a run creates the whole vocabulary.
+  "label list --json name --limit 100")
+    if [ "${SHIM_NO_LABELS:-0}" = 1 ]; then echo '[]'
+    else echo '[{"name":"bug"},{"name":"enhancement"},{"name":"ready-for-agent"}]'; fi ;;
   "label create "*) exit 0 ;;
   "issue create --title "*) echo "https://github.com/o/r/issues/${SHIM_NEW_ISSUE:-42}" ;;
   "api repos/o/r/issues/"[0-9]*" --jq .id") n=$(printf '%s' "$*" | sed -E 's#.*/issues/([0-9]+).*#\1#'); echo $((1000 + n)) ;;

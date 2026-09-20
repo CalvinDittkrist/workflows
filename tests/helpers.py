@@ -66,7 +66,11 @@ class ShimTest(unittest.TestCase):
         return self.log.read_text().splitlines() if self.log.exists() else []
 
     def argv_calls(self):
-        """Each logged call as its real argv list, so quoting and word-splitting stay visible."""
+        r"""Each logged call as its real argv list, so quoting and word-splitting stay visible. The shims write
+        \x1f between arguments and \x1e for a newline inside one, so a multi-line argument stays one record.
+        No script passes either control character itself, so the substitution needs no escape of its own."""
         if not self.argv_log.exists():
             return []
-        return [line.split("\x1f") for line in self.argv_log.read_text().splitlines()]
+        # split("\n"), not splitlines(): \x1e is a line boundary to splitlines, which would undo the escape.
+        records = self.argv_log.read_text().split("\n")
+        return [[arg.replace("\x1e", "\n") for arg in record.split("\x1f")] for record in records if record]
