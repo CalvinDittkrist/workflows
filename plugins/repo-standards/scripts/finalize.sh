@@ -4,16 +4,52 @@
 # Usage: finalize.sh
 # Refuses while the pull request from chore/standardize is open or was closed without a merge, because the
 # rulesets require the job check that the pull request brings. workspace.sh --apply runs only when the
-# workspace category was approved; its snapshot is posted as a comment on the catalogue issue. The check
+# workspace category was approved; it applies the whole difference, recomputed now, so one line names where
+# that differs from the audit. Its snapshot is posted as a comment on the catalogue issue. The check
 # (check.sh) runs on the head of the default branch on origin. Exit 1 when the check or the workspace fails.
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 # shellcheck source=lib.sh
 . "$here/lib.sh"
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
+# workspace_deviation <settings applied now>: one line naming how the difference workspace.sh applied differs
+# from the `configure` findings the report recorded, in both directions. workspace.sh recomputes the difference
+# when it runs, after the cleanup pull request is merged, so it can be another one than the audit saw
+# (ADR 0016). A setting the apply phase of this run has already worked on counts as changed, so a second run
+# does not claim the report asked for something that was never needed. Nothing is skipped or aborted
+# because of a deviation; the line is there to be read. Silent when the two sides name the same settings.
+workspace_deviation() {
+  local tab=$'\t'
+  { printf '%s\n' "$1" | sed "s/^/now$tab/"
+    [ ! -f "$handled" ] || sed "s/^/before$tab/" "$handled"
+    awk -F'\t' -v OFS='\t' '$1 == "workspace" && $3 == "configure" { print "audited", $2 }' "$dir/findings"; } \
+  | awk -F'\t' '
+      $2 == "" { next }
+      $1 == "now" { if (!($2 in N)) { N[$2] = 1; nl[++nn] = $2 }; A[$2] = 1; next }
+      $1 == "before" { A[$2] = 1; next }
+      { if (!($2 in R)) { R[$2] = 1; rl[++nr] = $2 } }
+      END {
+        for (i = 1; i <= nn; i++) if (!(nl[i] in R)) extra = extra (extra == "" ? "" : ", ") nl[i]
+        for (i = 1; i <= nr; i++) if (!(rl[i] in A)) gone = gone (gone == "" ? "" : ", ") rl[i]
+        if (extra == "" && gone == "") exit
+        line = "workspace: the applied difference is not the audited one"
+        if (extra != "") line = line "; changed without a finding: " extra
+        if (gone != "") line = line "; in the report but already at the standard: " gone
+        print line
+      }'
+}
+# record_handled <settings>: add them to the settings the apply phase of this run has worked on, so a later
+# run does not report one of them as a finding the report asked for in vain.
+record_handled() {
+  { [ ! -f "$handled" ] || cat "$handled"; printf '%s\n' "$1"; } | awk 'NF && !seen[$0]++' > "$handled.tmp" \
+    && mv "$handled.tmp" "$handled"
+}
 for c in gh jq git; do command -v "$c" >/dev/null 2>&1 || die "$c is required but not on PATH"; done
 answers=$(decisions) || exit 1
 dir=$(state_dir)
+# The settings the apply phase of this run has worked on: changed, or on the plan of a run that then failed.
+# report.sh clears the file with the approvals, because a new report starts a new run.
+handled="$dir/workspace-handled"
 err=$(mktemp); tmp=$(mktemp); trap 'rm -f "$err" "$tmp"' EXIT
 github_repo || exit 1
 catalogue=$(catalogue_issue) || exit 1
@@ -60,6 +96,11 @@ case " $(categories "$answers" approve) " in
       printf 'snapshot: posted to #%s\n' "$catalogue"
     fi
     [ -s "$snap" ] || rm -f "$snap"
+    # After the snapshot is on the catalogue issue, because this only reads: the settings workspace.sh worked
+    # on, how they deviate from the audit, and the note for the next run. It never fails the run.
+    settings=$(printf '%s\n' "$out" | workspace_settings) || settings=""
+    [ "$rc" != 0 ] || workspace_deviation "$settings" || true
+    record_handled "$settings" || true
     [ "$rc" = 0 ] || { printf 'workspace: failed; fix the error above and run finalize.sh again\n'; status=1; } ;;
   *) case " $(categories "$answers" reject) " in
        *" workspace "*) printf 'workspace: rejected, left untouched\n' ;;
