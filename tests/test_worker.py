@@ -68,12 +68,24 @@ class FactsTests(ShimTest):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(r.stdout.splitlines(), [
             "mode: manual", "issue: #7", "base: main",
-            "reviewers: code,security,docs,tests,senior", "max_rounds: 3",
+            "reviewers: code,security,docs,tests,senior", "max_rounds: 3", "subagents: background",
         ])
         r = self.run_script(WORKER / "facts.sh", WF_BASE_BRANCH="main", WF_MODE="yolo", WF_ISSUE="12",
                             WF_REVIEWERS="code,senior", WF_REVIEW_ROUNDS="1")
         self.assertIn("mode: yolo\nissue: #12\n", r.stdout)
         self.assertIn("reviewers: code,senior\nmax_rounds: 1", r.stdout)
+
+    def test_the_waiting_shape_of_the_session_is_a_fact_the_review_stage_can_read(self):
+        """A claim disables background tasks, a hand-started session does not; the review stage waits by
+        collecting the tool results in the first case and by ending the turn in the second (issue #34)."""
+        self.git("checkout", "-qb", "fix/7-y")
+        for value, shape in (("1", "foreground"), ("  True ", "foreground"), ("on", "foreground"),
+                             ("0", "background"), ("", "background")):
+            with self.subTest(value=value):
+                r = self.run_script(WORKER / "facts.sh", WF_BASE_BRANCH="main",
+                                    CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=value)
+                self.assertEqual(r.returncode, 0, r.stderr)
+                self.assertIn(f"subagents: {shape}", r.stdout)
 
 
 class PrWaitTests(ShimTest):

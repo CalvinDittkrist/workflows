@@ -39,7 +39,9 @@ class ShimTest(unittest.TestCase):
                               text=True, capture_output=True).stdout
 
     def env(self, **extra):
-        env = {k: v for k, v in os.environ.items() if not k.startswith(("WF_", "HERDR_", "SHIM_"))}
+        # CLAUDE_CODE_* is stripped with the rest: the suite runs inside worker sessions, whose own settings
+        # carry CLAUDE_CODE_DISABLE_BACKGROUND_TASKS, and facts.sh reads it.
+        env = {k: v for k, v in os.environ.items() if not k.startswith(("WF_", "HERDR_", "SHIM_", "CLAUDE_CODE_"))}
         env.update({
             "PATH": f"{SHIMS}:{env['PATH']}",
             "SHIM_LOG": str(self.log),

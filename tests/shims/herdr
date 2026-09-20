@@ -27,6 +27,11 @@ case "$1 $2" in
     if [ "${SHIM_AGENT_START_FAILS:-0}" != 0 ]; then echo '{"error":{"code":"timeout"}}'; exit 1; fi
     printf '%s' "$pane" > "${SHIM_WT_ROOT:?}/.agent-pane"
     echo '{"result":{"ok":true}}' ;;
+  "pane run")
+    # A sandboxed worker is started by a command in the pane, not by `agent start`; Herdr detects the agent after.
+    printf '%s' "$3" > "${SHIM_WT_ROOT:?}/.agent-pane"
+    echo '{"result":{"type":"ok"}}' ;;
+  "agent wait") echo '{"result":{"agent_status":"idle"}}' ;;
   "pane read")
     case "${SHIM_AGENT_START_FAILS:-0}" in
       1) echo "--agent 'planner' not found. Available agents: claude, Explore" ;;

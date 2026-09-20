@@ -15,6 +15,7 @@
 | conversation language | The language the planner talks to the user in, set with `WF_PLANNER_LANGUAGE`; issues, comments and glossary terms stay English. |
 | promotion | The pull request from `dev` to `main` that carries a release in the two-level branch model. |
 | acceptance | The check of a whole spec against the code on the base branch after its tickets are closed; it ends with gap tickets or with the spec closed ([ADR 0015](adr/0015-a-spec-with-tickets-is-closed-by-an-acceptance.md)). |
+| foreground subagent | A subagent whose report comes back as the result of the Agent call, because the session has background tasks disabled. Worker sessions run this way so the agent never waits in a loop; `facts.sh` prints which shape a session has as `subagents:` ([ADR 0017](adr/0017-worker-subagents-run-in-the-foreground.md)). |
 | spec checker | The read-only subagent that judges each checkable statement of a spec during an acceptance. |
 | item | One checkable statement of a spec with its verdict, in the fixed format `item: <section> \| <statement> \| <verdict> \| <evidence> \| <confidence>`. |
 | accepted deviation | A difference between spec and code the maintainer keeps, recorded as a comment on the spec, by someone with write access, that opens with `> Accepted deviation (spec acceptance).`; where write access cannot be read the author association decides, with a warning; an acceptance does not report it again. |

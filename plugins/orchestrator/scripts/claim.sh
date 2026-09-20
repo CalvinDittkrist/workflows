@@ -70,7 +70,9 @@ fi
 
 # Session-scoped configuration travels through --settings so hooks and skills can read it from the environment.
 # The worker session disables the planner and orchestrator plugins so their skills and agents stay out of its context.
-settings=$(jq -cn --arg m "$mode" --arg i "$issue" '{env:{WF_MODE:$m, WF_ISSUE:$i}, enabledPlugins:{"planner@workflows":false, "orchestrator@workflows":false}}')
+# CLAUDE_CODE_DISABLE_BACKGROUND_TASKS keeps subagents in the foreground: the reviewer reports come back as the
+# results of the Agent calls, so the worker never spends turns waiting for them (ADR 0017).
+settings=$(jq -cn --arg m "$mode" --arg i "$issue" '{env:{WF_MODE:$m, WF_ISSUE:$i, CLAUDE_CODE_DISABLE_BACKGROUND_TASKS:"1"}, enabledPlugins:{"planner@workflows":false, "orchestrator@workflows":false}}')
 perm="${WF_WORKER_PERMISSION_MODE:-auto}"
 name=$(wf_agent_name "issue-$issue")
 # WF_CLAUDE_ARGS applies to every session, WF_WORKER_CLAUDE_ARGS to workers only (e.g. "--model sonnet", "--plugin-dir /path" while developing).

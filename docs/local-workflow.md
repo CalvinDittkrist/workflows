@@ -19,6 +19,6 @@ Actors: **you** (in the orchestrator pane), the **orchestrator** agent, one **pl
 
 Parallelism: claim as many issues as you like and plan several topics at once; `/orchestrator:board` lists each worktree with agent state (idle, working, blocked), PR, checks and review decision, then the frontier of claimable issues and the specs whose tickets are all closed, which are due for an acceptance. Blocked means the worker is asking something: switch to its pane and answer.
 
-Recovery: everything is derived from the branch name and GitHub. A dead session is restarted with `claude --agent worker` in the worktree (`--continue` keeps its history). A stuck worktree is dropped with `/orchestrator:abandon 123` (refuses to delete unpushed work without `--force`).
+Recovery: everything is derived from the branch name and GitHub. A dead session is restarted with `claude --agent worker` in the worktree (`--continue` keeps its history); pass the flags and the `--settings` object `claim.sh` builds as well, because `--continue` restores the conversation, not the session settings, and without them the worker loses the foreground subagents and carries the other plugins' skills. A stuck worktree is dropped with `/orchestrator:abandon 123` (refuses to delete unpushed work without `--force`).
 
 Per-repository variation: enable a subset of plugins, set `WF_REVIEWERS` and the other `WF_*` variables, and write what an agent must know into `AGENTS.md`. Repository-local skills, agents, commands and rules are not part of the [standard](repo-standard.md); the check fails on them.
