@@ -94,21 +94,31 @@ class ManifestTests(unittest.TestCase):
             self.assertEqual(r.returncode, 0, f"{path}\n{r.stdout}{r.stderr}")
 
 
+class ShimCallLogTests(ShimTest):
+    """The harness itself: what the shims log has to be what a test reads back."""
+
+    def test_an_argument_with_a_newline_stays_one_logged_call(self):
+        # release.sh passes a multi-line --body, so without escaping the log would read back as two calls.
+        subprocess.run(["gh", "pr", "create", "--title", "t", "--body", "one\ntwo"], env=self.env(), capture_output=True)
+        self.assertEqual(self.argv_calls(), [["gh", "pr", "create", "--title", "t", "--body", "one\ntwo"]])
+
+
 class LabelVocabularyTests(ShimTest):
     """repo-standards and planner each define the label vocabulary; drift between the copies is a bug."""
 
     # The two files that define the vocabulary, and the one label repo-standards has that the planner has not.
-    STANDARDS_FILE = "plugins/repo-standards/scripts/lib.sh"
-    PLANNER_FILE = "plugins/planner/scripts/labels.sh"
+    STANDARDS_FILE = str((STANDARDS / "lib.sh").relative_to(ROOT))
+    PLANNER_FILE = str((PLANNER / "labels.sh").relative_to(ROOT))
     PRIVATE = "skill-candidate"
 
     def standards_vocabulary(self):
         """WF_LABELS as workspace.sh feeds it into its label loop. Sourced outside a git repository, because
-        reading the vocabulary must not need one."""
-        r = subprocess.run(["bash", "-c", f'. "{STANDARDS}/lib.sh"; printf "%s\n" "$WF_LABELS"'],
+        reading the vocabulary must not need one. Split like every shell reader of the value: a pipe in the
+        description belongs to the description."""
+        r = subprocess.run(["bash", "-c", r'. "$1/lib.sh"; printf "%s\n" "$WF_LABELS"', "_", str(STANDARDS)],
                            cwd=self.base, text=True, capture_output=True)
         self.assertEqual(r.returncode, 0, r.stderr)
-        return [tuple(line.split("|")) for line in r.stdout.splitlines() if line]
+        return [tuple(line.split("|", 2)) for line in r.stdout.splitlines() if line]
 
     def planner_vocabulary(self):
         """The labels labels.sh creates in a repository that has none, with the colour and description it gives them."""
@@ -118,8 +128,10 @@ class LabelVocabularyTests(ShimTest):
         for call in self.argv_calls():
             if call[1:3] != ["label", "create"]:
                 continue
-            options = dict(zip(call[4::2], call[5::2]))
-            vocabulary.append((call[3], options["--color"], options["--description"]))
+            name, options = call[3], call[4:]
+            self.assertEqual(options[0::2], ["--color", "--description"],
+                             f"{self.PLANNER_FILE} creates {name} with other options than this test reads: {options}")
+            vocabulary.append((name, options[1], options[3]))
         return vocabulary
 
     def test_the_two_definitions_of_the_label_vocabulary_are_identical(self):

@@ -3,7 +3,7 @@
 # A request body sent with --input - is logged on the same line, so tests can assert the payload.
 body=""; case " $* " in *" --input - "*) body=$(jq -c .) ;; esac
 printf 'gh %s%s\n' "$*" "${body:+ $body}" >> "${SHIM_LOG:-/dev/null}"
-{ printf 'gh'; for a in "$@"; do printf '\037%s' "$a"; done; printf '\n'; } >> "${SHIM_ARGV_LOG:-/dev/null}"
+{ printf 'gh'; for a in "$@"; do printf '\037%s' "${a//$'\n'/$'\036'}"; done; printf '\n'; } >> "${SHIM_ARGV_LOG:-/dev/null}"
 
 # SHIM_GH_DOWN=1: every call fails as if GitHub were unreachable.
 if [ "${SHIM_GH_DOWN:-0}" = 1 ]; then echo "gh: error connecting to api.github.com" >&2; exit 1; fi
