@@ -109,6 +109,10 @@ case "$*" in
   "label create "*) exit 0 ;;
   "issue create --title "*) echo "https://github.com/o/r/issues/${SHIM_NEW_ISSUE:-42}" ;;
   "api repos/o/r/issues/"[0-9]*" --jq .id") n=$(printf '%s' "$*" | sed -E 's#.*/issues/([0-9]+).*#\1#'); echo $((1000 + n)) ;;
+  # The milestone an issue already carries. SHIM_ISSUE_MILESTONE: its title, empty (the default) means none;
+  # SHIM_ISSUE_MILESTONE_ERROR=1 makes the read fail.
+  "api repos/o/r/issues/"[0-9]*" --jq .milestone.title"*)
+    [ "${SHIM_ISSUE_MILESTONE_ERROR:-0}" = 1 ] && { echo "gh: Not Found (HTTP 404)" >&2; exit 1; }; echo "${SHIM_ISSUE_MILESTONE:-}" ;;
   "api --method POST repos/o/r/issues/"*"/sub_issues -F sub_issue_id="*) [ "${SHIM_NO_SUBISSUES:-0}" = 1 ] && { echo "HTTP 404" >&2; exit 1; }; echo '{}' ;;
   "api --method POST repos/o/r/issues/"*"/dependencies/blocked_by -F issue_id="*) [ "${SHIM_NO_DEPS:-0}" = 1 ] && { echo "HTTP 404" >&2; exit 1; }; echo '{}' ;;
   "api repos/o/r/issues?labels=ready-for-agent&state=open&per_page=100") cat "${SHIM_FRONTIER_FIXTURE:-/dev/null}"; [ -n "${SHIM_FRONTIER_FIXTURE:-}" ] || echo '[]' ;;
@@ -151,6 +155,8 @@ case "$*" in
     cat "${SHIM_PROMOTION_FIXTURE:-/dev/null}"; [ -n "${SHIM_PROMOTION_FIXTURE:-}" ] || echo '[]' ;;
   "pr create --base main --head dev "*) echo "https://github.com/o/r/pull/77" ;;
   "release create "*) echo "https://github.com/o/r/releases/tag/$3" ;;
-  "issue edit "*" --milestone "*) exit 0 ;;
+  # SHIM_ISSUE_MILESTONE_EDIT_FAILS=1 refuses to put an issue on a milestone.
+  "issue edit "*" --milestone "*)
+    [ "${SHIM_ISSUE_MILESTONE_EDIT_FAILS:-0}" = 1 ] && { echo "gh: Validation Failed (HTTP 422)" >&2; exit 1; }; exit 0 ;;
   *) echo "gh shim: unhandled: $*" >&2; exit 64 ;;
 esac
