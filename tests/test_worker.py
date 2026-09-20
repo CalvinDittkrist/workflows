@@ -32,6 +32,8 @@ class SessionStartHookTests(ShimTest):
         self.git("checkout", "-qb", "feat/12-x")
         r = self.run_script(WORKER / "session-start.sh", stdin=payload)
         self.assertEqual(r.stdout, "")
+        # A plan branch carries a topic, so plan/12-factor-app is not issue #12's worktree.
+        self.assertEqual(self.hook("plan/12-factor-app").stdout, "")
         self.assertFalse(self.calls())
 
     def test_resume_injects_only_a_short_reminder(self):

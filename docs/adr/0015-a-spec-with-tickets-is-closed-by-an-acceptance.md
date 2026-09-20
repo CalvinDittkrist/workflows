@@ -1,4 +1,4 @@
-# 0014. A spec with tickets is closed by an acceptance
+# 0015. A spec with tickets is closed by an acceptance
 
 Date: 2026-09-20
 Status: accepted

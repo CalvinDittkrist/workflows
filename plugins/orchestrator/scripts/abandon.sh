@@ -13,7 +13,7 @@ root=$(wf_main_root); cd "$root"
 
 branch="$target"
 if printf '%s' "$target" | grep -Eq '^[0-9]+$'; then
-  branch=$(git worktree list --porcelain | sed -nE 's#^branch refs/heads/##p' | while read -r b; do [ "$(wf_issue_from_branch "$b")" = "$target" ] && printf '%s\n' "$b" && break; done)
+  branch=$(wf_branch_for_issue "$target")
   [ -n "$branch" ] || wf_die "no worktree branch for issue #$target"
 fi
 path=$(wf_worktree_path_for_branch "$branch")
