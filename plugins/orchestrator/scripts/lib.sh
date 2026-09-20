@@ -75,25 +75,29 @@ wf_check_claude_args() {
       if [ -z "$w" ] || [ "${w#-}" != "$w" ]; then wf_die "WF_CLAUDE_ARGS/$var: --plugin-dir needs a path (got '$w'). Use absolute paths, e.g. WF_PLANNER_CLAUDE_ARGS=\"--plugin-dir /repo/plugins/planner\""; fi
       [ -d "$w" ] || wf_die "WF_CLAUDE_ARGS/$var: --plugin-dir $w is not a directory"
     fi
+    # claude keeps only the last --settings and does not merge, and these flags come after the ones
+    # the script builds. A --settings here therefore drops the session's plugin isolation, its WF_*
+    # environment and WF_PLANNER_LANGUAGE. Warn instead of refusing: it is a legitimate override.
+    if [ "$w" = "--settings" ]; then
+      wf_warn "WF_CLAUDE_ARGS/$var: your --settings replaces the settings this script builds (plugin isolation, WF_* environment, WF_PLANNER_LANGUAGE), because claude keeps only the last one. Put those keys into your own JSON."
+    fi
     prev="$w"
   done
 }
 
-# Refuse a WF_PLANNER_LANGUAGE that cannot travel safely on the launch command line.
-# The value goes into the --settings JSON as claude's native `language` setting; claude does not
-# check it, so only a plain language name or locale code is accepted here.
+# Sanity-check WF_PLANNER_LANGUAGE before a planning session is created.
+# Quoting is not the risk: jq escapes the value into the --settings JSON and herdr passes that as one
+# argv element. What matters is that claude copies the value verbatim into the session's system prompt,
+# so a control character would corrupt the prompt and a long value is a pasted sentence, not a language.
+# Any name claude can read is accepted, `francais` and non-Latin names included.
 wf_check_planner_language() {
-  local v="${WF_PLANNER_LANGUAGE:-}" rest
+  local v="${WF_PLANNER_LANGUAGE:-}" ctrl
   [ -n "$v" ] || return 0
-  # The trailing x keeps a newline in $v visible: command substitution would strip it otherwise.
-  rest=$(printf '%s' "$v" | LC_ALL=C tr -d '[:alnum:] ._-'; printf x)
-  if [ "$rest" != x ] || [ ${#v} -gt 32 ]; then
-    wf_die "WF_PLANNER_LANGUAGE: '$v' is not a plain language name. Use a name or a locale code of at most 32 letters, digits, spaces, '.', '_' or '-', e.g. WF_PLANNER_LANGUAGE=german or WF_PLANNER_LANGUAGE=pt-br"
-  fi
-  case "$v" in
-    [A-Za-z]*) ;;
-    *) wf_die "WF_PLANNER_LANGUAGE: '$v' must start with a letter, e.g. WF_PLANNER_LANGUAGE=german" ;;
-  esac
+  # -dc keeps only control characters; the trailing x makes a trailing one visible, because command
+  # substitution strips trailing newlines.
+  ctrl=$(printf '%s' "$v" | LC_ALL=C tr -dc '[:cntrl:]'; printf x)
+  [ "$ctrl" = x ] || wf_die "WF_PLANNER_LANGUAGE contains a line break or a control character. Use a plain language name or locale code, e.g. WF_PLANNER_LANGUAGE=german"
+  [ ${#v} -le 32 ] || wf_die "WF_PLANNER_LANGUAGE is ${#v} characters long, which is a sentence, not a language. Use a name or a locale code of at most 32, e.g. WF_PLANNER_LANGUAGE=german or WF_PLANNER_LANGUAGE=pt-br"
 }
 
 # Create a worktree and Herdr workspace for branch $1 from ref $2 with label $3.

@@ -169,13 +169,33 @@ class PlanTests(ShimTest):
         # Documented precedence: claude keeps the last --settings, and the user's args come after ours.
         self.assertLess(start.index("--settings"), start.index("--verbose"))
 
-    def test_an_unsafe_language_is_refused_before_anything_is_created(self):
-        for bad in ("german; rm -rf /", "german\nEnglish", '"', "-german", "a" * 33):
+    def test_a_language_claude_cannot_read_is_refused_before_anything_is_created(self):
+        for bad in ("german\nEnglish", "german\t", "german\x1b[31m", "a" * 33):
             r = self.run_script(ORCH / "plan.sh", "Offline mode", WF_PLANNER_LANGUAGE=bad)
-            self.assertNotEqual(r.returncode, 0, bad)
-            self.assertIn("error: WF_PLANNER_LANGUAGE", r.stderr, bad)
-            self.assertIn("WF_PLANNER_LANGUAGE=german", r.stderr, bad)
-            self.assertFalse([c for c in self.calls() if "worktree create" in c], bad)
+            self.assertNotEqual(r.returncode, 0, repr(bad))
+            self.assertIn("error: WF_PLANNER_LANGUAGE", r.stderr, repr(bad))
+            self.assertIn("WF_PLANNER_LANGUAGE=german", r.stderr, repr(bad))
+            self.assertFalse([c for c in self.calls() if "worktree create" in c], repr(bad))
+
+    def test_any_language_name_claude_can_read_travels_whole(self):
+        # The value only has to survive jq and one argv element, so accents, scripts and spaces pass.
+        for i, lang in enumerate(("fran\u00e7ais", "\u65e5\u672c\u8a9e", "brazilian portuguese", "pt-br")):
+            self.reset_calls()
+            r = self.run_script(ORCH / "plan.sh", f"Topic {i}", WF_PLANNER_LANGUAGE=lang)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            start = [c for c in self.argv_calls() if c[1:3] == ["agent", "start"]][0]
+            self.assertEqual(json.loads(start[start.index("--settings") + 1])["language"], lang)
+
+    def test_a_settings_of_your_own_warns_that_it_replaces_the_sessions_settings(self):
+        r = self.run_script(ORCH / "plan.sh", "Offline mode", WF_PLANNER_LANGUAGE="german",
+                            WF_PLANNER_CLAUDE_ARGS=f"--settings {self.base}/mine.json")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("warning: WF_CLAUDE_ARGS/WF_PLANNER_CLAUDE_ARGS", r.stderr)
+        self.assertIn("WF_PLANNER_LANGUAGE", r.stderr)
+        self.reset_calls()
+        r = self.run_script(ORCH / "claim.sh", "12", WF_CLAUDE_ARGS="--settings /tmp/mine.json")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("warning: WF_CLAUDE_ARGS/WF_WORKER_CLAUDE_ARGS", r.stderr)
 
     def test_long_topics_get_a_valid_herdr_agent_name(self):
         words = "Füge einen Map-Skill zum Planner hinzu, wie wayfinder von mattpocock".split()

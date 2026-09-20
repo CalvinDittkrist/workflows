@@ -79,7 +79,7 @@ All knobs are environment variables, set per repository in `.claude/settings.jso
 | `WF_PLAN`, `WF_PLAN_ISSUE` | set by `/plan` | per-session plan slug and, when planning an issue, its number |
 | `WF_PROJECT_TEMPLATE` | empty | `<owner>/<number>` of the project `workspace.sh --apply` copies into a repository without one |
 
-`WF_PLANNER_LANGUAGE` reaches the planner through the `--settings` JSON `plan.sh` builds, so it applies to that one session and writes no settings file. Claude Code takes the **last** `--settings` on the command line and does not merge: a `--settings` of your own in `WF_CLAUDE_ARGS` or `WF_PLANNER_CLAUDE_ARGS` comes after and therefore replaces the whole object, language and plugin switches included. Put `language` into that JSON yourself if you pass one. Every other flag in those variables composes normally.
+`WF_PLANNER_LANGUAGE` reaches the planner through the `--settings` JSON `plan.sh` builds, so it applies to that one session and writes no settings file. Claude Code takes the **last** `--settings` on the command line and does not merge: a `--settings` of your own in `WF_CLAUDE_ARGS` or `WF_PLANNER_CLAUDE_ARGS` comes after and therefore replaces the whole object, language and plugin switches included. `plan.sh` and `claim.sh` print a `warning:` when they see one, so put those keys into your own JSON. Every other flag in those variables composes normally.
 
 A worker session takes its model from the first of these that is set:
 
