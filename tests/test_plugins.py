@@ -5,7 +5,7 @@ import subprocess
 import unittest
 from pathlib import Path
 
-from helpers import ROOT
+from helpers import PLANNER, ROOT, STANDARDS, ShimTest
 
 PLUGINS = sorted(p for p in (ROOT / "plugins").iterdir() if (p / ".claude-plugin/plugin.json").exists())
 
@@ -46,15 +46,29 @@ class ManifestTests(unittest.TestCase):
             fm = agent.read_text().split("---")[1]
             self.assertIn("model: inherit\n", fm, agent)
 
+    def assert_read_only(self, agent):
+        """An agent that only judges: no edit tool and no agent tool, neither granted nor reachable."""
+        fields = dict(line.split(": ", 1) for line in agent.read_text().split("---")[1].strip().splitlines())
+        self.assertEqual(fields["tools"].split(", "), ["Read", "Grep", "Glob", "Bash"], agent)
+        self.assertTrue({"Edit", "Write", "NotebookEdit", "Agent"} <= set(fields["disallowedTools"].split(", ")), agent)
+        self.assertNotIn("mcpServers", fields, agent)
+
     def test_every_auditor_is_read_only_by_its_declared_tools(self):
         agents = ROOT / "plugins/repo-standards/agents"
         names = {"files", "agent-config", "docs", "tests-ci", "workspace", "security"}
         self.assertEqual({p.stem for p in agents.glob("*.md")}, {f"{n}-auditor" for n in names})
         for agent in agents.glob("*.md"):
-            fields = dict(line.split(": ", 1) for line in agent.read_text().split("---")[1].strip().splitlines())
-            self.assertEqual(fields["tools"].split(", "), ["Read", "Grep", "Glob", "Bash"], agent)
-            self.assertTrue({"Edit", "Write", "NotebookEdit", "Agent"} <= set(fields["disallowedTools"].split(", ")), agent)
-            self.assertNotIn("mcpServers", fields, agent)
+            self.assert_read_only(agent)
+
+    def test_the_spec_checker_is_read_only_by_its_declared_tools(self):
+        self.assert_read_only(ROOT / "plugins/planner/agents/spec-checker.md")
+
+    def test_every_planner_skill_is_user_invoked_only(self):
+        skills = sorted(p.parent.name for p in (ROOT / "plugins/planner/skills").glob("*/SKILL.md"))
+        self.assertIn("accept", skills)
+        for skill in skills:
+            fm = (ROOT / f"plugins/planner/skills/{skill}/SKILL.md").read_text().split("---")[1]
+            self.assertIn("disable-model-invocation: true\n", fm, skill)
 
     def test_the_standardisation_run_is_user_invoked_only(self):
         for skill in ("standardize", "apply"):
@@ -92,6 +106,70 @@ class ManifestTests(unittest.TestCase):
         for path in [ROOT, *PLUGINS]:
             r = subprocess.run(["claude", "plugin", "validate", str(path), "--strict"], text=True, capture_output=True)
             self.assertEqual(r.returncode, 0, f"{path}\n{r.stdout}{r.stderr}")
+
+
+class ShimCallLogTests(ShimTest):
+    """The harness itself: what the shims log has to be what a test reads back."""
+
+    def test_an_argument_with_a_newline_stays_one_logged_call(self):
+        # release.sh passes a multi-line --body, so without escaping the log would read back as two calls.
+        subprocess.run(["gh", "pr", "create", "--title", "t", "--body", "one\ntwo"], env=self.env(), capture_output=True)
+        self.assertEqual(self.argv_calls(), [["gh", "pr", "create", "--title", "t", "--body", "one\ntwo"]])
+
+
+class LabelVocabularyTests(ShimTest):
+    """repo-standards and planner each define the label vocabulary; drift between the copies is a bug."""
+
+    # The two files that define the vocabulary, and the one label repo-standards has that the planner has not.
+    STANDARDS_FILE = str((STANDARDS / "lib.sh").relative_to(ROOT))
+    PLANNER_FILE = str((PLANNER / "labels.sh").relative_to(ROOT))
+    PRIVATE = "skill-candidate"
+    # The whole point of the test is the failure message, so it prints the differing label, not an elision.
+    maxDiff = None
+
+    def standards_vocabulary(self):
+        """WF_LABELS as workspace.sh feeds it into its label loop. Sourced outside a git repository, because
+        reading the vocabulary must not need one. Split like every shell reader of the value: a pipe in the
+        description belongs to the description."""
+        r = subprocess.run(["bash", "-c", r'. "$1/lib.sh"; printf "%s\n" "$WF_LABELS"', "_", str(STANDARDS)],
+                           cwd=self.base, text=True, capture_output=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        vocabulary = []
+        for line in r.stdout.splitlines():
+            if not line:
+                continue
+            entry = tuple(line.split("|", 2))
+            self.assertEqual(len(entry), 3, f"{self.STANDARDS_FILE} has a label that is not name|color|description: {line!r}")
+            vocabulary.append(entry)
+        return vocabulary
+
+    def planner_vocabulary(self):
+        """The labels labels.sh creates in a repository that has none, with the colour and description it gives them."""
+        r = self.run_script(PLANNER / "labels.sh", SHIM_NO_LABELS="1")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        vocabulary = []
+        for call in self.argv_calls():
+            if call[1:3] != ["label", "create"]:
+                continue
+            name, options = call[3], call[4:]
+            self.assertEqual(options[0::2], ["--color", "--description"],
+                             f"{self.PLANNER_FILE} creates {name} with other options than this test reads: {options}")
+            vocabulary.append((name, options[1], options[3]))
+        return vocabulary
+
+    def test_the_two_definitions_of_the_label_vocabulary_are_identical(self):
+        standards, planner = self.standards_vocabulary(), self.planner_vocabulary()
+        self.assertTrue(standards, f"no labels read from {self.STANDARDS_FILE}")
+        self.assertTrue(planner, f"no labels created by {self.PLANNER_FILE}")
+        names = [name for name, _, _ in standards]
+        self.assertIn(self.PRIVATE, names, f"{self.STANDARDS_FILE} no longer defines {self.PRIVATE}, the one label "
+                      f"{self.PLANNER_FILE} is allowed to omit; decide what this test should exempt instead")
+        self.assertNotIn(self.PRIVATE, [name for name, _, _ in planner],
+                         f"{self.PLANNER_FILE} creates {self.PRIVATE}, which belongs to {self.STANDARDS_FILE} alone")
+        self.assertEqual([entry for entry in standards if entry[0] != self.PRIVATE], planner,
+                         f"the label vocabulary of {self.STANDARDS_FILE} (WF_LABELS, minus {self.PRIVATE}) and of "
+                         f"{self.PLANNER_FILE} differ in name, colour, description or order. One of the two copies "
+                         f"was changed and the other has to follow; do not adjust this test.")
 
 
 if __name__ == "__main__":

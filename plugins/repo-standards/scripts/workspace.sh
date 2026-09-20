@@ -187,24 +187,72 @@ while IFS= read -r l; do [ -z "$l" ] || found "$l"; done <<EOF
 $(printf '%s' "$close" | jq -r '.[] | "milestone \(.title): open, \(.why) -> closed"')
 EOF
 
-# Project: copy the template when none is linked. The API cannot create or turn on project workflows.
+# Project: one per repository, copied from the template when none is linked, and carrying the standard's
+# Status and Priority fields. The API cannot create or turn on project workflows.
+# The fields of a project are a union; the interface ProjectV2FieldCommon gives the name and the type of
+# every member, so a field type GitHub adds later is read too instead of looking like a missing field.
+# GitHub caps a project at 50 fields, so the one page of 100 the query asks for is always all of them.
 q='query($o: String!, $n: String!) { repository(owner: $o, name: $n) { projectsV2(first: 20) { nodes {
-  number title url closed workflows(first: 50) { nodes { name enabled } } } } } }'
+  id number title url closed workflows(first: 50) { nodes { name enabled } }
+  fields(first: 100) { nodes { ... on ProjectV2FieldCommon { name dataType }
+    ... on ProjectV2SingleSelectField { options { name } } } } } } } }'
 autoadd="turn on Workflows > Auto-add to project with the filter is:issue,pr is:open for $nwo (the API cannot create or turn on project workflows)"
-project_plan="" projects_read=1
+# The fields every project has (docs/repo-standard.md, Projects). A field is matched by name ignoring case
+# and its options are compared by name alone, ignoring case and order; colour and description are what a
+# missing field is created with, never a reason to report a difference.
+want_fields='[{"name": "Status", "options": [
+    {"name": "Triage", "color": "GRAY", "description": "Not planned yet"},
+    {"name": "Ready", "color": "BLUE", "description": "Ready to be picked up"},
+    {"name": "In progress", "color": "YELLOW", "description": "Being worked on"},
+    {"name": "In review", "color": "ORANGE", "description": "Waiting for review"},
+    {"name": "Done", "color": "GREEN", "description": "Merged or closed"}]},
+  {"name": "Priority", "options": [
+    {"name": "P0", "color": "RED", "description": "Now"},
+    {"name": "P1", "color": "ORANGE", "description": "Next"},
+    {"name": "P2", "color": "YELLOW", "description": "Soon"},
+    {"name": "P3", "color": "GRAY", "description": "Someday"}]}]'
+field_mutation='mutation($p: ID!, $n: String!, $o: [ProjectV2SingleSelectFieldOptionInput!]!) {
+  createProjectV2Field(input: {projectId: $p, dataType: SINGLE_SELECT, name: $n, singleSelectOptions: $o}) {
+    projectV2Field { ... on ProjectV2SingleSelectField { id } } } }'
+project_plan="" field_plan="" projects_read=1
 if ! projects=$(gh api graphql -f query="$q" -f o="$owner" -f n="${nwo#*/}" 2>"$err"); then
   grep -q 'read:project' "$err" || die "cannot read the projects of $nwo: $(tail -n1 "$err")"
   projects="[]" projects_read=0; step "project: not checked, the gh token cannot read projects; run gh auth refresh -s project, then run workspace.sh again"
 else
   projects=$(printf '%s' "$projects" | jq -c '[.data.repository.projectsV2.nodes[] | select(.closed | not)]')
 fi
+open_projects=$(printf '%s' "$projects" | jq length)
 if [ "$projects_read" = 0 ]; then :
-elif [ "$(printf '%s' "$projects" | jq length)" = 0 ]; then
+elif [ "$open_projects" = 0 ]; then
   if [ -n "$tpl" ]; then found "project: none linked -> copy of $tpl"; project_plan=1; step "project (the copy): $autoadd"
   else step "project: none linked; set WF_PROJECT_TEMPLATE=<owner>/<number> and run again to copy the template project, or create one by hand"; fi
 else
+  [ "$open_projects" = 1 ] || step "projects: $open_projects open ones are linked ($(printf '%s' "$projects" | jq -r '[.[].url] | join(", ")')); the standard wants one; unlink or close the others by hand"
   while IFS= read -r url; do [ -z "$url" ] || step "project $url: $autoadd"; done <<EOF
 $(printf '%s' "$projects" | jq -r '.[] | select(any(.workflows.nodes[]; .name == "Auto-add to project" and .enabled) | not) | .url')
+EOF
+  # One verdict line per project and required field: the kind, the project (its node id and its url), the
+  # field, the line to print. Every column is filled, because read collapses repeated tabs. A field that is
+  # there but differs is never rewritten: replacing an option list clears that field on every item. A missing
+  # one is created only while a single project is linked, so no write lands in a project the run just asked
+  # the maintainer to unlink.
+  single=false; [ "$open_projects" != 1 ] || single=true
+  while IFS=$'\t' read -r kind pid url field line; do
+    case "$kind" in
+      diff) found "$line"; field_plan="$field_plan$pid"$'\t'"$field"$'\t'"$url"$'\n' ;;
+      manual) step "$line" ;;
+    esac
+  done <<EOF
+$(printf '%s' "$projects" | jq -r --argjson want "$want_fields" --argjson single "$single" '
+  def names: [.[].name | ascii_downcase] | sort;
+  def list: [.[].name] | join(", ");
+  .[] as $p | $want[] as $w | ([$p.fields.nodes[] | select(((.name // "") | ascii_downcase) == ($w.name | ascii_downcase))] | first) as $f
+  | "project \($p.url) field \($w.name)" as $where | ($w.options | list) as $wants | "\($p.id)\t\($p.url)\t\($w.name)" as $cols
+  | if $f == null then (if $single then "diff\t\($cols)\t\($where): missing -> create single-select with \($wants)"
+      else "manual\t\($cols)\t\($where): missing; the run creates it only while one project is linked, so unlink the others and run again, or create the single-select with \($wants) by hand" end)
+    elif $f.dataType != "SINGLE_SELECT" then "manual\t\($cols)\t\($where): a \(($f.dataType // "unknown") | ascii_downcase | gsub("_"; " ")) field, but the standard wants a single-select with \($wants); change it by hand"
+    elif ($f.options | names) != ($w.options | names) then "manual\t\($cols)\t\($where): options \($f.options | list), but the standard wants \($wants); change them by hand (replacing an option list clears the field on every item)"
+    else empty end')
 EOF
 fi
 
@@ -231,7 +279,8 @@ jq -n --arg nwo "$nwo" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --argjson repo 
       squash_merge_commit_title, squash_merge_commit_message, has_wiki, has_discussions, security_and_analysis}),
     rulesets: $rs, branch_protection: $bp, labels: [$labels[].name], dependabot: {alerts: $alerts, security_updates: $fixes},
     actions_default_token: $token, actions_token_approves_pull_requests: $approves, private_vulnerability_reporting: (if $pvr == "" then null else $pvr end),
-    milestones_closed: $ms, projects: [$projects[] | {number, title, url}]}' > "$snap" || die "cannot write the snapshot to $snap; nothing changed"
+    milestones_closed: $ms, projects: [$projects[] | {number, title, url,
+      fields: [.fields.nodes[] | {name, dataType, options: [(.options // [])[].name]}]}]}' > "$snap" || die "cannot write the snapshot to $snap; nothing changed"
 printf 'snapshot: %s\n' "$snap"
 
 if [ "$repo_patch" != "{}" ]; then
@@ -257,6 +306,16 @@ EOF
 [ "$sa_patch" = "{}" ] || send PATCH "repos/$nwo" "$(jq -cn --argjson s "$sa_patch" '{security_and_analysis: $s}')"
 [ -z "$pvr" ] || [ "$pvr" = on ] || send PUT "repos/$nwo/private-vulnerability-reporting"
 for num in $(printf '%s' "$close" | jq -r '.[].number'); do send PATCH "repos/$nwo/milestones/$num" '{"state":"closed"}'; done
+# A missing project field is created with its options; an existing one is never touched.
+while IFS=$'\t' read -r pid field url; do
+  [ -n "$pid" ] || continue
+  jq -cn --arg q "$field_mutation" --arg p "$pid" --arg n "$field" --argjson want "$want_fields" \
+    '{query: $q, variables: {p: $p, n: $n, o: ($want[] | select(.name == $n) | .options)}}' \
+    | gh api graphql --input - >/dev/null 2>"$err" \
+    || die "creating the field $field on $url failed: $(tail -n1 "$err"); the snapshot has the state before this run"
+done <<EOF
+$field_plan
+EOF
 if [ -n "$project_plan" ]; then
   copy=$(gh project copy "${tpl#*/}" --source-owner "${tpl%%/*}" --target-owner "$owner" --title "${nwo#*/}" --format json 2>"$err") \
     || die "copying project $tpl failed: $(tail -n1 "$err")"
