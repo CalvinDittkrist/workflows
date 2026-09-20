@@ -1,4 +1,4 @@
-# 0016. Worker sessions run subagents in the foreground, and the agent never waits by polling
+# 0017. Worker sessions run subagents in the foreground, and the agent never waits by polling
 
 Date: 2026-09-20
 Status: accepted

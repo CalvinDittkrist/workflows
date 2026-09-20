@@ -20,4 +20,4 @@ Approvals:
 6. Run `"${CLAUDE_PLUGIN_ROOT}/scripts/cleanup.sh" open` and show the pull request URL. If it refuses because of placeholders, fill them in and run it again.
 7. Run `"${CLAUDE_PLUGIN_ROOT}/scripts/issues.sh"` and show its output.
 8. Run `"${CLAUDE_PLUGIN_ROOT}/scripts/finalize.sh"`. While the pull request is not merged it refuses: tell the maintainer to merge it once `check` passes and then run `/repo-standards:apply` again, and stop. Once it is merged, the script configures the GitHub workspace and runs the check. If it reports that the default branch has no run of the job `check` yet, tell the maintainer to wait for CI on the default branch and run `/repo-standards:apply` again.
-9. End with finalize.sh's `result:` line, every `check: fail:` line, the `untouched:` line naming the rejected categories, and any `manual:` steps from the scripts.
+9. End with finalize.sh's `result:` line, every `check: fail:` line, the `workspace:` line about the applied difference deviating from the audited one when it printed one, the `untouched:` line naming the rejected categories, and any `manual:` steps from the scripts.

@@ -60,6 +60,25 @@ class StandardsTests(ShimTest):
         self.assertIn("kept: .claude/settings.json", r.stdout)
         self.assertEqual([c for c in self.calls() if not c.startswith("claude plugin marketplace add")], [])
 
+    def test_the_scaffolded_categories_are_the_ones_the_report_names(self):
+        """WF_SCAFFOLD_CATEGORIES (lib.sh) is what report.sh promises; scaffold.sh is what really writes files.
+        One run per category, everything else skipped, so a put call added or moved shows up here."""
+        def var(name):
+            return subprocess.run(["bash", "-c", f'. "{STANDARDS / "lib.sh"}"; printf "%s" "${name}"'],
+                                  capture_output=True, text=True, check=True).stdout.split()
+        every, scaffolded = var("WF_CATEGORIES"), var("WF_SCAFFOLD_CATEGORIES")
+        self.assertTrue(set(scaffolded) <= set(every), scaffolded)
+        for c in every:
+            root = self.base / f"scaffold-{c}"
+            root.mkdir()
+            skips = [a for other in every if other != c for a in ("--skip", other)]
+            r = self.run_script(STANDARDS / "scaffold.sh", *skips, str(root))
+            self.assertEqual(r.returncode, 0, r.stderr)
+            written = sorted(str(f.relative_to(root)) for f in root.rglob("*") if f.is_file())
+            self.assertEqual(bool(written), c in scaffolded, f"{c} alone wrote {written}")
+            # The settings file is the agent-config part of the scaffold, which the report names on its own.
+            self.assertEqual(".claude/settings.json" in written, c == "agent-config", f"{c} alone wrote {written}")
+
     def test_scaffold_skips_the_files_of_a_category(self):
         r = self.run_script(STANDARDS / "scaffold.sh", "--skip", "agent-config", "--skip", "docs")
         self.assertEqual(r.returncode, 0, r.stderr)
