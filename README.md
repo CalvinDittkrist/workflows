@@ -105,6 +105,7 @@ Repositories do not override agents or skills locally: the [repository standard]
 make check                                        # the gate: shellcheck, plugin validate --strict, standard check, unit tests
 claude --plugin-dir plugins/worker                # try a plugin in a session without installing it
 scripts/dev-orchestrator.sh                       # orchestrator from the checkout, inside a Herdr pane
+scripts/context-report.py                         # diagnostic: context and tool mix of finished worker sessions
 ```
 
 `dev-orchestrator.sh` points `WF_PLANNER_CLAUDE_ARGS` and `WF_WORKER_CLAUDE_ARGS` at the checkout's plugins, so the sessions the orchestrator opens use them too. Without that (or the plugins installed), a started session exits with `--agent 'planner' not found`; `plan.sh` and `claim.sh` detect that, remove the worktree again and print the fix. The same rollback runs when Herdr refuses the start itself (its error is printed as is) or when the pane is back at a shell prompt. Herdr agent names are derived from the branch and cut to its 32-character limit.
