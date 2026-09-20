@@ -372,6 +372,16 @@ class ReleaseTests(ShimTest):
         ])
         self.assertIn("status: released", r.stdout)
 
+    def test_refuses_a_milestone_whose_only_open_issue_is_the_spec(self):
+        # Every ticket is merged and closed, the spec the planner attached to the milestone is still open:
+        # the release waits for its acceptance instead of shipping unaccepted work.
+        states = ["closed", "closed", "closed", "closed", "open"]
+        milestone = self.milestones(open_issues=states.count("open"), closed_issues=states.count("closed"))
+        r = self.run_script(ORCH / "release.sh", "v1.2.0", SHIM_MILESTONES_FIXTURE=milestone)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("error: milestone v1.2.0 has 1 open issue(s)", r.stderr)
+        self.assertEqual(self.mutations(), [])
+
     def test_refuses_a_missing_milestone_open_issues_and_an_existing_tag(self):
         cases = [
             (dict(), "milestone v1.2.0 does not exist"),

@@ -20,11 +20,11 @@ Source: the spec issue named in the argument ($ARGUMENTS), or the spec this sess
        "${CLAUDE_PLUGIN_ROOT}/scripts/issue.sh" create --title "<title>" --body-file <file> --label ready-for-agent --parent <spec> --milestone <vX.Y.Z>
        "${CLAUDE_PLUGIN_ROOT}/scripts/issue.sh" block <ticket> --by <n>,<m>
 
-   The first ticket also carries the spec's glossary terms and ADRs under Docs. If the spec fits one session, create no tickets:
+   A ticket created with a milestone attaches the spec to the same milestone, so the release waits for the acceptance; a warning means the spec already carries a different one. The first ticket also carries the spec's glossary terms and ADRs under Docs. If the spec fits one session, create no tickets:
 
        "${CLAUDE_PLUGIN_ROOT}/scripts/issue.sh" label <spec> --add ready-for-agent
        "${CLAUDE_PLUGIN_ROOT}/scripts/issue.sh" attach <spec> --milestone <vX.Y.Z>
 
-7. Reply with the milestone (or none) and one line per ticket (number, title, blocked by) and `next: the orchestrator claims from the frontier (/orchestrator:board); /planner:finish ends this session`.
+7. Reply with the milestone (or none), the milestone the spec now carries, and one line per ticket (number, title, blocked by) and `next: the orchestrator claims from the frontier (/orchestrator:board); /planner:finish ends this session`.
 
-No em dash character (—) anywhere in the body. Do not close or edit the spec. Bodies carry no file paths and no code; the prototype exception from the spec applies.
+No em dash character (—) anywhere in the body. Do not close or edit the spec; its milestone is the script's job. Bodies carry no file paths and no code; the prototype exception from the spec applies.

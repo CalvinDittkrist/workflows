@@ -23,6 +23,18 @@ open_milestone() {
   [ "$(printf '%s' "$m" | jq -r .state)" = open ] || wf_die "milestone $1 is closed (released); pick a new version"
 }
 num() { local n="${1#\#}"; printf '%s' "$n" | grep -Eq '^[0-9]+$' || wf_die "issue must be a number, got '$1'"; printf '%s' "$n"; }
+# A release closes a milestone only once every issue on it is closed, so the parent ($1, the spec) joins the
+# milestone of its sub-issue ($2). A parent that already carries a different milestone keeps it.
+attach_parent() {
+  local have; have=$(gh api "repos/$(wf_repo_nwo)/issues/$1" --jq '.milestone.title // ""' 2>/dev/null) \
+    || { wf_warn "cannot read the milestone of #$1; attach it to $2 on GitHub"; return 0; }
+  case "$have" in
+    "$2") : ;;
+    "") if gh issue edit "$1" --milestone "$2" >/dev/null 2>&1; then wf_kv parent-milestone "#$1 attached to $2"
+        else wf_warn "attaching #$1 to $2 failed; attach it on GitHub"; fi ;;
+    *) wf_warn "#$1 stays on milestone $have while its sub-issues go to $2; move it if $2 releases this work" ;;
+  esac
+}
 
 case "$cmd" in
   create)
@@ -52,6 +64,8 @@ case "$cmd" in
       else
         wf_kv parent "#$parent (body only; sub-issues unavailable here)"
       fi
+      # The spec hangs on the milestone of its tickets, so the release waits for its acceptance.
+      [ -z "$milestone" ] || attach_parent "$parent" "$milestone"
     fi ;;
   block)
     n=$(num "${1:-}"); shift; by=""
