@@ -250,7 +250,7 @@ $(printf '%s' "$projects" | jq -r --argjson want "$want_fields" --argjson single
   | "project \($p.url) field \($w.name)" as $where | ($w.options | list) as $wants | "\($p.id)\t\($p.url)\t\($w.name)" as $cols
   | if $f == null then (if $single then "diff\t\($cols)\t\($where): missing -> create single-select with \($wants)"
       else "manual\t\($cols)\t\($where): missing; the run creates it only while one project is linked, so unlink the others and run again, or create the single-select with \($wants) by hand" end)
-    elif $f.dataType != "SINGLE_SELECT" then "manual\t\($cols)\t\($where): a \($f.dataType | ascii_downcase | gsub("_"; " ")) field, but the standard wants a single-select with \($wants); change it by hand"
+    elif $f.dataType != "SINGLE_SELECT" then "manual\t\($cols)\t\($where): a \(($f.dataType // "unknown") | ascii_downcase | gsub("_"; " ")) field, but the standard wants a single-select with \($wants); change it by hand"
     elif ($f.options | names) != ($w.options | names) then "manual\t\($cols)\t\($where): options \($f.options | list), but the standard wants \($wants); change them by hand (replacing an option list clears the field on every item)"
     else empty end')
 EOF
