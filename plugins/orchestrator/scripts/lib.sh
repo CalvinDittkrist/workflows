@@ -29,7 +29,8 @@ wf_slug() {
 }
 
 # Branch convention: <type>/<issue>-<slug>. The issue number is the only contract the worker hook relies on.
-wf_issue_from_branch() { printf '%s\n' "$1" | sed -nE 's#^[a-z]+/([0-9]+)-.*#\1#p'; }
+# A plan branch (plan/<slug>) carries a topic, so its slug may start with a number without being an issue.
+wf_issue_from_branch() { printf '%s\n' "$1" | sed -nE '\#^plan/#d; s#^[a-z]+/([0-9]+)-.*#\1#p'; }
 
 # True when the issue JSON $1 (as gh prints it) carries the label $2. Compared name by name, because a
 # GitHub label may itself contain a comma and a joined list would then match on a substring.
@@ -57,11 +58,13 @@ wf_workspace_for_path() {
 }
 
 # Branch of the linked worktree that belongs to issue $1, or empty. Derived from the branch names, not from
-# the issue's labels, so a claim or an abandon still finds the worktree after the labels changed. Plan branches
-# (plan/<slug>) are skipped: their slug can start with a number without belonging to that issue.
+# the issue's labels, so a claim or an abandon still finds the worktree after the labels changed.
 wf_branch_for_issue() {
-  git worktree list --porcelain | sed -nE 's#^branch refs/heads/##p' \
-    | awk -v n="$1" '$0 !~ "^plan/" && $0 ~ "^[a-z]+/" n "-" { print; exit }'
+  local b found=""
+  while read -r b; do
+    if [ -z "$found" ] && [ "$(wf_issue_from_branch "$b")" = "$1" ]; then found="$b"; fi
+  done < <(git worktree list --porcelain | sed -nE 's#^branch refs/heads/##p')
+  printf '%s\n' "$found"
 }
 
 # Path of the linked worktree checked out on branch $1 (from the main root), or empty.

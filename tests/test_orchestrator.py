@@ -534,5 +534,7 @@ class GhAxiContextHookTests(ShimTest):
         self.assertEqual(self.hook(source="resume", remote=None), "", "resume")
         self.assertEqual(self.hook(agent_id="a1", remote=None), "", "subagent")
         self.assertFalse([c for c in self.calls() if c.startswith("gh-axi")])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -4,7 +4,8 @@ wf_die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 wf_warn() { printf 'warning: %s\n' "$*" >&2; }
 wf_kv() { printf '%s: %s\n' "$1" "$2"; }
 wf_need() { command -v "$1" >/dev/null 2>&1 || wf_die "$1 is required but not on PATH"; }
-wf_issue_from_branch() { printf '%s\n' "$1" | sed -nE 's#^[a-z]+/([0-9]+)-.*#\1#p'; }
+# A plan branch (plan/<slug>) carries a topic, so its slug may start with a number without being an issue.
+wf_issue_from_branch() { printf '%s\n' "$1" | sed -nE '\#^plan/#d; s#^[a-z]+/([0-9]+)-.*#\1#p'; }
 wf_branch() { git rev-parse --abbrev-ref HEAD 2>/dev/null || true; }
 wf_issue() {
   if [ -n "${WF_ISSUE:-}" ]; then printf '%s\n' "$WF_ISSUE"; else wf_issue_from_branch "$(wf_branch)"; fi
