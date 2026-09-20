@@ -59,6 +59,16 @@ class StandardsTests(ShimTest):
         self.assertIn("kept: .claude/settings.json", r.stdout)
         self.assertEqual([c for c in self.calls() if not c.startswith("claude plugin marketplace add")], [])
 
+    def test_the_scaffolded_categories_are_the_ones_the_report_names(self):
+        """WF_SCAFFOLD_CATEGORIES (lib.sh) is what report.sh promises; scaffold.sh is what really writes files."""
+        cats = subprocess.run(["bash", "-c", f'. "{STANDARDS / "lib.sh"}"; printf "%s" "$WF_SCAFFOLD_CATEGORIES"'],
+                              capture_output=True, text=True, check=True).stdout.split()
+        skips = [a for c in cats for a in ("--skip", c)]
+        r = self.run_script(STANDARDS / "scaffold.sh", *skips)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual([line for line in r.stdout.splitlines() if not line.startswith("next:")], [],
+                         "scaffold.sh writes files for a category WF_SCAFFOLD_CATEGORIES does not name")
+
     def test_scaffold_skips_the_files_of_a_category(self):
         r = self.run_script(STANDARDS / "scaffold.sh", "--skip", "agent-config", "--skip", "docs")
         self.assertEqual(r.returncode, 0, r.stderr)

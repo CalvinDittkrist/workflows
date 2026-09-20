@@ -341,14 +341,31 @@ class ApplyTests(ApplyCase):
         self.assertNotIn("no longer needed", line)
         self.assertTrue(r.stdout.endswith("result: pass\n"), r.stdout)
 
-    def test_the_workspace_names_an_audited_setting_it_no_longer_needed_to_change(self):
+    def test_the_workspace_names_an_audited_setting_that_was_already_at_the_standard(self):
         self.audit(REPLIES + "finding: workspace | repo has_wiki | configure | the wiki is on | high\n",
                    "agent-config=approve", "tests-ci=approve", "security=approve", "workspace=approve", "files=reject")
         self.through_open()
         self.merge()
         r = self.step(FINALIZE)  # the wiki is off on GitHub, so the difference no longer holds that setting
-        self.assertIn("; in the report but no longer needed: repo has_wiki", self.workspace_deviation(r.stdout))
+        self.assertIn("; in the report but already at the standard: repo has_wiki", self.workspace_deviation(r.stdout))
         self.assertTrue(r.stdout.endswith("result: pass\n"), r.stdout)
+
+    def test_a_second_finalize_does_not_report_what_the_first_one_applied(self):
+        self.through_open()
+        self.merge()
+        first = self.step(FINALIZE)
+        self.assertIn("workspace: applied: ", first.stdout)
+        r = self.step(FINALIZE)  # the supported "run it again" path: the workspace conforms, so 0 differences
+        self.assertIn("workspace: applied: 0\n", r.stdout)
+        self.assertEqual(self.workspace_deviation(r.stdout), "")
+
+    def test_a_workspace_that_failed_reports_no_deviation(self):
+        self.through_open()
+        self.merge()
+        (self.ws / "check-runs").write_text("0")  # workspace.sh refuses: nothing was applied to compare
+        r = self.step(FINALIZE, ok=False)
+        self.assertIn("workspace: failed", r.stdout)
+        self.assertEqual(self.workspace_deviation(r.stdout), "")
 
     def test_the_workspace_says_nothing_when_it_applied_what_the_audit_recorded(self):
         self.through_open()

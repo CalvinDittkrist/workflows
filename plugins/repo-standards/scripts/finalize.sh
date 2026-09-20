@@ -12,26 +12,39 @@ here=$(cd "$(dirname "$0")" && pwd)
 # shellcheck source=lib.sh
 . "$here/lib.sh"
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
-# workspace_deviation <workspace.sh output>: one line naming how the difference workspace.sh applied differs
-# from the `configure` findings the report recorded, in both directions. It recomputes the difference when it
-# runs, after the cleanup pull request is merged, so it can be another one than the audit saw (ADR 0016).
-# Nothing is skipped or aborted because of a deviation; the line is there to be read. Silent when they match.
+# The settings this standardisation run has already brought to the standard, one per line; report.sh clears
+# the file with the approvals, because a new report starts a new run.
+applied_file() { printf '%s/workspace-applied' "$dir"; }
+# workspace_deviation <settings applied now>: one line naming how the difference workspace.sh applied differs
+# from the `configure` findings the report recorded, in both directions. workspace.sh recomputes the difference
+# when it runs, after the cleanup pull request is merged, so it can be another one than the audit saw
+# (ADR 0016). A setting an earlier run of this standardisation already applied counts as applied, so a second
+# run does not claim the report asked for something that was never needed. Nothing is skipped or aborted
+# because of a deviation; the line is there to be read. Silent when the two sides name the same settings.
 workspace_deviation() {
-  { printf '%s\n' "$1" | sed -n 's/^diff: //p' | sed 's/: [^:]*$//' | sed 's/^/applied	/'
-    awk -F'\t' '$1 == "workspace" && $3 == "configure" { print "audited\t" $2 }' "$dir/findings"; } \
+  local tab=$'\t'
+  { printf '%s\n' "$1" | sed "s/^/now$tab/"
+    [ ! -f "$(applied_file)" ] || sed "s/^/before$tab/" "$(applied_file)"
+    awk -F'\t' -v OFS='\t' '$1 == "workspace" && $3 == "configure" { print "audited", $2 }' "$dir/findings"; } \
   | awk -F'\t' '
       $2 == "" { next }
-      $1 == "applied" { if (!($2 in A)) { A[$2] = 1; al[++na] = $2 } ; next }
+      $1 == "now" { if (!($2 in N)) { N[$2] = 1; nl[++nn] = $2 }; A[$2] = 1; next }
+      $1 == "before" { A[$2] = 1; next }
       { if (!($2 in R)) { R[$2] = 1; rl[++nr] = $2 } }
       END {
-        for (i = 1; i <= na; i++) if (!(al[i] in R)) extra = extra (extra == "" ? "" : ", ") al[i]
+        for (i = 1; i <= nn; i++) if (!(nl[i] in R)) extra = extra (extra == "" ? "" : ", ") nl[i]
         for (i = 1; i <= nr; i++) if (!(rl[i] in A)) gone = gone (gone == "" ? "" : ", ") rl[i]
         if (extra == "" && gone == "") exit
         line = "workspace: the applied difference is not the audited one"
         if (extra != "") line = line "; changed without a finding: " extra
-        if (gone != "") line = line "; in the report but no longer needed: " gone
+        if (gone != "") line = line "; in the report but already at the standard: " gone
         print line
       }'
+}
+# record_applied <settings>: add them to the settings of this run, so the next one knows they were applied.
+record_applied() {
+  local f; f=$(applied_file)
+  { [ ! -f "$f" ] || cat "$f"; printf '%s\n' "$1"; } | awk 'NF && !seen[$0]++' > "$f.tmp" && mv "$f.tmp" "$f"
 }
 for c in gh jq git; do command -v "$c" >/dev/null 2>&1 || die "$c is required but not on PATH"; done
 answers=$(decisions) || exit 1
@@ -73,7 +86,6 @@ case " $(categories "$answers" approve) " in
     snap=$(mktemp "$dir/workspace-snapshot.XXXXXX")
     rc=0; out=$(bash "$here/workspace.sh" --apply --snapshot "$snap" 2>&1) || rc=$?
     printf '%s\n' "$out" | sed 's/^/workspace: /'
-    [ "$rc" != 0 ] || workspace_deviation "$out"
     if printf '%s\n' "$out" | grep -qxF "snapshot: $snap"; then
       { printf 'Snapshot of the GitHub workspace before `workspace.sh --apply` on %s, for undoing a change by hand.\n\nChanged:\n```\n%s\n```\n\n<details><summary>Previous state</summary>\n\n```json\n' \
           "$(date -u +%Y-%m-%d)" "$(printf '%s\n' "$out" | grep '^diff: ' || true)"
@@ -83,6 +95,11 @@ case " $(categories "$answers" approve) " in
       printf 'snapshot: posted to #%s\n' "$catalogue"
     fi
     [ -s "$snap" ] || rm -f "$snap"
+    # After the snapshot is on the catalogue issue, because this only reads: the settings workspace.sh worked
+    # on, how they deviate from the audit, and the note for the next run. It never fails the run.
+    settings=$(printf '%s\n' "$out" | workspace_settings) || settings=""
+    [ "$rc" != 0 ] || workspace_deviation "$settings" || true
+    record_applied "$settings" || true
     [ "$rc" = 0 ] || { printf 'workspace: failed; fix the error above and run finalize.sh again\n'; status=1; } ;;
   *) case " $(categories "$answers" reject) " in
        *" workspace "*) printf 'workspace: rejected, left untouched\n' ;;

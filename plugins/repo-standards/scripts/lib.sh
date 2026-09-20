@@ -10,11 +10,21 @@ first_of() { local dir=$1 n; shift; for n in "$@"; do has "$dir" "$n" && { print
 # directory inside the git directory, so the audit never changes the working tree.
 # shellcheck disable=SC2034 # used by the scripts that source this file
 WF_CATEGORIES="files agent-config docs tests-ci workspace security"
+# The categories scaffold.sh has templates for. Approving one of them creates every baseline file of it that
+# is missing, whether a finding lists it or not, so the report says so (ADR 0016). Keep it in step with the
+# `put` calls in scaffold.sh; a test scaffolds with all of them skipped and expects nothing to be created.
+# shellcheck disable=SC2034
+WF_SCAFFOLD_CATEGORIES="agent-config docs tests-ci workspace"
 state_dir() {
   local d
   d=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || { printf 'error: not inside a git repository; run git init first\n' >&2; return 1; }
   printf '%s/standardize' "$d"
 }
+
+# workspace_settings: reads workspace.sh output on stdin and prints the setting of each `diff:` line, one per
+# line: everything before the last `: `, which is the rule the workspace auditor follows when it writes the
+# target of a `configure` finding (agents/workspace-auditor.md). The two sides are compared in finalize.sh.
+workspace_settings() { sed -n 's/^diff: //p' | sed 's/: [^:]*$//'; }
 
 # workflow_jobs <file>: the jobs of a GitHub Actions workflow as `id` or `id ("name")`, comma separated,
 # name only when it differs from the id (GitHub shows the name as the check).
