@@ -12,19 +12,16 @@ here=$(cd "$(dirname "$0")" && pwd)
 # shellcheck source=lib.sh
 . "$here/lib.sh"
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
-# The settings this standardisation run has already brought to the standard, one per line; report.sh clears
-# the file with the approvals, because a new report starts a new run.
-applied_file() { printf '%s/workspace-applied' "$dir"; }
 # workspace_deviation <settings applied now>: one line naming how the difference workspace.sh applied differs
 # from the `configure` findings the report recorded, in both directions. workspace.sh recomputes the difference
 # when it runs, after the cleanup pull request is merged, so it can be another one than the audit saw
-# (ADR 0016). A setting an earlier run of this standardisation already applied counts as applied, so a second
-# run does not claim the report asked for something that was never needed. Nothing is skipped or aborted
+# (ADR 0016). A setting the apply phase of this run has already worked on counts as changed, so a second run
+# does not claim the report asked for something that was never needed. Nothing is skipped or aborted
 # because of a deviation; the line is there to be read. Silent when the two sides name the same settings.
 workspace_deviation() {
   local tab=$'\t'
   { printf '%s\n' "$1" | sed "s/^/now$tab/"
-    [ ! -f "$(applied_file)" ] || sed "s/^/before$tab/" "$(applied_file)"
+    [ ! -f "$handled" ] || sed "s/^/before$tab/" "$handled"
     awk -F'\t' -v OFS='\t' '$1 == "workspace" && $3 == "configure" { print "audited", $2 }' "$dir/findings"; } \
   | awk -F'\t' '
       $2 == "" { next }
@@ -41,14 +38,18 @@ workspace_deviation() {
         print line
       }'
 }
-# record_applied <settings>: add them to the settings of this run, so the next one knows they were applied.
-record_applied() {
-  local f; f=$(applied_file)
-  { [ ! -f "$f" ] || cat "$f"; printf '%s\n' "$1"; } | awk 'NF && !seen[$0]++' > "$f.tmp" && mv "$f.tmp" "$f"
+# record_handled <settings>: add them to the settings the apply phase of this run has worked on, so a later
+# run does not report one of them as a finding the report asked for in vain.
+record_handled() {
+  { [ ! -f "$handled" ] || cat "$handled"; printf '%s\n' "$1"; } | awk 'NF && !seen[$0]++' > "$handled.tmp" \
+    && mv "$handled.tmp" "$handled"
 }
 for c in gh jq git; do command -v "$c" >/dev/null 2>&1 || die "$c is required but not on PATH"; done
 answers=$(decisions) || exit 1
 dir=$(state_dir)
+# The settings the apply phase of this run has worked on: changed, or on the plan of a run that then failed.
+# report.sh clears the file with the approvals, because a new report starts a new run.
+handled="$dir/workspace-handled"
 err=$(mktemp); tmp=$(mktemp); trap 'rm -f "$err" "$tmp"' EXIT
 github_repo || exit 1
 catalogue=$(catalogue_issue) || exit 1
@@ -99,7 +100,7 @@ case " $(categories "$answers" approve) " in
     # on, how they deviate from the audit, and the note for the next run. It never fails the run.
     settings=$(printf '%s\n' "$out" | workspace_settings) || settings=""
     [ "$rc" != 0 ] || workspace_deviation "$settings" || true
-    record_applied "$settings" || true
+    record_handled "$settings" || true
     [ "$rc" = 0 ] || { printf 'workspace: failed; fix the error above and run finalize.sh again\n'; status=1; } ;;
   *) case " $(categories "$answers" reject) " in
        *" workspace "*) printf 'workspace: rejected, left untouched\n' ;;

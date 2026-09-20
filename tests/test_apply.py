@@ -338,7 +338,7 @@ class ApplyTests(ApplyCase):
         self.assertIn("changed without a finding: ", line)
         self.assertIn("ruleset standard: main", line)  # applied, and the audit recorded no finding for it
         self.assertNotIn("repo allow_rebase_merge", line)  # audited, so not named
-        self.assertNotIn("no longer needed", line)
+        self.assertNotIn("; in the report but already at the standard", line)
         self.assertTrue(r.stdout.endswith("result: pass\n"), r.stdout)
 
     def test_the_workspace_names_an_audited_setting_that_was_already_at_the_standard(self):

@@ -46,8 +46,8 @@ parsed=$(cat "$@" | CATS="$WF_CATEGORIES" awk '
 
 mkdir -p "$dir"
 printf '%s\n' "$parsed" | awk 'NF' > "$dir/findings"
-# A new report answers for a new run: the approvals and what an apply phase of the last run already applied go.
-rm -f "$dir/approvals" "$dir/workspace-applied"
+# A new report answers for a new run: the approvals and the settings the last run worked on go.
+rm -f "$dir/approvals" "$dir/workspace-handled"
 
 total=$(awk 'END { print NR }' "$dir/findings")
 if [ "$total" = 0 ]; then
@@ -82,8 +82,15 @@ CATS="$WF_CATEGORIES" SCAFFOLDED="$WF_SCAFFOLD_CATEGORIES" awk -F'\t' '
         printf "  workspace.sh decides these; the lines are what it found at the audit:\n%s", dec[c]
         printf "  approving %s applies the whole difference between the GitHub workspace and the standard, recomputed after the cleanup pull request is merged, so it can differ from the lines above\n", c
       }
-      if (c in S) printf "  approving %s also creates every baseline file of the category that is missing, whether a finding above lists it or not\n", c
+      if (c in S) printf "  approving %s %screates every baseline file of the category that is missing, whether a finding above lists it or not\n",
+                         c, ((c in per) || (c in dec)) ? "also " : ""
       if (c in iss) printf "  become issues:\n%s", iss[c]; else print "  become issues: none"
     }
+    # A category is left alone only when it is rejected, and a category without findings cannot be answered at
+    # all, so the apply phase scaffolds it. The report names it; what the apply phase applies is unchanged.
+    miss = ""; mn = 0
+    for (i = 1; i <= nc; i++) { c = order[i]; if ((c in S) && !(c in n)) { miss = miss (mn++ ? ", " : "") c } }
+    if (miss != "") printf "\nalso: %s %s no findings, so the report does not ask about %s; the apply phase still creates %s missing baseline files, because only a rejected category is left alone\n",
+                           miss, (mn == 1 ? "has" : "have"), (mn == 1 ? "it" : "them"), (mn == 1 ? "its" : "their")
   }' "$dir/findings" "$dir/findings"
 printf '\nnext: ask for approval per category, then record the answers with approve.sh <category>=approve|reject ...\n'

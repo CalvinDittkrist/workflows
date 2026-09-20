@@ -316,6 +316,9 @@ security: 1 finding (issue 1)
   become issues:
     issue api/db.py:12: SQL built by string concatenation (medium)
 
+also: docs, tests-ci have no findings, so the report does not ask about them; \
+the apply phase still creates their missing baseline files, because only a rejected category is left alone
+
 next: ask for approval per category, then record the answers with approve.sh <category>=approve|reject ...
 """)
         self.assertEqual(self.git("status", "--porcelain", "--ignored"), "", "report.sh changed the working tree")
@@ -331,7 +334,7 @@ next: ask for approval per category, then record the answers with approve.sh <ca
                       r.stdout)
 
     def test_a_report_of_findings_the_run_works_through_promises_nothing_beyond_its_lines(self):
-        """files and security are never scaffolded and never configure, so nothing beyond the lines happens."""
+        """files and security are never scaffolded and never configure, so nothing beyond their lines happens."""
         r = self.report("finding: files | NOTES.md | delete | agent resume notes | medium\n"
                         "finding: security | SECURITY.md | create | a public repository without a policy | high\n"
                         "finding: security | api/db.py:12 | issue | SQL built by string concatenation | high\n")
@@ -339,6 +342,24 @@ next: ask for approval per category, then record the answers with approve.sh <ca
         self.assertIn("    create SECURITY.md: a public repository without a policy (high)\n", r.stdout)
         self.assertNotIn("decides these", r.stdout)
         self.assertNotIn("approving", r.stdout)
+
+    def test_the_scaffolded_categories_without_findings_are_named(self):
+        """They cannot be answered, and only a rejected category is left alone, so the apply phase scaffolds them."""
+        r = self.report("finding: files | NOTES.md | delete | agent resume notes | medium\n")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("\nalso: agent-config, docs, tests-ci, workspace have no findings, so the report does not ask about them; "
+                      "the apply phase still creates their missing baseline files, because only a rejected category is left alone\n",
+                      r.stdout)
+        r = self.report("finding: files | NOTES.md | delete | agent resume notes | medium\n"
+                        "finding: agent-config | AGENTS.md | create | missing | high\n"
+                        "finding: tests-ci | Makefile | create | missing | high\n"
+                        "finding: workspace | repo has_wiki | configure | true -> false | high\n")
+        self.assertIn("\nalso: docs has no findings, so the report does not ask about it; "
+                      "the apply phase still creates its missing baseline files, because only a rejected category is left alone\n",
+                      r.stdout)
+        full = self.report(AUDIT + "finding: docs | README.md | create | missing | high\n"
+                           "finding: tests-ci | Makefile | create | missing | high\n")
+        self.assertEqual(full.stdout.count("\nalso:"), 0, "every scaffolded category has findings, so there is nothing to add")
 
     def test_a_report_of_create_findings_deletes_nothing_and_opens_no_issues(self):
         audit = "\n".join(f"finding: {c} | {t} | create | missing | high" for c, t in (
