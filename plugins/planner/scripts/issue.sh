@@ -8,10 +8,11 @@
 #        issue.sh label <n> [--add <l>]... [--remove <l>]...
 #        issue.sh comment <n> --body-file <f>
 #        issue.sh close <n> [--comment-file <f>] [--reason completed|not-planned]
+#        create with --parent and --milestone also attaches the parent to that milestone when it carries none
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 wf_need gh; wf_need jq
-usage() { sed -n '3,10p' "$0"; exit "${1:-0}"; }
+usage() { sed -n '3,11p' "$0"; exit "${1:-0}"; }
 cmd="${1:-}"; [ -n "$cmd" ] || usage 1; shift
 version() { printf '%s' "$1" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' || wf_die "milestone must be named vX.Y.Z, got '$1'"; printf '%s' "$1"; }
 # The milestone titled $1 as JSON (open or closed), or empty.
@@ -26,11 +27,11 @@ num() { local n="${1#\#}"; printf '%s' "$n" | grep -Eq '^[0-9]+$' || wf_die "iss
 # A release closes a milestone only once every issue on it is closed, so the parent ($1, the spec) joins the
 # milestone of its sub-issue ($2). A parent that already carries a different milestone keeps it.
 attach_parent() {
-  local have; have=$(gh api "repos/$(wf_repo_nwo)/issues/$1" --jq '.milestone.title // ""' 2>/dev/null) \
+  local have; have=$(gh api "repos/$(wf_repo_nwo)/issues/$1" --jq '.milestone.title // ""') \
     || { wf_warn "cannot read the milestone of #$1; attach it to $2 on GitHub"; return 0; }
   case "$have" in
-    "$2") : ;;
-    "") if gh issue edit "$1" --milestone "$2" >/dev/null 2>&1; then wf_kv parent-milestone "#$1 attached to $2"
+    "$2") wf_kv parent-milestone "#$1 already on $2" ;;
+    "") if gh issue edit "$1" --milestone "$2" >/dev/null; then wf_kv parent-milestone "#$1 attached to $2"
         else wf_warn "attaching #$1 to $2 failed; attach it on GitHub"; fi ;;
     *) wf_warn "#$1 stays on milestone $have while its sub-issues go to $2; move it if $2 releases this work" ;;
   esac

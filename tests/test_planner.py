@@ -164,15 +164,27 @@ class IssueScriptTests(PlanWorktree):
         r = self.run_script(PLANNER / "issue.sh", "create", "--title", "T", "--body-file", self.body(), "--parent", "12",
                             "--milestone", "v1.2.0", SHIM_MILESTONES_FIXTURE=self.milestones(), SHIM_ISSUE_MILESTONE="v2.0.0")
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("warning: #12 stays on milestone v2.0.0", r.stderr)
-        self.assertIn("v1.2.0", r.stderr)
+        self.assertIn("warning: #12 stays on milestone v2.0.0 while its sub-issues go to v1.2.0", r.stderr)
         self.assertFalse([c for c in self.calls() if c.startswith("gh issue edit")])
-        self.reset_calls()
+
+    def test_a_spec_already_on_the_milestone_is_reported_and_not_edited(self):
         r = self.run_script(PLANNER / "issue.sh", "create", "--title", "T", "--body-file", self.body(), "--parent", "12",
                             "--milestone", "v1.2.0", SHIM_MILESTONES_FIXTURE=self.milestones(), SHIM_ISSUE_MILESTONE="v1.2.0")
         self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("parent-milestone: #12 already on v1.2.0", r.stdout)
         self.assertEqual(r.stderr, "")
         self.assertFalse([c for c in self.calls() if c.startswith("gh issue edit")])
+
+    def test_a_spec_that_cannot_be_attached_warns_and_keeps_the_ticket(self):
+        for env, text in ((dict(SHIM_ISSUE_MILESTONE_ERROR="1"), "cannot read the milestone of #12; attach it to v1.2.0"),
+                          (dict(SHIM_ISSUE_MILESTONE_EDIT_FAILS="1"), "attaching #12 to v1.2.0 failed")):
+            r = self.run_script(PLANNER / "issue.sh", "create", "--title", "T", "--body-file", self.body(), "--parent", "12",
+                                "--milestone", "v1.2.0", SHIM_MILESTONES_FIXTURE=self.milestones(), **env)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("issue: #42", r.stdout)
+            self.assertNotIn("parent-milestone", r.stdout)
+            self.assertIn(f"warning: {text}", r.stderr)
+            self.assertIn("HTTP", r.stderr)  # gh's own diagnostic, not swallowed
 
     def test_a_ticket_without_a_milestone_leaves_its_spec_alone(self):
         r = self.run_script(PLANNER / "issue.sh", "create", "--title", "T", "--body-file", self.body(), "--parent", "12")
