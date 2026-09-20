@@ -91,8 +91,20 @@ if [ -n "${SHIM_WS:-}" ]; then
     "api graphql -f query="*" -f o=o -f n=r") [ ! -e "$ws/no-project-scope" ] || { echo "gh: Your token has not been granted the required scopes to execute this query. The 'projectsV2' field requires one of the following scopes: ['read:project']" >&2; exit 1; }; jq '{data: {repository: {projectsV2: {nodes: .}}}}' "$ws/projects.json"; exit ;;
     "project copy "*" --target-owner o --title r --format json") echo '{"number":12,"url":"https://github.com/users/o/projects/12"}'; exit ;;
     "project link 12 --owner o --repo o/r")
-      jq '. + [{number: 12, title: "r", url: "https://github.com/users/o/projects/12", closed: false,
-        workflows: {nodes: [{name: "Auto-add to project", enabled: false}, {name: "Item closed", enabled: true}]}}]' "$ws/projects.json" > "$ws/t" && mv "$ws/t" "$ws/projects.json"; exit ;;
+      # The copy carries the template's fields, so the next run finds Status and Priority in place.
+      jq '. + [{id: "PVT_12", number: 12, title: "r", url: "https://github.com/users/o/projects/12", closed: false,
+        workflows: {nodes: [{name: "Auto-add to project", enabled: false}, {name: "Item closed", enabled: true}]},
+        fields: {nodes: [{name: "Title", dataType: "TITLE"},
+          {name: "Status", dataType: "SINGLE_SELECT", options: [{name: "Triage"}, {name: "Ready"},
+            {name: "In progress"}, {name: "In review"}, {name: "Done"}]},
+          {name: "Priority", dataType: "SINGLE_SELECT", options: [{name: "P0"}, {name: "P1"}, {name: "P2"}, {name: "P3"}]}]}}]' \
+        "$ws/projects.json" > "$ws/t" && mv "$ws/t" "$ws/projects.json"; exit ;;
+    # createProjectV2Field: the new single-select field lands in projects.json, so the next run sees it.
+    "api graphql --input -")
+      case "$(jq -r .query <<<"$body")" in *createProjectV2Field*) ;; *) echo "gh shim: unhandled graphql: $body" >&2; exit 64 ;; esac
+      jq --argjson b "$body" 'map(if .id == $b.variables.p then .fields.nodes += [{name: $b.variables.n,
+        dataType: "SINGLE_SELECT", options: [$b.variables.o[] | {name}]}] else . end)' "$ws/projects.json" > "$ws/t" && mv "$ws/t" "$ws/projects.json"
+      echo '{"data": {"createProjectV2Field": {"projectV2Field": {"id": "PVTSSF_new"}}}}'; exit ;;
   esac
 fi
 case "$*" in

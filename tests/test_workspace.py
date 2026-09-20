@@ -12,6 +12,24 @@ def milestone(number, title, open_issues, closed_issues, state="open"):
     return {"number": number, "title": title, "state": state, "open_issues": open_issues, "closed_issues": closed_issues}
 
 
+STATUS = ["Triage", "Ready", "In progress", "In review", "Done"]
+PRIORITY = ["P0", "P1", "P2", "P3"]
+
+
+def select(name, options):
+    return {"name": name, "dataType": "SINGLE_SELECT", "options": [{"name": o} for o in options]}
+
+
+def project(number, fields=None, autoadd=False, closed=False):
+    """One projectsV2 node as the GraphQL query returns it; by default its fields match the standard."""
+    if fields is None:
+        fields = [select("Status", STATUS), select("Priority", PRIORITY)]
+    return {"id": f"PVT_{number}", "number": number, "title": "r",
+            "url": f"https://github.com/users/o/projects/{number}", "closed": closed,
+            "workflows": {"nodes": [{"name": "Auto-add to project", "enabled": autoadd}]},
+            "fields": {"nodes": [{"name": "Title", "dataType": "TITLE"}, *fields]}}
+
+
 class WorkspaceTests(ShimTest):
     """workspace.sh against a stateful gh shim: $SHIM_WS holds the GitHub state and every write changes it."""
 
@@ -59,8 +77,7 @@ class WorkspaceTests(ShimTest):
         (self.ws / "private-vulnerability-reporting.json").unlink()
         (self.ws / "protection-main.json").unlink()
         self.put("milestones.json", [milestone(1, "v1.0.0", 1, 4)])
-        self.put("projects.json", [{"number": 3, "title": "r", "url": "https://github.com/users/o/projects/3", "closed": False,
-                                    "workflows": {"nodes": [{"name": "Auto-add to project", "enabled": False}]}}])
+        self.put("projects.json", [project(3)])
         # As GitHub returns them: ids, defaults the standard leaves open, rules in another order.
         dev = {"id": 7, "name": "standard: dev", "target": "branch", "enforcement": "active", "source_type": "Repository",
                "bypass_actors": [], "current_user_can_bypass": "never",
@@ -90,7 +107,8 @@ class WorkspaceTests(ShimTest):
         return self.run_script(WORKSPACE, *args, SHIM_WS=str(self.ws), TMPDIR=str(self.base), **env)
 
     def writes(self):
-        return [c for c in self.calls() if " --method " in c or c.startswith(("gh project copy", "gh project link"))]
+        return [c for c in self.calls()
+                if " --method " in c or c.startswith(("gh project copy", "gh project link", "gh api graphql --input -"))]
 
     def body(self, prefix):
         """Payload of the one logged write that starts with prefix."""
@@ -317,6 +335,7 @@ class WorkspaceTests(ShimTest):
         self.assertIn("manual: project: not checked, the gh token cannot read projects; run gh auth refresh -s project, "
                       "then run workspace.sh again", r.stdout)
         self.assertNotIn("diff: project", r.stdout)
+        self.assertNotIn(" field ", r.stdout, "no field is checked without the scope")
         self.assertIn("differences: 22", r.stdout)
 
     def test_a_default_branch_outside_the_two_models_blocks_apply(self):
@@ -346,6 +365,87 @@ class WorkspaceTests(ShimTest):
         r = self.ws_run()
         self.assertEqual(r.returncode, 1)
         self.assertIn("error: admin rights on o/r are needed", r.stderr)
+
+    def test_a_project_field_that_is_missing_is_created_and_one_that_differs_is_left_to_a_person(self):
+        self.public_main()
+        # What GitHub gives a new project: Status with its own options, no Priority.
+        self.put("projects.json", [project(3, fields=[select("Status", ["Todo", "In progress", "Done"])], autoadd=True)])
+        url = "https://github.com/users/o/projects/3"
+        r = self.ws_run()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn(f"diff: project {url} field Priority: missing -> create single-select with P0, P1, P2, P3", r.stdout)
+        status_line = (f"manual: project {url} field Status: options Todo, In progress, Done, but the standard wants "
+                       "Triage, Ready, In progress, In review, Done; change them by hand (replacing an option list "
+                       "clears the field on every item)")
+        self.assertIn(status_line, r.stdout)
+        self.assertIn("differences: 23", r.stdout)
+        self.assertEqual(self.writes(), [])
+
+        snap = self.base / "snapshot.json"
+        r = self.ws_run("--apply", "--snapshot", str(snap))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(json.loads(snap.read_text())["projects"], [{
+            "number": 3, "title": "r", "url": url,
+            "fields": [{"name": "Title", "dataType": "TITLE", "options": []},
+                       {"name": "Status", "dataType": "SINGLE_SELECT", "options": ["Todo", "In progress", "Done"]}]}],
+            "the snapshot holds the fields as they were before the run")
+        created = [c for c in self.writes() if c.startswith("gh api graphql --input -")]
+        self.assertEqual(len(created), 1, self.writes())
+        body = json.loads(created[0].split(" --input - ", 1)[1])
+        self.assertIn("createProjectV2Field", body["query"])
+        self.assertEqual(body["variables"]["p"], "PVT_3")
+        self.assertEqual(body["variables"]["n"], "Priority")
+        self.assertEqual([o["name"] for o in body["variables"]["o"]], ["P0", "P1", "P2", "P3"])
+        self.assertTrue(all(o["color"] and o["description"] for o in body["variables"]["o"]), body["variables"]["o"])
+
+        self.reset_calls()
+        r = self.ws_run()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn("diff:", r.stdout)
+        self.assertIn(status_line, r.stdout)
+        self.assertNotIn("field Priority", r.stdout, "the created field matches the standard")
+        self.assertIn("differences: 0", r.stdout)
+
+    def test_project_field_options_match_in_any_order_and_casing(self):
+        self.private_dev_main()
+        self.put("projects.json", [project(3, fields=[select("status", ["done", "IN REVIEW", "In progress", "ready", "TRIAGE"]),
+                                                      select("Priority", ["P3", "P2", "P1", "P0"])])])
+        r = self.ws_run()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn(" field ", r.stdout)
+        self.assertIn("differences: 3", r.stdout)
+
+    def test_an_extra_option_or_a_field_of_another_type_is_a_manual_step_and_nothing_is_written(self):
+        self.private_dev_main()
+        url = "https://github.com/users/o/projects/3"
+        self.put("projects.json", [project(3, fields=[select("Status", [*STATUS, "Blocked"]),
+                                                      {"name": "Priority", "dataType": "TEXT"}])])
+        r = self.ws_run()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn(f"manual: project {url} field Status: options Triage, Ready, In progress, In review, Done, Blocked, "
+                      "but the standard wants Triage, Ready, In progress, In review, Done; change them by hand "
+                      "(replacing an option list clears the field on every item)", r.stdout)
+        self.assertIn(f"manual: project {url} field Priority: a text field, but the standard wants a single-select with "
+                      "P0, P1, P2, P3; change it by hand", r.stdout)
+        self.assertNotIn("diff: project", r.stdout)
+        self.assertIn("differences: 3", r.stdout)
+        self.assertEqual(self.ws_run("--apply").returncode, 0)
+        self.assertFalse([c for c in self.writes() if "graphql" in c], "an existing field is never rewritten")
+
+    def test_more_than_one_open_project_is_a_manual_step_and_every_one_is_checked(self):
+        self.private_dev_main()
+        self.put("projects.json", [project(3), project(4, fields=[select("Status", STATUS)], autoadd=True),
+                                   project(5, closed=True, fields=[])])
+        r = self.ws_run()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("manual: projects: 2 open ones are linked (https://github.com/users/o/projects/3, "
+                      "https://github.com/users/o/projects/4); the standard wants one; unlink or close the others by hand",
+                      r.stdout)
+        self.assertNotIn("projects/5", r.stdout, "a closed project is not checked")
+        self.assertIn("diff: project https://github.com/users/o/projects/4 field Priority: missing -> create "
+                      "single-select with P0, P1, P2, P3", r.stdout)
+        self.assertNotIn("projects/3 field", r.stdout)
+        self.assertIn("differences: 4", r.stdout)
 
     def test_check_reports_workspace_drift_and_skips_it_when_github_is_unreachable(self):
         self.assertEqual(self.run_script(STANDARDS / "scaffold.sh").returncode, 0)
