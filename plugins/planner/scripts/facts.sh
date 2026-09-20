@@ -13,9 +13,9 @@ acceptance_line() {
   sj=$(gh api "repos/$nwo/issues/$1" 2>/dev/null) || return 0
   [ "$(printf '%s' "$sj" | jq -r .state)" = open ] || return 0
   printf '%s' "$sj" | jq -e '[.labels[]?.name] | index("spec")' >/dev/null 2>&1 || return 0
-  subs=$(gh api --paginate "repos/$nwo/issues/$1/sub_issues?per_page=100" 2>/dev/null) || return 0
-  total=$(printf '%s' "$subs" | jq -s -r '[add // [] | .[]?] | length')
-  open=$(printf '%s' "$subs" | jq -s -r '[add // [] | .[]? | select(.state == "open")] | length')
+  subs=$(wf_sub_issues "$nwo" "$1") || return 0
+  total=$(printf '%s' "$subs" | jq -r 'length')
+  open=$(printf '%s' "$subs" | jq -r '[.[]? | select(.state == "open")] | length')
   if [ "$total" = 0 ]; then
     wf_kv acceptance "#$1 is a spec without native sub-issues; /planner:accept takes the ticket numbers"
   elif [ "$open" = 0 ]; then

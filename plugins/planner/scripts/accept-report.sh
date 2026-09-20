@@ -9,7 +9,6 @@
 # reworded verdict must never pass as a report. Nothing is written, on GitHub or in the repository.
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
-wf_need gh; wf_need jq
 usage() { sed -n '2,4p' "$0"; exit "${1:-0}"; }
 case "${1:-}" in -h|--help) usage 0 ;; "") wf_die "usage: accept-report.sh <spec> [<file>...]" ;; esac
 spec=$(wf_issue_num "$1"); shift
@@ -46,14 +45,16 @@ parsed=$(cat "$@" | SECTIONS="$SECTIONS" awk '
 # The checkable sections of the spec itself, so a section the checker left out is visible. A section that is
 # absent or says "none" is not checkable. An unreadable spec costs the comparison, not the report.
 present=""
-nwo=$(wf_repo_nwo 2>/dev/null) || nwo=""
+nwo=""
+if command -v gh >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then nwo=$(wf_repo_nwo 2>/dev/null) || nwo=""; fi
 if [ -n "$nwo" ] && sj=$(gh api "repos/$nwo/issues/$spec" 2>/dev/null); then
   present=$(printf '%s' "$sj" | jq -r '.body // ""' | SECTIONS="$SECTIONS" awk '
     function trim(s) { gsub(/^[[:space:]\r]+|[[:space:]\r]+$/, "", s); return s }
     BEGIN { n = split(ENVIRON["SECTIONS"], s, "|"); for (i = 1; i <= n; i++) S[tolower(s[i])] = s[i] }
-    /^#+ / { sec = trim(substr($0, index($0, " ") + 1)); next }
-    { t = trim($0); if (t != "" && tolower(sec) in S && tolower(t) != "none" && tolower(t) != "none.") seen[tolower(sec)] = 1 }
-    END { for (k in seen) print S[k] }')
+    /^#+ / { sec = trim(substr($0, index($0, " ") + 1)); first[tolower(sec)] = ""; next }
+    { t = trim($0)
+      if (t != "" && tolower(sec) in S && first[tolower(sec)] == "") first[tolower(sec)] = t }
+    END { for (k in first) if (first[k] != "" && tolower(first[k]) !~ /^none([[:space:][:punct:]]|$)/) print S[k] }')
 else
   wf_warn "could not read #$spec; the report cannot say whether the checker left a section of the spec out"
 fi
@@ -66,8 +67,9 @@ printf '%s\n' "$parsed" | SECTIONS="$SECTIONS" PRESENT="$present" SPEC="$spec" a
     if ($3 != "met") { open++; rows = rows sprintf("  %s (%s) %s | %s | %s\n", $3, $5, $1, $2, $4) } }
   END {
     secs = 0; for (i = 1; i <= ns; i++) if (order[i] in n) secs++
+    for (i = 1; i <= nv; i++) if (!(verdicts[i] in v)) v[verdicts[i]] = 0   # a count of zero prints as 0
     printf "items: %d in %d section(s); %d met, %d open\n", total, secs, v["met"], open
-    line = ""; for (i = 1; i <= nv; i++) line = line (line == "" ? "" : ", ") verdicts[i] " " (verdicts[i] in v ? v[verdicts[i]] : 0)
+    line = ""; for (i = 1; i <= nv; i++) line = line (line == "" ? "" : ", ") verdicts[i] " " v[verdicts[i]]
     printf "verdicts: %s\n", line
     for (i = 1; i <= ns; i++) {
       c = order[i]

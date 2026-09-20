@@ -40,3 +40,34 @@ wf_notify() {
 wf_issue_num() { local n="${1#\#}"; printf '%s' "$n" | grep -Eq '^[0-9]+$' || wf_die "issue must be a number, got '$1'"; printf '%s' "$n"; }
 # GitHub's numeric database id of issue $1 (dependency and sub-issue APIs want it, not the number).
 wf_issue_db_id() { gh api "repos/$(wf_repo_nwo)/issues/$1" --jq .id 2>/dev/null; }
+
+# --- The acceptance of a spec (accept-facts.sh, accept-report.sh, accept-close.sh) ---
+
+# Issue $2 of repository $1 as JSON, or a refusal naming it.
+wf_issue_json() { gh api "repos/$1/issues/$2" 2>/dev/null || wf_die "could not read issue #$2 in $1; does it exist, and is gh authenticated for this repository?"; }
+# The native sub-issues of issue $2 of repository $1 as one JSON array, empty where there are none.
+# Fails (non-zero, no output) where the API is unavailable, which is not the same as a spec without tickets.
+wf_sub_issues() { gh api --paginate "repos/$1/issues/$2/sub_issues?per_page=100" 2>/dev/null | jq -s -c 'add // []'; }
+# Refuse anything but an open spec issue. $1 the number, $2 its JSON.
+wf_require_open_spec() {
+  local labels; labels=$(printf '%s' "$2" | jq -r '[.labels[]?.name] | join(",")')
+  case ",$labels," in
+    *,spec,*) ;;
+    *) wf_die "#$1 is not labelled spec (labels: ${labels:--}); an acceptance judges a spec against the code. Open a planning session on the issue to triage it." ;;
+  esac
+  [ "$(printf '%s' "$2" | jq -r .state)" = open ] || wf_die "#$1 is closed; it was accepted already. Reopen it to accept it again."
+}
+# Refuse a worktree that is not the base branch as it is now: the acceptance judges the code on the base
+# branch, and a planning worktree branched off before the tickets merged would show the checker old code.
+# $1 the base branch. A fetch that fails costs the comparison, not the run.
+wf_require_base_up_to_date() {
+  local ref="origin/$1" behind ahead
+  # The explicit refspec updates refs/remotes/origin/<base>; fetching the branch by name only writes FETCH_HEAD.
+  git fetch --quiet origin "+refs/heads/$1:refs/remotes/origin/$1" 2>/dev/null \
+    || wf_warn "could not fetch $ref; this worktree may be older than the base branch"
+  git rev-parse --verify --quiet "$ref" >/dev/null || { wf_warn "no $ref here; the code the checker reads may be older than the base branch"; return 0; }
+  behind=$(git rev-list --count "HEAD..$ref" 2>/dev/null || echo 0)
+  ahead=$(git rev-list --count "$ref..HEAD" 2>/dev/null || echo 0)
+  [ "$ahead" = 0 ] || wf_warn "this worktree has $ahead commit(s) that $ref does not; the checker reads them as if they were merged"
+  [ "$behind" = 0 ] || wf_die "this worktree is $behind commit(s) behind $ref, so the checker would judge the spec against old code. Update it first: git merge --ff-only $ref"
+}

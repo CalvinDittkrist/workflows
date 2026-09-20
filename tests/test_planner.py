@@ -1,6 +1,7 @@
 import json
 import time
 import unittest
+from pathlib import Path
 
 from helpers import PLANNER, ShimTest
 
@@ -99,9 +100,9 @@ class FactsAndLabelsTests(PlanWorktree):
         r = self.run_script(PLANNER / "facts.sh", SHIM_SPEC_FIXTURE=self.specs())
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertNotIn("acceptance:", r.stdout, "an issue that is not a spec gets no acceptance line")
-        r = self.run_script(PLANNER / "facts.sh", SHIM_GH_DOWN="1")
+        r = self.run_script(PLANNER / "facts.sh", WF_PLAN_ISSUE="19", SHIM_SPEC_FIXTURE=self.specs(), SHIM_GH_DOWN="1")
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("issue: #34", r.stdout)
+        self.assertIn("issue: #19", r.stdout)
         self.assertNotIn("acceptance:", r.stdout, "without GitHub the state is unknown, not guessed")
         self.plan("offline-mode")
         self.reset_calls()
@@ -313,6 +314,25 @@ class PrototypeAndFinishTests(PlanWorktree):
 class AcceptFactsTests(ShimTest):
     """accept-facts.sh against the gh shim: the block, the refusals and the ticket numbers as arguments."""
 
+    def setUp(self):
+        """A planning worktree with an origin, so the check against the base branch runs for real."""
+        super().setUp()
+        self.origin = self.base / "origin.git"
+        self.git("init", "-q", "--bare", str(self.origin), cwd=self.base)
+        self.git("remote", "add", "origin", str(self.origin))
+        self.git("push", "-q", "-u", "origin", "main")
+
+    def move_the_base_branch_on(self):
+        """A ticket merged elsewhere: one commit on origin/main this worktree has not even heard of."""
+        clone = self.base / "clone"
+        self.git("clone", "-q", "--branch", "main", str(self.origin), str(clone), cwd=self.base)
+        self.git("config", "user.email", "t@example.com", cwd=clone)
+        self.git("config", "user.name", "t", cwd=clone)
+        (clone / "ticket.txt").write_text("what a ticket merged\n")
+        self.git("add", ".", cwd=clone)
+        self.git("commit", "-qm", "feat: a merged ticket", cwd=clone)
+        self.git("push", "-q", "origin", "main", cwd=clone)
+
     DEVIATION = ("> Accepted deviation (spec acceptance).\n"
                  "The release command reads the default branch, not a dev branch.\n"
                  "Kept: that is the better rule.")
@@ -367,6 +387,29 @@ class AcceptFactsTests(ShimTest):
         self.assertNotIn("Org member says", r.stdout, "an organisation member without write access is not a maintainer")
         self.assertIn("warning: ignored 2 comment(s) with the deviation marker from someone without write access", r.stderr)
         self.assertIn("warning: pull request(s) #25 changed more than 100 files", r.stderr)
+
+    def test_a_worktree_behind_the_base_branch_is_refused_before_anything_is_read(self):
+        self.move_the_base_branch_on()
+        self.assertEqual(self.git("rev-list", "--count", "HEAD..origin/main").strip(), "0",
+                         "the worktree does not know yet; only the script's own fetch can tell")
+        r = self.facts("19")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("this worktree is 1 commit(s) behind origin/main", r.stderr)
+        self.assertIn("git merge --ff-only origin/main", r.stderr)
+        self.assertFalse([c for c in self.calls() if "/issues/" in c], "no issue is read before the refusal")
+        self.git("merge", "--ff-only", "origin/main")
+        r = self.facts("19")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("base: main\n", r.stdout)
+        self.assertNotIn("behind", r.stderr)
+
+    def test_a_worktree_with_commits_of_its_own_is_reported_but_not_refused(self):
+        (self.repo / "scratch.txt").write_text("prototype\n")
+        self.git("add", ".")
+        self.git("commit", "-qm", "wip")
+        r = self.facts("19")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("warning: this worktree has 1 commit(s) that origin/main does not", r.stderr)
 
     def test_facts_refuse_a_non_spec_a_closed_spec_and_open_tickets(self):
         r = self.facts("34")
@@ -520,6 +563,30 @@ class AcceptReportTests(AcceptanceSpec):
         self.assertIn("warning: could not read #19; the report cannot say whether the checker left a section", r.stderr)
         self.assertIn("items: 4 in 3 section(s); 2 met, 2 open", r.stdout)
 
+    def test_a_verdict_nobody_used_counts_as_zero(self):
+        r = self.report("item: Decisions | The checker is read-only | missing | nothing in agents/ | high\n")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("items: 1 in 1 section(s); 0 met, 1 open\n"
+                      "verdicts: met 0, missing 1, deviates 0, untested 0\n", r.stdout)
+
+    def test_a_section_that_says_none_in_a_sentence_needs_no_item(self):
+        db = self.db()
+        body = json.loads(Path(db).read_text())
+        body[0]["body"] = self.BODY.replace("## ADRs to write\nnone", "## ADRs to write\nNone, nothing here is hard to reverse.")
+        Path(db).write_text(json.dumps(body))
+        r = self.report("item: User stories | A maintainer accepts a spec | met | plugins/planner/skills/accept/SKILL.md:1 | high\n"
+                        "item: Decisions | The checker is read-only | met | spec-checker.md:5 | high\n"
+                        "item: Testing | The report has a test | met | tests/test_planner.py:1 | high\n"
+                        "item: Vocabulary | acceptance is defined | met | docs/glossary.md:15 | high\n",
+                        fixture=db)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stderr, "", "a section whose answer is none needs no item")
+
+    def test_the_reply_can_arrive_on_stdin(self):
+        r = self.run_script(PLANNER / "accept-report.sh", "19", stdin=self.REPLY, SHIM_SPEC_FIXTURE=self.db())
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("items: 4 in 3 section(s); 2 met, 2 open", r.stdout)
+
     def test_a_missing_reply_file_is_named(self):
         r = self.run_script(PLANNER / "accept-report.sh", "19", str(self.base / "gone.txt"), SHIM_SPEC_FIXTURE=self.db())
         self.assertNotEqual(r.returncode, 0)
@@ -558,7 +625,7 @@ class AcceptCloseTests(AcceptanceSpec):
         self.assertIn("not labelled spec (labels: ready-for-agent)", r.stderr)
         r = self.close(fixture=self.db(spec_state="closed"))
         self.assertNotEqual(r.returncode, 0)
-        self.assertIn("#19 is closed already", r.stderr)
+        self.assertIn("#19 is closed; it was accepted already", r.stderr)
         r = self.run_script(PLANNER / "accept-close.sh", "19", "--comment-file", self.comment(""), SHIM_SPEC_FIXTURE=self.db())
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("is empty; the closing comment records what was checked", r.stderr)
@@ -575,14 +642,31 @@ class AcceptCloseTests(AcceptanceSpec):
         r = self.close(fixture=self.db(sub_issues=()))
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("#19 has no native sub-issues", r.stderr)
-        self.reset_calls()
         r = self.close("20", "#21", SHIM_NO_SUBISSUES="1")
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("#19 still has open sub-issues: #21", r.stderr)
-        self.assertFalse([c for c in self.calls() if "sub_issues" in c], "the arguments replace the sub-issue lookup")
         r = self.close("20", SHIM_NO_SUBISSUES="1")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("closed: #19 (completed)", r.stdout)
+
+    def test_the_ticket_arguments_add_to_the_sub_issues_they_do_not_replace_them(self):
+        r = self.close("20", fixture=self.db(sub_issues=(20, 21)))
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("#19 still has open sub-issues: #21", r.stderr,
+                      "a gap ticket the caller left out still refuses the close")
+        self.assertFalse([c for c in self.calls() if c.startswith("gh issue close")])
+
+    def test_a_ticket_whose_state_cannot_be_read_stops_the_close(self):
+        r = self.close("99")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("could not read issue #99", r.stderr)
+        self.assertFalse([c for c in self.calls() if c.startswith("gh issue close")],
+                         "an unreadable ticket is never counted as closed")
+
+    def test_comment_file_without_a_value_is_refused_with_the_fix(self):
+        r = self.run_script(PLANNER / "accept-close.sh", "19", "--comment-file", SHIM_SPEC_FIXTURE=self.db())
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("error: --comment-file needs the file with the closing comment", r.stderr)
 
 
 if __name__ == "__main__":

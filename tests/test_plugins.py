@@ -46,24 +46,22 @@ class ManifestTests(unittest.TestCase):
             fm = agent.read_text().split("---")[1]
             self.assertIn("model: inherit\n", fm, agent)
 
+    def assert_read_only(self, agent):
+        """An agent that only judges: no edit tool and no agent tool, neither granted nor reachable."""
+        fields = dict(line.split(": ", 1) for line in agent.read_text().split("---")[1].strip().splitlines())
+        self.assertEqual(fields["tools"].split(", "), ["Read", "Grep", "Glob", "Bash"], agent)
+        self.assertTrue({"Edit", "Write", "NotebookEdit", "Agent"} <= set(fields["disallowedTools"].split(", ")), agent)
+        self.assertNotIn("mcpServers", fields, agent)
+
     def test_every_auditor_is_read_only_by_its_declared_tools(self):
         agents = ROOT / "plugins/repo-standards/agents"
         names = {"files", "agent-config", "docs", "tests-ci", "workspace", "security"}
         self.assertEqual({p.stem for p in agents.glob("*.md")}, {f"{n}-auditor" for n in names})
         for agent in agents.glob("*.md"):
-            fields = dict(line.split(": ", 1) for line in agent.read_text().split("---")[1].strip().splitlines())
-            self.assertEqual(fields["tools"].split(", "), ["Read", "Grep", "Glob", "Bash"], agent)
-            self.assertTrue({"Edit", "Write", "NotebookEdit", "Agent"} <= set(fields["disallowedTools"].split(", ")), agent)
-            self.assertNotIn("mcpServers", fields, agent)
+            self.assert_read_only(agent)
 
     def test_the_spec_checker_is_read_only_by_its_declared_tools(self):
-        agent = ROOT / "plugins/planner/agents/spec-checker.md"
-        fields = dict(line.split(": ", 1) for line in agent.read_text().split("---")[1].strip().splitlines())
-        tools = fields["tools"].split(", ")
-        self.assertEqual(tools, ["Read", "Grep", "Glob", "Bash"])
-        self.assertFalse({"Edit", "Write", "NotebookEdit", "MultiEdit", "Agent", "Task"} & set(tools))
-        self.assertTrue({"Edit", "Write", "NotebookEdit", "Agent"} <= set(fields["disallowedTools"].split(", ")))
-        self.assertNotIn("mcpServers", fields)
+        self.assert_read_only(ROOT / "plugins/planner/agents/spec-checker.md")
 
     def test_every_planner_skill_is_user_invoked_only(self):
         skills = sorted(p.parent.name for p in (ROOT / "plugins/planner/skills").glob("*/SKILL.md"))
