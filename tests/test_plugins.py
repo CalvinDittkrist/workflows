@@ -56,6 +56,22 @@ class ManifestTests(unittest.TestCase):
             self.assertTrue({"Edit", "Write", "NotebookEdit", "Agent"} <= set(fields["disallowedTools"].split(", ")), agent)
             self.assertNotIn("mcpServers", fields, agent)
 
+    def test_the_spec_checker_is_read_only_by_its_declared_tools(self):
+        agent = ROOT / "plugins/planner/agents/spec-checker.md"
+        fields = dict(line.split(": ", 1) for line in agent.read_text().split("---")[1].strip().splitlines())
+        tools = fields["tools"].split(", ")
+        self.assertEqual(tools, ["Read", "Grep", "Glob", "Bash"])
+        self.assertFalse({"Edit", "Write", "NotebookEdit", "MultiEdit", "Agent", "Task"} & set(tools))
+        self.assertTrue({"Edit", "Write", "NotebookEdit", "Agent"} <= set(fields["disallowedTools"].split(", ")))
+        self.assertNotIn("mcpServers", fields)
+
+    def test_every_planner_skill_is_user_invoked_only(self):
+        skills = sorted(p.parent.name for p in (ROOT / "plugins/planner/skills").glob("*/SKILL.md"))
+        self.assertIn("accept", skills)
+        for skill in skills:
+            fm = (ROOT / f"plugins/planner/skills/{skill}/SKILL.md").read_text().split("---")[1]
+            self.assertIn("disable-model-invocation: true\n", fm, skill)
+
     def test_the_standardisation_run_is_user_invoked_only(self):
         for skill in ("standardize", "apply"):
             fm = (ROOT / f"plugins/repo-standards/skills/{skill}/SKILL.md").read_text().split("---")[1]
