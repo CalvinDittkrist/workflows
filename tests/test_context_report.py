@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -23,10 +24,13 @@ class ContextReportTests(unittest.TestCase):
                               env={**os.environ, **env})
 
     def rows(self, stdout):
-        """Every session line, split into fields by column."""
+        """Every session line, split into fields by column.
+
+        On the two-space separator, not on whitespace: a label is free text and may hold a space.
+        """
         lines = [line for line in stdout.splitlines() if not line.startswith("#")]
-        heads = lines[0].split() if lines else []
-        return [dict(zip(heads, line.split())) for line in lines[1:]]
+        heads = re.split(r" {2,}", lines[0]) if lines else []
+        return [dict(zip(heads, re.split(r" {2,}", line))) for line in lines[1:]]
 
     def row(self, stdout):
         """The one session line, split into fields."""
@@ -51,6 +55,7 @@ class ContextReportTests(unittest.TestCase):
                             "message": {"role": "assistant", "content": [call],
                                         "usage": {"input_tokens": 1000, "cache_read_input_tokens": 9000}}})
             records.append({**base, "type": "user", "uuid": f"u{number}",
+                            "toolUseResult": {"stdout": "x" * 100, "stderr": ""},
                             "message": {"role": "user", "content": [
                                 {"type": "tool_result", "tool_use_id": f"t{number}", "content": "x" * 100}]}})
         records.append({**base, "type": "assistant", "uuid": "az", "requestId": "rz",
@@ -111,14 +116,59 @@ class ContextReportTests(unittest.TestCase):
                 "grep -c '<<EOF' setup.sh\ncat AGENTS.md",  # a quoted `<<` must not swallow the cat
                 'grep x <<< "foo"; cat README.md',          # a here-string is not a heredoc either
                 'git commit -m "one\nsleep calls; cat is mentioned"',  # a quoted separator is text
+                "cat notes.md 2>/dev/null",                 # a stderr redirect still reads the file
+                "cat a.txt > b.txt",                        # a stdout redirect writes, it reads nothing in
+                "timeout 5 head -5 CHANGELOG.md",           # a wrapper does not hide the reader
             ])
             result = self.report(str(path))
         self.assertEqual(result.returncode, 0, result.stderr)
         row = self.row(result.stdout)
         self.assertEqual(row["sleep"], "1")
-        self.assertEqual(row["shell"], "5")
-        self.assertEqual(row["shellread"], "40%")  # the two `cat` calls, 200 of 500 characters
+        self.assertEqual(row["shell"], "8")
+        self.assertEqual(row["shellread"], "50%")  # four reading calls, 400 of 800 characters
         self.assertEqual(row["label"], "feat/42-file-tools")  # no agent name: the branch names the session
+
+    def test_output_that_cannot_be_attributed_to_a_command_is_left_out_of_the_share(self):
+        poll = {"type": "assistant", "uuid": "ap", "requestId": "rp", "message": {
+            "role": "assistant", "usage": {"input_tokens": 0, "cache_read_input_tokens": 10000},
+            "content": [{"type": "tool_use", "id": "tp", "name": "BashOutput", "input": {"bash_id": "b1"}}]}}
+        polled = {"type": "user", "uuid": "up", "toolUseResult": {"stdout": "y" * 500}, "message": {
+            "role": "user", "content": [{"type": "tool_result", "tool_use_id": "tp", "content": "y" * 500}]}}
+        orphan = {"type": "user", "uuid": "uo", "message": {
+            "role": "user", "content": [{"type": "tool_result", "tool_use_id": "gone", "content": "z" * 500}]}}
+        with tempfile.TemporaryDirectory(prefix="wf-report-") as tmp:
+            path = self.shell_session(tmp, ["cat AGENTS.md"], extra=[poll, polled, orphan])
+            result = self.report(str(path))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        row = self.row(result.stdout)
+        # The polled output belongs to a background call whose command is elsewhere, and the orphan
+        # result has no call in this transcript: neither says anything about how the worker reads.
+        self.assertEqual(row["shellread"], "100%")
+        self.assertEqual(row["shell"], "2")
+
+    def test_a_worker_session_that_ran_no_tool_is_reported_not_called_a_format_change(self):
+        # A worker aborted after its first answer is a short session, not a changed format.
+        start = {"type": "user", "uuid": "u0", "message": {
+            "role": "user", "content": "<command-name>/worker:work</command-name>"}}
+        answer = {"type": "assistant", "uuid": "a0", "requestId": "r0", "attributionPlugin": "worker",
+                  "message": {"role": "assistant", "content": [{"type": "text", "text": "Which repository?"}],
+                              "usage": {"input_tokens": 500, "cache_read_input_tokens": 9500}}}
+        with tempfile.TemporaryDirectory(prefix="wf-report-") as tmp:
+            path = self.write(tmp, "0badc0de-0000-4000-8000-00000000000c.jsonl",
+                              [{"version": "2.1.278", "isSidechain": False, "gitBranch": "feat/42-x",
+                                "timestamp": "2026-09-20T12:00:00.000Z", **record}
+                               for record in (start, answer)])
+            result = self.report(str(path))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.row(result.stdout)["shell"], "0")
+
+    def test_a_control_character_in_a_label_cannot_repaint_the_terminal(self):
+        name = {"type": "agent-name", "agentName": "#42\x1b[2K\x1b[31mFAKE"}
+        with tempfile.TemporaryDirectory(prefix="wf-report-") as tmp:
+            path = self.shell_session(tmp, ["ls"], extra=[name])
+            result = self.report(str(path))
+        self.assertNotIn("\x1b", result.stdout)
+        self.assertEqual(self.row(result.stdout)["label"], "#42?[2K?[31mFAKE")
 
     def test_scans_the_worktree_projects_and_skips_sessions_that_are_not_workers(self):
         with tempfile.TemporaryDirectory(prefix="wf-report-") as tmp:
@@ -153,8 +203,13 @@ class ContextReportTests(unittest.TestCase):
         typed = {"type": "user", "uuid": "ut", "message": {
             "role": "user", "content": "<command-message>worker:pr</command-message>"
                                        "<command-name>/worker:pr</command-name>"}}
+        # No skill is named worker:pr-author today, but the agent is; naming it starts no stage.
+        author = {"type": "assistant", "uuid": "aa", "requestId": "ra", "message": {
+            "role": "assistant", "usage": {"input_tokens": 0, "cache_read_input_tokens": 99000},
+            "content": [{"type": "tool_use", "id": "ta", "name": "Skill",
+                         "input": {"skill": "worker:pr-author"}}]}}
         with tempfile.TemporaryDirectory(prefix="wf-report-") as tmp:
-            path = self.shell_session(tmp, ["ls"], extra=[typed])
+            path = self.shell_session(tmp, ["ls"], extra=[author, typed])
             result = self.report(str(path))
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.row(result.stdout)["pr"], "10.0k")

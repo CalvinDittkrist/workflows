@@ -37,9 +37,11 @@ FILE_READERS = re.compile(r"^(cat|bat|head|tail|less|more|sed\s+-n)\b")
 # `<<TAG`, `<<-TAG`, `<<'TAG'`: a here-string (`<<<`) and a shift (`1 << 2`) are neither.
 HEREDOC = re.compile(r"<<(?!<)-?\s*([\"']?)([A-Za-z_]\w*)\1")
 SLEEP = re.compile(r"^sleep\b")
+# `> file` and `&> file` send the output away; `2> file` and `2>&1` only move stderr.
+STDOUT_REDIRECT = re.compile(r"(?<![0-9])>")
 # What a shell keyword puts in front of the command it runs, and the wrappers that pass it on.
 SEGMENT_PREFIX = re.compile(r"^(do|then|else|elif|if|while|until|!|time|nohup|command|exec|eval"
-                            r"|timeout\s+[\d.]+[smhd]?|xargs(\s+-\S+)*)\s+")
+                            r"|timeout\s+[\d.]+[smhd]?)\s+")
 
 
 class FormatError(Exception):
@@ -123,10 +125,12 @@ def commands(command):
 def reads_files(command):
     """True when the command prints file content into the context (cat, sed -n, head, ...).
 
-    A segment that redirects to a file writes instead of reading: `cat <<'EOF' > new.py` and
-    `cat a b > merged` add nothing to the context.
+    A segment that redirects its output to a file writes instead of reading: `cat <<'EOF' >
+    new.py` and `cat a b > merged` add nothing to the context. A redirect of stderr does not
+    count as one, so `cat missing.md 2>/dev/null` stays a read.
     """
-    return any(FILE_READERS.match(segment) and ">" not in segment for segment in commands(command))
+    return any(FILE_READERS.match(segment) and not STDOUT_REDIRECT.search(segment)
+               for segment in commands(command))
 
 
 def sleeps(command):
@@ -188,7 +192,7 @@ def read_records(path):
     records = []
     # split("\n"), not splitlines(): a record may carry \x0b, \x1e or U+2028 inside a string,
     # and splitlines() would break it into two halves that are both invalid JSON.
-    for number, line in enumerate(path.read_text(errors="replace").split("\n"), 1):
+    for number, line in enumerate(path.read_text(encoding="utf-8", errors="replace").split("\n"), 1):
         if not line.strip():
             continue
         try:
@@ -213,12 +217,20 @@ def check_transcript(records, version):
     return True
 
 
-def check_worker_session(row, version):
-    """Refuse a worker session whose tool calls or their results no longer parse."""
-    if not row["calls"]:
-        raise FormatError("a worker session without a single `tool_use` block", version)
-    if not row["answered"]:
-        raise FormatError("no `tool_result` matches the id of a `tool_use`", version)
+def check_tool_calls(records, calls, answered, version):
+    """Refuse a session whose tool calls stopped parsing, but not one that made none.
+
+    A worker that was aborted after its first question ran no tool at all; that is a short
+    session, not a changed format. The evidence that a call is there but unread is the
+    `toolUseResult` field beside the message: every answered call carries it.
+    """
+    if not any(r.get("toolUseResult") is not None for r in records if not r.get("isSidechain")):
+        return
+    if not calls:
+        raise FormatError("records carry `toolUseResult` but no `tool_use` block was found", version)
+    if not answered:
+        raise FormatError("records carry `toolUseResult` but no `tool_result` block matches a "
+                          "`tool_use` id", version)
 
 
 def load(path):
@@ -233,17 +245,16 @@ def load(path):
     try:
         if not check_transcript(records, version):
             return None
-        row = measure(records, path)
+        row = measure(records, path, version)
     except (AttributeError, TypeError, ValueError) as error:
         raise FormatError(f"a record has a shape this report cannot read ({error})", version) from None
     if row is None:
         return None
-    check_worker_session(row, version)
     row["version"] = version
     return row
 
 
-def measure(records, path):
+def measure(records, path, version):
     """The row for a worker session, or None when the session ran no worker stage."""
     row = {
         "session": path.stem[:8],
@@ -306,7 +317,7 @@ def measure(records, path):
 
     if not is_worker:
         return None
-    row["calls"], row["answered"] = calls, answered
+    check_tool_calls(records, calls, answered, version)
     row.update(tools)
     row["turns"] = len(turns)
     row["peak"] = peak
@@ -331,7 +342,8 @@ def transcripts(arguments):
     return sorted(p for d in sorted(projects.glob("*worktrees*")) for p in d.glob("*.jsonl"))
 
 
-def tokens(value):
+def thousands(value):
+    """A context size as the maintainer reads it: 96.2k."""
     return "-" if value is None else f"{value / 1000:.1f}k"
 
 
@@ -339,9 +351,9 @@ COLUMNS = [
     ("session", lambda row: row["session"]),
     ("version", lambda row: row["version"]),
     ("turns", lambda row: str(row["turns"])),
-    ("review", lambda row: tokens(row["review"])),
-    ("pr", lambda row: tokens(row["pr"])),
-    ("peak", lambda row: tokens(row["peak"])),
+    ("review", lambda row: thousands(row["review"])),
+    ("pr", lambda row: thousands(row["pr"])),
+    ("peak", lambda row: thousands(row["peak"])),
     ("shellread", lambda row: f"{row['shellread'] * 100:.0f}%"),
     ("read", lambda row: str(row["read"])),
     ("edit", lambda row: str(row["edit"])),
