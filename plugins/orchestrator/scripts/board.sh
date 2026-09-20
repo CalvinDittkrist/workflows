@@ -58,22 +58,25 @@ if [ -n "$nwo" ]; then
     [.[] | select(.pull_request == null)] as $all
     | [$all[] | select((.assignees|length) == 0 and ((.issue_dependencies_summary.blocked_by // 0) == 0) and (.number as $n | $claimed | index($n) | not))] as $free
     | "frontier[\($free|length)]{issue,milestone,title}:",
-      ($free[] | "  \(.number),\(.milestone.title // "-"),\(.title | gsub("[\\n\\r\\t]"; " "))"),
+      ($free[] | "  \(.number),\(.milestone.title // "-" | gsub("[\\n\\r\\t]"; " ")),\(.title | gsub("[\\n\\r\\t]"; " "))"),
       (if ($all|length) > ($free|length) then "waiting: \(($all|length) - ($free|length)) ready-for-agent issue(s) blocked, assigned or claimed" else empty end)'
 
   # Ready for acceptance: open specs with native sub-issues, all of them closed. Derived per run, no state.
-  specs=$(gh api "repos/$nwo/issues?labels=spec&state=open&per_page=100" 2>/dev/null || echo '[]')
-  acc_rows=""; acc_count=0; acc_first=""
+  specs=$(gh api --paginate "repos/$nwo/issues?labels=spec&state=open&per_page=100" 2>/dev/null | jq -s -c 'add // []' || echo '[]')
+  acc_rows=""; acc_count=0; acc_first=""; acc_unknown=0
   while IFS= read -r spec; do
     [ -n "$spec" ] || continue
-    subs=$(gh api "repos/$nwo/issues/$spec/sub_issues?per_page=100" 2>/dev/null || echo '[]')
-    tally=$(printf '%s' "$subs" | jq -r 'if type == "array" then "\(length) \([.[] | select(.state == "open")] | length)" else "0 0" end' 2>/dev/null || echo '0 0')
+    if ! subs=$(gh api --paginate "repos/$nwo/issues/$spec/sub_issues?per_page=100" 2>/dev/null | jq -s -c 'add // []'); then
+      acc_unknown=$((acc_unknown+1)); continue   # a failed read is not the same as a spec without tickets
+    fi
+    tally=$(printf '%s' "$subs" | jq -r '"\(length) \([.[] | select(.state == "open")] | length)"' 2>/dev/null || echo '0 0')
     [ "${tally% *}" -gt 0 ] && [ "${tally#* }" -eq 0 ] || continue
-    acc_rows="$acc_rows$(printf '%s' "$specs" | jq -r --argjson n "$spec" '.[] | select(.number == $n) | "  \(.number),\(.milestone.title // "-"),\(.title | gsub("[\\n\\r\\t]"; " "))"')
+    acc_rows="$acc_rows$(printf '%s' "$specs" | jq -r --argjson n "$spec" '.[] | select(.number == $n) | "  \(.number),\(.milestone.title // "-" | gsub("[\\n\\r\\t]"; " ")),\(.title | gsub("[\\n\\r\\t]"; " "))"')
 "
     acc_count=$((acc_count+1)); [ -n "$acc_first" ] || acc_first="$spec"
   done < <(printf '%s' "$specs" | jq -r '.[] | select(.pull_request == null) | .number')
   printf 'acceptance[%s]{issue,milestone,title}:\n' "$acc_count"
   printf '%s' "$acc_rows"
   if [ "$acc_count" != 0 ]; then printf 'help: every ticket is closed; accept the spec in a planning session, e.g. /orchestrator:plan #%s.\n' "$acc_first"; fi
+  if [ "$acc_unknown" != 0 ]; then printf 'note: could not read the sub-issues of %s spec(s); they are not listed.\n' "$acc_unknown"; fi
 fi

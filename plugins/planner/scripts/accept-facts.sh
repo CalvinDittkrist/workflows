@@ -26,8 +26,8 @@ esac
 
 # The tickets: the arguments, or the native sub-issues.
 if [ -z "$tickets" ]; then
-  subs=$(gh api "repos/$nwo/issues/$spec/sub_issues?per_page=100" 2>/dev/null || echo '[]')
-  tickets=$(printf '%s' "$subs" | jq -r '[.[]?.number] | join(" ")')
+  subs=$(gh api --paginate "repos/$nwo/issues/$spec/sub_issues?per_page=100" 2>/dev/null || echo '[]')
+  tickets=$(printf '%s' "$subs" | jq -s -r '[add // [] | .[]?.number] | join(" ")')
   [ -n "$tickets" ] || wf_die "#$spec has no native sub-issues; pass the ticket numbers as further arguments: accept-facts.sh $spec <ticket>..."
 fi
 
@@ -37,7 +37,7 @@ for t in $tickets; do
   tj=$(issue_json "$t")
   state=$(printf '%s' "$tj" | jq -r .state)
   if [ "$state" = open ]; then open_tickets="$open_tickets #$t"; fi
-  rows="$rows$t	$state	$(printf '%s' "$tj" | jq -r '.title | gsub("[\\n\\t]"; " ")')
+  rows="$rows$t	$state	$(printf '%s' "$tj" | jq -r '.title | gsub("[\\n\\r\\t]"; " ")')
 "
 done
 [ -z "$open_tickets" ] || wf_die "#$spec still has open tickets:$open_tickets; accept the spec when all of them are closed"
@@ -55,7 +55,7 @@ while IFS='	' read -r t state title; do
     merged=$(printf '%s' "$nodes" | jq -c '[.[] | select(.merged)]')
     prs=$(printf '%s' "$merged" | jq -r '[.[] | "#\(.number)"] | join(" ")')
     [ -n "$prs" ] || prs="-"
-    printf '%s' "$merged" | jq -r '.[].files.nodes[]?.path' >> "$files"
+    printf '%s' "$merged" | jq -r '.[].files.nodes[]?.path | gsub("[\\n\\r\\t]"; " ")' >> "$files"
     [ "$(printf '%s' "$nodes" | jq length)" -lt "$pr_page" ] || wf_warn "#$t names $pr_page or more pull requests; only the first $pr_page are read"
     truncated=$(printf '%s' "$merged" | jq -r '[.[] | select(.files.totalCount > (.files.nodes | length)) | "#\(.number)"] | join(" ")')
     [ -z "$truncated" ] || wf_warn "pull request(s) $truncated changed more than 100 files; the file list is incomplete"
@@ -69,19 +69,43 @@ $rows
 EOF
 
 # Deviations accepted in earlier runs: comments on the spec that open with the fixed marker line.
-comments=$(gh api "repos/$nwo/issues/$spec/comments?per_page=100" 2>/dev/null || echo '[]')
-marked=$(printf '%s' "$comments" | jq -c --arg marker '> Accepted deviation (spec acceptance).' '
-  [.[] | select((((.body // "") | split("\n") | .[0] // "") | sub("\r$"; "")) == $marker)]')
-# Anyone can comment the marker on a public issue, so only a maintainer's comment counts, and it is attributed.
-maintainer='def maintainer: .author_association as $a | ["OWNER", "MEMBER", "COLLABORATOR"] | index($a) != null;'
-deviations=$(printf '%s' "$marked" | jq -r "$maintainer"' .[] | select(maintainer)
-  | "@\(.user.login // "unknown"): " + (((.body // "") | split("\n")[1:] | join(" ") | gsub("\\s+"; " ") | sub("^ "; "") | sub(" $"; "")))')
-outsiders=$(printf '%s' "$marked" | jq -r "$maintainer"' [.[] | select(maintainer | not)] | length')
-[ "$outsiders" = 0 ] || wf_warn "ignored $outsiders comment(s) with the deviation marker from outside the repository; only a maintainer accepts a deviation"
+# Paginated: the deviations of earlier runs are the newest comments, and GitHub returns the oldest first.
+comments=$(gh api --paginate "repos/$nwo/issues/$spec/comments?per_page=100" 2>/dev/null || echo '[]')
+marked=$(printf '%s' "$comments" | jq -s -c --arg marker '> Accepted deviation (spec acceptance).' '
+  [add // [] | .[] | select((((.body // "") | split("\n") | .[0] // "") | sub("\r$"; "")) == $marker)]')
+# Anyone can comment the marker on a public issue, and an organisation member is not automatically a
+# maintainer, so the commenter must have write access. Where that cannot be read (the caller needs it
+# himself), the author association decides and the run says so.
+unverified=0
+can_write() {
+  local perm
+  perm=$(gh api "repos/$nwo/collaborators/$1/permission" 2>/dev/null | jq -r '.permission // empty' 2>/dev/null || true)
+  case "$perm" in
+    admin|maintain|write) return 0 ;;
+    triage|read|none) return 1 ;;
+    *) unverified=1; case "$2" in OWNER|MEMBER|COLLABORATOR) return 0 ;; *) return 1 ;; esac ;;
+  esac
+}
+deviations=""; outsiders=0
+while IFS='	' read -r login association text; do
+  [ -n "$login" ] || continue
+  if can_write "$login" "$association"; then
+    deviations="$deviations@$login: $text
+"
+  else
+    outsiders=$((outsiders+1))
+  fi
+done <<EOF
+$(printf '%s' "$marked" | jq -r '.[] | [(.user.login // "unknown"), (.author_association // ""),
+  (((.body // "") | split("\n")[1:] | join(" ") | gsub("\\s+"; " ") | sub("^ "; "") | sub(" $"; "")))] | @tsv')
+EOF
+[ "$outsiders" = 0 ] || wf_warn "ignored $outsiders comment(s) with the deviation marker from someone without write access; only a maintainer accepts a deviation"
+[ "$unverified" = 0 ] || wf_warn "could not read who has write access here; fell back to the comment's author association"
 
 wf_kv repo "$nwo"
-wf_kv spec "#$spec $(printf '%s' "$sj" | jq -r .title)"
-wf_kv milestone "$(printf '%s' "$sj" | jq -r '.milestone.title // "-"')"
+# Every title is printed control-character free: the block has a fixed shape the checker reads line by line.
+wf_kv spec "#$spec $(printf '%s' "$sj" | jq -r '.title | gsub("[\\n\\r\\t]"; " ")')"
+wf_kv milestone "$(printf '%s' "$sj" | jq -r '.milestone.title // "-" | gsub("[\\n\\r\\t]"; " ")')"
 wf_kv base "$(wf_base_branch)"
 printf 'tickets[%s]{issue,state,prs,title}:\n' "$(printf '%s' "$tickets" | wc -w | tr -d ' ')"
 printf '%s' "$ticket_rows"

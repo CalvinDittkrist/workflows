@@ -450,10 +450,12 @@ class BoardAndAbandonTests(ShimTest):
             self.assertNotIn(absent, r.stdout, "only an open spec with sub-issues and none of them open is due")
         self.assertLess(r.stdout.index("frontier["), r.stdout.index("acceptance["), "the section follows the frontier")
 
-    def test_board_lists_no_spec_where_sub_issues_are_unavailable(self):
+    def test_board_says_so_when_it_cannot_read_the_sub_issues(self):
         r = self.run_script(ORCH / "board.sh", SHIM_SPEC_FIXTURE=self.specs(), SHIM_NO_SUBISSUES="1")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("acceptance[0]{issue,milestone,title}:\n", r.stdout)
+        self.assertIn("note: could not read the sub-issues of 4 spec(s); they are not listed.", r.stdout,
+                      "an unreadable spec is not the same as a spec with nothing to accept")
 
     def test_board_without_a_spec_ready_and_with_github_unreachable(self):
         r = self.run_script(ORCH / "board.sh")
