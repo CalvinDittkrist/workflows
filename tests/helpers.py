@@ -3,6 +3,7 @@ import re
 import shlex
 import subprocess
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -23,6 +24,8 @@ class ShimTest(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory(prefix="wf-test-")
         self.addCleanup(self.tmp.cleanup)
         self.base = Path(self.tmp.name).resolve()
+        # Cleanups run last in first out, so this one ends before the directory goes.
+        self.addCleanup(self.await_detached)
         self.repo = self.base / "repo"
         self.repo.mkdir()
         self.git("init", "-q", "-b", "main")
@@ -35,6 +38,18 @@ class ShimTest(unittest.TestCase):
         self.argv_log = self.base / "calls.argv.log"
         self.wt_root = self.base / "wt"
         self.wt_root.mkdir()
+
+    def await_detached(self, seconds=30):
+        """Wait for a process a script under test left running in the temp directory — the handoff starts one
+        with nohup. The directory is removed when the test ends, and a process still writing into it made the
+        removal fail from time to time; one that outstays the wait is ended, because what it writes into is
+        about to go."""
+        deadline = time.time() + seconds
+        while time.time() < deadline:
+            if subprocess.run(["pgrep", "-f", str(self.base)], capture_output=True).returncode != 0:
+                return
+            time.sleep(0.05)
+        subprocess.run(["pkill", "-f", str(self.base)], capture_output=True)
 
     def git(self, *args, cwd=None):
         return subprocess.run(["git", *args], cwd=cwd or self.repo, env={**os.environ, **GIT_ISOLATION}, check=True,
