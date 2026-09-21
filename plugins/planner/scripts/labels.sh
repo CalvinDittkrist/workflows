@@ -19,6 +19,7 @@ needs-info|D876E3|Waiting on the reporter
 ready-for-human|1D76DB|Needs a human to implement
 wontfix|FFFFFF|Will not be actioned; the closing comment says why
 spec|5319E7|Spec issue; its tickets carry the work
+factory|FFC799|Routed to the factory host; local claims leave it alone
 bug|D73A4A|Something is broken
 enhancement|A2EEEF|New feature or improvement
 LABELS

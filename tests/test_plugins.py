@@ -173,6 +173,19 @@ class LabelVocabularyTests(ShimTest):
                          f"{self.PLANNER_FILE} differ in name, colour, description or order. One of the two copies "
                          f"was changed and the other has to follow; do not adjust this test.")
 
+    def test_the_routing_label_the_local_claim_refuses_is_in_the_vocabulary(self):
+        """claim.sh refuses a routed issue by the name in WF_ROUTING_LABEL; a rename in the vocabulary that
+        leaves that name behind would let a local claim take an issue the factory owns."""
+        r = subprocess.run(["bash", "-c", r'. "$1/lib.sh"; printf "%s\n" "$WF_ROUTING_LABEL"', "_", str(ORCH)],
+                           cwd=self.base, text=True, capture_output=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        routing = r.stdout.strip()
+        self.assertTrue(routing, "plugins/orchestrator/scripts/lib.sh defines no WF_ROUTING_LABEL")
+        for file, vocabulary in ((self.STANDARDS_FILE, self.standards_vocabulary()),
+                                 (self.PLANNER_FILE, self.planner_vocabulary())):
+            self.assertIn(routing, [name for name, _, _ in vocabulary],
+                          f"claim.sh refuses the label {routing}, which {file} does not define")
+
 
 class ContextValueContractTests(ShimTest):
     """The context value file is the only thing the orchestrator and the worker share (ADR 0020): the status

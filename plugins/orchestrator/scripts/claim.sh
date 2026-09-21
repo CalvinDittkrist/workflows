@@ -59,8 +59,51 @@ if ! wf_issue_has_label "$json" ready-for-agent; then
   fi
 fi
 
+# The factory owns a routed issue: it claims the issue on its host and opens the pull request from there.
+# Claiming it here as well would mean two workers on one issue and one of the two results thrown away.
+if wf_issue_has_label "$json" "$WF_ROUTING_LABEL"; then
+  if [ "$force" = 1 ]; then
+    wf_warn "issue #$issue is routed to the factory (labels: $labels); claiming it locally anyway because --force was given. The factory may work it at the same time."
+  else
+    wf_die "issue #$issue is routed to the factory (labels: $labels). Remove the label $WF_ROUTING_LABEL to work on it locally, or claim it anyway with --force."
+  fi
+fi
+
+# A claim on the remote is the creation of the issue's branch there, so a remote branch of the contract's
+# shape belongs to another claimer. Looked up by issue number like the worktree above, because the branch
+# type follows the labels and the other claimer may have seen different ones. Only read when there is an
+# origin to read; a remote that answers with an error is a warning, so a claim still works offline.
+remote_branch=""
+if git remote get-url origin >/dev/null 2>&1; then
+  remote_branch=$(wf_remote_branch_for_issue "$issue") \
+    || wf_warn "could not read the branches of origin; claiming #$issue without checking whether it is claimed there"
+fi
+if [ -n "$remote_branch" ]; then
+  # The branch is the factory's, a second machine's, or one this machine abandoned: abandon.sh removes the
+  # worktree and the local branch and leaves the remote one, so the common single-machine case lands here too.
+  if [ "$force" = 1 ]; then
+    wf_warn "issue #$issue is already claimed on origin by branch $remote_branch; --force adopts that branch, so this worktree continues its work instead of starting from $base."
+  else
+    wf_die "issue #$issue is already claimed on origin: the branch $remote_branch exists there, left by the factory, by another machine or by a claim of your own you abandoned. Wait for its pull request, delete it with git push origin --delete $remote_branch to start over, or continue its work here with --force, which starts the worktree from it."
+  fi
+fi
+
 git fetch -q origin "$base" 2>/dev/null || wf_warn "could not fetch origin/$base; branching from local $base"
 baseref="origin/$base"; git rev-parse -q --verify "$baseref" >/dev/null 2>&1 || baseref="$base"
+
+# The forced claim of a remotely claimed issue adopts its branch: work the other claimer already pushed is
+# continued here instead of being started again from the base.
+if [ -n "$remote_branch" ]; then
+  git fetch -q origin "+refs/heads/$remote_branch:refs/remotes/origin/$remote_branch" 2>/dev/null \
+    || wf_die "could not fetch $remote_branch from origin, so the work on it cannot be continued here"
+  branch="$remote_branch"; baseref="origin/$remote_branch"
+  # A local branch of that name (an earlier claim whose worktree is gone) would be checked out at its own tip
+  # instead of the base, so the worktree would silently not carry the work this claim says it continues.
+  stale=$(git rev-parse -q --verify "refs/heads/$branch" || true)
+  if [ -n "$stale" ] && [ "$stale" != "$(git rev-parse "$baseref")" ]; then
+    wf_die "the local branch $branch exists at $(git rev-parse --short "$stale") and is not what origin has, so the worktree would start from it instead of from the work on origin. Continue that branch by hand, or remove it with git branch -D $branch and claim again."
+  fi
+fi
 
 wf_create_worktree "$branch" "$baseref" "#$issue $(wf_slug "$title" | cut -c1-24)"
 if [ "${WF_DRY_RUN:-0}" = 1 ]; then
