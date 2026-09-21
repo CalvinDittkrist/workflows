@@ -10,20 +10,25 @@ set -euo pipefail
 # The one origin this script talks to, and the prefix every requested and every answering URL must carry.
 docs_base="https://code.claude.com/docs"
 # Seconds for the whole request, and the largest answer that is still a documentation page (the biggest one
-# on 2026-09-21 is 115 KB). Both bound what one lookup can cost a session in wall clock and in context.
+# on 2026-09-21 is 115 KB, so this is nine times the real thing). Both bound what one lookup can cost a
+# session in wall clock and in context. A leading zero is refused with the rest: `--max-time 0` is curl's
+# way of saying "no timeout", so the typo that looks like the strictest bound would remove it.
 timeout=${WF_DOCS_TIMEOUT:-30}
-max_bytes=5000000
-case $timeout in ''|*[!0123456789]*) wf_die "WF_DOCS_TIMEOUT is '$timeout'; set it to a number of seconds, or unset it for 30" ;; esac
+max_bytes=1000000
+case $timeout in ''|*[!0123456789]*|0*) wf_die "WF_DOCS_TIMEOUT is '$timeout'; set it to a whole number of seconds above zero, or unset it for 30" ;; esac
 
 case $# in
   0) url="$docs_base/llms.txt" ;;
   1)
-    # The slug is a path segment of a URL, so it is matched against a literal set, not against a range like
-    # [a-z0-9-]: ranges collate per locale, and this check must mean the same in every environment. A slash,
-    # a dot, a colon, a newline and an empty slug all fall outside it, so no argument can leave the path.
+    # The slug becomes the path of a URL, so it is matched against a literal set, not against a range like
+    # [a-z0-9-]: ranges collate per locale, and this check must mean the same in every environment. The
+    # index lists nested pages (agent-sdk/hooks, whats-new/...), so a slash between segments is allowed,
+    # and the shapes that would leave the path are not: a dot, a colon, a space, a newline and an empty
+    # slug are outside the set, and a leading slash, a trailing slash and an empty segment are refused
+    # here. With no dot in the set, `..` cannot be written at all.
     case $1 in
-      ''|*[!abcdefghijklmnopqrstuvwxyz0123456789-]*)
-        wf_die "not a documentation page: '$1'; pass a slug of lowercase letters, digits and hyphens (sub-agents), not a path or a URL; no argument prints the index" ;;
+      ''|*[!abcdefghijklmnopqrstuvwxyz0123456789/-]*|/*|*/|*//*)
+        wf_die "not a documentation page: '$1'; pass a page slug of lowercase letters, digits and hyphens, nested with a slash (sub-agents, agent-sdk/hooks), not a path or a URL; no argument prints the index" ;;
     esac
     url="$docs_base/en/$1.md" ;;
   *) wf_die "usage: claude-docs.sh [<slug>]; one page slug, or no argument for the index" ;;

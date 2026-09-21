@@ -99,9 +99,19 @@ class ClaudeDocsTests(ShimTest):
     def docs(self, *args, **env):
         return self.run_script(WORKER / "claude-docs.sh", *args, **env)
 
+    def curl_calls(self):
+        """The argv of every curl invocation, in order."""
+        return [call for call in self.argv_calls() if call[0] == "curl"]
+
     def requested(self):
         """The URLs curl was asked for, in order."""
-        return [call[-1] for call in self.argv_calls() if call[0] == "curl"]
+        return [call[-1] for call in self.curl_calls()]
+
+    def timeout_of(self, result):
+        """The seconds the one curl call of `result` was bounded by."""
+        self.assertEqual(result.returncode, 0, result.stderr)
+        call = self.curl_calls()[-1]
+        return call[call.index("--max-time") + 1]
 
     def test_without_an_argument_it_prints_the_index(self):
         r = self.docs()
@@ -118,16 +128,34 @@ class ClaudeDocsTests(ShimTest):
         self.assertIn(f"url: {self.ORIGIN}en/sub-agents.md", r.stdout)
         self.assertEqual(self.requested(), [f"{self.ORIGIN}en/sub-agents.md"])
 
-    def test_a_timeout_that_is_not_a_number_of_seconds_is_refused_with_the_fix(self):
-        r = self.docs("sub-agents", WF_DOCS_TIMEOUT="soon")
-        self.assertEqual(r.returncode, 1)
-        self.assertIn("error: WF_DOCS_TIMEOUT is 'soon'", r.stderr)
-        self.assertEqual(self.requested(), [])
+    def test_a_nested_slug_reaches_the_nested_page(self):
+        """A quarter of the index is nested (agent-sdk/..., whats-new/...); those pages are reachable."""
+        r = self.docs("agent-sdk/hooks")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn(f"url: {self.ORIGIN}en/agent-sdk/hooks.md", r.stdout)
+        self.assertEqual(self.requested(), [f"{self.ORIGIN}en/agent-sdk/hooks.md"])
+
+    def test_the_request_carries_the_timeout_and_a_size_bound(self):
+        self.assertEqual(self.timeout_of(self.docs("sub-agents")), "30")
+        self.reset_calls()
+        # An operator may raise or lower it; whatever they set is what curl is given.
+        self.assertEqual(self.timeout_of(self.docs("sub-agents", WF_DOCS_TIMEOUT="7")), "7")
+        self.assertIn("--max-filesize", self.curl_calls()[0], "a page of any size would land in a context")
+
+    def test_a_timeout_that_is_not_a_number_of_seconds_above_zero_is_refused_with_the_fix(self):
+        # "0" is a number, and `curl --max-time 0` means no timeout at all, so it is refused with the rest.
+        for value in ("soon", "0", "00", "-1", "1.5", " 5"):
+            with self.subTest(timeout=value):
+                self.reset_calls()
+                r = self.docs("sub-agents", WF_DOCS_TIMEOUT=value)
+                self.assertEqual(r.returncode, 1, r.stdout)
+                self.assertIn(f"error: WF_DOCS_TIMEOUT is '{value}'", r.stderr)
+                self.assertEqual(self.requested(), [])
 
     def test_an_argument_that_is_not_a_slug_is_refused_before_any_request(self):
         # Each of these would leave the pinned path, or is not a page at all. The message names the fix.
-        for argument in ("../x", "../../etc/passwd", "https://evil.example/x", "//evil.example/x", "a/b",
-                         "a.b", "a b", "A", "a?b", "a#b", "a%2fb", "a\nb", ""):
+        for argument in ("../x", "../../etc/passwd", "https://evil.example/x", "//evil.example/x", "/a",
+                         "a/", "a//b", "a.b", "a b", "A", "a?b", "a#b", "a%2fb", "a\nb", ""):
             with self.subTest(argument=argument):
                 self.reset_calls()
                 r = self.docs(argument)
@@ -156,6 +184,13 @@ class ClaudeDocsTests(ShimTest):
         self.assertEqual(r.returncode, 1)
         self.assertIn("outside https://code.claude.com/docs/", r.stderr)
         self.assertEqual(r.stdout, "")
+
+    def test_a_redirect_inside_the_origin_is_followed_and_the_page_that_answered_is_named(self):
+        """The documentation renames pages; the answer is printed and cited under the URL it came from."""
+        r = self.docs("sub-agents", SHIM_CURL_REDIRECT=f"{self.ORIGIN}en/subagents.md")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn(f"url: {self.ORIGIN}en/subagents.md", r.stdout)
+        self.assertIn("# Page sub-agents.md", r.stdout)
 
     def test_only_https_to_the_pinned_origin_is_ever_requested(self):
         for args in ((), ("sub-agents",), ("hooks",), ("cli-reference",)):
