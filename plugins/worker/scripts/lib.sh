@@ -26,6 +26,10 @@ wf_state_dir() {
   d=$(git rev-parse --path-format=absolute --git-dir 2>/dev/null) || wf_die "not inside a git repository"
   printf '%s/worker' "$d"
 }
+# A record a worker stage leaves for the next one (ADR 0018): headers, an empty line, then the block it
+# carries. Both records in this plugin are read through these two, so their formats cannot drift apart.
+wf_record_field() { sed -n "s/^$2: //p" "$1" | head -1; }
+wf_record_body() { sed '1,/^$/d' "$1"; }
 wf_repo_owner() { gh repo view --json owner -q .owner.login; }
 wf_repo_name() { gh repo view --json name -q .name; }
 wf_notify() {

@@ -9,8 +9,8 @@ Hook: `SessionStart` runs `scripts/session-start.sh`. On startup it assigns the 
 | Skill | Purpose |
 | --- | --- |
 | `/worker:work` | pipeline driver: understand → implement → review → pr → ci → finish |
-| `/worker:review` | reviewer panel in parallel (`WF_REVIEWERS`), fix, re-review (`WF_REVIEW_ROUNDS`) |
-| `/worker:pr` | forked into `pr-author`: push and open the PR from a fresh context, with the recorded panel summary (`panel.sh`) in the body and a draft when it did not pass |
+| `/worker:review` | one gate run per round (`gate.sh`, the result goes into every brief), reviewer panel in parallel (`WF_REVIEWERS`), fix, re-review (`WF_REVIEW_ROUNDS`); no reviewer runs the gate ([ADR 0019](../../docs/adr/0019-the-gate-runs-once-per-review-round.md)) |
+| `/worker:pr` | forked into `pr-author`: push and open the PR from a fresh context, with the recorded panel summary (`panel.sh`) and gate result (`gate.sh`) in the body, and a draft when the panel did not pass |
 | `/worker:ci` | `pr-wait.sh`: checks + bot review wait (skipped on a draft, which it reports), returns `green`, `checks-failed`, `review-comments` or `waiting` |
 | `/worker:address-reviews` | `pr-threads.sh` + `pr-resolve.sh`: fix or decline each thread, reply, resolve |
 

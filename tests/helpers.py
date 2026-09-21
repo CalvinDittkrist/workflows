@@ -1,4 +1,6 @@
 import os
+import re
+import shlex
 import subprocess
 import tempfile
 import unittest
@@ -40,8 +42,13 @@ class ShimTest(unittest.TestCase):
 
     def env(self, **extra):
         # CLAUDE_CODE_* is stripped with the rest: the suite runs inside worker sessions, whose own settings
-        # carry CLAUDE_CODE_DISABLE_BACKGROUND_TASKS, and facts.sh reads it.
-        env = {k: v for k, v in os.environ.items() if not k.startswith(("WF_", "HERDR_", "SHIM_", "CLAUDE_CODE_"))}
+        # carry CLAUDE_CODE_DISABLE_BACKGROUND_TASKS, and facts.sh reads it. Every MAKE* variable goes too:
+        # the suite itself runs under `make test`, and a make that finds MAKELEVEL or MAKEFLAGS in its
+        # environment treats itself as a sub-make and prints "Entering directory" lines (GNU make 4 on CI,
+        # not 3.81 on macOS), which would end up in the gate record of a script under test. A worker runs
+        # its gate outside make, so the tests give it that environment.
+        dropped = ("WF_", "HERDR_", "SHIM_", "CLAUDE_CODE_", "MAKE", "MFLAGS")
+        env = {k: v for k, v in os.environ.items() if not k.startswith(dropped)}
         env.update({
             "PATH": f"{SHIMS}:{env['PATH']}",
             "SHIM_LOG": str(self.log),
@@ -58,6 +65,19 @@ class ShimTest(unittest.TestCase):
     def run_script(self, script, *args, cwd=None, stdin="", **extra):
         return subprocess.run(["bash", str(script), *args], cwd=cwd or self.repo, env=self.env(**extra),
                               input=stdin, text=True, capture_output=True)
+
+    def skill_brief(self, plugin, skill, **env):
+        """Everything a skill's !`command` injections print, run as the real scripts, in order. That text is
+        the brief a stage hands to a fresh context, so a test of the brief runs exactly this."""
+        body = (ROOT / f"plugins/{plugin}/skills/{skill}/SKILL.md").read_text().split("---", 2)[2]
+        out = ""
+        for cmd in re.findall(r"!`([^`]+)`", body):
+            argv = shlex.split(cmd.replace("${CLAUDE_PLUGIN_ROOT}/", f"{ROOT}/plugins/{plugin}/"))
+            self.assertNotIn("$", " ".join(argv), f"{skill}: {cmd} carries a placeholder this helper cannot fill")
+            r = self.run_script(argv[0], *argv[1:], **env)
+            self.assertEqual(r.returncode, 0, f"{skill}: {cmd}\n{r.stderr}")
+            out += r.stdout
+        return out
 
     def reset_calls(self):
         """Forget every recorded call. Both logs, so calls() and argv_calls() cannot drift apart."""

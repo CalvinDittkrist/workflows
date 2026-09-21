@@ -1,0 +1,86 @@
+#!/usr/bin/env bash
+# The gate result, run once per review round and handed to the reviewers as a fact (ADR 0019).
+# Usage: gate.sh run     run the gate, record the result for this head, print the output only when it failed
+#        gate.sh print   the gate block the review and pull request briefs carry
+# The record lives beside the panel summary in this worktree's git directory (ADR 0018), so the workers of
+# two issues never overwrite each other's gate result.
+set -euo pipefail
+# shellcheck source=lib.sh
+. "$(dirname "$0")/lib.sh"
+
+# One command for every repository, fixed by ADR 0008, so nothing here is configurable.
+gate_cmd=(make check)
+record="$(wf_state_dir)/gate"
+log="$(wf_state_dir)/gate.log"
+tail_lines=10  # five reviewers read this block; the full output is one file read away
+
+# The output is the repository's, not this script's: it is quoted into a brief, so it is indented by two
+# spaces. A line of it that imitates a key of this block therefore cannot be read as one.
+print_tail() {
+  # A tail without text is stated, not shown as a bare key a reader would have to tell apart from a
+  # truncation. It says what it knows: these lines carry nothing. Whether the gate printed anything at all
+  # is a question for the log, because the record keeps the last lines only.
+  if ! wf_record_body "$record" | grep -q .; then
+    wf_kv gate_output_tail "(blank: the last $tail_lines lines of the output carry no text; gate_log has all of it)"
+    return
+  fi
+  printf 'gate_output_tail:\n'; wf_record_body "$record" | sed 's/^./  &/'
+}
+
+field() { wf_record_field "$record" "$1"; }
+
+# The same phrasing of an exit status wherever a reader meets it.
+gate_outcome() { if [ "$1" = 0 ]; then printf 'pass (exit 0)'; else printf 'fail (exit %s)' "$1"; fi; }
+
+case "${1:-}" in
+  run)
+    wf_need make
+    commit=$(git rev-parse HEAD 2>/dev/null) || wf_die "this branch has no commit to record a gate run at"
+    dirty=no; [ -z "$(git status --porcelain)" ] || dirty=yes
+    started=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    begin=$(date +%s)
+    mkdir -p "$(dirname "$record")"
+    set +e
+    ( cd "$(git rev-parse --show-toplevel)" && "${gate_cmd[@]}" ) > "$log.tmp" 2>&1
+    status=$?
+    set -e
+    mv "$log.tmp" "$log"
+    # One file, written in one move: the headers, an empty line, then the tail of the output verbatim.
+    # Nothing is parsed out of that output; the gate command is fixed, its output shape is per repository.
+    { printf 'commit: %s\ndirty: %s\nstatus: %s\nstarted: %s\nduration: %s\ncommand: %s\nlog: %s\n\n' \
+        "$commit" "$dirty" "$status" "$started" "$(( $(date +%s) - begin ))" "${gate_cmd[*]}" "$log"
+      tail -n "$tail_lines" "$log"; } > "$record.tmp"
+    mv "$record.tmp" "$record"
+    # A failing gate is read here, in the call that ran it, instead of being run a second time for its
+    # output. A passing one is not: this runs in the worker's own context once per round, and the whole
+    # output of a passing gate is 36 KB of "ok" lines nobody reads, in the context the budget is kept in.
+    [ "$status" = 0 ] || cat "$log"
+    note=""; [ "$dirty" = no ] || note=", with a dirty working tree, so no reader counts it for that commit"
+    wf_kv gate_recorded "$(gate_outcome "$status") at $(git rev-parse --short "$commit")$note"
+    wf_kv gate_log "$log (the full output)"
+    exit "$status"
+    ;;
+  print)
+    if [ ! -f "$record" ]; then
+      wf_kv gate_result "none recorded for this head; run the worker's gate.sh run before the reviewers"
+      exit 0
+    fi
+    commit=$(field commit)
+    # A record is only ever read for the commit it was taken at: an older one says nothing about this head,
+    # and one taken on a dirty working tree says nothing about any commit. Neither is shown in its place.
+    if [ -z "$commit" ]; then
+      wf_kv gate_result "none recorded for this head; the record names no commit, so run the worker's gate.sh run again"
+    elif [ "$commit" != "$(git rev-parse HEAD)" ]; then
+      wf_kv gate_result "none for this head; the newest record is for $(git rev-parse --short "$commit" 2>/dev/null || printf '%s' "$commit"), which is not this head, so run the gate again"
+    elif [ "$(field dirty)" != no ]; then
+      wf_kv gate_result "none for this head; the newest record ran with a dirty working tree, so it belongs to no commit; commit what belongs to the change, ignore or remove what does not, and run the gate again"
+    else
+      wf_kv gate_result "$(gate_outcome "$(field status)") at $(git rev-parse --short "$commit")"
+      wf_kv gate_command "$(field command)"
+      wf_kv gate_started "$(field started), $(field duration) s"
+      wf_kv gate_log "$(field log) (the full output)"
+      print_tail
+    fi
+    ;;
+  *) wf_die "usage: gate.sh run | gate.sh print" ;;
+esac
