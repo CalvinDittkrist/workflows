@@ -1,7 +1,7 @@
 import json
 import unittest
 
-from helpers import WORKER, ShimTest
+from helpers import ROOT, WORKER, ShimTest
 
 
 class SessionStartHookTests(ShimTest):
@@ -86,6 +86,101 @@ class FactsTests(ShimTest):
                                     CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=value)
                 self.assertEqual(r.returncode, 0, r.stderr)
                 self.assertIn(f"subagents: {shape}", r.stdout)
+
+
+SUMMARY = """review_rounds: 2
+panel: code=FIX→PASS security=PASS docs=PASS tests=PASS senior=PASS
+fixed: 3 (S1 1, S2 1, S3 1)
+disputed: none"""
+
+
+class PanelSummaryTests(ShimTest):
+    """The hand-over from the review stage to the pull request stage (issue #41, ADR 0018)."""
+
+    def setUp(self):
+        super().setUp()
+        self.git("checkout", "-qb", "fix/12-x")
+
+    def record(self, block, cwd=None):
+        return self.run_script(WORKER / "panel.sh", "record", stdin=block, cwd=cwd)
+
+    def print_brief(self, cwd=None):
+        return self.run_script(WORKER / "panel.sh", "print", cwd=cwd)
+
+    def commit(self, name):
+        (self.repo / name).write_text(name)
+        self.git("add", "."); self.git("commit", "-qm", f"feat: {name}")
+
+    def verdict(self, panel_line):
+        r = self.record(f"review_rounds: 1\n{panel_line}\nfixed: 0\ndisputed: none")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return [l for l in self.print_brief().stdout.splitlines() if l.startswith("panel_verdict:")][0]
+
+    def test_a_recorded_summary_reaches_the_pull_request_brief_unchanged(self):
+        self.commit("a.txt")
+        r = self.record(SUMMARY)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        brief = self.print_brief().stdout
+        self.assertIn("panel_summary_block:\n" + SUMMARY + "\n", brief)
+        self.assertIn("panel_verdict: ready", brief)
+
+    def test_without_a_record_the_brief_says_so_in_one_line_and_the_verdict_is_draft(self):
+        brief = self.print_brief().stdout.splitlines()
+        self.assertEqual(len(brief), 2, brief)
+        self.assertTrue(brief[0].startswith("panel_summary: none recorded"), brief)
+        self.assertEqual(brief[1], "panel_verdict: draft")
+
+    def test_the_verdict_is_draft_unless_every_reviewer_ends_on_pass(self):
+        self.assertEqual(self.verdict("panel: code=PASS security=PASS docs=PASS tests=PASS senior=PASS"),
+                         "panel_verdict: ready")
+        # The last verdict of each reviewer counts, and a parenthesised suffix is accepted and ignored.
+        self.assertEqual(self.verdict("panel: code=FIX→FIX→PASS security=PASS(S3 only) docs=PASS"),
+                         "panel_verdict: ready")
+        self.assertEqual(self.verdict("panel: code=FIX→FIX→FIX security=PASS docs=PASS"),
+                         "panel_verdict: draft")
+        self.assertEqual(self.verdict("panel: code=PASS tests=PASS→FIX(S2 open)"), "panel_verdict: draft")
+
+    def test_a_block_without_a_parseable_panel_line_records_nothing(self):
+        self.record(SUMMARY)
+        for block in ("review_rounds: 1\nfixed: 0", "panel: code=MAYBE", "panel:"):
+            r = self.record(block)
+            self.assertEqual(r.returncode, 1, block)
+            self.assertTrue(r.stderr.startswith("error: "), r.stderr)
+            self.assertIn("panel: code=PASS", r.stderr)  # names the expected form
+            self.assertIn(SUMMARY, self.print_brief().stdout)  # the earlier record survives
+
+    def test_the_brief_names_the_commit_and_reports_a_moved_head(self):
+        self.commit("a.txt")
+        recorded = self.git("rev-parse", "--short", "HEAD").strip()
+        self.record(SUMMARY)
+        self.assertIn(f"panel_summary: recorded at {recorded}", self.print_brief().stdout)
+        self.assertIn("panel_head: unchanged", self.print_brief().stdout)
+        self.commit("b.txt")
+        self.commit("c.txt")
+        brief = self.print_brief().stdout
+        self.assertIn(f"panel_summary: recorded at {recorded}", brief)
+        self.assertIn("panel_head: 2 commits since", brief)
+
+    def test_the_pull_request_stages_brief_carries_the_summary_without_a_skill_argument(self):
+        """End to end over the wiring: whatever the pr skill injects has to print the recorded summary,
+        because the pipeline driver invokes that skill with no argument."""
+        import re
+        self.record(SUMMARY)
+        body = (ROOT / "plugins/worker/skills/pr/SKILL.md").read_text().split("---")[2]
+        briefs = [self.run_script(*cmd.replace("${CLAUDE_PLUGIN_ROOT}/scripts/", str(WORKER) + "/").split())
+                  for cmd in re.findall(r"!`([^`]+)`", body)]
+        for r in briefs:
+            self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn(SUMMARY, "".join(r.stdout for r in briefs))
+
+    def test_two_worktrees_of_one_repository_keep_separate_records(self):
+        other = self.base / "other-worktree"
+        self.git("worktree", "add", "-q", "-b", "fix/13-y", str(other))
+        self.record(SUMMARY)
+        self.assertTrue(self.print_brief(cwd=other).stdout.startswith("panel_summary: none recorded"))
+        self.record(SUMMARY.replace("2", "9"), cwd=other)
+        self.assertIn("review_rounds: 9", self.print_brief(cwd=other).stdout)
+        self.assertIn("review_rounds: 2", self.print_brief().stdout)
 
 
 class PrWaitTests(ShimTest):
