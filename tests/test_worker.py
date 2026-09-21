@@ -446,6 +446,13 @@ class CheckpointTests(ShimTest):
         self.assertIn("900 s limit", out["reason"])
         self.assertEqual(self.checkpoint(WF_CONTEXT_MAX_AGE="2000")["handoff"], "no")
 
+    def test_a_value_without_a_readable_token_count_hands_over(self):
+        (self.repo / ".git" / "worker").mkdir(parents=True, exist_ok=True)
+        (self.repo / ".git/worker/context").write_text("total_input_tokens: \nat: 2026-09-21T10:00:00Z\n")
+        out = self.checkpoint()
+        self.assertEqual(out["context_tokens"], "unknown")
+        self.assertEqual(out["handoff"], "yes")
+
     def test_a_value_without_a_readable_time_hands_over(self):
         self.record(78231, at="not-a-time")
         out = self.checkpoint()

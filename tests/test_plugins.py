@@ -174,7 +174,6 @@ class LabelVocabularyTests(ShimTest):
                          f"was changed and the other has to follow; do not adjust this test.")
 
 
-
 class ContextValueContractTests(ShimTest):
     """The context value file is the only thing the orchestrator and the worker share (ADR 0020): the status
     line of the pane writes it, the worker's checkpoint reads it, and no code crosses between the plugins."""

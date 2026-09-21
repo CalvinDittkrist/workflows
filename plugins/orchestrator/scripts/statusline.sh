@@ -7,10 +7,13 @@
 # never the line. The value it writes is the contract with the worker plugin (ADR 0020); no code is shared.
 # No -e: this runs on every render and a lookup that fails costs a segment of the line, never the line.
 set -uo pipefail
+# shellcheck source=lib.sh
+. "$(dirname "$0")/lib.sh"  # functions only; the branch convention lives there and is not copied here
 
 input=$(cat)
 
-# One jq call for every field, so the render costs one process. Empty for anything the input does not carry.
+# Everything the line and the value need, in one jq call, because the render is in the way of the terminal.
+# Empty for anything the input does not carry; the numeric checks below fork nothing.
 fields=$(printf '%s' "$input" | jq -r '[
     (.context_window.total_input_tokens // ""),
     (.context_window.context_window_size // ""),
@@ -19,33 +22,37 @@ fields=$(printf '%s' "$input" | jq -r '[
 IFS=$'\t' read -r tokens window cwd <<EOF
 $fields
 EOF
-num() { printf '%s' "${1:-}" | grep -Eq '^[0-9]+$'; }
+num() { case "${1:-}" in "" | *[!0-9]*) return 1 ;; *) return 0 ;; esac; }
 num "$tokens" || tokens=""
 num "$window" || window=""
 
-[ -z "$cwd" ] || cd "$cwd" 2>/dev/null || true
+# The value belongs to the worktree the session works in, which is the directory the input names. When that
+# directory cannot be entered, nothing is written: the process's own directory is some other repository, and a
+# size written there would be read by a worker it does not describe.
+here_ok=1
+[ -z "$cwd" ] || cd "$cwd" 2>/dev/null || here_ok=0
 
 # Issue and mode come from the session settings claim.sh writes; the branch answers for a session started by
 # hand, and a pane whose branch names no issue still gets a line.
 issue="${WF_ISSUE:-}"
-[ -n "$issue" ] || issue=$(git rev-parse --abbrev-ref HEAD 2>/dev/null | sed -nE '\#^plan/#d; s#^[a-z]+/([0-9]+)-.*#\1#p')
+[ -n "$issue" ] || issue=$(wf_issue_from_branch "$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)")
 
 # The value file: the latest context size with the time it was read, in this worktree's own git directory, so
 # the workers of two issues never read each other's size. Written whole, by a move, because the worker's
-# checkpoint may read it while a render writes it. Nothing is written before the first response of the
-# session, when the input carries no numbers: an invented zero would read as a nearly empty context.
-if [ -n "$tokens" ] && [ "$tokens" -gt 0 ]; then
+# checkpoint may read it while a render writes it, and the temp file goes with a render Claude Code cuts
+# short. Nothing is written before the first response of the session, when the input carries no numbers: an
+# invented zero would read as a nearly empty context.
+if [ "$here_ok" = 1 ] && [ -n "$tokens" ] && [ "$tokens" -gt 0 ]; then
   if gitdir=$(git rev-parse --path-format=absolute --git-dir 2>/dev/null); then
     dir="$gitdir/worker"
     tmp="$dir/context.$$.tmp"
+    trap 'rm -f "$tmp" 2>/dev/null' EXIT HUP INT TERM
     if mkdir -p "$dir" 2>/dev/null &&
       { printf 'total_input_tokens: %s\n' "$tokens"
         [ -z "$window" ] || printf 'context_window_size: %s\n' "$window"
         printf 'at: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
       } > "$tmp" 2>/dev/null; then
-      mv "$tmp" "$dir/context" 2>/dev/null || rm -f "$tmp" 2>/dev/null
-    else
-      rm -f "$tmp" 2>/dev/null
+      mv "$tmp" "$dir/context" 2>/dev/null
     fi
   fi
 fi
@@ -53,9 +60,9 @@ fi
 # The line itself: what the maintainer sees of this pane across the whole workspace, so it is short and the
 # context size is the part that changes. The size is shown against the window this session really has: the
 # model's, or the auto-compact window given as the argument when that is smaller. A session on a million-token
-# model that compacts at 200k is at a fifth of its window there, and 3 % would read as room it does not have.
+# model that compacts at 200k is at a fifth of its window there, and 7 % would read as room it does not have.
 shown="$window"
-if printf '%s' "${1:-}" | grep -Eq '^[1-9][0-9]*$'; then
+if num "${1:-}" && [ "${1:-0}" -gt 0 ]; then
   { [ -n "$shown" ] && [ "$shown" -le "$1" ]; } || shown="$1"
 fi
 if [ -z "$tokens" ]; then

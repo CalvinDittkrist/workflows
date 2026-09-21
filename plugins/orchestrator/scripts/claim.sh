@@ -77,13 +77,18 @@ fi
 # session has this plugin disabled, which hides its skills and agents, not its files.
 # autoCompactWindow is the safety net under that: a session that is not handed over in time compacts instead of
 # growing until the model refuses. The status line is given the same number, so the pane shows the size against
-# the window this session really has and not against a model window it never reaches.
+# the window this session really has and not against a model window it never reaches. refreshInterval keeps the
+# value fresh while one long tool call runs, which changes no message and would otherwise render nothing.
 here=$(cd "$(dirname "$0")" && pwd)
 compact=200000
-settings=$(jq -cn --arg m "$mode" --arg i "$issue" --arg sl "$here/statusline.sh $compact" --argjson c "$compact" \
+# claude runs statusLine.command through a shell, so the path is quoted: a checkout under "/Users/John Smith"
+# would otherwise split into words, nothing would render, and the worker's checkpoint would read a missing
+# value as a handoff for the rest of the run. Single quotes, with any single quote in the path escaped.
+sl="'$(printf '%s' "$here/statusline.sh" | sed "s/'/'\\\\''/g")' $compact"
+settings=$(jq -cn --arg m "$mode" --arg i "$issue" --arg sl "$sl" --argjson c "$compact" \
   '{env:{WF_MODE:$m, WF_ISSUE:$i, CLAUDE_CODE_DISABLE_BACKGROUND_TASKS:"1"},
     enabledPlugins:{"planner@workflows":false, "orchestrator@workflows":false},
-    statusLine:{type:"command", command:$sl, padding:0},
+    statusLine:{type:"command", command:$sl, padding:0, refreshInterval:60},
     autoCompactWindow:$c}')
 perm="${WF_WORKER_PERMISSION_MODE:-auto}"
 name=$(wf_agent_name "issue-$issue")
