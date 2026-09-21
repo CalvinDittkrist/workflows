@@ -116,6 +116,8 @@ class ShimTest(unittest.TestCase):
         """The words a real `sh` makes of a command line a script built for another shell, expansions and all.
         `shlex.split` performs no expansion, so it cannot tell a value that was quoted for that shell from one
         the shell would rewrite; only running the line proves that a `$`, a quote or a space arrives as typed.
-        The words come back separated by NUL, which no argument of ours carries and no shell can produce."""
+        The words come back separated by NUL, which no argument of ours carries and no shell can produce.
+        The line really runs here, so a test value never carries a command substitution: a script that failed
+        to quote one would have this shell execute it instead of showing it to the assertion."""
         r = subprocess.run(["sh", "-c", 'printf "%s\\0" ' + line], capture_output=True, check=True)
         return r.stdout.decode().split("\0")[:-1]

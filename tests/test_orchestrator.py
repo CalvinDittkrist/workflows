@@ -339,26 +339,31 @@ class ClaimEnvTests(ShimTest):
             words = [c for c in self.argv_calls() if c[1:3] == ["agent", "start"]][0]
         return r, json.loads(words[words.index("--settings") + 1])
 
-    def test_a_knob_given_on_the_claim_reaches_that_session_and_changes_nothing_else(self):
-        r, settings = self.claim("--env", "WF_HANDOFF_TOKENS=5000")
-        self.assertEqual(settings["env"], {**self.SESSION_ENV, "WF_HANDOFF_TOKENS": "5000"})
+    def assert_session_shape(self, settings):
+        """What every claim gives a worker session, knob or no knob: the status line the checkpoint reads the
+        context from, the compact trigger under it, and the plugin isolation that leaves only worker skills."""
         self.assertEqual(settings["autoCompactWindow"], 250000)
         self.assertEqual(shlex.split(settings["statusLine"]["command"]), [str(ORCH / "statusline.sh"), "200000"])
         self.assertEqual(settings["enabledPlugins"],
                          {"planner@workflows": False, "orchestrator@workflows": False})
+
+    def test_a_knob_given_on_the_claim_reaches_that_session_and_changes_nothing_else(self):
+        r, settings = self.claim("--env", "WF_HANDOFF_TOKENS=5000")
+        self.assertEqual(settings["env"], {**self.SESSION_ENV, "WF_HANDOFF_TOKENS": "5000"})
+        self.assert_session_shape(settings)
         # The transcript of the orchestrator shows the effect beside the command that asked for it.
         self.assertIn("env: WF_HANDOFF_TOKENS", r.stdout)
 
     def test_a_sandboxed_claim_carries_the_knob_the_same_way(self):
         r, settings = self.claim("--env", "WF_HANDOFF_TOKENS=5000", "--sandbox", sandbox=True)
         self.assertEqual(settings["env"], {**self.SESSION_ENV, "WF_HANDOFF_TOKENS": "5000"})
-        self.assertEqual(settings["autoCompactWindow"], 250000)
-        self.assertEqual(shlex.split(settings["statusLine"]["command"]), [str(ORCH / "statusline.sh"), "200000"])
+        self.assert_session_shape(settings)
         self.assertIn("env: WF_HANDOFF_TOKENS", r.stdout)
 
     def test_a_yolo_claim_carries_the_knob_beside_its_mode(self):
         r, settings = self.claim("--env", "WF_HANDOFF_TOKENS=5000", "--yolo")
         self.assertEqual(settings["env"], {**self.SESSION_ENV, "WF_MODE": "yolo", "WF_HANDOFF_TOKENS": "5000"})
+        self.assert_session_shape(settings)
         self.assertIn("env: WF_HANDOFF_TOKENS", r.stdout)
 
     # A value no shell would leave alone: spaces, both quotes, and a $ that a shell would expand away. It
@@ -406,6 +411,13 @@ class ClaimEnvTests(ShimTest):
         for args in (["--env", "WF_HANDOFF_TOKENS"], ["--env", "=5000"], ["--env"]):
             with self.subTest(args=args):
                 self.assert_refused(*args, expect="--env takes NAME=VALUE")
+
+    def test_a_name_that_is_not_one_word_is_refused_and_sets_nothing(self):
+        # Two accepted names in one argument, and a name with a glob in it: neither is a variable name, and
+        # the lookup of an accepted name must not be talked into either by the spaces around its list.
+        for name in ("WF_REVIEWERS WF_REVIEW_ROUNDS", "WF_REVIEWERS*", "wf reviewers"):
+            with self.subTest(name=name):
+                self.assert_refused("--env", f"{name}=x", expect="a name is A-Z, 0-9 and _")
 
     def test_the_same_name_twice_is_refused_rather_than_resolved(self):
         self.assert_refused("--env", "WF_HANDOFF_TOKENS=5000", "--env", "WF_HANDOFF_TOKENS=9000",

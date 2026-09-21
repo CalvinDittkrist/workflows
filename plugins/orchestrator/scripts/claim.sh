@@ -16,7 +16,12 @@ wf_read_env_arg() {
   local arg="$1" name
   case "$arg" in *=*) ;; *) wf_die "--env $arg has no '='. $env_shape" ;; esac
   name="${arg%%=*}"
-  [ -n "$name" ] || wf_die "--env $arg has no name. $env_shape"
+  # A name is one word of A-Z, 0-9 and _, and is checked for that before it is looked up: the lookup below
+  # asks whether the accepted list contains " $name ", which a name of two words could otherwise span.
+  case "$name" in
+    "") wf_die "--env $arg has no name. $env_shape" ;;
+    *[!A-Z0-9_]*) wf_die "--env $arg has no usable name: a name is A-Z, 0-9 and _. $env_shape" ;;
+  esac
   case " $env_accepted " in
     *" $name "*) ;;
     *) wf_die "--env $name is not a worker knob a claim can set. Accepted names: $env_accepted" ;;
