@@ -25,8 +25,11 @@ attempts=2  # the first /clear, and one retry for the pane that swallowed it
 session() { herdr agent get "$pane" 2>/dev/null | jq -r '.result.agent.agent_session.value // empty' 2>/dev/null || true; }
 
 # The worker that asked for the handoff is still finishing its turn. `/clear` typed into a working agent
-# would land in the queue of that turn, so the wait is first and everything else follows it.
-herdr agent wait "$pane" --until idle --until blocked --timeout 600000 >/dev/null 2>&1 || true
+# would land in the queue of that turn, so the wait is first and everything else follows it. Without
+# `--until` herdr waits for the first settled state, which is the three of them: a worker that ends its turn
+# settles as `done`, not as `idle`, and a wait for `idle` alone sits through the whole timeout (measured in
+# the live run of this change).
+herdr agent wait "$pane" --timeout 600000 >/dev/null 2>&1 || true
 
 attempt=1
 while :; do
@@ -47,6 +50,6 @@ done
 
 # The fresh context is up and its SessionStart hook has injected the note; the driver command is what tells
 # it to read that note and carry on. A pane that is busy with its own start-up gets the moment it needs.
-herdr agent wait "$pane" --until idle --until blocked --timeout 60000 >/dev/null 2>&1 || true
+herdr agent wait "$pane" --timeout 60000 >/dev/null 2>&1 || true
 herdr agent prompt "$pane" "$cmd" >/dev/null 2>&1 ||
   wf_notify "Handoff could not resume pane $pane" "The context was cleared but $cmd was refused; send it by hand to resume at the $stage stage." alert

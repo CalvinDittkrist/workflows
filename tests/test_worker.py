@@ -630,11 +630,16 @@ class HandoffResumeTests(ShimTest):
         return [" ".join(call[1:3]) + (f" {call[4]}" if call[1:3] == ["agent", "prompt"] else "")
                 for call in self.argv_calls() if call[1] == "agent" and call[2] in ("wait", "prompt")]
 
-    def test_it_waits_for_idle_then_clears_then_sends_the_driver_command(self):
+    def test_it_waits_for_the_turn_to_settle_then_clears_then_sends_the_driver_command(self):
         r = self.resume()
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertEqual(self.sequence(),
                          ["agent wait", "agent prompt /clear", "agent wait", "agent prompt /worker:work"])
+        # No wait narrows the settled states it accepts: a worker that ends its turn settles as `done`, and a
+        # wait for `idle` alone sat through the whole ten-minute timeout in the live run of this change, so
+        # the pane was never cleared.
+        waits = [c for c in self.argv_calls() if c[1:3] == ["agent", "wait"]]
+        self.assertFalse([c for c in waits if "--until" in c], waits)
         self.assertTrue(all("w9:p1" in call for call in self.calls()))
         self.assertFalse([c for c in self.calls() if "notification" in c])
 
