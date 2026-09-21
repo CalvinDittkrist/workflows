@@ -24,3 +24,14 @@
 | label vocabulary | The fixed set of GitHub labels the workflow uses, each with a name, a colour and a description. Every plugin that creates labels defines it itself; a test in `tests/test_plugins.py` keeps the copies identical, `skill-candidate` being the one label only `repo-standards` creates. |
 | panel summary | The block the review stage records at the end of a round loop (`review_rounds`, `panel`, `fixed`, `disputed`) and the pull request stage reads, with the commit it was recorded at and the draft verdict derived from its `panel:` line: draft as soon as a reviewer's last verdict is not PASS ([ADR 0018](adr/0018-worker-stages-hand-facts-over-through-the-worktree-git-dir.md)). |
 | gate record | The recorded result of one gate run, written by the worker's `gate.sh` and read by the review and pull request stages: the commit, whether the working tree was dirty, the exit status, the start time, the duration and the tail of the output, with the full output in a file beside it. It answers for the commit it was taken at and for no other, so a stale or dirty record reads as none ([ADR 0019](adr/0019-the-gate-runs-once-per-review-round.md)). |
+| factory | The service that works routed issues unattended on a host of its own, as a second driver over the worker pipeline ([ADR 0020](adr/0020-the-factory-is-a-second-driver-over-the-worker-pipeline.md)). A Go service in `factory/`, not a plugin. |
+| factory host | The dedicated machine the factory runs on; it shares nothing with a developer's machine but GitHub, and it is the factory's isolation boundary ([ADR 0025](adr/0025-the-factorys-isolation-boundary-is-the-host.md)). |
+| routing label | The label `factory`; together with `ready-for-agent` it hands an issue to the factory. |
+| routed issue | An open issue with both labels, no assignee and no open blocker. |
+| queue | The routed issues of all connected repositories in one line, derived from GitHub on every poll, never stored; work in progress comes before new issues ([ADR 0023](adr/0023-one-queue-one-worker-work-in-progress-first.md)). |
+| factory run | One worker session the factory started, with its record and its event log. Kinds: first run, resumed run, follow-up run. |
+| outcome | How a factory run ended: `ready`, `blocked`, `failed`, `timeout`, `lost`, `interrupted`, `cancelled`, `quota`. |
+| remote claim | Creating the issue's branch through the GitHub API, which exactly one claimer wins ([ADR 0022](adr/0022-a-claim-is-the-creation-of-the-branch-through-the-api.md)). |
+| local claim | What was called "claim" until the factory existed: the orchestrator's claim of an issue into a Herdr worktree on a developer's machine (`/orchestrator:claim`). It refuses an issue the factory owns. |
+| release signal | Removing the assignee from an issue the factory holds, which queues a resumed run. |
+| connected repository | A repository named in the factory's configuration, as `owner/name`. |
