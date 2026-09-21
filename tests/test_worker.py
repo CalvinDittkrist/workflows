@@ -793,6 +793,107 @@ class CheckpointEntryTests(ShimTest):
                 self.assertIn(f'handoff.sh" {skill}', brief, "with the stage this entrance would resume at")
 
 
+class RepairRecordTests(ShimTest):
+    """The count of CI repair rounds of one pull request, kept by a script so the limit outlives the context
+    that started counting (issue #75, ADR 0032)."""
+
+    def setUp(self):
+        super().setUp()
+        self.git("checkout", "-qb", "feat/12-x")
+        self.record = self.repo / ".git" / "worker" / "repair"
+
+    def repair(self, *args, **env):
+        return self.run_script(WORKER / "repair.sh", *args, **env)
+
+    def keys(self, out):
+        """The key lines of an answer. Not every line: a last round ends in what to do after it."""
+        return dict(line.split(": ", 1) for line in out.splitlines() if re.match(r"^[a-z_]+: ", line))
+
+    def take_round(self, **env):
+        r = self.repair("round", **env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return self.keys(r.stdout)
+
+    def write_record(self, pr=7, rounds=2):
+        self.record.parent.mkdir(parents=True, exist_ok=True)
+        self.record.write_text(f"pr: {pr}\nrounds: {rounds}\nat: 2026-09-21T12:00:00Z\n\n")
+
+    def test_the_rounds_are_counted_up_to_the_limit_and_then_refused(self):
+        for expected in (1, 2, 3):
+            r = self.repair("round")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            out = self.keys(r.stdout)
+            self.assertEqual(out["repair_pr"], "#7")
+            self.assertEqual(out["repair_rounds_taken"], str(expected))
+            self.assertEqual(out["repair_limit"], "3")
+            self.assertEqual("last repair round" in r.stdout, expected == 3, "the last round says it is one")
+        before = self.record.read_text()
+        r = self.repair("round")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("3 of 3 repair rounds", r.stderr)
+        self.assertIn("maintainer", r.stderr, "and the refusal says where the pipeline stops")
+        self.assertEqual(self.record.read_text(), before, "a refused round is no round and changes nothing")
+
+    def test_a_count_taken_for_another_pull_request_reads_as_none(self):
+        for _ in range(3):
+            self.take_round()
+        # The first pull request was closed and this branch has another one open now: no round of its
+        # checks has failed yet, so the count starts again.
+        out = self.take_round(SHIM_PR_FOR_BRANCH="9")
+        self.assertEqual(out["repair_pr"], "#9")
+        self.assertEqual(out["repair_rounds_taken"], "1")
+
+    def test_a_context_started_by_a_handoff_counts_on_from_the_record(self):
+        # Nothing of the count is in the handoff note or in the model's head: a fresh context reads the
+        # record the context before it left in the worktree and continues where that one stopped.
+        self.write_record(rounds=2)
+        self.assertEqual(self.take_round()["repair_rounds_taken"], "3")
+        r = self.repair("round")
+        self.assertEqual(r.returncode, 1, "so the limit holds in a context that counted none of the first two")
+
+    def test_entering_the_ci_stage_reads_the_count(self):
+        self.write_record(rounds=2)
+        out = self.keys(self.skill_brief("worker", "ci", HERDR_PANE_ID="w9:p1"))
+        self.assertEqual(out["repair_rounds_taken"], "2")
+        self.assertEqual(out["repair_limit"], "3")
+
+    def test_reading_the_record_counts_nothing(self):
+        self.take_round()
+        for _ in range(2):
+            r = self.repair("print")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertEqual(self.keys(r.stdout)["repair_rounds_taken"], "1")
+        self.assertEqual(self.take_round()["repair_rounds_taken"], "2", "and the next round is the second")
+
+    def test_the_limit_is_a_knob_and_an_invalid_one_is_refused_with_the_fix(self):
+        self.assertEqual(self.take_round(WF_CI_REPAIR_ROUNDS="1")["repair_limit"], "1")
+        r = self.repair("round", WF_CI_REPAIR_ROUNDS="1")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("1 of 1 repair rounds", r.stderr)
+        for bad in ("three", "0", "-1", "3 "):
+            with self.subTest(value=bad):
+                r = self.repair("print", WF_CI_REPAIR_ROUNDS=bad)
+                self.assertEqual(r.returncode, 1, r.stdout)
+                self.assertIn(f"WF_CI_REPAIR_ROUNDS='{bad}'", r.stderr)
+                self.assertIn("WF_CI_REPAIR_ROUNDS=3", r.stderr, "with the fix")
+
+    def test_without_an_open_pull_request_there_is_no_round_to_count(self):
+        r = self.repair("round", SHIM_PR_FOR_BRANCH="")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("/worker:pr", r.stderr, "with the fix")
+        # The stage's brief reads it all the same, because an injection that fails tells the model nothing.
+        r = self.repair("print", SHIM_PR_FOR_BRANCH="")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("no open pull request", self.keys(r.stdout)["repair_pr"])
+
+    def test_a_call_without_a_known_subcommand_is_refused_with_the_usage(self):
+        for args in ([], ["rounds"], ["round", "7"]):
+            with self.subTest(args=args):
+                r = self.repair(*args)
+                self.assertEqual(r.returncode, 1, r.stdout)
+                self.assertIn("usage: repair.sh", r.stderr)
+
+
 NOTE = """## decisions
 - the note lives in the worktree's git directory, never in the tree
 
