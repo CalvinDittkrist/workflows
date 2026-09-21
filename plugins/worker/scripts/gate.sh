@@ -16,9 +16,14 @@ tail_lines=10  # five reviewers read this block; the full output is one file rea
 
 # The output is the repository's, not this script's: it is quoted into a brief, so it is indented by two
 # spaces. A line of it that imitates a key of this block therefore cannot be read as one.
-print_tail() { printf 'gate_output_tail:\n'; sed '1,/^$/d' "$record" | sed 's/^./  &/'; }
+print_tail() {
+  local body; body=$(wf_record_body "$record")
+  # Empty is stated, not shown as a bare key a reader would have to tell apart from a truncation.
+  [ -n "$body" ] || { wf_kv gate_output_tail "(the gate printed nothing)"; return; }
+  printf 'gate_output_tail:\n'; printf '%s\n' "$body" | sed 's/^./  &/'
+}
 
-field() { sed -n "s/^$1: //p" "$record" | head -1; }
+field() { wf_record_field "$record" "$1"; }
 
 # The same phrasing of an exit status wherever a reader meets it.
 gate_outcome() { if [ "$1" = 0 ]; then printf 'pass (exit 0)'; else printf 'fail (exit %s)' "$1"; fi; }
@@ -57,7 +62,7 @@ case "${1:-}" in
     if [ "$commit" != "$(git rev-parse HEAD)" ]; then
       wf_kv gate_result "none for this head; the newest record is for $(git rev-parse --short "$commit" 2>/dev/null || printf '%s' "$commit"), which is not this head, so run the gate again"
     elif [ "$(field dirty)" != no ]; then
-      wf_kv gate_result "none for this head; the newest record ran with a dirty working tree, so it belongs to no commit; commit and run the gate again"
+      wf_kv gate_result "none for this head; the newest record ran with a dirty working tree, so it belongs to no commit; commit what belongs to the change, ignore or remove what does not, and run the gate again"
     else
       wf_kv gate_result "$(gate_outcome "$(field status)") at $(git rev-parse --short "$commit")"
       wf_kv gate_command "$(field command)"

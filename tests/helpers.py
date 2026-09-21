@@ -1,5 +1,6 @@
 import os
 import re
+import shlex
 import subprocess
 import tempfile
 import unittest
@@ -63,10 +64,10 @@ class ShimTest(unittest.TestCase):
     def skill_brief(self, plugin, skill, **env):
         """Everything a skill's !`command` injections print, run as the real scripts, in order. That text is
         the brief a stage hands to a fresh context, so a test of the brief runs exactly this."""
-        body = (ROOT / f"plugins/{plugin}/skills/{skill}/SKILL.md").read_text().split("---")[2]
+        body = (ROOT / f"plugins/{plugin}/skills/{skill}/SKILL.md").read_text().split("---", 2)[2]
         out = ""
         for cmd in re.findall(r"!`([^`]+)`", body):
-            argv = cmd.replace("${CLAUDE_PLUGIN_ROOT}/", f"{ROOT}/plugins/{plugin}/").split()
+            argv = shlex.split(cmd.replace("${CLAUDE_PLUGIN_ROOT}/", f"{ROOT}/plugins/{plugin}/"))
             r = self.run_script(argv[0], *argv[1:], **env)
             self.assertEqual(r.returncode, 0, f"{skill}: {cmd}\n{r.stderr}")
             out += r.stdout

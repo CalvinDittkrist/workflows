@@ -2,6 +2,7 @@
 
 Date: 2026-09-18
 Status: accepted
+Amended by: [0019](0019-the-gate-runs-once-per-review-round.md) (the command stays `make check`; reviewers no longer run it and the worker runs it through a script that records the result)
 
 ## Context
 Each repository ran its tests, linters and builds differently, so an agent had to discover the command every time and sometimes ran less than CI did. The required status checks in rulesets also differed per repository. Spec: #3.

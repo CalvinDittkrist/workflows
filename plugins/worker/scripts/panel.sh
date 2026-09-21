@@ -58,7 +58,7 @@ record="$(wf_state_dir)/panel"
 # so an unknown panel never reads as a passed one.
 recorded_verdict() {
   local v=""
-  [ ! -f "$record" ] || v=$(sed -n 's/^verdict: //p' "$record" | head -1)
+  [ ! -f "$record" ] || v=$(wf_record_field "$record" verdict)
   case "$v" in ready) printf 'ready\n' ;; *) printf 'draft\n' ;; esac
 }
 
@@ -81,9 +81,10 @@ case "${1:-}" in
       case "$named" in *" $reviewer "*) ;; *) wf_warn "the panel line does not name $reviewer, so the record says nothing about that reviewer" ;; esac
     done
     set +f
-    # The brief prints these keys itself; a block that carries one would say something else about the
-    # panel further down the same brief, so the record refuses it instead of quoting it.
-    spoof=$(printf '%s\n' "$block" | sed -n -E '/^[[:space:]]*(commit|verdict|panel_summary|panel_verdict|panel_head|panel_summary_block):/p' | head -1)
+    # The brief prints these keys itself; a block that carries one would say something else about the panel,
+    # or about the gate run printed beside it, further down the same brief, so the record refuses it instead
+    # of quoting it. The panel block is the last thing a brief prints, so anything after it reads as part of it.
+    spoof=$(printf '%s\n' "$block" | sed -n -E '/^[[:space:]]*(commit|verdict|panel_summary|panel_verdict|panel_head|panel_summary_block|gate_[a-z_]*):/p' | head -1)
     [ -z "$spoof" ] || wf_die "the summary carries a line the brief uses for itself ('$spoof'); reword that line and record again"
     commit=$(git rev-parse HEAD 2>/dev/null) || wf_die "this branch has no commit to record the summary at"
     mkdir -p "$(dirname "$record")"
@@ -99,7 +100,7 @@ case "${1:-}" in
       wf_kv panel_verdict "draft"
       exit 0
     fi
-    commit=$(sed -n 's/^commit: //p' "$record" | head -1)
+    commit=$(wf_record_field "$record" commit)
     wf_kv panel_summary "recorded at $(git rev-parse --short "$commit" 2>/dev/null || printf '%s' "$commit")"
     if [ "$(git rev-parse HEAD)" = "$commit" ]; then
       wf_kv panel_head "unchanged since the summary was recorded"
@@ -110,7 +111,7 @@ case "${1:-}" in
     fi
     wf_kv panel_verdict "$(recorded_verdict)"
     printf 'panel_summary_block:\n'
-    sed '1,/^$/d' "$record"
+    wf_record_body "$record"
     ;;
   # The one word the yolo finish stage gates on, so it reads a contract rather than scraping the brief.
   verdict) recorded_verdict ;;
