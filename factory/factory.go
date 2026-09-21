@@ -110,6 +110,26 @@ func (f *Factory) dispatch(ctx context.Context) {
 	}
 }
 
+// waiting is the queue without the issues a run has already taken. It is what the factory would
+// start next and what the interface serves as the queue. Having a run is final here: the release
+// signal, which queues a second run for an issue, arrives with the ticket that resumes runs.
+func (f *Factory) waiting() []Issue {
+	worked := map[string]bool{}
+	for _, run := range f.runs.list() {
+		worked[run.key()] = true
+	}
+	f.mu.Lock()
+	queue := f.queue
+	f.mu.Unlock()
+	out := []Issue{}
+	for _, issue := range queue {
+		if !worked[issue.key()] {
+			out = append(out, issue)
+		}
+	}
+	return out
+}
+
 // start records the run and works it in the background, so the loop keeps polling while it runs. A
 // factory that is already stopping records nothing: the run would count as worked without ever
 // having run.
@@ -190,6 +210,9 @@ func (f *Factory) execute(parent context.Context, r *Run, issue Issue) {
 	}()
 	go func() {
 		defer readers.Done()
+		// Every line of the error output counts as the cause of a failure, the last one winning. A
+		// real session also writes what is only noise there; the ticket that starts one decides what
+		// of it is a cause.
 		f.read(r, "the worker's error output", stderr, func(line []byte) {
 			f.error(r, Event{Kind: "error", Title: "stderr: " + firstLine(string(line)), Body: string(line)})
 		})
@@ -214,13 +237,8 @@ func (f *Factory) execute(parent context.Context, r *Run, issue Issue) {
 	case !reported && errors.Is(ctx.Err(), context.DeadlineExceeded):
 		f.finish(r, outcomeTimeout, fmt.Sprintf("the deadline of %s passed; the worker's process group was ended", f.settings.Deadline), &exitCode)
 	case r.reportOutcome == outcomeReady:
-		// The report is written by a model and read by a browser later: only an absolute https URL
-		// reaches the record, so no reader of the interface can be handed another kind of link.
-		pullRequest, reason := r.reportDetail, ""
-		if !strings.HasPrefix(pullRequest, "https://") {
-			pullRequest, reason = "", "the report says ready but names no pull request: "+firstLine(r.reportDetail)
-		}
-		f.runs.update(r, func() { r.PullRequest = pullRequest })
+		url, reason := pullRequest(r.reportDetail, r.Repository)
+		f.runs.update(r, func() { r.PullRequest = url })
 		f.finish(r, outcomeReady, reason, &exitCode)
 	case r.reportOutcome == outcomeBlocked:
 		f.runs.update(r, func() { r.Reason = r.reportDetail })

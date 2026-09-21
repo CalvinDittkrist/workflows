@@ -192,7 +192,16 @@ func TestFakeModeWorksTheCannedQueueOneRunAtATime(t *testing.T) {
 		}
 	}
 	if truncated != 1 {
-		t.Errorf("run 4 logged %d truncated events, want the one over-long tool result", truncated)
+		t.Errorf("run 4 logged %d truncated events, want the one over-long tool call", truncated)
+	}
+	logged := map[string]bool{}
+	for _, e := range withBody.Events {
+		logged[e.Title] = true
+	}
+	for _, title := range []string{"tool error", "the worker printed a line that is not the stream format"} {
+		if !logged[title] {
+			t.Errorf("run 4 did not log %q, want what went wrong in the stream to be in the log", title)
+		}
 	}
 
 	// timeout: the deadline passed and the whole process group was ended.
@@ -287,8 +296,8 @@ func TestPausedShowsTheQueueAndStartsNothing(t *testing.T) {
 	if status["state"] != "paused" {
 		t.Errorf("the factory says it is %q, want paused", status["state"])
 	}
-	if status["quotaUntil"] != nil {
-		t.Errorf("the factory waits for quota until %v, want no wait", status["quotaUntil"])
+	if quota, served := status["quotaUntil"]; !served || quota != nil {
+		t.Errorf("the factory serves quotaUntil as %v (served: %v), want it served and empty", quota, served)
 	}
 	var line apiLine
 	f.get(t, "/api/line", &line)
@@ -350,7 +359,10 @@ func TestAnInvalidConfigurationIsRefusedWithTheFix(t *testing.T) {
 		{"wildcard address", `{"data_dir":"data","repositories":["a/b"],"listen":"0.0.0.0:7341"}`, `answers on every interface; bind it to one address`},
 		{"wildcard address, IPv6", `{"data_dir":"data","repositories":["a/b"],"listen":"[::]:7341"}`, `answers on every interface`},
 		{"wildcard address, IPv6 written out", `{"data_dir":"data","repositories":["a/b"],"listen":"[0:0:0:0:0:0:0:0]:7341"}`, `answers on every interface`},
-		{"wildcard address, not a literal", `{"data_dir":"data","repositories":["a/b"],"listen":"0:7341"}`, `answers on every interface`},
+		// A host that is not an IP literal is refused after binding, or by the resolver that could not
+		// make an address of it; which of the two answers is the platform's business, so only the
+		// refusal is asserted here.
+		{"address that is not a literal host", `{"data_dir":"data","repositories":["a/b"],"listen":"0:7341"}`, `error: `},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "factory.json")
@@ -460,6 +472,51 @@ func TestARestartKeepsTheRunsAndInterruptsWhatWasActive(t *testing.T) {
 	}
 }
 
+func TestOnlyThePullRequestOfTheRunIsTakenFromAReport(t *testing.T) {
+	for _, c := range []struct {
+		name, detail, url string
+	}{
+		{"the pull request of the run", "https://github.com/acme/edge-sensors/pull/204", "https://github.com/acme/edge-sensors/pull/204"},
+		{"another repository", "https://github.com/acme/backtest/pull/204", ""},
+		{"another host", "https://attacker.example/acme/edge-sensors/pull/204", ""},
+		{"another scheme", "javascript:alert(1)", ""},
+		{"an issue, not a pull request", "https://github.com/acme/edge-sensors/issues/204", ""},
+		{"no number", "https://github.com/acme/edge-sensors/pull/", ""},
+		{"nothing at all", "", ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			url, reason := pullRequest(c.detail, "acme/edge-sensors")
+			if url != c.url {
+				t.Errorf("the report %q gives the pull request %q, want %q", c.detail, url, c.url)
+			}
+			if (reason == "") != (c.url != "") {
+				t.Errorf("the report %q gives the reason %q, want one exactly when there is no pull request", c.detail, reason)
+			}
+		})
+	}
+}
+
+// The stage of a run is read from the worker's skill calls, so the names the factory knows have to
+// be the skills the worker plugin has. This is the drift test that binds the two.
+func TestTheStagesAreTheSkillsOfTheWorkerPlugin(t *testing.T) {
+	for skill := range stages {
+		name, found := strings.CutPrefix(skill, "worker:")
+		if !found {
+			t.Errorf("the stage %q is not a skill of the worker plugin", skill)
+			continue
+		}
+		path := filepath.Join("..", "plugins", "worker", "skills", name, "SKILL.md")
+		if _, err := os.Stat(path); err != nil {
+			t.Errorf("the stage %q reads the skill %s, which is not there: %v", skill, path, err)
+		}
+	}
+	// The other direction is not a rule: the worker plugin has skills that are no stage of a run, such
+	// as the one that talks to GitHub.
+	if len(stages) != 5 {
+		t.Errorf("the factory knows %d stages, want the five the worker pipeline has", len(stages))
+	}
+}
+
 func TestTheReportIsReadFromMarkdown(t *testing.T) {
 	for _, c := range []struct {
 		name            string
@@ -518,19 +575,25 @@ func start(t *testing.T, c config) *factory {
 	}
 	f.cmd = exec.Command(binary, "-config", path, "-fake")
 	f.cmd.Stdout, f.cmd.Stderr = output, output
-	// The factory and every worker it starts share one process group here, so a test that fails while
-	// a worker hangs leaves nothing behind: the factory ends its workers only when it stops itself.
-	f.cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := f.cmd.Start(); err != nil {
 		t.Fatalf("the factory could not be started: %v", err)
 	}
+	// A worker leads a process group of its own and only the factory ends it, so a test that fails
+	// while a worker hangs has to let the factory stop rather than kill it, or the worker is orphaned.
 	t.Cleanup(func() {
-		output.Close()
-		if f.cmd.ProcessState == nil {
-			_ = f.cmd.Process.Signal(syscall.SIGKILL)
-			_ = f.cmd.Wait()
+		defer output.Close()
+		if f.cmd.ProcessState != nil {
+			return
 		}
-		_ = syscall.Kill(-f.cmd.Process.Pid, syscall.SIGKILL)
+		_ = f.cmd.Process.Signal(syscall.SIGTERM)
+		ended := make(chan struct{})
+		go func() { _ = f.cmd.Wait(); close(ended) }()
+		select {
+		case <-ended:
+		case <-time.After(30 * time.Second):
+			_ = f.cmd.Process.Signal(syscall.SIGKILL)
+			<-ended
+		}
 	})
 	f.eventually(t, 20*time.Second, "the factory to answer", func() bool {
 		response, err := http.Get("http://" + f.address + "/api/status")

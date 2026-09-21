@@ -144,6 +144,19 @@ func report(final string) (outcome, detail string) {
 	return "", ""
 }
 
+// pullRequest is the pull request a ready report names, as the record may carry it. The report is
+// written by a model and read by a browser later, and the text of an issue can steer what a worker
+// writes, so only the one shape a real report has is taken: the pull request of the repository this
+// run is for. Anything else is given back as the reason it was not taken.
+func pullRequest(detail, repository string) (url, reason string) {
+	want := "https://github.com/" + repository + "/pull/"
+	number, found := strings.CutPrefix(detail, want)
+	if !found || number == "" || strings.Trim(number, "0123456789") != "" {
+		return "", "the report says ready but names no pull request of " + repository + ": " + firstLine(detail)
+	}
+	return detail, ""
+}
+
 // undecorate strips the markdown around a line, so the text of the line can be read as text.
 func undecorate(line string) string {
 	return strings.TrimSpace(strings.Trim(strings.TrimSpace(line), "*_`#>- \t"))

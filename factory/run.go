@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -126,12 +127,17 @@ func OpenStore(dir string) (*Store, error) {
 		if r.ID <= 0 {
 			return nil, fmt.Errorf("the run record %s has no id; move it aside to start without it", file)
 		}
-		// The event log is the truth about how much was logged; the record's count is a copy for readers.
-		events, err := s.events(r.ID, 0)
-		if err != nil {
-			return nil, fmt.Errorf("the event log %s cannot be read: %w; move it aside to start without it", s.eventsPath(r.ID), err)
+		// A run that ended wrote its record after its last event, so its count is good. A run that was
+		// active did not: its log is the truth about how much of it was logged. Nothing else is read
+		// here, because the logs of every run ever made are never deleted and a restart must not grow
+		// with them.
+		if r.EndedAt == nil {
+			events, err := s.events(r.ID, 0)
+			if err != nil {
+				return nil, fmt.Errorf("the event log %s cannot be read: %w; move it aside to start without it", s.eventsPath(r.ID), err)
+			}
+			r.EventCount = len(events)
 		}
-		r.EventCount = len(events)
 		s.runs = append(s.runs, r)
 	}
 	sort.Slice(s.runs, func(a, b int) bool { return s.runs[a].ID < s.runs[b].ID })
@@ -277,10 +283,10 @@ func (s *Store) get(id int) (Run, bool) {
 }
 
 // events reads a run's log from disk and serves the events after the sequence number after, so a
-// reader that polls asks only for what it has not seen. The line count is the cheap skip and the
-// sequence number is the exact one: they agree unless an event could not be written, and then the
-// sequence decides. A line that is not an event is skipped: the log is what the factory wrote last,
-// and a half-written last line must not lose the rest.
+// reader that polls asks only for what it has not seen. What it skips it never parses: the sequence
+// is the first field of every line the factory writes, so the head of a line decides. A line that is
+// not an event is skipped: the log is what the factory wrote last, and a half-written last line must
+// not lose the rest.
 func (s *Store) events(id, after int) ([]Event, error) {
 	file, err := os.Open(s.eventsPath(id))
 	if os.IsNotExist(err) {
@@ -293,19 +299,37 @@ func (s *Store) events(id, after int) ([]Event, error) {
 	out := []Event{}
 	scanner := bufio.NewScanner(file)
 	scanner.Buffer(make([]byte, 4096), maxEventLine)
-	seen := 0
 	for scanner.Scan() {
-		seen++
-		if seen <= after {
-			continue // counted, never parsed: a reader that polls pays for what it asked for
+		line := scanner.Bytes()
+		if seq, ok := sequence(line); ok {
+			if seq <= after {
+				continue
+			}
 		}
 		var e Event
-		if json.Unmarshal(scanner.Bytes(), &e) != nil || e.Seq <= after {
+		if json.Unmarshal(line, &e) != nil || e.Seq <= after {
 			continue
 		}
 		out = append(out, e)
 	}
 	return out, scanner.Err()
+}
+
+// sequence reads the seq of a logged event from the head of its line, without parsing the rest of
+// it. A line that does not begin that way is left to the parser.
+func sequence(line []byte) (int, bool) {
+	const prefix = `{"seq":`
+	if !bytes.HasPrefix(line, []byte(prefix)) {
+		return 0, false
+	}
+	seq := 0
+	for _, c := range line[len(prefix):] {
+		if c < '0' || c > '9' {
+			return seq, seq > 0
+		}
+		seq = seq*10 + int(c-'0')
+	}
+	return 0, false
 }
 
 // stage moves a run to a stage and keeps the stages it has been through, so a finished run still

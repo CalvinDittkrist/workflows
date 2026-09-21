@@ -99,8 +99,13 @@ func scriptedWorker(args []string, stdout, stderr io.Writer) int {
 		s.result("error_during_execution", "", true, "api_error")
 		return 1
 	case "silent":
-		// A session that ends by itself without reporting, with a tool result far beyond what one
-		// event keeps: the log has to survive both, here and after a restart.
+		// A session that ends by itself without reporting. The error output of this one is on the
+		// worker's own stream — a tool that failed and a line that is not the stream format at all —
+		// which the factory logs without it changing how the run ended.
+		s.failingTool("Bash", map[string]any{"command": "make check", "description": "Run the gate"}, "make: *** [check] Error 1")
+		fmt.Fprintln(stdout, "npm warn: a line of the worker's output that is not the stream format")
+		// Its tool call carries a file far beyond what one event keeps: the log has to survive that,
+		// here and after a restart.
 		s.tool("Write", map[string]any{"file_path": "docs/report.html", "content": strings.Repeat(`<a href="x">&amp;</a>`, 1000)},
 			"File created successfully.")
 		s.result("success", "I have pushed the branch and stopped here.", false, "completed")
@@ -183,6 +188,14 @@ func (s *script) call(parent, name string, input map[string]any, result string) 
 
 func (s *script) tool(name string, input map[string]any, result string) {
 	s.call("", name, input, result)
+}
+
+// failingTool is a tool call whose result is an error, which the factory logs as one.
+func (s *script) failingTool(name string, input map[string]any, result string) {
+	s.tools++
+	id := fmt.Sprintf("toolu_%d", s.tools)
+	s.message("assistant", "", []map[string]any{{"type": "tool_use", "id": id, "name": name, "input": input}})
+	s.message("user", "", []map[string]any{{"type": "tool_result", "tool_use_id": id, "content": result, "is_error": true}})
 }
 
 // skill is how a worker enters a stage: the factory reads the stage from this call.

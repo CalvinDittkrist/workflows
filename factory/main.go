@@ -8,6 +8,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -47,8 +48,11 @@ func run(config string, fake, paused bool) error {
 	// Listening comes before everything else: a second factory on this host has to fail here, before
 	// it has started a run or taken an issue from anybody.
 	listener, err := net.Listen("tcp", settings.Listen)
-	if err != nil {
+	if errors.Is(err, syscall.EADDRINUSE) {
 		return fmt.Errorf("%w; is another factory running on this host? one host runs one factory", err)
+	}
+	if err != nil {
+		return fmt.Errorf("%w; listen names the address the factory answers on, such as %q", err, defaultListen)
 	}
 	defer listener.Close()
 	// The address the kernel chose is the one that counts: a host that is not an IP literal can still

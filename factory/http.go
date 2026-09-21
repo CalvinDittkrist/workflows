@@ -124,24 +124,6 @@ func (f *Factory) run(w http.ResponseWriter, r *http.Request) {
 	}{record, events})
 }
 
-// waiting is the queue without the issues a run has already taken.
-func (f *Factory) waiting() []Issue {
-	worked := map[string]bool{}
-	for _, run := range f.runs.list() {
-		worked[run.key()] = true
-	}
-	f.mu.Lock()
-	queue := f.queue
-	f.mu.Unlock()
-	out := []Issue{}
-	for _, issue := range queue {
-		if !worked[issue.key()] {
-			out = append(out, issue)
-		}
-	}
-	return out
-}
-
 func writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	encoder := json.NewEncoder(w)
