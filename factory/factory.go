@@ -92,6 +92,9 @@ func New(settings Settings, fake bool) (*Factory, error) {
 // factory takes work. It says so on the interface while it runs, because a first clone takes minutes
 // and a line that has not been polled yet would otherwise be the sight of an idle factory.
 func (f *Factory) Connect(ctx context.Context) {
+	if f.fake {
+		return // fake mode works a canned queue; there is no repository behind it to clone
+	}
 	f.mu.Lock()
 	f.connecting = true
 	f.mu.Unlock()

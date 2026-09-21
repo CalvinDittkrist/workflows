@@ -87,11 +87,8 @@ func run(config string, fake, paused bool) error {
 
 	// The clones come after the interface answers and before the first poll: a worker branches off a
 	// clone, so the host is made ready before there is work to give it. A first clone takes minutes,
-	// which is why the interface is up while it runs and says it is connecting. Fake mode has nothing
-	// to clone: its queue is canned.
-	if !fake {
-		factory.Connect(ctx)
-	}
+	// which is why the interface is up while it runs and says it is connecting.
+	factory.Connect(ctx)
 	factory.Work(ctx)
 	log.Printf("stopping")
 

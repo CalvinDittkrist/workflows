@@ -114,14 +114,23 @@ func TestAConnectedRepositoryIsClonedOnStartAndAFailedCloneIsReported(t *testing
 	}
 
 	// The repository that is there is not cloned again on the next start, and the one that is missing
-	// is tried again, because connecting it is a line in the configuration and a restart.
+	// is tried again, because connecting it is a line in the configuration and a restart. What a host
+	// that was rebooted mid-clone left behind is swept rather than collected.
 	f.stop(t, syscall.SIGTERM)
+	leftover := filepath.Join(data, "repos", "acme", ".backtest.cloning-42")
+	if err := os.MkdirAll(leftover, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(leftover, "half"), "a clone nobody finished\n")
 	gh.start(t, config{"poll": "50ms", "data_dir": data}).queue(t, 0)
 	if cloned := gh.cloned(t, "acme/edge-sensors"); cloned != 1 {
 		t.Errorf("the repository was cloned %d times, want once: a clone that is there is kept", cloned)
 	}
 	if tried := gh.cloned(t, "acme/backtest"); tried != 2 {
 		t.Errorf("the repository that is missing was cloned %d times, want one try per start", tried)
+	}
+	if _, err := os.Stat(leftover); !os.IsNotExist(err) {
+		t.Errorf("the staging directory of an earlier start is still there: %v", err)
 	}
 }
 
@@ -139,6 +148,9 @@ func TestARepositoryThatCannotBeReadIsSaidSoAndDoesNotEmptyTheLineOfTheOthers(t 
 	f.queue(t, 2)
 	events := "api --paginate " + eventsRequest("acme/backtest", 9)
 	knew := gh.made(t, events)
+	if knew != 1 {
+		t.Fatalf("the events of the issue were read %d times before the outage, want once", knew)
+	}
 
 	// One of the two repositories answers as an unreachable GitHub does from here on.
 	gh.fail(t, "api repos/acme/backtest/*")
@@ -296,6 +308,9 @@ func TestACloneThatIsCutOffEndsWithTheFactoryAndLeavesNothingBehind(t *testing.T
 	clone := filepath.Join(data, "repos", "acme", "edge-sensors")
 	if _, err := os.Stat(clone); !os.IsNotExist(err) {
 		t.Errorf("the clone that was cut off left %s behind; the next start would take it for a whole one", clone)
+	}
+	if staging, _ := filepath.Glob(filepath.Join(data, "repos", "acme", ".edge-sensors.cloning-*")); len(staging) != 0 {
+		t.Errorf("the clone that was cut off left %v behind", staging)
 	}
 }
 

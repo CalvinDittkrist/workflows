@@ -130,9 +130,12 @@ func Load(path string) (Settings, error) {
 	seen := map[string]bool{}
 	for _, r := range c.Repositories {
 		// The clone of a repository is a directory named after it under the data directory, so an
-		// owner or a name of nothing but dots would step out of that directory. GitHub has neither.
+		// owner or a name of nothing but dots would step out of that directory, and the name is given
+		// to gh as an argument, where one that opens with a hyphen would be read as a flag. GitHub
+		// has neither.
 		owner, name, _ := strings.Cut(r, "/")
-		if !repository.MatchString(r) || strings.Trim(owner, ".") == "" || strings.Trim(name, ".") == "" {
+		if !repository.MatchString(r) || strings.Trim(owner, ".") == "" || strings.Trim(name, ".") == "" ||
+			strings.HasPrefix(owner, "-") || strings.HasPrefix(name, "-") {
 			return bad("repository %q is not owner/name; write it as \"CalvinDittkrist/workflows\"", r)
 		}
 		// GitHub reads owner and name without regard to case, and so does the filesystem of many a

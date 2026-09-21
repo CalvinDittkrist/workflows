@@ -201,10 +201,10 @@ func repositoryOf(key string) string {
 // warn reports what could not be read of one issue, once, until it can be read again.
 func (g *gitHub) warn(key, format string, a ...any) {
 	g.mu.Lock()
-	first := !g.warned[key]
 	if g.warned == nil {
 		g.warned = map[string]bool{}
 	}
+	first := !g.warned[key]
 	g.warned[key] = true
 	g.mu.Unlock()
 	if first {
