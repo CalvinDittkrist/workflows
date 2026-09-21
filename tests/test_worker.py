@@ -341,6 +341,19 @@ class PanelSummaryTests(ShimTest):
         self.record(SUMMARY)
         self.assertEqual(self.run_script(WORKER / "panel.sh", "verdict").stdout, "ready\n")
 
+    def test_a_summary_a_commit_has_outrun_is_no_longer_a_ready_one(self):
+        # A summary describes the commit it was recorded at. The review stage is skippable since ADR 0029 —
+        # a `/worker:work` resuming at the ci stage goes straight to the merge — so a panel that never saw
+        # what would be merged has to read as draft, and `verdict` is what scripts ask.
+        self.record(SUMMARY)
+        self.assertEqual(self.run_script(WORKER / "panel.sh", "verdict").stdout, "ready\n")
+        self.commit("later.txt")
+        self.assertEqual(self.run_script(WORKER / "panel.sh", "verdict").stdout, "draft\n",
+                         "one unreviewed commit is enough")
+        brief = self.print_brief().stdout
+        self.assertIn("panel_verdict: draft", brief)
+        self.assertIn("commits since the summary was recorded", brief, "and the brief still names the distance")
+
     def test_an_unreadable_record_is_an_unknown_panel_not_a_ready_one(self):
         self.record(SUMMARY)
         record = Path(self.git("rev-parse", "--path-format=absolute", "--git-dir").strip()) / "worker/panel"
@@ -808,6 +821,18 @@ class HandoffResumeTests(ShimTest):
         self.assertEqual(self.sequence(), ["agent wait", "agent prompt /clear"], "cleared once, never twice")
         self.assertIn("Handoff did not clear pane w9:p1",
                       [c for c in self.calls() if "notification show" in c][0])
+
+    def test_the_driver_command_is_a_keystroke_too_and_waits_for_the_same_ended_turn(self):
+        # The pane can be `blocked` again by the time the note has landed: the fresh context opened a trust
+        # dialog, or the maintainer took the pane over. The Enter of `/worker:work` would answer it.
+        record = self.note_record(injected=False)
+        r = self.resume(record=record, SHIM_CLEAR_MARKS_RECORD=record, SHIM_AGENT_STATUS_AFTER_CLEAR="blocked")
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertEqual(self.sequence(), ["agent wait", "agent prompt /clear", "agent wait"])
+        self.assertFalse([c for c in self.calls() if "/worker:work" in c and "prompt" in c])
+        notification = [c for c in self.calls() if "notification show" in c][0]
+        self.assertIn("Handoff did not resume pane w9:p1", notification)
+        self.assertIn("blocked", notification)
 
     def test_a_fresh_context_that_never_got_the_note_is_reported_instead_of_driven(self):
         # The new session id says a context started, not that its hook ran. One that produced nothing has

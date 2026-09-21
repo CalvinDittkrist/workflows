@@ -33,6 +33,18 @@ session() { wf_agent_session "$pane"; }
 # because clearing again would throw the note away and the driver command would reach a context without it.
 taken() { [ -n "$record" ] && [ -f "$record" ] && [ -n "$(wf_record_field "$record" injected)" ]; }
 stop() { wf_notify "$1" "$2 The note is on disk: clear the pane by hand if it still holds the old context, then send $cmd there to resume at the $stage stage." alert; exit 1; }
+# Everything this script sends is keystrokes, and keystrokes carry an Enter: typed into a permission dialog
+# they answer a question the maintainer has not read, typed into a working turn they queue behind work nobody
+# asked for. herdr's wait ends on `blocked` and on its timeout too, so the pane's state is read immediately
+# before every prompt and never once for all of them — between two of them a minute passes, and the keystroke
+# before may be what opened the dialog the next would answer.
+require_ended() {
+  status=$(wf_agent_status "$pane")
+  case "$status" in
+    idle|done) ;;
+    *) stop "Handoff did not $1 pane $pane" "The pane is ${status:-in no state herdr can name} instead of at the end of its turn, so nothing was typed into it." ;;
+  esac
+}
 
 # The worker that asked for the handoff is still finishing its turn. `/clear` typed into a working agent
 # would land in the queue of that turn, so the wait is first and everything else follows it. Without
@@ -52,16 +64,7 @@ now=$(session)
   stop "Handoff note went to another context" "A session this handover did not start has taken the note, so pane $pane was left alone."
 attempt=1
 while :; do
-  # The wait also ends on `blocked` and on its timeout, and `/clear` is keystrokes: typed into a permission
-  # dialog its Enter answers a question the maintainer has not read, and typed into a working turn it queues
-  # behind work nobody asked for. Only a turn that has ended is cleared, and the retry asks again rather than
-  # trusting the first answer: the `/clear` that went unanswered is itself the thing that may have opened a
-  # dialog, and a minute of waiting is long enough for the maintainer to take the pane over.
-  status=$(wf_agent_status "$pane")
-  case "$status" in
-    idle|done) ;;
-    *) stop "Handoff did not clear pane $pane" "The pane is ${status:-in no state herdr can name} instead of at the end of its turn, so nothing was typed into it." ;;
-  esac
+  require_ended clear
   herdr agent prompt "$pane" "/clear" >/dev/null 2>&1 || true
   # The fresh session reports itself under a new id. Nothing else confirms it: a `/clear` that was swallowed
   # and a `/clear` that worked look the same from here, and the driver command must never reach the context
@@ -95,5 +98,13 @@ if [ -n "$record" ]; then
     sleep "$poll"
   done
 fi
+# The driver command is a keystroke like the `/clear` was, and the wait above ends on `blocked` too: a fresh
+# context that opened a trust dialog, or a maintainer who took the pane while the note was landing, must not
+# have this Enter answer it. The pane is asked once more, as late as possible, and it must still be the
+# context this handover started — not a third one that came up after it.
+require_ended resume
+fresh=$(session)
+[ -n "$fresh" ] && [ "$fresh" != "$before" ] ||
+  stop "Handoff did not resume pane $pane" "The pane reports ${fresh:-no session} instead of the fresh context this handover started, so the driver command was not sent."
 herdr agent prompt "$pane" "$cmd" >/dev/null 2>&1 ||
   wf_notify "Handoff could not resume pane $pane" "The context was cleared but $cmd was refused; send it by hand to resume at the $stage stage." alert

@@ -55,10 +55,15 @@ panel_verdict() {
 record="$(wf_state_dir)/panel"
 
 # recorded_verdict: "draft" or "ready" for the record, and "draft" for one that is missing or unreadable,
-# so an unknown panel never reads as a passed one.
+# so an unknown panel never reads as a passed one. A summary describes the commit it was recorded at and
+# nothing else: once a commit has landed since, no reviewer has read what would be merged, so the one word
+# the finish stage gates on is "draft" however the panel itself ended. It matters because the review stage is
+# skippable now — a `/worker:work` resuming at the ci stage (ADR 0029) reaches the merge without it — and
+# because `verdict` is read by scripts, which see no `panel_head:` line to tell them the distance.
 recorded_verdict() {
   local v=""
   [ ! -f "$record" ] || v=$(wf_record_field "$record" verdict)
+  [ "$v" != ready ] || [ "$(git rev-parse HEAD 2>/dev/null)" = "$(wf_record_field "$record" commit)" ] || v=stale
   case "$v" in ready) printf 'ready\n' ;; *) printf 'draft\n' ;; esac
 }
 
