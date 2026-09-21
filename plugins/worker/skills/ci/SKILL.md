@@ -12,7 +12,7 @@ The checkpoint above measured this context as you entered the stage, whichever s
 Repair record:
 !`${CLAUDE_PLUGIN_ROOT}/scripts/repair.sh print`
 
-The repair record counts the repair rounds of this pull request and holds the limit across a handover, so the number is the script's and never yours. Count every repair round with `"${CLAUDE_PLUGIN_ROOT}/scripts/repair.sh" round` before you start it; when it refuses, repair nothing more and report the failing checks or the unresolved threads to the maintainer.
+The repair record counts the repair rounds of the pull request this branch has open and holds the limit across a handover, so the number is the script's and never yours. It is the branch's budget: the script reads which pull request that is itself, and an argument you pass this skill selects what to wait on, not what to count. Count every repair round with `"${CLAUDE_PLUGIN_ROOT}/scripts/repair.sh" round` before you start it; when it refuses, repair nothing more and report the failing checks or the unresolved threads to the maintainer.
 
 Run `"${CLAUDE_PLUGIN_ROOT}/scripts/pr-wait.sh" $ARGUMENTS` with the Bash tool timeout set to 600000 ms. The script returns within about nine minutes:
 

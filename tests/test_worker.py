@@ -886,6 +886,18 @@ class RepairRecordTests(ShimTest):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("no open pull request", self.keys(r.stdout)["repair_pr"])
 
+    def test_a_gh_that_cannot_answer_is_not_read_as_a_branch_without_a_pull_request(self):
+        # gh exit 4 is "authentication required", not "no pull request": the two ask for different fixes,
+        # and reading the first as the second sends the worker off to open a second pull request.
+        for args in (["round"], ["print"]):
+            with self.subTest(args=args):
+                r = self.repair(*args, SHIM_GH_PR_LIST_EXIT="4")
+                self.assertEqual(r.returncode, 1, r.stdout)
+                self.assertIn("gh exit 4", r.stderr)
+                self.assertIn("gh auth status", r.stderr, "with the fix")
+                self.assertNotIn("/worker:pr", r.stderr, "and never the fix for a branch without one")
+        self.assertFalse(self.record.exists(), "and no round is counted while the count cannot be placed")
+
     def test_a_record_whose_count_cannot_be_read_is_refused_and_not_read_as_none(self):
         # The record is the whole guard, so a truncated or hand-edited count must not hand the pull
         # request a fresh set of rounds; it is said out loud instead, with the fix.
