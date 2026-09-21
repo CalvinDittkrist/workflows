@@ -81,13 +81,15 @@ All knobs are environment variables, set per repository in `.claude/settings.jso
 
 `WF_PLANNER_LANGUAGE` reaches the planner through the `--settings` JSON `plan.sh` builds, so it applies to that one session and writes no settings file. Claude Code takes the **last** `--settings` on the command line and does not merge: a `--settings` of your own in `WF_CLAUDE_ARGS` or `WF_PLANNER_CLAUDE_ARGS` comes after and therefore replaces the whole object, language, plugin switches and the worker's foreground-subagent switch included. `plan.sh` and `claim.sh` print a `warning:` when they see one, so put those keys into your own JSON. Every other flag in those variables composes normally.
 
-A worker session takes its model from the first of these that is set:
+A session takes its model from the first of these that is set:
 
-1. `--model` in `WF_CLAUDE_ARGS` or `WF_WORKER_CLAUDE_ARGS`
-2. the `model` field of the session's agent file (`opus` for `worker`, `sonnet` for `orchestrator`)
+1. `--model` in `WF_CLAUDE_ARGS` or, per session kind, `WF_WORKER_CLAUDE_ARGS` / `WF_PLANNER_CLAUDE_ARGS`
+2. the `model` field of the session's agent file (`fable` for `planner`, `opus` for `worker`, `sonnet` for `orchestrator`)
 3. `model` in your Claude Code settings
 
-Subagents resolve separately: an agent file that names a model keeps it — the panel's `docs-reviewer` stays on `sonnet` — and only `model: inherit` follows the session. So `WF_CLAUDE_ARGS="--model sonnet"` pins the worker session per repository, not every reviewer.
+The planner runs on Fable because planning has the highest leverage in the pipeline: a wrong spec multiplies into every ticket, and a planning session is interactive and small in token volume.
+
+Subagents resolve separately: an agent file that names a model keeps it — the panel's `docs-reviewer` stays on `sonnet` — and only `model: inherit` follows the session. So `WF_CLAUDE_ARGS="--model sonnet"` pins the worker session per repository, not every reviewer. The planner's subagents inherit instead: `spec-checker` is `model: inherit` and the research subagent has no agent file at all, so both follow the session to Fable. `WF_PLANNER_CLAUDE_ARGS="--model opus"` therefore moves the whole planner session, subagents included.
 
 Repositories do not override agents or skills locally: the [repository standard](docs/repo-standard.md) keeps `.claude/` to the settings file, and its check fails on local skills, agents, commands and rules. Tune a repository with the `WF_*` variables and its `AGENTS.md`.
 

@@ -34,7 +34,7 @@ class ManifestTests(unittest.TestCase):
         expected = {
             "orchestrator/agents/orchestrator.md": "sonnet",
             "worker/agents/worker.md": "opus",
-            "planner/agents/planner.md": "opus",
+            "planner/agents/planner.md": "fable",
             "worker/agents/docs-reviewer.md": "sonnet",
         }
         for rel, model in expected.items():
