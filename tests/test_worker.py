@@ -125,8 +125,11 @@ class GateRecordTests(ShimTest):
         head = self.head()
         r = self.run_gate()
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("Ran 3 tests", r.stdout)  # the output reaches the caller while it is recorded
+        # A passing gate answers with its record, not with its output: this runs in the worker's context.
+        self.assertNotIn("Ran 3 tests", r.stdout)
+        self.assertEqual(len(r.stdout.splitlines()), 2, r.stdout)
         self.assertIn(f"gate_recorded: pass (exit 0) at {head}", r.stdout)
+        self.assertIn("(the full output)", r.stdout)
         brief = self.brief()
         self.assertIn(f"gate_result: pass (exit 0) at {head}", brief)
         self.assertIn("gate_command: make check", brief)
@@ -138,12 +141,15 @@ class GateRecordTests(ShimTest):
     def test_a_failing_gate_is_recorded_with_its_status_and_its_output(self):
         self.set_gate(FAILING_GATE)
         r = self.run_gate()
-        # The status is the gate's own: make answers 2 for a failed recipe, not the 3 the recipe exited with.
-        self.assertEqual(r.returncode, 2, r.stdout)
+        # The status is the gate's own, which is make's for a failed recipe (2 with GNU make) and never the
+        # 3 the recipe exited with, and the record carries that same status.
+        self.assertNotIn(r.returncode, (0, 3), r.stdout)
+        # A failing gate prints its whole output in the call that ran it, so nobody runs it again to read it.
         self.assertIn("FAILED (failures=1)", r.stdout)
-        self.assertIn(f"gate_recorded: fail (exit 2) at {self.head()}", r.stdout)
+        self.assertIn("running the gate", r.stdout)
+        self.assertIn(f"gate_recorded: fail (exit {r.returncode}) at {self.head()}", r.stdout)
         brief = self.brief()
-        self.assertIn(f"gate_result: fail (exit 2) at {self.head()}", brief)
+        self.assertIn(f"gate_result: fail (exit {r.returncode}) at {self.head()}", brief)
         self.assertIn("  FAILED (failures=1)", brief)
         log = Path(re.search(r"gate_log: (\S+)", brief).group(1))
         self.assertIn("FAILED (failures=1)", log.read_text())
@@ -162,6 +168,11 @@ class GateRecordTests(ShimTest):
         self.assertTrue(brief.startswith("gate_result: none for this head"), brief)
         self.assertIn(recorded, brief)  # it names the commit the stale record belongs to
         self.assertNotIn("Ran 3 tests", brief)
+        # And the way back: the review stage runs the gate again, and the brief answers for the new head.
+        self.run_gate()
+        brief = self.brief()
+        self.assertIn(f"gate_result: pass (exit 0) at {self.head()}", brief)
+        self.assertIn("  Ran 3 tests", brief)
 
     def test_a_record_taken_on_a_dirty_working_tree_is_marked_and_counts_as_none(self):
         (self.repo / "scratch.txt").write_text("uncommitted\n")
@@ -225,16 +236,16 @@ class GateRecordTests(ShimTest):
             self.assertEqual(r.returncode, 1, r.stdout)
             self.assertTrue(r.stderr.startswith("error: usage: gate.sh run | gate.sh print"), r.stderr)
 
-    def test_the_review_and_pull_request_briefs_carry_the_gate_result(self):
-        """End to end over the wiring: what those skills inject has to print the recorded gate result,
-        because that text is the whole brief a fresh-context reviewer or pull request author receives. The
-        setUp order is the pipeline's: every stage commits and then gates, so the record names the head."""
+    def test_the_pull_request_brief_carries_the_gate_result(self):
+        """End to end over the wiring: what the pr skill injects has to print the recorded gate result,
+        because that text is the whole brief its fresh-context author receives. The review stage reads the
+        same record with its own call, after the commit its round procedure makes."""
         self.run_gate()
-        for skill in ("review", "pr"):
-            with self.subTest(skill=skill):
-                brief = self.skill_brief("worker", skill, WF_BASE_BRANCH="main")
-                self.assertIn(f"gate_result: pass (exit 0) at {self.head()}", brief)
-                self.assertIn("  Ran 3 tests", brief)
+        brief = self.skill_brief("worker", "pr", WF_BASE_BRANCH="main")
+        self.assertIn(f"gate_result: pass (exit 0) at {self.head()}", brief)
+        self.assertIn("  Ran 3 tests", brief)
+        # The gate block comes before the panel block, which is open and runs to the end of the brief.
+        self.assertLess(brief.index("gate_result:"), brief.index("panel_summary:"))
 
     def test_two_worktrees_of_one_repository_keep_separate_gate_records(self):
         other = self.base / "other-worktree"

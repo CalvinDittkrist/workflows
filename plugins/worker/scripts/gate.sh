@@ -40,10 +40,9 @@ case "${1:-}" in
     started=$(date -u +%Y-%m-%dT%H:%M:%SZ)
     begin=$(date +%s)
     mkdir -p "$(dirname "$record")"
-    # tee, so the caller reads a failing gate in this call instead of running it again for the output.
     set +e
-    ( cd "$(git rev-parse --show-toplevel)" && "${gate_cmd[@]}" ) 2>&1 | tee "$log.tmp"
-    status=${PIPESTATUS[0]}
+    ( cd "$(git rev-parse --show-toplevel)" && "${gate_cmd[@]}" ) > "$log.tmp" 2>&1
+    status=$?
     set -e
     mv "$log.tmp" "$log"
     # One file, written in one move: the headers, an empty line, then the tail of the output verbatim.
@@ -52,8 +51,13 @@ case "${1:-}" in
         "$commit" "$dirty" "$status" "$started" "$(( $(date +%s) - begin ))" "${gate_cmd[*]}" "$log"
       tail -n "$tail_lines" "$log"; } > "$record.tmp"
     mv "$record.tmp" "$record"
+    # A failing gate is read here, in the call that ran it, instead of being run a second time for its
+    # output. A passing one is not: this runs in the worker's own context once per round, and the whole
+    # output of a passing gate is 36 KB of "ok" lines nobody reads, in the context the budget is kept in.
+    [ "$status" = 0 ] || cat "$log"
     note=""; [ "$dirty" = no ] || note=", with a dirty working tree, so no reader counts it for that commit"
     wf_kv gate_recorded "$(gate_outcome "$status") at $(git rev-parse --short "$commit")$note"
+    wf_kv gate_log "$log (the full output)"
     exit "$status"
     ;;
   print)
