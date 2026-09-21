@@ -886,6 +886,18 @@ class RepairRecordTests(ShimTest):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("no open pull request", self.keys(r.stdout)["repair_pr"])
 
+    def test_a_record_whose_count_cannot_be_read_is_refused_and_not_read_as_none(self):
+        # The record is the whole guard, so a truncated or hand-edited count must not hand the pull
+        # request a fresh set of rounds; it is said out loud instead, with the fix.
+        self.write_record(rounds="x")
+        for args in (["round"], ["print"]):
+            with self.subTest(args=args):
+                r = self.repair(*args)
+                self.assertEqual(r.returncode, 1, r.stdout)
+                self.assertIn("rounds header reads 'x'", r.stderr)
+                self.assertIn("delete the file", r.stderr, "with the fix")
+        self.assertIn("rounds: x", self.record.read_text(), "and a refused call changes nothing")
+
     def test_a_call_without_a_known_subcommand_is_refused_with_the_usage(self):
         for args in ([], ["rounds"], ["round", "7"]):
             with self.subTest(args=args):

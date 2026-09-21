@@ -9,7 +9,11 @@
 set -euo pipefail
 # shellcheck source=lib.sh
 . "$(dirname "$0")/lib.sh"
+# The pull request the record belongs to is read from GitHub, so a missing gh is said as itself and never
+# mistaken for a branch without a pull request.
+wf_need gh
 
+usage="usage: repair.sh round | repair.sh print"
 record="$(wf_state_dir)/repair"
 limit="${WF_CI_REPAIR_ROUNDS:-3}"
 printf '%s' "$limit" | grep -Eq '^[1-9][0-9]*$' ||
@@ -23,7 +27,11 @@ pr=$(wf_pr_for_branch)
 taken=0
 if [ -n "$pr" ] && [ -f "$record" ] && [ "$(wf_record_field "$record" pr)" = "$pr" ]; then
   counted=$(wf_record_field "$record" rounds)
-  if printf '%s' "$counted" | grep -Eq '^[0-9]+$'; then taken="$counted"; fi
+  # This file is the whole guard, so a count it cannot read is refused rather than read as zero: a damaged
+  # record would otherwise hand the pull request a fresh set of rounds.
+  printf '%s' "$counted" | grep -Eq '^[0-9]+$' ||
+    wf_die "the repair record $record names pull request #$pr but its rounds header reads '$counted', not a count; delete the file to start this pull request's count again, and say so when you report"
+  taken="$counted"
 fi
 
 # Three keys, always in this order, so a round and a plain reading are read the same way.
@@ -37,9 +45,9 @@ report() {
   wf_kv repair_limit "$limit"
 }
 
-case "${1:-}" in
+[ $# -eq 1 ] || wf_die "$usage"
+case "$1" in
   round)
-    [ $# -eq 1 ] || wf_die "usage: repair.sh round | repair.sh print"
     [ -n "$pr" ] ||
       wf_die "branch $(wf_branch) has no open pull request, so there is no repair round to count; open it with /worker:pr first"
     next=$((taken + 1))
@@ -54,9 +62,6 @@ case "${1:-}" in
     [ "$taken" -lt "$limit" ] ||
       printf 'next: this is the last repair round for pull request #%s; if it does not end green, stop and report to the maintainer.\n' "$pr"
     ;;
-  print)
-    [ $# -eq 1 ] || wf_die "usage: repair.sh round | repair.sh print"
-    report
-    ;;
-  *) wf_die "usage: repair.sh round | repair.sh print" ;;
+  print) report ;;
+  *) wf_die "$usage" ;;
 esac
