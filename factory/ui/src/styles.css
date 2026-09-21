@@ -141,6 +141,7 @@ button {
 .mode-working i {
   animation: pulse 1.4s ease-in-out infinite;
 }
+.mode-connecting,
 .mode-paused,
 .mode-waiting-for-quota {
   color: var(--lavender);
@@ -201,6 +202,22 @@ h2 b {
   color: var(--dim);
   font-weight: 400;
   font-variant-numeric: tabular-nums;
+}
+/* A repository whose issues could not be read: no count, because nobody knows, and what gh said
+   underneath it. An empty queue and an unreadable repository must not look alike. */
+.repos li.unreadable i {
+  background: var(--red);
+}
+.repos li.unreadable b {
+  color: var(--red);
+}
+.repos li small {
+  grid-column: 2 / -1;
+  overflow: hidden;
+  color: var(--red);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .line h2:not(:first-child) {

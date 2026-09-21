@@ -466,6 +466,10 @@ func TestAnInvalidConfigurationIsRefusedWithTheFix(t *testing.T) {
 		{"no repositories", `{"data_dir":"data"}`, `repositories is empty; name at least one`},
 		{"repository without owner", `{"data_dir":"data","repositories":["workflows"]}`, `is not owner/name`},
 		{"repository twice", `{"data_dir":"data","repositories":["a/b","a/b"]}`, `named twice; remove the duplicate`},
+		{"repository twice in two spellings", `{"data_dir":"data","repositories":["Acme/Repo","acme/repo"]}`, `named twice; remove the duplicate`},
+		{"repository of dots", `{"data_dir":"data","repositories":["../.."]}`, `is not owner/name`},
+		{"repository whose name is dots", `{"data_dir":"data","repositories":["acme/.."]}`, `is not owner/name`},
+		{"repository that reads as a flag", `{"data_dir":"data","repositories":["-acme/repo"]}`, `is not owner/name`}, // it would name a directory outside the data directory
 		{"no data directory", `{"repositories":["a/b"]}`, `data_dir is missing; name the directory`},
 		{"unknown field", `{"data_dir":"data","repositories":["a/b"],"listn":"x"}`, `unknown field "listn"; the fields are listen, label`},
 		{"not JSON", `listen = 7341`, `see factory/factory.example.json`},
@@ -514,19 +518,8 @@ func TestAnInvalidConfigurationIsRefusedWithTheFix(t *testing.T) {
 			t.Errorf("the factory said %q, want the fix for a data directory it cannot use", strings.TrimSpace(string(output)))
 		}
 	})
-	t.Run("without fake mode", func(t *testing.T) {
-		path := filepath.Join(t.TempDir(), "factory.json")
-		if err := os.WriteFile(path, []byte(`{"data_dir":"data","repositories":["a/b"]}`), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		output, err := exec.Command(binary, "-config", path).CombinedOutput()
-		if err == nil {
-			t.Fatalf("the factory started without -fake, want a refusal while only fake mode works")
-		}
-		if !strings.Contains(string(output), "start it with -fake") {
-			t.Errorf("the factory said %q, want the fix for a mode that does not work yet", strings.TrimSpace(string(output)))
-		}
-	})
+	// Without fake mode the factory reads real GitHub, which so far it may only do paused:
+	// TestAgainstRealGitHubTheFactoryRefusesToRunUnpaused.
 	t.Run("missing file", func(t *testing.T) {
 		output, _ := exec.Command(binary, "-config", filepath.Join(t.TempDir(), "gone.json"), "-fake").CombinedOutput()
 		if !strings.Contains(string(output), "copy factory/factory.example.json") {
@@ -684,6 +677,13 @@ type factory struct {
 // start writes a configuration, starts the binary in fake mode and waits until it answers.
 func start(t *testing.T, c config) *factory {
 	t.Helper()
+	return launch(t, c, nil, "-fake")
+}
+
+// launch starts the binary with the given arguments and environment and waits until it answers. The
+// environment is the test process's, so a shim on PATH is added by the caller.
+func launch(t *testing.T, c config, env []string, args ...string) *factory {
+	t.Helper()
 	if _, ok := c["listen"]; !ok {
 		c["listen"] = freeAddress(t)
 	}
@@ -703,8 +703,11 @@ func start(t *testing.T, c config) *factory {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.cmd = exec.Command(binary, "-config", path, "-fake")
+	f.cmd = exec.Command(binary, append([]string{"-config", path}, args...)...)
 	f.cmd.Stdout, f.cmd.Stderr = output, output
+	if env != nil {
+		f.cmd.Env = env
+	}
 	if err := f.cmd.Start(); err != nil {
 		t.Fatalf("the factory could not be started: %v", err)
 	}

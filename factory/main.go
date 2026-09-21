@@ -2,8 +2,10 @@
 // own. It is a second driver over the same worker pipeline a local claim starts, and it shares
 // nothing with a developer's machine but GitHub.
 //
-// So far it runs in fake mode only: a canned queue and scripted workers, which need no tokens, no
-// git and no GitHub. What it does is read over its HTTP interface, which never writes anything.
+// So far it works its line only in fake mode, with a canned queue and scripted workers that need no
+// tokens, no git and no GitHub. Against real GitHub it runs paused: it clones the connected
+// repositories, shows the live queue of routed issues and claims nothing. What it does is read over
+// its HTTP interface, which never writes anything.
 package main
 
 import (
@@ -41,9 +43,17 @@ func run(config string, fake, paused bool) error {
 		return err
 	}
 	settings.Paused = settings.Paused || paused
-	if !fake {
-		return fmt.Errorf("only fake mode runs so far; start it with -fake (working routed issues for real arrives with the tickets that connect GitHub)")
+	// Against real GitHub the factory only reads so far. Claiming an issue and starting a worker
+	// arrives with its own ticket, and until then an unpaused start would promise work it cannot do.
+	if !fake && !settings.Paused {
+		return fmt.Errorf("a factory against real GitHub runs paused so far; start it with -paused or set \"paused\": true in %s (claiming routed issues arrives with the ticket that starts real workers)", config)
 	}
+
+	// On SIGTERM the factory ends the worker it is running before it exits: no worker process is left
+	// behind on the host, and the run is recorded as interrupted. The clone of a connected repository
+	// answers to it too, so a stop during a long clone is not waited out.
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
 
 	// Listening comes before everything else: a second factory on this host has to fail here, before
 	// it has started a run or taken an issue from anybody.
@@ -75,10 +85,10 @@ func run(config string, fake, paused bool) error {
 	log.Printf("factory on http://%s (fake=%v paused=%v label=%s deadline=%s data=%s)",
 		settings.Listen, fake, settings.Paused, settings.Label, settings.Deadline, settings.DataDir)
 
-	// On SIGTERM the factory ends the worker it is running before it exits: no worker process is left
-	// behind on the host, and the run is recorded as interrupted.
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
+	// The clones come after the interface answers and before the first poll: a worker branches off a
+	// clone, so the host is made ready before there is work to give it. A first clone takes minutes,
+	// which is why the interface is up while it runs and says it is connecting.
+	factory.Connect(ctx)
 	factory.Work(ctx)
 	log.Printf("stopping")
 

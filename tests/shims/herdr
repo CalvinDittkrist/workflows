@@ -3,12 +3,19 @@
 printf 'herdr %s\n' "$*" >> "${SHIM_LOG:-/dev/null}"
 # Argv-preserving log: "$*" above collapses quoting, so word-splitting regressions are invisible there.
 { printf 'herdr'; for a in "$@"; do printf '\037%s' "${a//$'\n'/$'\036'}"; done; printf '\n'; } >> "${SHIM_ARGV_LOG:-/dev/null}"
+
+# What the pane holds, written the way herdr reports it: in one move. More than one process reads these
+# files while another writes them — a detached handoff half clears a pane while the next call asks who is in
+# it — and `> file` truncates first, so a reader in that window would find no session at all, which the real
+# herdr never answers. Written to a temporary file of this process and renamed, a reader sees the state
+# before or the state after and nothing in between.
+state() { printf '%s' "$2" > "$1.$$.tmp" && mv "$1.$$.tmp" "$1"; }
 case "$1 $2" in
   "worktree create")
     # Create the worktree for real so later git commands behave; parse --branch/--base/--cwd.
     b=""; base=""; cwd=""; p=""; while [ $# -gt 0 ]; do case "$1" in --branch) shift; b=$1;; --base) shift; base=$1;; --cwd) shift; cwd=$1;; --path) shift; p=$1;; esac; shift; done
     [ -n "$p" ] || p="${SHIM_WT_ROOT:?}/$(printf '%s' "$b" | tr '/' '-')"
-    printf '%s' "$p" > "${SHIM_WT_ROOT:?}/.ws-w9"
+    state "${SHIM_WT_ROOT:?}/.ws-w9" "$p"
     git -C "$cwd" worktree add -q -b "$b" "$p" "$base" >/dev/null 2>&1 || git -C "$cwd" worktree add -q "$p" "$b" >/dev/null
     printf '{"result":{"workspace":{"workspace_id":"w9"},"root_pane":{"pane_id":"w9:p1"},"worktree":{"path":"%s","branch":"%s"}}}\n' "$p" "$b" ;;
   "worktree remove")
@@ -25,17 +32,17 @@ case "$1 $2" in
     pane=""; while [ $# -gt 0 ]; do case "$1" in --pane) shift; pane=$1;; esac; shift; done
     # SHIM_AGENT_START_FAILS=1: claude exits at once (unknown agent), so no agent is ever detected.
     if [ "${SHIM_AGENT_START_FAILS:-0}" != 0 ]; then echo '{"error":{"code":"timeout"}}'; exit 1; fi
-    printf '%s' "$pane" > "${SHIM_WT_ROOT:?}/.agent-pane"
+    state "${SHIM_WT_ROOT:?}/.agent-pane" "$pane"
     echo '{"result":{"ok":true}}' ;;
   "pane run")
     # A sandboxed worker is started by a command in the pane, not by `agent start`; Herdr detects the agent after.
-    printf '%s' "$3" > "${SHIM_WT_ROOT:?}/.agent-pane"
+    state "${SHIM_WT_ROOT:?}/.agent-pane" "$3"
     echo '{"result":{"type":"ok"}}' ;;
   "agent wait")
     # SHIM_WAIT_STARTS_SESSION=<id> is the pane somebody cleared again while the handover waited for its fresh
     # context to settle: from the wait after the `/clear` on, it reports a session the handover never started.
     if [ -n "${SHIM_WAIT_STARTS_SESSION:-}" ] && [ -f "${SHIM_WT_ROOT:?}/.agent-session" ]; then
-      printf '%s' "$SHIM_WAIT_STARTS_SESSION" > "${SHIM_WT_ROOT}/.agent-session"
+      state "${SHIM_WT_ROOT}/.agent-session" "$SHIM_WAIT_STARTS_SESSION"
     fi
     echo '{"result":{"agent_status":"idle"}}' ;;
   "agent get")
@@ -51,18 +58,18 @@ case "$1 $2" in
     # `/clear` starts a fresh Claude session, which herdr reports under a new id; SHIM_CLEAR_KEEPS_SESSION=1
     # is the pane that swallowed it and keeps the old context.
     if [ "$4" = "/clear" ] && [ -z "${SHIM_CLEAR_KEEPS_SESSION:-}" ]; then
-      printf 'session-after-%s' "$(date +%s)$RANDOM" > "${SHIM_WT_ROOT:?}/.agent-session"
+      state "${SHIM_WT_ROOT:?}/.agent-session" "session-after-$(date +%s)$RANDOM"
     fi
     # SHIM_AGENT_STATUS_AFTER_CLEAR=<state> is the pane the `/clear` itself left busy or waiting on a dialog:
     # from the next `agent get` on, that is what herdr reports there.
     if [ "$4" = "/clear" ] && [ -n "${SHIM_AGENT_STATUS_AFTER_CLEAR:-}" ]; then
-      printf '%s' "$SHIM_AGENT_STATUS_AFTER_CLEAR" > "${SHIM_WT_ROOT:?}/.agent-status"
+      state "${SHIM_WT_ROOT:?}/.agent-status" "$SHIM_AGENT_STATUS_AFTER_CLEAR"
     fi
     # SHIM_CLEAR_MARKS_RECORD=<path> is the SessionStart hook of whatever session comes up: it marks the
     # handoff record as it injects the note, which is what the record says and not who says it.
     if [ "$4" = "/clear" ] && [ -n "${SHIM_CLEAR_MARKS_RECORD:-}" ] && [ -f "${SHIM_CLEAR_MARKS_RECORD}" ]; then
-      { printf 'injected: 2026-09-21T12:00:00Z\n'; cat "${SHIM_CLEAR_MARKS_RECORD}"; } > "${SHIM_CLEAR_MARKS_RECORD}.tmp"
-      mv "${SHIM_CLEAR_MARKS_RECORD}.tmp" "${SHIM_CLEAR_MARKS_RECORD}"
+      { printf 'injected: 2026-09-21T12:00:00Z\n'; cat "${SHIM_CLEAR_MARKS_RECORD}"; } > "${SHIM_CLEAR_MARKS_RECORD}.$$.tmp"
+      mv "${SHIM_CLEAR_MARKS_RECORD}.$$.tmp" "${SHIM_CLEAR_MARKS_RECORD}"
     fi
     echo '{"result":{"type":"ok"}}' ;;
   "pane read")

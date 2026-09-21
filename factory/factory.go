@@ -36,22 +36,41 @@ func (i Issue) key() string { return fmt.Sprintf("%s#%d", i.Repository, i.Number
 type Factory struct {
 	settings Settings
 	fake     bool
+	source   source
 	runs     *Store
 	started  time.Time
 	self     string        // this binary, which fake mode starts again as the scripted worker
 	wake     chan struct{} // a run ended: the next entry need not wait for the next poll
 	active   sync.WaitGroup
 
-	mu       sync.Mutex
-	queue    []Issue
-	polledAt time.Time
+	mu         sync.Mutex
+	queue      []Issue
+	unreadable map[string]string
+	polledAt   time.Time
+	connecting bool
 	// quotaUntil is served empty until the quota check arrives (ADR 0028); the interface carries the
 	// state from the start so the ticket that fills it changes no reader.
 	quotaUntil *time.Time
 }
 
-// New opens the data directory and takes the runs already in it. Nothing here starts a run: the
-// caller listens first, so a second factory on this host fails before this is reached.
+// source is where the line comes from on every poll: GitHub, or the canned queue of fake mode. It
+// answers with what it could read and reports what it could not, so nothing of it is ever stored.
+type source interface {
+	queue(ctx context.Context) poll
+}
+
+// poll is one reading of the line: the routed issues the source could read, and the repositories it
+// could not, with what stood in the way. The factory serves the second beside the first, because a
+// repository nobody can read holds no issues either, and an empty line is otherwise the same sight
+// as an idle one — on the one surface an unattended factory is watched through.
+type poll struct {
+	issues     []Issue
+	unreadable map[string]string // repository -> what gh said
+}
+
+// New opens the data directory and takes the runs already in it. Nothing here starts a run and
+// nothing here reads GitHub: the caller listens first, so a second factory on this host fails before
+// this is reached.
 func New(settings Settings, fake bool) (*Factory, error) {
 	runs, err := OpenStore(settings.DataDir)
 	if err != nil {
@@ -61,14 +80,37 @@ func New(settings Settings, fake bool) (*Factory, error) {
 	if err != nil {
 		return nil, fmt.Errorf("the factory cannot find its own binary: %w", err)
 	}
-	return &Factory{settings: settings, fake: fake, runs: runs, started: time.Now(), self: self, wake: make(chan struct{}, 1)}, nil
+	f := &Factory{settings: settings, fake: fake, runs: runs, started: time.Now(), self: self, wake: make(chan struct{}, 1)}
+	f.source = &gitHub{repositories: settings.Repositories, label: settings.Label}
+	if fake {
+		f.source = &canned{repositories: settings.Repositories, started: f.started}
+	}
+	return f, nil
+}
+
+// Connect makes sure every connected repository has a clone under the data directory before the
+// factory takes work. It says so on the interface while it runs, because a first clone takes minutes
+// and a line that has not been polled yet would otherwise be the sight of an idle factory.
+func (f *Factory) Connect(ctx context.Context) {
+	if f.fake {
+		return // fake mode works a canned queue; there is no repository behind it to clone
+	}
+	f.mu.Lock()
+	f.connecting = true
+	f.mu.Unlock()
+	defer func() {
+		f.mu.Lock()
+		f.connecting = false
+		f.mu.Unlock()
+	}()
+	connect(ctx, f.settings)
 }
 
 // Work derives the queue, starts the run at its head, and does so again on every poll and whenever a
 // run ends. It returns when the context is done and the run that was active has ended.
 func (f *Factory) Work(ctx context.Context) {
 	for ctx.Err() == nil {
-		f.refreshQueue()
+		f.refreshQueue(ctx)
 		f.dispatch(ctx)
 		select {
 		case <-ctx.Done():
@@ -79,10 +121,14 @@ func (f *Factory) Work(ctx context.Context) {
 	f.active.Wait()
 }
 
-// refreshQueue derives the line of routed issues. In fake mode it is the canned queue; the ticket
-// that connects GitHub replaces this with the issue search, and nothing else changes.
-func (f *Factory) refreshQueue() {
-	queue := cannedQueue(f.settings.Repositories, f.started)
+// refreshQueue derives the line of routed issues of all connected repositories. It is asked from the
+// source on every poll and only held in memory: the queue is a view of GitHub, never a state of the
+// factory ([ADR 0025]).
+//
+// [ADR 0025]: ../docs/adr/0025-one-queue-one-worker-work-in-progress-first.md
+func (f *Factory) refreshQueue(ctx context.Context) {
+	read := f.source.queue(ctx)
+	queue := read.issues
 	sort.SliceStable(queue, func(a, b int) bool {
 		if !queue[a].RoutedAt.Equal(queue[b].RoutedAt) {
 			return queue[a].RoutedAt.Before(queue[b].RoutedAt) // work in the order the maintainer routed
@@ -91,7 +137,7 @@ func (f *Factory) refreshQueue() {
 	})
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.queue, f.polledAt = queue, time.Now()
+	f.queue, f.unreadable, f.polledAt = queue, read.unreadable, time.Now()
 }
 
 // dispatch starts the head of the queue. One worker at a time: while a run is active, nothing else

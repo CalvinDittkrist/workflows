@@ -64,10 +64,12 @@ func (f *Factory) index(w http.ResponseWriter, _ *http.Request) {
 // status is what the factory is doing: running, paused, or waiting for the Claude quota to reset.
 func (f *Factory) status(w http.ResponseWriter, _ *http.Request) {
 	f.mu.Lock()
-	quotaUntil, polledAt := f.quotaUntil, f.polledAt
+	quotaUntil, polledAt, connecting := f.quotaUntil, f.polledAt, f.connecting
 	f.mu.Unlock()
 	state := "running"
 	switch {
+	case connecting: // the clones of the connected repositories are being made; nothing is polled yet
+		state = "connecting"
 	case f.settings.Paused:
 		state = "paused"
 	case quotaUntil != nil:
@@ -84,15 +86,24 @@ func (f *Factory) status(w http.ResponseWriter, _ *http.Request) {
 	})
 }
 
-// repositories are the connected repositories with what waits in each of them.
+// repositories are the connected repositories with what waits in each of them, and what stood in the
+// way of the ones the last poll could not read: a repository whose issues cannot be read holds no
+// queue either, and without the error it would be the same sight as one with nothing routed.
 func (f *Factory) repositories(w http.ResponseWriter, _ *http.Request) {
 	queued := map[string]int{}
 	for _, issue := range f.waiting() {
 		queued[issue.Repository]++
 	}
+	f.mu.Lock()
+	unreadable := f.unreadable
+	f.mu.Unlock()
 	out := make([]map[string]any, 0, len(f.settings.Repositories))
 	for _, repository := range f.settings.Repositories {
-		out = append(out, map[string]any{"repository": repository, "queued": queued[repository]})
+		row := map[string]any{"repository": repository, "queued": queued[repository]}
+		if said := unreadable[repository]; said != "" {
+			row["error"] = said
+		}
+		out = append(out, row)
 	}
 	writeJSON(w, out)
 }

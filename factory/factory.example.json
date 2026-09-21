@@ -5,7 +5,7 @@
   "poll": "60s",
   "data_dir": "/var/lib/factory",
   "worker_args": [],
-  "paused": false,
+  "paused": true,
   "repositories": [
     "CalvinDittkrist/workflows"
   ]

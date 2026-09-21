@@ -1324,13 +1324,16 @@ class HandoffTests(ShimTest):
         # The detached half runs against the shim too; these keep its wait short instead of stubbing it out.
         env.setdefault("WF_HANDOFF_SESSION_MS", "1000")
         env.setdefault("WF_HANDOFF_POLL_SECONDS", "0.2")
+        ended = self.count("notification show")
         r = self.run_script(WORKER / "handoff.sh", stage, stdin=note, **env)
-        # A started handover leaves a process running in the worktree; wait for its last call, so no test
-        # ends while a child of it still writes into the directory the harness is about to remove. Nothing
-        # here plays the fresh session's hook, so that call is the report of a note nobody took; what the
-        # detached half does with the pane is HandoffResumeTests' subject, not this class's.
+        # A started handover leaves a process running in the worktree; wait for the last call of this one, so
+        # neither the next handover nor the end of the test comes while a child of it still calls the shims
+        # and writes into the directory the harness is about to remove. The count is what makes it this
+        # handover's last call: the log keeps the calls of the handovers before it. Nothing here plays the
+        # fresh session's hook, so that call is the report of a note nobody took; what the detached half does
+        # with the pane is HandoffResumeTests' subject, not this class's.
         if r.returncode == 0:
-            self.await_call("notification show")
+            self.await_call("notification show", ended)
         return r
 
     def hook(self, source="clear", session_id="s2", **env):
@@ -1345,14 +1348,29 @@ class HandoffTests(ShimTest):
         self.assertEqual(r.returncode, 0, r.stderr)
         return r.stdout
 
-    def await_call(self, needle, seconds=15):
-        """Wait for a call of the detached resume process, which runs while the test goes on."""
+    def count(self, needle):
+        """How often the shims were called that way, over the whole test."""
+        return sum(needle in call for call in self.calls())
+
+    def await_call(self, needle, seen=0, seconds=15):
+        """Wait for a call of the detached resume process beyond the `seen` the log holds already, which runs
+        while the test goes on."""
         deadline = time.time() + seconds
         while time.time() < deadline:
-            if any(needle in call for call in self.calls()):
+            if self.count(needle) > seen:
                 return
             time.sleep(0.05)
-        self.fail(f"no '{needle}' call within {seconds} s; calls: {self.calls()}")
+        self.fail(f"no '{needle}' call beyond {seen} within {seconds} s; calls: {self.calls()}")
+
+    def test_one_handover_is_over_before_the_next_one_starts(self):
+        # The detached half keeps asking the pane who is in it while the test goes on. A handover started
+        # while an earlier one still ran raced it through the pane's state and was refused with 'herdr
+        # reports no agent session' (seen in the CI of #82, never on the machine that wrote the test). Every
+        # test of this class that hands over more than once rests on this wait.
+        for _ in range(3):
+            self.assertEqual(self.handoff().returncode, 0)
+        self.assertEqual(self.count("notification show"), 3,
+                         "each handover's detached half is over before the next one starts")
 
     def test_a_dirty_working_tree_is_refused_with_the_files_in_it(self):
         (self.repo / "b.txt").write_text("b\n")

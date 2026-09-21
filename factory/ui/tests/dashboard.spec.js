@@ -162,6 +162,38 @@ test('the factory says when it waits for quota and until when', async ({ page })
   await expect(page.locator('.mode')).toContainText('until')
 })
 
+test('the factory says when it is still cloning what it was connected to', async ({ page }) => {
+  // The state a factory serves while it makes the clones of its connected repositories, which fake
+  // mode never does: the line is empty then, and the header is what says why.
+  await page.route('**/api/status', async (route) => {
+    const answer = await route.fetch()
+    await route.fulfill({ json: { ...(await answer.json()), state: 'connecting' } })
+  })
+  await page.goto(working('/'))
+  await expect(page.locator('.mode')).toContainText('connecting')
+})
+
+test('a repository whose issues could not be read is said so, not shown as idle', async ({ page }) => {
+  // The factory serves this from a repository its last poll could not read; in fake mode there is
+  // none, so the answer under test is put in front of the dashboard here.
+  await page.route('**/api/repositories', async (route) => {
+    const answer = await route.fetch()
+    const repositories = await answer.json()
+    await route.fulfill({
+      json: repositories.map((r, i) =>
+        i === 0 ? { ...r, error: 'gh: HTTP 401: Bad credentials' } : r,
+      ),
+    })
+  })
+  await page.goto(working('/'))
+
+  const unreadable = page.locator('.repos li').first()
+  await expect(unreadable).toHaveClass(/unreadable/)
+  await expect(unreadable.locator('small')).toContainText('Bad credentials')
+  await expect(unreadable.locator('b')).toHaveText('\u2014') // no count: nobody knows
+  await expect(page.locator('.repos li').last()).not.toHaveClass(/unreadable/)
+})
+
 test('a factory that stops answering is said so, and a run it does not have too', async ({ page }) => {
   // A run reached by editing the URL that this factory never ran.
   await page.goto(working('/#run=999'))

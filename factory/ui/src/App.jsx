@@ -173,10 +173,11 @@ export default function App() {
         <h2>Repositories</h2>
         <ul>
           {repositories.map((r) => (
-            <li key={r.repository}>
+            <li key={r.repository} className={r.error ? 'unreadable' : undefined} title={r.error}>
               <i />
               <span>{r.repository}</span>
-              <b>{r.queued}</b>
+              <b>{r.error ? '\u2014' : r.queued}</b>
+              {r.error && <small>{r.error}</small>}
             </li>
           ))}
         </ul>
