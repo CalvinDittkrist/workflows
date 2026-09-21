@@ -67,7 +67,7 @@ All knobs are environment variables, set per repository in `.claude/settings.jso
 | --- | --- | --- |
 | `WF_BASE_BRANCH` | remote default branch | base for worktrees and PRs |
 | `WF_REVIEWERS` | `code,security,docs,tests,senior` | reviewer panel members |
-| `WF_REVIEW_ROUNDS` | `3` | max fix-and-re-review rounds |
+| `WF_REVIEW_ROUNDS` | `3` | max fix-and-re-review rounds, counted over the rounds the review recorded, so the limit holds across a hand-over |
 | `WF_PR_BOT_REVIEWERS` | `chatgpt-codex-connector` | bot logins whose PR review the worker waits for; set to `""` in repositories without a bot reviewer |
 | `WF_PR_REVIEW_WAIT` | `600` | seconds to wait for a bot review after checks pass |
 | `WF_HANDOFF_TOKENS` | `100000` | context size at which a worker hands the stage it is entering to a fresh context; leave room for one review round under the compact trigger of 160 000 a claim pins, an upper bound rather than an exact size ([ADR 0031](docs/adr/0031-the-workflow-pins-the-size-at-which-a-worker-session-compacts.md)) |

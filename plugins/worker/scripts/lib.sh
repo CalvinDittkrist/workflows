@@ -52,6 +52,9 @@ wf_agent_status() {
 }
 # The reviewer panel of this session: the configured list, or the five reviewers the worker ships with.
 wf_reviewers() { printf '%s\n' "${WF_REVIEWERS:-code,security,docs,tests,senior}"; }
+# How many review rounds this session runs at most. The facts print it and panel.sh counts recorded rounds
+# against it, so the limit holds across the contexts one review may be spread over.
+wf_review_rounds() { printf '%s\n' "${WF_REVIEW_ROUNDS:-3}"; }
 # Where a worker stage leaves a fact for the next one (ADR 0018): this worktree's own git directory, never
 # the common one, so the workers of two issues in two worktrees keep separate records. Removed with the
 # worktree, which is what a pipeline run lives in.
