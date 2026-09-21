@@ -184,9 +184,10 @@ func (s *Store) update(r *Run, change func()) {
 	s.write(r)
 }
 
-// raiseContextPeak keeps the largest context the worker's own messages carried. The comparison is
-// made under the lock, and the record is written only when the peak actually grew: a session writes
-// hundreds of messages, and the host's disk is an SD card.
+// raiseContextPeak keeps the largest context the worker's own messages carried. The comparison and
+// the write are made under the lock. A context usually grows with every message, so this writes the
+// record about as often as the worker speaks; it stops only once the peak stands, after a handoff or
+// a long run of reading.
 func (s *Store) raiseContextPeak(r *Run, tokens int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

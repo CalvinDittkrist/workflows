@@ -21,15 +21,19 @@ var ui embed.FS
 // browser keeps to itself, so no path but the files themselves is ever asked for.
 func uiHandler() http.Handler {
 	dist, err := fs.Sub(ui, "ui/dist/app")
-	if err != nil || !built(dist) {
+	if err != nil {
+		return http.HandlerFunc(notBuilt)
+	}
+	return serveDashboard(dist)
+}
+
+// serveDashboard is uiHandler around a build that is already found, which is what a binary built
+// without the dashboard is tested through.
+func serveDashboard(dist fs.FS) http.Handler {
+	if _, err := fs.Stat(dist, "index.html"); err != nil {
 		return http.HandlerFunc(notBuilt)
 	}
 	return http.FileServerFS(dist)
-}
-
-func built(dist fs.FS) bool {
-	_, err := fs.Stat(dist, "index.html")
-	return err == nil
 }
 
 // notBuilt answers a binary that was built without the dashboard. The API is unaffected, which is

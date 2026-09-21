@@ -32,11 +32,13 @@ jobs:
           npm --prefix factory/ui exec -- playwright install --with-deps chromium
       - name: Gate
         run: make check
-      - name: Keep the browser test's report when it failed
+      - name: Keep the browser test's report and what it saw when it failed
         if: failure()
         uses: actions/upload-artifact@v7
         with:
           name: playwright-report
-          path: factory/ui/playwright-report
+          path: |
+            factory/ui/playwright-report
+            factory/ui/test-results
           if-no-files-found: ignore
           retention-days: 7

@@ -8,7 +8,7 @@ check: lint validate standard test ui factory browser
 # embeds. Every target below needs that build, so it is a file the others depend on.
 UI := factory/ui
 UI_BUILD := $(UI)/dist/app/index.html
-UI_SOURCES := $(UI)/index.html $(UI)/vite.config.js $(wildcard $(UI)/src/*)
+UI_SOURCES := $(UI)/index.html $(UI)/vite.config.js $(UI)/package.json $(shell find $(UI)/src -type f)
 
 lint:
 	@command -v shellcheck >/dev/null || { echo 'error: shellcheck not installed; brew install shellcheck' >&2; exit 1; }

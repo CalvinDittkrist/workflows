@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,6 +16,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"testing/fstest"
 	"time"
 )
 
@@ -350,6 +352,45 @@ func TestTheBinaryServesTheDashboardFromItself(t *testing.T) {
 	endpoints, _ := f.page(t, "/api")
 	if !strings.Contains(endpoints, "GET /api/line") {
 		t.Errorf("GET /api answered %.120q, want the list of endpoints", endpoints)
+	}
+
+	// The page loads from this binary and from nowhere else, and no foreign page may frame it or
+	// read what it shows.
+	response := f.do(t, "GET", "/")
+	response.Body.Close()
+	for header, want := range map[string]string{
+		"X-Content-Type-Options": "nosniff",
+		"Referrer-Policy":        "no-referrer",
+	} {
+		if got := response.Header.Get(header); got != want {
+			t.Errorf("GET / answers %s: %q, want %q", header, got, want)
+		}
+	}
+	policy := response.Header.Get("Content-Security-Policy")
+	for _, want := range []string{"default-src 'none'", "script-src 'self'", "connect-src 'self'", "frame-ancestors 'none'"} {
+		if !strings.Contains(policy, want) {
+			t.Errorf("the content security policy is %q, want %q in it", policy, want)
+		}
+	}
+}
+
+// A clone that has not run make ui builds a factory whose interface works and whose dashboard is
+// not there. It says so, in the one place a reader would look.
+func TestABinaryWithoutTheDashboardSaysHowToBuildIt(t *testing.T) {
+	server := httptest.NewServer(serveDashboard(fstest.MapFS{"robots.txt": &fstest.MapFile{}}))
+	defer server.Close()
+
+	response, err := http.Get(server.URL + "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	body, _ := io.ReadAll(response.Body)
+	if response.StatusCode != http.StatusNotFound {
+		t.Errorf("a binary without the dashboard answers / with %d, want 404", response.StatusCode)
+	}
+	if !strings.Contains(string(body), "make ui") {
+		t.Errorf("it answers %q, want the command that builds the dashboard", body)
 	}
 }
 

@@ -10,7 +10,15 @@ const STAGES = ['implement', 'review', 'pr', 'ci', 'reviews']
 const SLOW = 2000 // the three areas
 const FAST = 1000 // the selected run, whose log is followed while it is written
 
-const get = (url) => fetch(url).then((r) => (r.ok ? r.json() : Promise.reject(new Error(`${url}: ${r.status}`))))
+// Every read goes through here. A failure carries the status, so a reader of it can tell a run that
+// is not on this factory from a factory that stopped answering.
+const get = (url) =>
+  fetch(url).then((r) => {
+    if (r.ok) return r.json()
+    const failed = new Error(`${url}: ${r.status}`)
+    failed.status = r.status
+    throw failed
+  })
 
 // A run's colour and word come from its outcome once it has ended, and from the fact that it is
 // still going while it has not.
@@ -246,6 +254,7 @@ export default function App() {
 function Run({ id, now }) {
   const [run, setRun] = useState(null)
   const [missing, setMissing] = useState(false)
+  const [trouble, setTrouble] = useState('')
   const [events, setEvents] = useState([])
   const [open, setOpen] = useState({})
   const seen = useRef(0)
@@ -254,6 +263,7 @@ function Run({ id, now }) {
 
   useEffect(() => {
     let stop = false
+    let follow = null
     seen.current = 0
     const load = () =>
       get(`/api/runs/${id}?after=${seen.current}`)
@@ -270,15 +280,24 @@ function Run({ id, now }) {
           }
           setRun(next)
           setMissing(false)
+          setTrouble('')
+          // A run that has ended is written once and never again: this answer carries its record and
+          // the rest of its log, so a dashboard left open stops asking for it.
+          if (next.endedAt && follow) {
+            clearInterval(follow)
+            follow = null
+          }
         })
         .catch((e) => {
-          if (!stop && String(e.message).endsWith(': 404')) setMissing(true)
+          if (stop) return
+          if (e.status === 404) setMissing(true)
+          else setTrouble(e.message)
         })
     load()
-    const t = setInterval(load, FAST)
+    follow = setInterval(load, FAST)
     return () => {
       stop = true
-      clearInterval(t)
+      if (follow) clearInterval(follow)
     }
   }, [id])
 
@@ -313,6 +332,7 @@ function Run({ id, now }) {
         </h3>
         <State state={state} />
       </div>
+      {trouble && <p className="trouble">{trouble}</p>}
       <Facts
         items={[
           run.repository,

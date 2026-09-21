@@ -21,6 +21,6 @@ The host runs one process from one binary. Deploying the factory is copying that
 
 A fresh clone has to build the dashboard before the factory's Go tests pass, because they read it out of the binary. `make check` does that itself, and `factory/ui/dist` is in git with a placeholder so a build without the dashboard still compiles — it then answers `/` with a short line that names `make ui`.
 
-Node joins the toolchain for developing this repository, and Chromium joins it for the browser test. Both are installed by the gate and by the CI job; neither is needed to run a factory.
+Node joins the toolchain for developing this repository, and Chromium joins it for the browser test. The gate installs the npm dependencies and that Chromium itself, and refuses with the fix when npm is not there; the CI job brings Node and Chromium with it. Neither is needed to run a factory.
 
-The browser test is the only test here that judges pixels. It masks what counts up, asserts the three panes numerically, and compares the rest to one approved screenshot with a tolerance for the way each operating system rasterises glyphs; the font is served by the factory so that nothing but rasterisation differs.
+The browser test is the only test here that judges pixels. It masks what counts up, asserts the three panes numerically, and compares the rest to an approved screenshot. Layout is the same everywhere, the rasterisation of glyphs is not, so the baseline is per operating system and the one for a platform is approved on it: a platform without one fails the first time and is approved from what that run saw.

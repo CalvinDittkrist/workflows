@@ -97,7 +97,8 @@ button {
 
 .app {
   display: grid;
-  grid-template: 40px minmax(0, 1fr) / 240px 460px minmax(0, 1fr);
+  /* Header, a row for the banner that is nothing while there is no banner, and the three panes. */
+  grid-template: 40px auto minmax(0, 1fr) / 240px 460px minmax(0, 1fr);
   height: 100%;
 }
 .top {
@@ -146,13 +147,14 @@ button {
 }
 .banner {
   grid-column: 1 / -1;
+  grid-row: 2;
   padding: 6px 16px;
   border-bottom: 1px solid var(--line);
   color: var(--red);
 }
 
 .pane {
-  grid-row: 2;
+  grid-row: 3;
   min-height: 0;
   overflow-y: auto;
   padding: 16px 0;
@@ -307,6 +309,9 @@ h3 em {
 }
 .state-running i {
   animation: pulse 1.4s ease-in-out infinite;
+}
+.trouble {
+  color: var(--red);
 }
 .detail .facts {
   margin-top: -8px;

@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { pausedURL } from '../playwright.config.js'
+import { paused, working } from './where.js'
 
 // The dashboard read the way the maintainer reads it: in a browser, against the real binary in fake
 // mode. The canned queue is worked before the tests start (tests/factory.js), so the runs below are
@@ -13,7 +13,7 @@ const RUNNING_RUN = 6
 const detail = (page) => page.locator('.detail')
 
 test('the three areas render from the canned data', async ({ page }) => {
-  await page.goto('/')
+  await page.goto(working('/'))
 
   const repositories = page.locator('.repos li')
   await expect(repositories).toHaveCount(2)
@@ -39,7 +39,7 @@ test('the three areas render from the canned data', async ({ page }) => {
 })
 
 test('the whole queue is shown in its order while the factory is paused', async ({ page }) => {
-  await page.goto(`${pausedURL}/`)
+  await page.goto(paused('/'))
 
   await expect(page.locator('.mode')).toHaveText('paused')
   await expect(page.locator('.repos li').first()).toContainText('4') // what waits per repository
@@ -57,7 +57,7 @@ test('the whole queue is shown in its order while the factory is paused', async 
 })
 
 test('a run is selected through the URL and the selection survives a reload', async ({ page }) => {
-  await page.goto(`/#run=${BLOCKED_RUN}`)
+  await page.goto(working(`/#run=${BLOCKED_RUN}`))
   await expect(detail(page).locator('h3')).toContainText('#109')
 
   await page.reload()
@@ -70,7 +70,7 @@ test('a run is selected through the URL and the selection survives a reload', as
 })
 
 test('the stage line and the outcome box show the scripted states', async ({ page }) => {
-  await page.goto(`/#run=${READY_RUN}`)
+  await page.goto(working(`/#run=${READY_RUN}`))
   const stages = detail(page).locator('.steps li')
   await expect(stages).toHaveText(['implement', 'review', 'pr', 'ci', 'reviews'])
   // The ready run went through every stage and stopped in the last one it invoked.
@@ -82,14 +82,14 @@ test('the stage line and the outcome box show the scripted states', async ({ pag
     'https://github.com/acme/edge-sensors/pull/204',
   )
 
-  await page.goto(`/#run=${BLOCKED_RUN}`)
+  await page.goto(working(`/#run=${BLOCKED_RUN}`))
   // The blocked run stopped in the review stage and never reached the ones after it.
   await expect(detail(page).locator('.steps .at')).toHaveText('review')
   await expect(detail(page).locator('.steps li').nth(2)).toHaveClass('')
   await expect(detail(page).locator('.outcome')).toContainText('blocked')
   await expect(detail(page).locator('.outcome')).toContainText('supersede ADR 0012')
 
-  await page.goto(`/#run=${RUNNING_RUN}`)
+  await page.goto(working(`/#run=${RUNNING_RUN}`))
   // The run that is still going has no outcome box at all.
   await expect(detail(page).locator('.state')).toHaveText('running')
   await expect(detail(page).locator('.steps .at')).toHaveText('implement')
@@ -99,7 +99,7 @@ test('the stage line and the outcome box show the scripted states', async ({ pag
 test('the selected run shows what it cost, how full its context came and what it warned about', async ({
   page,
 }) => {
-  await page.goto(`/#run=${WARNED_RUN}`)
+  await page.goto(working(`/#run=${WARNED_RUN}`))
   await expect(detail(page).locator('.facts').first()).toContainText('$4.18')
   await expect(detail(page).locator('.facts').first()).toContainText('23 turns')
   await expect(detail(page).locator('.facts').first()).toContainText(/\d+\.\dk context peak/)
@@ -107,7 +107,7 @@ test('the selected run shows what it cost, how full its context came and what it
 })
 
 test('the live log sets the events of the worker’s subagents in', async ({ page }) => {
-  await page.goto(`/#run=${READY_RUN}`)
+  await page.goto(working(`/#run=${READY_RUN}`))
   const log = detail(page).locator('.log')
   await expect(log.locator('.ev-result')).toContainText('result: success')
   const subagent = log.locator('.ev-sub').first()
@@ -133,9 +133,29 @@ test('the factory says when it waits for quota and until when', async ({ page })
       json: { ...status, state: 'waiting-for-quota', quotaUntil: '2026-09-21T16:45:00Z' },
     })
   })
-  await page.goto('/')
+  await page.goto(working('/'))
   await expect(page.locator('.mode')).toContainText('waiting for quota')
   await expect(page.locator('.mode')).toContainText('until')
+})
+
+test('a factory that stops answering is said so, and a run it does not have too', async ({ page }) => {
+  // A run reached by editing the URL that this factory never ran.
+  await page.goto(working('/#run=999'))
+  await expect(detail(page).locator('.none')).toHaveText('run 999 is not on this factory')
+
+  // The run that is still being followed, while the factory answers nothing but errors.
+  await page.goto(working(`/#run=${RUNNING_RUN}`))
+  await expect(detail(page).locator('h3')).toContainText('#118')
+  await page.route('**/api/**', (route) => route.fulfill({ status: 500, body: 'no' }))
+
+  // The banner stands under the header, where it is read, and the run says what stopped answering.
+  await expect(page.locator('.banner')).toBeVisible()
+  const [header, said, repositories] = await Promise.all(
+    ['.top', '.banner', '.repos'].map((part) => page.locator(part).boundingBox()),
+  )
+  expect(said.y).toBe(header.y + header.height)
+  expect(repositories.y).toBe(said.y + said.height)
+  await expect(detail(page).locator('.trouble')).toContainText(`/api/runs/${RUNNING_RUN}`)
 })
 
 test('the dashboard sends no writing request', async ({ page }) => {
@@ -144,17 +164,24 @@ test('the dashboard sends no writing request', async ({ page }) => {
     if (!['GET', 'HEAD'].includes(request.method())) written.push(`${request.method()} ${request.url()}`)
   })
 
-  await page.goto('/')
-  await page.locator('.line button.row', { hasText: '#112' }).click()
-  await expect(detail(page).locator('h3')).toContainText('#112')
+  await page.goto(working('/'))
+  // The run that is still going, because it is the one the page keeps asking about.
+  await page.locator('.line button.row', { hasText: '#118' }).click()
+  await expect(detail(page).locator('h3')).toContainText('#118')
   await detail(page).locator('.ev-tool').first().getByRole('button').click()
-  await page.waitForTimeout(2500) // two polls of the three areas, and two of the run
+  // Two rounds of every poll the page makes, so a request it only sends later would be seen here.
+  await Promise.all([twice(page, '/api/line'), twice(page, '/api/runs/'), twice(page, '/api/status')])
 
   expect(written).toEqual([])
 })
 
+const twice = (page, endpoint) => {
+  const answered = (response) => response.url().includes(endpoint)
+  return page.waitForResponse(answered).then(() => page.waitForResponse(answered))
+}
+
 test('the layout holds', async ({ page }) => {
-  await page.goto(`/#run=${READY_RUN}`)
+  await page.goto(working(`/#run=${READY_RUN}`))
   await expect(detail(page).locator('.ev-result')).toBeVisible()
 
   // The three areas stand next to each other, each in its place, whatever the content is.
@@ -171,14 +198,14 @@ test('the layout holds', async ({ page }) => {
   expect(line.height).toBe(run.height)
 
   // Everything that differs between two readings of the same state is a tick: the durations that
-  // count up and the clock times in the log. The rest is compared to the approved layout. The
-  // tolerance is for the glyph edges, which every operating system rasterises its own way; a shift
-  // of any part of the layout moves far more pixels than that.
+  // count up and the clock times in the log. The rest is compared to the screenshot approved for
+  // this operating system, with room for a machine that rasterises glyphs a little differently —
+  // far less than the smallest change of a colour or a position would move.
   await expect(page).toHaveScreenshot('dashboard.png', {
     mask: [page.locator('.tick')],
     maskColor: '#101010', // the background, so the approved look can be read off the baseline
     animations: 'disabled',
     caret: 'hide',
-    maxDiffPixelRatio: 0.05,
+    maxDiffPixelRatio: 0.005,
   })
 })
