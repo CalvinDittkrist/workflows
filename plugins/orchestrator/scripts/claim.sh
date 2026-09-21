@@ -122,7 +122,7 @@ fi
 # of growing until the model refuses. Claude Code compacts at a percentage of autoCompactWindow, and that
 # percentage is not documented, so the claim pins both numbers here and nowhere else (ADR 0031). The trigger is
 # their product, and it is the number the status line is given, so the pane shows the size against the point
-# this session really compacts at and not against a window it never reaches. refreshInterval keeps the value
+# this session compacts by and not against a window it never reaches. refreshInterval keeps the value
 # fresh while one long tool call runs, which changes no message and would otherwise render nothing.
 here=$(cd "$(dirname "$0")" && pwd)
 compact_window=200000

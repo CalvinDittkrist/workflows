@@ -15,7 +15,7 @@ This supersedes ADR 0020 for its sentences about the 200 000 safety net. The wor
 
 `claim.sh` pins two numbers next to each other: the auto-compact window, 200 000, and the percentage of it at which compaction fires, `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=80` in the session's `env`. Their product is the **compact trigger**, 160 000 tokens, and that is what the claim hands to the status line, which shows the context against the smaller of it and the model's window (`78k/160k`). Both ways the orchestrator starts a worker session — the Herdr pane and the Docker sandbox — send the same settings object, so both carry both numbers.
 
-80 is under the measured default, which is what makes it the percentage that applies: the override can only lower, and a value above the default is dropped in silence. The workflow therefore states a number it set rather than one it guessed, and a release that moves the default moves nothing here.
+80 is under the measured default, which is what makes it the percentage that applies: the override can only lower, and a value above the default is dropped in silence. The workflow therefore states a number it set rather than one it guessed, and a release that raises the default changes nothing here. A release that lowers it under 80 would drop the override instead and compact the session earlier, which leaves 160 000 what it is throughout this decision: an upper bound.
 
 Nothing else changes. The status line writes the same context value (`total_input_tokens`, `context_window_size`, the time), so its contract with the worker's `checkpoint.sh` ([ADR 0018](0018-worker-stages-hand-facts-over-through-the-worktree-git-dir.md), ADR 0020) is untouched, and a status line started without the argument behaves as before. Planning and orchestrator sessions get neither number: only worker sessions grow long enough for it to matter.
 
@@ -27,6 +27,8 @@ The two numbers can drift from the trigger only if someone writes the trigger by
 Pinning the percentage costs a little of the window: a session that would have compacted at 83 % or more now compacts at 80 %, some 10 000 tokens earlier. That is the price of a number the workflow can state.
 
 The trigger is a ceiling, not a promise that a session compacts at exactly 160 000. The check runs on the turn that would cross it, so a boundary lands at or just under the number, and a window at the documented minimum of 100 000 compacts earlier still — measured at 66 471, 66.5 %, where the pinned percentage is not what binds. What the workflow relies on is the upper bound, which is what the pane and the handoff threshold need.
+
+The bound also survives the release this decision cannot see. Were a later Claude Code to lower its default percentage under 80, the override would be ignored and the session would compact under 160 000, not over it: the pane would overstate the headroom, and the handoff at 120 000 would still fire first until a default under 60 %. Nothing here detects that, because Claude Code publishes no effective percentage and the override fails silently by design; it would show up the way the undocumented default showed up here, as a `compact_boundary` below the number in a real session. A threshold moved towards the trigger spends that room, which is why the READMEs say to keep it under the trigger rather than at it.
 
 That bound is measured, not assumed. Real headless sessions grown in 18k steps until Claude Code compacted them, with the window and the override passed exactly as the claim passes them:
 
