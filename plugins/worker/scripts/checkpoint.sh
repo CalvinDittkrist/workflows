@@ -15,7 +15,8 @@ stages="review ci"
 stage="${1:-}"
 [ $# -le 1 ] || wf_die "usage: checkpoint.sh [$(printf '%s' "$stages" | tr ' ' '|')]"
 if [ -n "$stage" ]; then
-  case " $stages " in *" $stage "*) ;; *) wf_die "'$stage' is not a stage with a checkpoint; usage: checkpoint.sh [$(printf '%s' "$stages" | tr ' ' '|')]" ;; esac
+  wf_in_list "$stage" "$stages" ||
+    wf_die "'$stage' is not a stage with a checkpoint; usage: checkpoint.sh [$(printf '%s' "$stages" | tr ' ' '|')]"
 fi
 
 here=$(cd "$(dirname "$0")" && pwd)
@@ -34,7 +35,7 @@ procedure() {
 next: hand the $stage stage over to a fresh context and do no work in it.
   1. Commit everything first: the note describes the branch, and handoff.sh refuses a working tree whose
      changes the next context would not see.
-  2. Pipe the note into "$here/handoff.sh $stage" with a quoted heredoc (<<'NOTE', never an unquoted one: the
+  2. Pipe the note into "$here/handoff.sh" $stage with a quoted heredoc (<<'NOTE', never an unquoted one: the
      note quotes findings, paths and commands, and the shell would expand \$x and backticks in it). It needs
      four sections, each a '## ' heading with text under it, in this order: decisions (what you decided and
      why, one line each), rejected (what you tried or considered and did not do, with the reason), verified
@@ -58,35 +59,54 @@ report() {
   if [ "$2" = yes ] && [ -n "$stage" ]; then procedure; fi
 }
 
+# Spending the skip is a mark in the record, written the way the hook writes its own: a header prepended in
+# one move. The whole write runs in a subshell, so the shell's own message about a redirection it could not
+# open is suppressed with everything else and the reader sees one warning instead of two lines.
+mark_skip() {
+  ( { printf 'skip_used: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"; cat "$record"; } > "$record.tmp" ) 2>/dev/null &&
+    mv "$record.tmp" "$record" 2>/dev/null && return 0
+  rm -f "$record.tmp" 2>/dev/null || true
+  return 1
+}
+
 # The one skip a context that a handoff started gets at the stage it was started for. The context value is
 # per worktree (ADR 0020), so at the first checkpoint of a fresh context it still describes the context that
 # is gone and is over the threshold by definition: without this the entrance would hand over again and the
-# handovers would loop without doing any work. The skip is bound to the session the SessionStart hook gave
-# the note to, so a session that merely finds the record — one restarted by hand, a forced claim that adopted
-# the branch — never inherits it, and it is spent at the first entrance so every later checkpoint of that
-# session measures. Prints the reason and succeeds when it grants the skip.
+# handovers would loop without doing any work. The skip belongs to the handover, and it is spent at the first
+# entrance, so every later checkpoint of that session measures. Prints the reason and succeeds when it grants
+# the skip.
 claim_skip() {
   local injected session
   [ -f "$record" ] || return 1
   [ "$(wf_record_field "$record" stage)" = "$stage" ] || return 1
   [ -n "$(wf_record_field "$record" injected)" ] || return 1
   [ -z "$(wf_record_field "$record" skip_used)" ] || return 1
+  # Which session the hook gave the note to, and which session this is. The skip is taken away only from a
+  # session that is provably a different one — restarted by hand, typed after a crash, a forced claim that
+  # adopted the branch — so that its first entry into a stage is measured. When either id is missing the two
+  # cannot be compared: a record written by a worker plugin from before `injected_session:`, a hook that
+  # reported no session, a Herdr that names no agent for this pane. Denying the skip there would measure the
+  # stale value of the context that is gone and start the very loop the skip exists to prevent, and an
+  # unearned skip costs one stage measured late, once, so the unknown case grants it and says so.
   injected=$(wf_record_field "$record" injected_session)
-  [ -n "$injected" ] || return 1
-  [ -n "${HERDR_PANE_ID:-}" ] || return 1
-  command -v herdr >/dev/null 2>&1 || return 1
-  session=$(wf_agent_session "${HERDR_PANE_ID}")
-  [ -n "$session" ] && [ "$session" = "$injected" ] || return 1
-  # Spending the skip is a mark in the record, written the way the hook writes its own: a header prepended in
-  # one move. A mark that cannot be written is a warning and not a refusal — refusing here would measure the
-  # stale value of the context that is gone and start the very loop the skip exists to prevent, so this one
-  # fails open and says so.
-  if ! { printf 'skip_used: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"; cat "$record"; } > "$record.tmp" 2>/dev/null ||
-     ! mv "$record.tmp" "$record" 2>/dev/null; then
-    rm -f "$record.tmp"
-    wf_warn "the handoff record in $record could not be marked as entered, so this session may skip the $stage checkpoint again; it measures normally once the record is writable"
+  session=""
+  if [ -n "${HERDR_PANE_ID:-}" ] && command -v herdr >/dev/null 2>&1; then
+    session=$(wf_agent_session "${HERDR_PANE_ID}")
   fi
-  printf 'this context was started by the handoff that resumes at the %s stage, and a context does one unit of work before it may hand over again; every later checkpoint of this session measures' "$stage"
+  if [ -n "$injected" ] && [ -n "$session" ]; then
+    [ "$session" = "$injected" ] || return 1
+    printf 'this context was started by the handoff that resumes at the %s stage, and a context does one unit of work before it may hand over again; every later checkpoint of this session measures' "$stage"
+  else
+    printf 'the handoff that resumes at the %s stage was handed to a session this one cannot be compared with (the record names %s, this pane %s), and a context does one unit of work before it may hand over again; every later checkpoint of this session measures' \
+      "$stage" "${injected:-no session}" "${session:-none}"
+  fi
+  # A mark that cannot be written is a warning and not a refusal, for the same reason: refusing here would
+  # start that loop. It says so in the answer as well as on stderr, because a skill injection may show the
+  # model stdout alone, and a guard that has stopped counting is worth seeing.
+  if ! mark_skip; then
+    wf_warn "the handoff record in $record could not be marked as entered, so this session may skip the $stage checkpoint again; it measures normally once the record is writable"
+    printf '. The record could not be marked as entered, so this skip was not counted and this session may skip the %s checkpoint again' "$stage"
+  fi
 }
 
 # Outside a Herdr pane no status line runs, so nothing writes the value: a session started by hand, and a
