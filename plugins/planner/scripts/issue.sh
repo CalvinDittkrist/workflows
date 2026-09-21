@@ -52,7 +52,7 @@ case "$cmd" in
     done
     if [ -z "$title" ] || [ -z "$body" ]; then wf_die "create needs --title and --body-file"; fi
     [ -f "$body" ] || wf_die "body file $body not found"
-    wf_require_routable "the new issue" "${labels[@]+"${labels[@]}"}"
+    wf_require_routable "the new issue" "leave --label $WF_ROUTING_LABEL off" "${labels[@]+"${labels[@]}"}"
     args=(); for l in "${labels[@]+"${labels[@]}"}"; do args+=(--label "$l"); done
     if [ -n "$milestone" ]; then open_milestone "$milestone"; args+=(--milestone "$milestone"); fi
     url=$(gh issue create --title "$title" --body-file "$body" "${args[@]+"${args[@]}"}") || wf_die "gh issue create failed (missing label? run labels.sh)"
@@ -124,7 +124,7 @@ case "$cmd" in
     done <<EOF
 $current
 EOF
-    wf_require_routable "#$n" "${resulting[@]+"${resulting[@]}"}"
+    wf_require_routable "#$n" "take the routing label off with --remove $WF_ROUTING_LABEL" "${resulting[@]+"${resulting[@]}"}"
     gh issue edit "$n" "${args[@]}" >/dev/null || wf_die "gh issue edit failed (missing label? run labels.sh)"
     wf_kv labels "#$n updated" ;;
   comment)

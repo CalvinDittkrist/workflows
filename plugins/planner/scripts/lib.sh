@@ -45,22 +45,24 @@ wf_issue_db_id() { gh api "repos/$(wf_repo_nwo)/issues/$1" --jq .id 2>/dev/null;
 
 # The factory's routing label, as the label vocabulary defines it (labels.sh). The factory host works an issue
 # that carries it unattended, with no Herdr, no screen and nobody to ask, so the planner decides per ticket
-# whether it is routed and only these two scripts put the label on an issue.
-# shellcheck disable=SC2034  # read by the scripts that source this file
+# whether it is routed, and issue.sh (create and label) is the only script that puts the label on an issue.
 WF_ROUTING_LABEL=factory
-# True when the label set $2... contains the name $1.
-wf_labels_have() { local want="$1"; shift; printf '%s\n' "$@" | grep -qxF "$want"; }
+# True when the label set $2... contains the name $1. The names come from GitHub, so -e keeps one that opens
+# with a dash an operand instead of an option to grep.
+wf_labels_have() { local want="$1"; shift; printf '%s\n' "$@" | grep -qxF -e "$want"; }
 # Refuse a label set that routes an issue the factory cannot work: routing is only true next to
 # `ready-for-agent` (the factory takes no half-specified issue) and never next to `ready-for-human` (a person
-# implements that one). $1 names the issue in the message, the rest is the label set the call would leave.
+# implements that one). $1 names the issue in the message, $2 is how this call drops the routing label (the
+# set is the one the call would leave behind, so the label may be one the call never named), the rest is that
+# label set.
 wf_require_routable() {
-  local subject="$1"; shift
+  local subject="$1" drop="$2"; shift 2
   wf_labels_have "$WF_ROUTING_LABEL" "$@" || return 0
   if wf_labels_have ready-for-human "$@"; then
-    wf_die "$subject would carry $WF_ROUTING_LABEL and ready-for-human: the factory works unattended, so an issue a person has to implement is never routed to it. Drop one of the two labels."
+    wf_die "$subject would carry $WF_ROUTING_LABEL and ready-for-human: the factory works unattended, so an issue a person has to implement is never routed to it. Drop one of the two labels; $drop."
   fi
   if ! wf_labels_have ready-for-agent "$@"; then
-    wf_die "$subject would carry $WF_ROUTING_LABEL without ready-for-agent: the factory takes only issues a worker can finish from the brief alone. Add ready-for-agent, or leave $WF_ROUTING_LABEL off."
+    wf_die "$subject would carry $WF_ROUTING_LABEL without ready-for-agent: the factory takes only issues a worker can finish from the brief alone. Add ready-for-agent, or $drop."
   fi
 }
 # The labels issue $1 carries now, one per line, or a refusal: the routing rule holds over the whole set, not
