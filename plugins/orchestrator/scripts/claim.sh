@@ -72,13 +72,26 @@ fi
 # The worker session disables the planner and orchestrator plugins so their skills and agents stay out of its context.
 # CLAUDE_CODE_DISABLE_BACKGROUND_TASKS keeps subagents in the foreground: the reviewer reports come back as the
 # results of the Agent calls, so the worker never spends turns waiting for them (ADR 0017).
-settings=$(jq -cn --arg m "$mode" --arg i "$issue" '{env:{WF_MODE:$m, WF_ISSUE:$i, CLAUDE_CODE_DISABLE_BACKGROUND_TASKS:"1"}, enabledPlugins:{"planner@workflows":false, "orchestrator@workflows":false}}')
+# The status line makes the worker's context size visible in its pane and writes it into the worktree, where
+# the worker's own checkpoint reads it (ADR 0020). It is this plugin's script by absolute path: the worker
+# session has this plugin disabled, which hides its skills and agents, not its files.
+# autoCompactWindow is the safety net under that: a session that is not handed over in time compacts instead of
+# growing until the model refuses. The status line is given the same number, so the pane shows the size against
+# the window this session really has and not against a model window it never reaches.
+here=$(cd "$(dirname "$0")" && pwd)
+compact=200000
+settings=$(jq -cn --arg m "$mode" --arg i "$issue" --arg sl "$here/statusline.sh $compact" --argjson c "$compact" \
+  '{env:{WF_MODE:$m, WF_ISSUE:$i, CLAUDE_CODE_DISABLE_BACKGROUND_TASKS:"1"},
+    enabledPlugins:{"planner@workflows":false, "orchestrator@workflows":false},
+    statusLine:{type:"command", command:$sl, padding:0},
+    autoCompactWindow:$c}')
 perm="${WF_WORKER_PERMISSION_MODE:-auto}"
 name=$(wf_agent_name "issue-$issue")
 # WF_CLAUDE_ARGS applies to every session, WF_WORKER_CLAUDE_ARGS to workers only (e.g. "--model sonnet", "--plugin-dir /path" while developing).
 extra="${WF_CLAUDE_ARGS:-} ${WF_WORKER_CLAUDE_ARGS:-}"
 if [ "$sandbox" = 1 ]; then
-  herdr pane run "$pane" "$(dirname "$0")/sbx-worker.sh '$path' -- --agent worker --strict-mcp-config --permission-mode $perm --settings '$settings' --name '#$issue' $extra '/worker:work'" >/dev/null
+  # Absolute: this command line runs in the new pane, whose working directory is not this script's.
+  herdr pane run "$pane" "$here/sbx-worker.sh '$path' -- --agent worker --strict-mcp-config --permission-mode $perm --settings '$settings' --name '#$issue' $extra '/worker:work'" >/dev/null
   herdr agent wait "$pane" --until idle --until blocked --timeout 300000 >/dev/null || wf_warn "worker did not become ready within 5 minutes; inspect pane $pane"
   wf_wait_agent "$pane"
 else
