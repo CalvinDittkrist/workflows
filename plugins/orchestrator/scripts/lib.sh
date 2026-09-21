@@ -72,6 +72,18 @@ wf_branch_for_issue() {
   printf '%s\n' "$found"
 }
 
+# Branch on origin that belongs to issue $1 by the same rule as above, or empty; returns 1 when origin
+# cannot be read. A claim on the remote is the creation of that branch, so one that exists means another
+# claimer (the factory host, a second machine, an earlier claim of this one) owns the issue.
+wf_remote_branch_for_issue() {
+  local b found="" heads
+  heads=$(git ls-remote --heads origin 2>/dev/null) || return 1
+  while read -r b; do
+    if [ -z "$found" ] && [ "$(wf_issue_from_branch "$b")" = "$1" ]; then found="$b"; fi
+  done < <(printf '%s\n' "$heads" | sed -nE 's#^[^[:space:]]+[[:space:]]+refs/heads/##p')
+  printf '%s\n' "$found"
+}
+
 # Path of the linked worktree checked out on branch $1 (from the main root), or empty.
 wf_worktree_path_for_branch() {
   git worktree list --porcelain | awk -v b="refs/heads/$1" '

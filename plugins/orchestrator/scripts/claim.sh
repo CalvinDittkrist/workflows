@@ -75,19 +75,16 @@ fi
 # origin to read; a remote that answers with an error is a warning, so a claim still works offline.
 remote_branch=""
 if git remote get-url origin >/dev/null 2>&1; then
-  if heads=$(git ls-remote --heads origin 2>/dev/null); then
-    while IFS= read -r b; do
-      if [ -z "$remote_branch" ] && [ "$(wf_issue_from_branch "$b")" = "$issue" ]; then remote_branch="$b"; fi
-    done < <(printf '%s\n' "$heads" | sed -nE 's#^[^[:space:]]+[[:space:]]+refs/heads/##p')
-  else
-    wf_warn "could not read the branches of origin; claiming #$issue without checking whether it is claimed there"
-  fi
+  remote_branch=$(wf_remote_branch_for_issue "$issue") \
+    || wf_warn "could not read the branches of origin; claiming #$issue without checking whether it is claimed there"
 fi
 if [ -n "$remote_branch" ]; then
+  # The branch is the factory's, a second machine's, or one this machine abandoned: abandon.sh removes the
+  # worktree and the local branch and leaves the remote one, so the common single-machine case lands here too.
   if [ "$force" = 1 ]; then
     wf_warn "issue #$issue is already claimed on origin by branch $remote_branch; --force adopts that branch, so this worktree continues its work instead of starting from $base."
   else
-    wf_die "issue #$issue is already claimed on origin: the branch $remote_branch exists there, so the factory or another machine is working it. Wait for its pull request, or continue that work here with --force, which starts the worktree from $remote_branch."
+    wf_die "issue #$issue is already claimed on origin: the branch $remote_branch exists there, left by the factory, by another machine or by a claim of your own you abandoned. Wait for its pull request, delete it with git push origin --delete $remote_branch to start over, or continue its work here with --force, which starts the worktree from it."
   fi
 fi
 
@@ -100,6 +97,12 @@ if [ -n "$remote_branch" ]; then
   git fetch -q origin "+refs/heads/$remote_branch:refs/remotes/origin/$remote_branch" 2>/dev/null \
     || wf_die "could not fetch $remote_branch from origin, so the work on it cannot be continued here"
   branch="$remote_branch"; baseref="origin/$remote_branch"
+  # A local branch of that name (an earlier claim whose worktree is gone) would be checked out at its own tip
+  # instead of the base, so the worktree would silently not carry the work this claim says it continues.
+  stale=$(git rev-parse -q --verify "refs/heads/$branch" || true)
+  if [ -n "$stale" ] && [ "$stale" != "$(git rev-parse "$baseref")" ]; then
+    wf_die "the local branch $branch exists at $(git rev-parse --short "$stale") and is not what origin has, so the worktree would start from it instead of from the work on origin. Continue that branch by hand, or remove it with git branch -D $branch and claim again."
+  fi
 fi
 
 wf_create_worktree "$branch" "$baseref" "#$issue $(wf_slug "$title" | cut -c1-24)"

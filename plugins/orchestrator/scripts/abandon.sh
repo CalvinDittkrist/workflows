@@ -32,4 +32,4 @@ wf_run git branch -D "$branch" >/dev/null
 wf_kv branch "$branch deleted locally"
 wf_kv worktree "$path removed"
 wf_kv workspace "${ws:-none} closed"
-wf_kv note "remote branch and the issue assignment are untouched"
+wf_kv note "remote branch and the issue assignment are untouched; while $branch is on origin a new claim of this issue refuses it, and --force adopts it"

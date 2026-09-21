@@ -124,13 +124,17 @@ class ClaimTests(ShimTest):
         self.assertIn("status: already-claimed", r.stdout)
         self.assertIn("branch: fix/12-fix-login-timeout", r.stdout)
 
-    def remote_claim(self, branch):
-        """A remote whose branch `branch` carries a commit the local repository has never seen: what the
-        factory leaves behind when it claims an issue and pushes work. Returns that commit."""
+    def origin(self):
+        """A bare repository as origin, with main on it."""
         remote = self.base / "remote.git"
         subprocess.run(["git", "init", "-q", "--bare", str(remote)], check=True, env={**os.environ, **GIT_ISOLATION})
         self.git("remote", "add", "origin", str(remote))
         self.git("push", "-q", "origin", "main")
+
+    def remote_claim(self, branch):
+        """An origin whose branch `branch` carries a commit the local repository has never seen: what the
+        factory leaves behind when it claims an issue and pushes work. Returns that commit."""
+        self.origin()
         self.git("checkout", "-q", "-b", "wip")
         (self.repo / "factory-work.md").write_text("work the factory pushed\n")
         self.git("add", ".")
@@ -193,6 +197,44 @@ class ClaimTests(ShimTest):
         self.assertIn("status: already-claimed", r.stdout)
         self.assertIn("branch: fix/12-fix-login-timeout", r.stdout)
         self.assertFalse([c for c in self.calls() if "worktree create" in c or "agent start" in c])
+
+    def test_a_claim_of_an_abandoned_issue_names_the_abandoned_claim_and_force_continues_it(self):
+        # The single-machine loop: claim, push, abandon (which keeps the remote branch by design), claim again.
+        self.origin()
+        self.run_script(ORCH / "claim.sh", "12")
+        wt = self.repo / ".claude/worktrees/fix-12-fix-login-timeout"
+        (wt / "local-work.md").write_text("work this machine pushed\n")
+        self.git("add", ".", cwd=wt)
+        self.git("commit", "-qm", "wip", cwd=wt)
+        self.git("push", "-q", "origin", "HEAD:refs/heads/fix/12-fix-login-timeout", cwd=wt)
+        sha = self.git("rev-parse", "HEAD", cwd=wt).strip()
+        r = self.run_script(ORCH / "abandon.sh", "12")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("a claim of your own you abandoned", self.run_script(ORCH / "claim.sh", "12").stderr)
+
+        r = self.run_script(ORCH / "claim.sh", "12", "--force")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.git("rev-parse", "HEAD", cwd=wt).strip(), sha, "the abandoned work is continued")
+
+    def test_a_stale_local_branch_stops_the_adoption_instead_of_starting_from_it(self):
+        # A local branch that outlived its worktree would be checked out at its own tip, and the worktree would
+        # not carry the work the claim says it continues.
+        self.remote_claim("feat/12-fix-login-timeout")
+        self.git("branch", "feat/12-fix-login-timeout", "main")
+        r = self.run_script(ORCH / "claim.sh", "12", "--force")
+        self.assertNotEqual(r.returncode, 0, r.stdout)
+        self.assertIn("the local branch feat/12-fix-login-timeout exists at", r.stderr)
+        self.assertIn("git branch -D feat/12-fix-login-timeout", r.stderr)
+        self.assertEqual(self.git("worktree", "list").count("\n"), 1)
+        self.assertFalse([c for c in self.calls() if "worktree create" in c or "agent start" in c])
+
+    def test_an_unreadable_origin_warns_and_claims(self):
+        # Offline, or a remote that is gone: the check is a courtesy and must not be able to stop a claim.
+        self.git("remote", "add", "origin", str(self.base / "nowhere.git"))
+        r = self.run_script(ORCH / "claim.sh", "12")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("could not read the branches of origin", r.stderr)
+        self.assertIn("branch: fix/12-fix-login-timeout", r.stdout)
 
     def test_claim_refuses_outside_herdr(self):
         r = self.run_script(ORCH / "claim.sh", "12", HERDR_ENV="")
