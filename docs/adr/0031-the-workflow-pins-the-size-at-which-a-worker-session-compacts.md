@@ -6,7 +6,7 @@ Status: accepted
 ## Context
 [ADR 0020](0020-the-pane-measures-the-context-and-the-worktree-carries-the-value.md) put `autoCompactWindow: 200000` under a claimed worker session and treated that number as the size the session compacts at. The pane showed `78k/200k (39%)`, the token budget said the same, and the handoff threshold of [ADR 0029](0029-a-worker-resets-its-context-by-a-handoff-not-by-compaction.md) was chosen against it.
 
-It is not that size. The window is the base of a percentage: "Compaction occurs when the conversation reaches the percentage of the context window specified by `autoCompactWindow`" (https://code.claude.com/docs/en/model-config.md, checked 2026-09-21). Six automatic compactions in worker sessions of this repository — [#37](https://github.com/CalvinDittkrist/workflows/issues/37) three times, [#50](https://github.com/CalvinDittkrist/workflows/issues/50) twice, [#44](https://github.com/CalvinDittkrist/workflows/issues/44) once — fired between 166.5k and 171.3k tokens, about 83 % of the window. So every number the workflow stated about compaction was 40k too high, and the pane showed the size against a limit the session never reaches.
+It is not that size. The window is the base of a percentage: "Compaction occurs when the conversation reaches the percentage of the context window specified by `autoCompactWindow`" (https://code.claude.com/docs/en/model-config.md, checked 2026-09-21). Six automatic compactions in worker sessions of this repository — [#37](https://github.com/CalvinDittkrist/workflows/issues/37) three times, [#50](https://github.com/CalvinDittkrist/workflows/issues/50) twice, [#44](https://github.com/CalvinDittkrist/workflows/issues/44) once — fired at 166 512, 167 303, 167 568, 167 711, 168 702 and 171 312 tokens: 83.3 % to 85.7 % of the window, never near it. So every number the workflow stated about compaction was some 30k too high, and the pane showed the size against a limit the session never reaches.
 
 The percentage itself is Claude Code's, and it is not documented: `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` "Set the percentage (1-100) of the auto-compact window at which auto-compaction triggers … the variable can't raise the threshold, so values above the default percentage are ignored" (https://code.claude.com/docs/en/env-vars.md, checked 2026-09-21), and the default it compares against is named nowhere. A release could move it, every statement in this repository would be wrong again, and nothing in the workflow would notice.
 
@@ -24,6 +24,17 @@ The handoff threshold has a real ceiling to sit under: `WF_HANDOFF_TOKENS` (defa
 
 The two numbers can drift from the trigger only if someone writes the trigger by hand; a test asserts that the argument the claim passes to the status line is the window times the percentage of the same settings object, so a literal that stops matching fails the gate.
 
-Pinning the percentage costs a little of the window: a session that would have compacted at 83 % now compacts at 80 %, about 6 000 tokens earlier. That is the price of a number the workflow can state.
+Pinning the percentage costs a little of the window: a session that would have compacted at 83 % or more now compacts at 80 %, some 10 000 tokens earlier. That is the price of a number the workflow can state.
 
-The measurement stays honest only as long as someone takes it. The evidence for this decision is a real session whose `compact_boundary` fired at the pinned percentage of a deliberately lowered window; a later Claude Code release that reads the override differently would show up the same way, in a session, and not in a document.
+The trigger is a ceiling, not a promise that a session compacts at exactly 160 000. The check runs on the turn that would cross it, so a boundary lands at or just under the number, and a window at the documented minimum of 100 000 compacts earlier still — measured at 66 471, 66.5 %, where the pinned percentage is not what binds. What the workflow relies on is the upper bound, which is what the pane and the handoff threshold need.
+
+That bound is measured, not assumed. Real headless sessions grown in 18k steps until Claude Code compacted them, with the window and the override passed exactly as the claim passes them:
+
+| `autoCompactWindow` | `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` | `compact_boundary` (`trigger: auto`) | share of the window |
+| --- | --- | --- | --- |
+| 200 000 | 80 | 157 713 | 78.9 % |
+| 150 000 | 80 | 120 716 | 80.5 % |
+| 100 000 | 50 | 48 156 | 48.2 % |
+| 200 000 | unset (the six worker sessions above) | 166 512 – 171 312 | 83.3 – 85.7 % |
+
+The override is therefore read from the session's `env` and does lower the trigger, and at the production window it moves the boundary from about 168k to about 158k. A later Claude Code release that reads it differently would show up the same way, in a session, and not in a document.
