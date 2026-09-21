@@ -1,23 +1,53 @@
 #!/usr/bin/env bash
 # Claim a GitHub issue: create a worktree + Herdr workspace and start a worker session in it.
-# Usage: claim.sh <issue> [--yolo] [--sandbox] [--force] [--base <branch>]
+# Usage: claim.sh <issue> [--yolo] [--sandbox] [--force] [--base <branch>] [--env NAME=VALUE]...
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
-issue="" mode="manual" sandbox=0 force=0 base=""
+# The worker knobs a claim may set for the one session it starts. They are the variables the worker plugin's
+# scripts read and the README's configuration table documents; a test fails when the two drift apart. The
+# session's own three are not here: the claim itself sets WF_MODE and WF_ISSUE, and the base branch has --base.
+env_accepted="WF_REVIEWERS WF_REVIEW_ROUNDS WF_CI_REPAIR_ROUNDS WF_PR_BOT_REVIEWERS WF_PR_REVIEW_WAIT WF_HANDOFF_TOKENS WF_CONTEXT_MAX_AGE WF_HANDOFF_SESSION_MS WF_HANDOFF_POLL_SECONDS WF_DOCS_TIMEOUT"
+env_shape="--env takes NAME=VALUE, e.g. --env WF_HANDOFF_TOKENS=5000; an empty value (--env WF_PR_BOT_REVIEWERS=) is allowed"
+
+# Validate one --env argument and remember it. Nothing is created yet when this refuses, and the value is
+# only ever read as data from here on: it reaches the session through jq, never through a shell.
+wf_read_env_arg() {
+  local arg="$1" name
+  case "$arg" in *=*) ;; *) wf_die "--env $arg has no '='. $env_shape" ;; esac
+  name="${arg%%=*}"
+  # A name is one word of A-Z, 0-9 and _, and is checked for that before it is looked up: the lookup below
+  # asks whether the accepted list contains " $name ", which a name of two words could otherwise span.
+  case "$name" in
+    "") wf_die "--env $arg has no name. $env_shape" ;;
+    *[!A-Z0-9_]*) wf_die "--env $arg has no usable name: a name is A-Z, 0-9 and _. $env_shape" ;;
+  esac
+  case " $env_accepted " in
+    *" $name "*) ;;
+    *) wf_die "--env $name is not a worker knob a claim can set. Accepted names: $env_accepted" ;;
+  esac
+  case " $env_names " in
+    *" $name "*) wf_die "--env $name was given twice. Pass it once, with the value you mean" ;;
+  esac
+  env_names="${env_names:+$env_names }$name"
+  env_pairs[${#env_pairs[@]}]="$arg"
+}
+
+issue="" mode="manual" sandbox=0 force=0 base="" env_names="" env_pairs=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --yolo) mode="yolo" ;;
     --sandbox) sandbox=1 ;;
     --force) force=1 ;;
-    --base) shift; base="${1:-}" ;;
+    --base) [ $# -gt 1 ] || wf_die "--base needs a branch name, e.g. --base dev"; shift; base="$1" ;;
+    --env) [ $# -gt 1 ] || wf_die "--env needs an argument. $env_shape"; shift; wf_read_env_arg "$1" ;;
     -h|--help) sed -n '2,3p' "$0"; exit 0 ;;
     -*) wf_die "unknown flag $1" ;;
     *) issue="${1#\#}" ;;
   esac
   shift
 done
-[ -n "$issue" ] || wf_die "usage: claim.sh <issue> [--yolo] [--sandbox] [--force] [--base <branch>]"
+[ -n "$issue" ] || wf_die "usage: claim.sh <issue> [--yolo] [--sandbox] [--force] [--base <branch>] [--env NAME=VALUE]..."
 printf '%s' "$issue" | grep -Eq '^[0-9]+$' || wf_die "issue must be a number, got '$issue'"
 [ "${HERDR_ENV:-}" = 1 ] || wf_die "claim needs a Herdr-managed pane (HERDR_ENV=1). Start the orchestrator inside Herdr."
 wf_need gh; wf_need jq; wf_need herdr; wf_need git
@@ -42,6 +72,9 @@ if [ -n "$claimed" ]; then
   ws=$(wf_workspace_for_path "$existing")
   wf_kv issue "#$issue"; wf_kv branch "$claimed"; wf_kv path "$existing"; wf_kv workspace "${ws:-none}"
   wf_kv status "already-claimed"
+  # This claim starts no session, so it applied nothing: the running one keeps the settings it was started
+  # with. Said here rather than left to be read into "already-claimed" as if the values had arrived.
+  [ -n "$env_names" ] && wf_kv env "not applied ($env_names): this claim started no session, and the running one keeps the values it was started with"
   wf_kv next "Talk to the worker in workspace ${ws:-?} or run abandon.sh $issue to drop it."
   exit 0
 fi
@@ -108,6 +141,7 @@ fi
 wf_create_worktree "$branch" "$baseref" "#$issue $(wf_slug "$title" | cut -c1-24)"
 if [ "${WF_DRY_RUN:-0}" = 1 ]; then
   wf_kv issue "#$issue"; wf_kv branch "$branch"; wf_kv base "$baseref"; wf_kv mode "$mode"; wf_kv sandbox "$sandbox"
+  [ -n "$env_names" ] && wf_kv env "$env_names"
   wf_kv status "dry-run"; exit 0
 fi
 
@@ -137,10 +171,21 @@ compact_trigger=$((compact_window * compact_pct / 100))
 # would otherwise split into words, nothing would render, and the worker's checkpoint would read a missing
 # value as a handoff for the rest of the run.
 sl="$(wf_shell_quote "$here/statusline.sh") $compact_trigger"
+# The worker knobs of --env ride in the same env block, beside the keys every claim sets. Claude Code merges
+# an env block per variable across the settings levels and takes the command line's value for a key it sets
+# (https://code.claude.com/docs/en/settings.md, checked 2026-09-21), so a knob given here wins over the
+# repository's settings for this one session and leaves every other variable of theirs alone. Each value
+# enters as a jq argument and leaves as JSON: no shell inside the claim reads it, whatever it contains. The
+# knobs go in first, so the keys every claim sets are written over them and stay what this script says they
+# are however the accepted names ever change.
+env_extra='{}'
+for pair in ${env_pairs[@]+"${env_pairs[@]}"}; do
+  env_extra=$(printf '%s' "$env_extra" | jq -c --arg n "${pair%%=*}" --arg v "${pair#*=}" '.[$n] = $v')
+done
 settings=$(jq -cn --arg m "$mode" --arg i "$issue" --arg sl "$sl" \
-  --argjson w "$compact_window" --arg p "$compact_pct" \
-  '{env:{WF_MODE:$m, WF_ISSUE:$i, CLAUDE_CODE_DISABLE_BACKGROUND_TASKS:"1",
-         CLAUDE_AUTOCOMPACT_PCT_OVERRIDE:$p},
+  --argjson w "$compact_window" --arg p "$compact_pct" --argjson e "$env_extra" \
+  '{env:($e + {WF_MODE:$m, WF_ISSUE:$i, CLAUDE_CODE_DISABLE_BACKGROUND_TASKS:"1",
+                CLAUDE_AUTOCOMPACT_PCT_OVERRIDE:$p}),
     enabledPlugins:{"planner@workflows":false, "orchestrator@workflows":false},
     statusLine:{type:"command", command:$sl, padding:0, refreshInterval:60},
     autoCompactWindow:$w}')
@@ -171,6 +216,7 @@ wf_kv pane "$pane"
 wf_kv agent "$name"
 wf_kv agent_status "${agent_status:-not-detected}"
 wf_kv mode "$mode"
+[ -n "$env_names" ] && wf_kv env "$env_names"
 [ "$sandbox" = 1 ] && wf_kv sandbox "docker"
 if [ "$mode" = yolo ]; then
   wf_kv next "board.sh shows progress; this worker merges its own PR when it is green"

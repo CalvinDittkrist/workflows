@@ -271,6 +271,58 @@ class LabelVocabularyTests(ShimTest):
                           f"claim.sh refuses the label {routing}, which {file} does not define")
 
 
+class WorkerKnobTests(ShimTest):
+    """A claim sets a worker knob for the one session it starts (`--env NAME=VALUE`). The names it accepts are
+    the worker knobs the README's configuration table documents, so the two must not drift: a knob the README
+    gains and the claim does not cannot be set per session, and one the claim gains alone is undocumented."""
+
+    README = ROOT / "README.md"
+    # The three variables of the table a worker reads that a claim does not take: it sets the session's mode
+    # and issue itself, and the base branch is what --base is for.
+    CLAIM_OWNED = ("WF_MODE", "WF_ISSUE", "WF_BASE_BRANCH")
+    maxDiff = None
+
+    def accepted_names(self):
+        """The names claim.sh lists when it refuses one it does not accept — the set as a user meets it."""
+        r = self.run_script(ORCH / "claim.sh", "12", "--env", "NOT_A_KNOB=1")
+        self.assertNotEqual(r.returncode, 0, r.stdout)
+        listed = re.search(r"Accepted names: (.+)", r.stderr)
+        self.assertTrue(listed, f"claim.sh refused --env without naming the knobs it accepts: {r.stderr}")
+        return sorted(listed.group(1).split())
+
+    def documented_worker_knobs(self):
+        """The variables of the README's configuration table that the worker plugin names anywhere: its
+        scripts read most of them, but a skill or an agent may name one too, and a knob a worker is told
+        about is a knob a claim can set."""
+        rows = [row for row in self.README.read_text().splitlines() if row.startswith("| `WF_")]
+        self.assertTrue(rows, f"no configuration table found in {self.README.name}")
+        documented = {name for row in rows for name in re.findall(r"`(WF_[A-Z0-9_]+)`", row.split("|")[1])}
+        read = set()
+        for path in sorted(WORKER.parent.rglob("*")):
+            if path.is_file() and path.suffix in (".sh", ".md", ".json"):
+                read |= set(re.findall(r"WF_[A-Z0-9_]+", path.read_text()))
+        return sorted((documented & read) - set(self.CLAIM_OWNED))
+
+    def readme_list(self):
+        """The names the README's configuration section tells a maintainer to use with --env."""
+        listed = re.search(r"Accepted names: ((?:`WF_[A-Z0-9_]+`(?:, )?)+)", self.README.read_text())
+        self.assertTrue(listed, f"{self.README.name} does not name the knobs --env accepts")
+        return sorted(re.findall(r"`(WF_[A-Z0-9_]+)`", listed.group(1)))
+
+    def test_the_claim_accepts_exactly_the_documented_worker_knobs(self):
+        knobs = self.documented_worker_knobs()
+        self.assertTrue(knobs, f"no worker knob named in {WORKER.parent.relative_to(ROOT)} "
+                               f"and {self.README.name}")
+        self.assertEqual(self.accepted_names(), knobs,
+                         f"the names claim.sh accepts for --env and the worker knobs of the configuration "
+                         f"table in {self.README.name} (minus {', '.join(self.CLAIM_OWNED)}, which a claim "
+                         f"sets itself) differ. Whichever of the two changed, the other has to follow; do "
+                         f"not adjust this test.")
+        self.assertEqual(self.readme_list(), knobs,
+                         f"the names {self.README.name} lists for --env are not the worker knobs of its own "
+                         f"configuration table")
+
+
 class ContextValueContractTests(ShimTest):
     """The context value file is the only thing the orchestrator and the worker share (ADR 0020): the status
     line of the pane writes it, the worker's checkpoint reads it, and no code crosses between the plugins."""
