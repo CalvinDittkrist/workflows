@@ -251,6 +251,56 @@ class IssueScriptTests(PlanWorktree):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("gh issue close 12 --comment no --reason not-planned", self.calls())
 
+    def test_a_routed_ticket_is_created_with_the_routing_label_next_to_ready_for_agent(self):
+        r = self.run_script(PLANNER / "issue.sh", "create", "--title", "T", "--body-file", self.body(),
+                            "--label", "ready-for-agent", "--label", "factory", "--parent", "12")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn(f"gh issue create --title T --body-file {self.body()} --label ready-for-agent --label factory",
+                      self.calls())
+
+    def test_creating_a_ticket_the_factory_cannot_work_is_refused_before_it_exists(self):
+        """The factory works a routed issue unattended: without the brief there is nothing to work from, and a
+        ticket a person has to implement is never handed to it."""
+        for labels, text in ((["factory"], "without ready-for-agent"),
+                             (["ready-for-human", "factory"], "and ready-for-human")):
+            args = [a for label in labels for a in ("--label", label)]
+            r = self.run_script(PLANNER / "issue.sh", "create", "--title", "T", "--body-file", self.body(), *args)
+            self.assertNotEqual(r.returncode, 0)
+            self.assertIn(f"the new issue would carry factory {text}", r.stderr)
+        self.assertFalse([c for c in self.calls() if c.startswith("gh issue create")])
+
+    def test_routing_an_issue_reads_the_labels_it_already_carries(self):
+        # Already agent-ready (the shim's issue 12): routing it is one --add. Still in triage: the same call
+        # that makes it agent-ready may route it, because the guard judges the labels the issue ends up with.
+        r = self.run_script(PLANNER / "issue.sh", "label", "12", "--add", "factory")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("gh issue edit 12 --add-label factory", self.calls())
+        r = self.run_script(PLANNER / "issue.sh", "label", "12", "--add", "ready-for-agent", "--add", "factory",
+                            "--remove", "needs-triage", SHIM_ISSUE_LABELS="needs-triage,bug")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("gh issue edit 12 --add-label ready-for-agent --add-label factory --remove-label needs-triage",
+                      self.calls())
+
+    def test_labelling_refuses_every_route_the_factory_cannot_work(self):
+        cases = (
+            (["--add", "factory"], "needs-triage,bug", "#12 would carry factory without ready-for-agent"),
+            (["--add", "factory"], "ready-for-human", "#12 would carry factory and ready-for-human"),
+            # The route is left behind: taking ready-for-agent off a routed issue would leave the label alone.
+            (["--add", "ready-for-human", "--remove", "ready-for-agent"], "ready-for-agent,factory",
+             "#12 would carry factory and ready-for-human"),
+        )
+        for args, labels, text in cases:
+            r = self.run_script(PLANNER / "issue.sh", "label", "12", *args, SHIM_ISSUE_LABELS=labels)
+            self.assertNotEqual(r.returncode, 0, r.stdout)
+            self.assertIn(text, r.stderr)
+        self.assertFalse([c for c in self.calls() if c.startswith("gh issue edit")])
+
+    def test_labels_that_cannot_be_read_stop_the_call_instead_of_guessing(self):
+        r = self.run_script(PLANNER / "issue.sh", "label", "99", "--add", "factory")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("could not read the labels of #99", r.stderr)
+        self.assertFalse([c for c in self.calls() if c.startswith("gh issue edit")])
+
     def test_bad_input_is_refused_before_any_call(self):
         r = self.run_script(PLANNER / "issue.sh", "create", "--title", "T")
         self.assertNotEqual(r.returncode, 0); self.assertIn("--body-file", r.stderr)
