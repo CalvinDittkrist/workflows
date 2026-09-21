@@ -37,7 +37,7 @@ commit=$(git rev-parse HEAD 2>/dev/null) || wf_die "this branch has no commit, s
 
 # The one signal that the pane really started a fresh session, read before the handover so the detached
 # process has something to compare against. Without it nothing could tell the new context from this one.
-session=$(herdr agent get "$pane" 2>/dev/null | jq -r '.result.agent.agent_session.value // empty' 2>/dev/null || true)
+session=$(wf_agent_session "$pane")
 [ -n "$session" ] || wf_die "herdr reports no agent session for pane $pane, so nothing could confirm that a fresh context started; hand over by hand instead: /clear, then $driver"
 
 note=$(cat)
@@ -52,11 +52,10 @@ for section in $sections; do
   printf '%s\n' "$note" | section_text "$section" | grep -q . || wf_die "the note has no '## $section' section with text under it; a fresh context reads the note instead of this transcript, so it needs all of them ($(printf '%s' "$sections" | sed 's/ /, ## /g; s/^/## /')); write that section and hand over again"
 done
 
-# The same range the reviewers read, resolved the same way as in diff-context.sh: the commits of this
-# branch, whether or not they are pushed already, so the second checkpoint lists them as the first one does.
+# The same range the reviewers read: the commits of this branch, whether or not they are pushed already, so
+# the second checkpoint lists them as the first one does.
 base=$(wf_base_branch)
-ref="origin/$base"; git rev-parse -q --verify "$ref" >/dev/null 2>&1 || ref="$base"
-mb=$(git merge-base "$ref" HEAD 2>/dev/null || printf '%s' "$ref")
+mb=$(wf_merge_base)
 
 record="$(wf_state_dir)/handoff"
 mkdir -p "$(dirname "$record")"
@@ -73,7 +72,9 @@ mkdir -p "$(dirname "$record")"
 } > "$record.tmp"
 mv "$record.tmp" "$record"
 
-nohup bash "$(dirname "$0")/handoff-resume.sh" "$pane" "$session" "$stage" "$driver" >/dev/null 2>&1 &
+# The record goes with it: the detached process reads it to learn whether a fresh context has taken the note
+# already, which is the one case in which a second `/clear` would destroy what it came to deliver.
+nohup bash "$(dirname "$0")/handoff-resume.sh" "$pane" "$session" "$stage" "$driver" "$record" >/dev/null 2>&1 &
 
 wf_kv handoff "started for pane $pane"
 wf_kv resume_stage "$stage"

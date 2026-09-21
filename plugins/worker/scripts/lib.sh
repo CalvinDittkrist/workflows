@@ -16,6 +16,23 @@ wf_base_branch() {
   if [ -n "$ref" ]; then printf '%s\n' "${ref#origin/}"; return; fi
   gh repo view --json defaultBranchRef -q .defaultBranchRef.name 2>/dev/null || printf 'main\n'
 }
+# The ref this branch is reviewed against, and the commit it forked from. Every stage that names a range
+# resolves it through these two, so the range in a brief, in a handoff note and in the diff context is one
+# range: the remote base when it is fetched, the local branch when it is not.
+wf_base_ref() {
+  local base ref; base=$(wf_base_branch); ref="origin/$base"
+  git rev-parse -q --verify "$ref" >/dev/null 2>&1 || ref="$base"
+  printf '%s\n' "$ref"
+}
+wf_merge_base() {
+  local ref; ref=$(wf_base_ref)
+  git merge-base "$ref" HEAD 2>/dev/null || printf '%s\n' "$ref"
+}
+# The agent session id herdr reports for a pane: the one signal that tells one Claude context in a pane from
+# the next, which is what a handoff confirms itself with (ADR 0021). Empty when herdr knows no agent there.
+wf_agent_session() {
+  herdr agent get "$1" 2>/dev/null | jq -r '.result.agent.agent_session.value // empty' 2>/dev/null || true
+}
 # The reviewer panel of this session: the configured list, or the five reviewers the worker ships with.
 wf_reviewers() { printf '%s\n' "${WF_REVIEWERS:-code,security,docs,tests,senior}"; }
 # Where a worker stage leaves a fact for the next one (ADR 0018): this worktree's own git directory, never

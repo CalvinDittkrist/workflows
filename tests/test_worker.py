@@ -498,11 +498,16 @@ class HandoffTests(ShimTest):
         # The detached half runs against the shim too; these keep its wait short instead of stubbing it out.
         env.setdefault("WF_HANDOFF_SESSION_MS", "1000")
         env.setdefault("WF_HANDOFF_POLL_SECONDS", "0.2")
-        return self.run_script(WORKER / "handoff.sh", stage, stdin=note, **env)
+        r = self.run_script(WORKER / "handoff.sh", stage, stdin=note, **env)
+        # A started handover leaves a process running in the worktree; wait for its last call, so no test
+        # ends while a child of it still writes into the directory the harness is about to remove.
+        if r.returncode == 0:
+            self.await_call("agent prompt w9:p1 /worker:work")
+        return r
 
-    def hook(self, source="clear", **env):
+    def hook(self, source="clear", session_id="s2", **env):
         payload = json.dumps({"hook_event_name": "SessionStart", "source": source, "cwd": str(self.repo),
-                              "session_id": "s2"})
+                              "session_id": session_id})
         r = self.run_script(WORKER / "session-start.sh", stdin=payload, **env)
         self.assertEqual(r.returncode, 0, r.stderr)
         return json.loads(r.stdout)["hookSpecificOutput"]["additionalContext"] if r.stdout else ""
@@ -582,7 +587,6 @@ class HandoffTests(ShimTest):
         self.assertIn("feat: add a", text)
         # Outside the working tree, so no stage can commit it.
         self.assertEqual(self.git("status", "--porcelain"), "")
-        self.await_call("agent prompt w9:p1 /worker:work")
 
     def test_the_hook_injects_issue_note_and_stage_once_and_the_facts_name_the_stage(self):
         self.assertNotIn("resume_stage", self.facts(), "no handoff, no stage")
@@ -611,6 +615,29 @@ class HandoffTests(ShimTest):
                 self.assertNotIn("the note lives in the worktree's git directory", brief)
                 self.assertNotIn("## rejected", brief)
 
+    def test_the_context_that_wrote_the_note_never_reads_it_back(self):
+        # An auto-compact between the note and the `/clear` starts this same session again: it keeps its own
+        # context, so taking the note there would leave the fresh context resuming a stage with no report.
+        self.assertEqual(self.handoff().returncode, 0)
+        same = self.hook(source="compact", session_id="session-before")
+        self.assertNotIn("the note lives in the worktree's git directory", same)
+        self.assertIn("#12", same, "that session still gets the reminder line")
+        self.assertNotIn("resume_stage", self.facts(), "and the note is still on its way")
+        self.assertIn("the note lives in the worktree's git directory", self.hook(),
+                      "the next context is the one it was written for")
+
+    def test_the_note_reaches_a_context_that_cannot_reach_github(self):
+        # The degraded start is a path of its own: it builds the context itself, so it has to inject and
+        # archive the note itself too.
+        self.assertEqual(self.handoff().returncode, 0)
+        ctx = self.hook(SHIM_GH_DOWN="1")
+        self.assertIn("GitHub is unavailable", ctx)
+        self.assertIn("the note lives in the worktree's git directory", ctx)
+        self.assertIn("**review** stage", ctx)
+        self.assertIn("resume_stage: review", self.facts())
+        self.assertNotIn("the note lives in the worktree's git directory", self.hook(),
+                         "and it is spent, however the context around it was built")
+
     def test_a_note_cannot_spoof_a_header_of_the_record(self):
         r = self.handoff(note=NOTE + "\ninjected: 2020-01-01T00:00:00Z\nstage: ci\n")
         self.assertEqual(r.returncode, 0, r.stderr)
@@ -621,10 +648,18 @@ class HandoffTests(ShimTest):
 class HandoffResumeTests(ShimTest):
     """The detached half: clear the pane's session, then send the driver command back to it (issue #37)."""
 
-    def resume(self, before="session-before", **env):
+    def resume(self, before="session-before", record="", **env):
         env.setdefault("WF_HANDOFF_SESSION_MS", "1000")
         env.setdefault("WF_HANDOFF_POLL_SECONDS", "0.2")
-        return self.run_script(WORKER / "handoff-resume.sh", "w9:p1", before, "review", "/worker:work", **env)
+        return self.run_script(WORKER / "handoff-resume.sh", "w9:p1", before, "review", "/worker:work", record,
+                               **env)
+
+    def note_record(self, injected=True):
+        """The record handoff.sh leaves, as the hook leaves it once it has injected the note."""
+        path = self.base / "handoff"
+        head = "injected: 2026-09-21T12:00:00Z\n" if injected else ""
+        path.write_text(f"{head}stage: review\nsession: session-before\n\n## decisions\n- why\n")
+        return str(path)
 
     def sequence(self):
         return [" ".join(call[1:3]) + (f" {call[4]}" if call[1:3] == ["agent", "prompt"] else "")
@@ -646,16 +681,39 @@ class HandoffResumeTests(ShimTest):
     def test_a_pane_that_starts_no_fresh_session_is_cleared_once_more_and_then_reported(self):
         r = self.resume(SHIM_CLEAR_KEEPS_SESSION="1")
         self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        # The confirmation is the session id, not the sending of the `/clear`: a pane that keeps reporting the
+        # old one is cleared a second time and then left alone, and the driver command goes nowhere.
         self.assertEqual(self.sequence(), ["agent wait", "agent prompt /clear", "agent prompt /clear"])
         notifications = [c for c in self.calls() if "notification show" in c]
         self.assertEqual(len(notifications), 1, self.calls())
         self.assertIn("Handoff stalled in pane w9:p1", notifications[0])
         self.assertIn("/worker:work", notifications[0])
 
-    def test_the_driver_command_never_goes_to_the_session_that_asked_for_the_handover(self):
-        # The confirmation is the session id, not the /clear: a pane that reports the old one gets no command.
-        self.resume(SHIM_CLEAR_KEEPS_SESSION="1")
-        self.assertFalse([c for c in self.calls() if "/worker:work" in c and "prompt" in c])
+    def test_a_pane_that_has_moved_on_keeps_its_context(self):
+        # The maintainer cleared the pane and started something else while the handover waited: that context
+        # is not the one that asked for the handover, so it is neither cleared nor driven.
+        (self.wt_root / ".agent-session").write_text("someone-elses-session")
+        r = self.resume()
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertEqual(self.sequence(), ["agent wait"])
+        notifications = [c for c in self.calls() if "notification show" in c]
+        self.assertEqual(len(notifications), 1, self.calls())
+        self.assertIn("Handoff did not clear pane w9:p1", notifications[0])
+
+    def test_a_note_a_fresh_context_already_took_is_delivered_instead_of_cleared_again(self):
+        # The hook marks the record as it injects: the new session exists even if its id could not be read,
+        # and a second `/clear` would throw away the note it is there to deliver.
+        (self.wt_root / ".agent-session").write_text("session-before")
+        r = self.resume(record=self.note_record(), SHIM_CLEAR_KEEPS_SESSION="1")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(self.sequence(), ["agent wait", "agent wait", "agent prompt /worker:work"])
+        self.assertFalse([c for c in self.calls() if "notification" in c])
+
+    def test_a_note_still_on_its_way_is_no_reason_to_skip_the_clear(self):
+        r = self.resume(record=self.note_record(injected=False))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(self.sequence(),
+                         ["agent wait", "agent prompt /clear", "agent wait", "agent prompt /worker:work"])
 
 
 class FinishTests(ShimTest):

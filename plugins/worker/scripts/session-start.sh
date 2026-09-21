@@ -7,6 +7,7 @@ input=$(cat)
 command -v jq >/dev/null 2>&1 || exit 0
 [ -z "$(printf '%s' "$input" | jq -r '.agent_id // empty')" ] || exit 0
 source_=$(printf '%s' "$input" | jq -r '.source // "startup"')
+session_id=$(printf '%s' "$input" | jq -r '.session_id // empty')
 cwd=$(printf '%s' "$input" | jq -r '.cwd // empty')
 if [ -n "$cwd" ]; then cd "$cwd" 2>/dev/null || exit 0; fi
 issue=$(wf_issue); [ -n "$issue" ] || exit 0
@@ -17,8 +18,12 @@ emit() { jq -n --arg c "$1" '{hookSpecificOutput:{hookEventName:"SessionStart",a
 # A handoff note is waiting when the previous context of this worktree wrote one and no session has been
 # given it yet (ADR 0021). That context cleared itself, so this session starts with the issue as if it were
 # the first — plus the note, which is the only thing the branch and the issue do not say.
+# The note is for the next context, never for the one that wrote it: the record names the session that asked
+# for the handover, and a start that reaches this session again — an auto-compact firing between the note and
+# the `/clear` — must leave the note where it is, or the fresh context would resume a stage with no report.
 handoff=""
-if state=$(wf_state_dir 2>/dev/null) && [ -f "$state/handoff" ] && [ -z "$(wf_record_field "$state/handoff" injected)" ]; then
+if state=$(wf_state_dir 2>/dev/null) && [ -f "$state/handoff" ] && [ -z "$(wf_record_field "$state/handoff" injected)" ] &&
+   [ "$(wf_record_field "$state/handoff" session)" != "${session_id:-}" ]; then
   handoff="$state/handoff"
 fi
 
