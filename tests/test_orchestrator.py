@@ -1,10 +1,8 @@
 import json
-import os
 import shlex
-import subprocess
 import unittest
 
-from helpers import GIT_ISOLATION, ORCH, ShimTest
+from helpers import ORCH, ShimTest
 
 
 class ClaimTests(ShimTest):
@@ -127,7 +125,7 @@ class ClaimTests(ShimTest):
     def origin(self):
         """A bare repository as origin, with main on it."""
         remote = self.base / "remote.git"
-        subprocess.run(["git", "init", "-q", "--bare", str(remote)], check=True, env={**os.environ, **GIT_ISOLATION})
+        self.git("init", "-q", "--bare", str(remote), cwd=self.base)
         self.git("remote", "add", "origin", str(remote))
         self.git("push", "-q", "origin", "main")
 
