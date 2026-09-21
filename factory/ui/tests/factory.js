@@ -26,7 +26,7 @@ export default async function start() {
   const stopAll = () => stops.forEach((stop) => stop())
   process.on('exit', stopAll)
   try {
-    const ports = { working: await freePort(), paused: await freePort() }
+    const ports = await freePorts(['working', 'paused'])
     const working = run(binary, dir, 'working', ports.working, [])
     const paused = run(binary, dir, 'paused', ports.paused, ['-paused'])
     stops.push(working.stop, paused.stop)
@@ -48,15 +48,22 @@ export default async function start() {
 
 const url = (on) => `http://127.0.0.1:${on}`
 
-// freePort asks the operating system for a port nobody holds, the way the factory's own Go tests do.
-function freePort() {
-  return new Promise((found, failed) => {
+// freePorts asks the operating system for one port per name, the way the factory's own Go tests do.
+// All of them are held at the same time, so it cannot hand the same one out twice, and they are let
+// go together, right before the factories bind them.
+async function freePorts(names) {
+  const held = await Promise.all(names.map(hold))
+  const ports = Object.fromEntries(names.map((name, i) => [name, held[i].address().port]))
+  await Promise.all(held.map((server) => new Promise((closed) => server.close(closed))))
+  return ports
+}
+
+// hold takes a port nobody holds and keeps it until it is closed.
+function hold() {
+  return new Promise((held, failed) => {
     const server = createServer()
     server.once('error', failed)
-    server.listen(0, '127.0.0.1', () => {
-      const { port } = server.address()
-      server.close(() => found(port))
-    })
+    server.listen(0, '127.0.0.1', () => held(server))
   })
 }
 
