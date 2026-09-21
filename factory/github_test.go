@@ -117,12 +117,12 @@ func TestAConnectedRepositoryIsClonedOnStartAndAFailedCloneIsReported(t *testing
 	// is tried again, because connecting it is a line in the configuration and a restart.
 	f.stop(t, syscall.SIGTERM)
 	gh.start(t, config{"poll": "50ms", "data_dir": data}).queue(t, 0)
-	if cloned := gh.made(t, "repo clone acme/edge-sensors "+filepath.Join(data, "repos", "acme", "edge-sensors")); cloned != 1 {
+	if cloned := gh.cloned(t, "acme/edge-sensors"); cloned != 1 {
 		t.Errorf("the repository was cloned %d times, want once: a clone that is there is kept", cloned)
 	}
 }
 
-func TestARepositoryThatCannotBeReadDoesNotEmptyTheLineOfTheOthers(t *testing.T) {
+func TestARepositoryThatCannotBeReadIsSaidSoAndDoesNotEmptyTheLineOfTheOthers(t *testing.T) {
 	gh := newGhShim(t)
 	now := time.Now().UTC()
 	gh.remote(t, "acme/edge-sensors")
@@ -139,6 +139,112 @@ func TestARepositoryThatCannotBeReadDoesNotEmptyTheLineOfTheOthers(t *testing.T)
 	f.eventually(t, 10*time.Second, "the error line for the repository that could not be read", func() bool {
 		return strings.Contains(f.output(t), "error: the routed issues of acme/backtest could not be read")
 	})
+	// The interface says it too: a repository nobody can read holds no queue either, and an empty
+	// count would be the same sight as a repository with nothing routed.
+	if said := f.repositorySaid(t, "acme/backtest"); !strings.Contains(said, "error connecting to api.github.com") {
+		t.Errorf("the interface says %q of the repository it could not read, want what gh said", said)
+	}
+	if said := f.repositorySaid(t, "acme/edge-sensors"); said != "" {
+		t.Errorf("the repository that could be read carries the error %q", said)
+	}
+	// It is reported when it starts failing, not once per poll: this factory polls twenty times a
+	// second and a host runs it for weeks.
+	asked := "api " + issuesRequest("acme/backtest", "factory")
+	f.eventually(t, 10*time.Second, "several polls", func() bool { return gh.made(t, asked) >= 5 })
+	if said := strings.Count(f.output(t), "error: the routed issues of acme/backtest could not be read"); said != 1 {
+		t.Errorf("the factory reported the unreadable repository %d times over %d polls, want once", said, gh.made(t, asked))
+	}
+
+	// GitHub answers again: the repository comes back into the line and the interface stops warning.
+	gh.issues(t, "acme/backtest", openIssue(9, "Warn when a backtest is short", now.Add(-48*time.Hour)))
+	gh.timeline(t, "acme/backtest", 9, labeled("factory", now.Add(-time.Hour)))
+	gh.fail(t, "")
+	f.queue(t, 2)
+	if said := f.repositorySaid(t, "acme/backtest"); said != "" {
+		t.Errorf("the repository that can be read again carries the error %q", said)
+	}
+	if !strings.Contains(f.output(t), "the routed issues of acme/backtest can be read again") {
+		t.Errorf("the factory said %q, want a line for the repository that can be read again", f.output(t))
+	}
+}
+
+// The routing time of an issue costs a request of its own, so it is remembered until GitHub says the
+// issue was touched: a line that stands still is one request per repository and per poll, not one
+// per issue, on a token the whole workflow shares.
+func TestARoutingTimeIsReadAgainOnlyWhenTheIssueWasTouched(t *testing.T) {
+	gh := newGhShim(t)
+	now := time.Now().UTC()
+	gh.remote(t, "acme/edge-sensors")
+	gh.issues(t, "acme/edge-sensors", openIssue(104, "Retry the upload", now.Add(-72*time.Hour)))
+	gh.timeline(t, "acme/edge-sensors", 104, labeled("factory", now.Add(-6*time.Hour)))
+
+	f := gh.start(t, config{"poll": "50ms", "repositories": []string{"acme/edge-sensors"}})
+	routed := f.queue(t, 1)[0].RoutedAt
+	asked := "api " + issuesRequest("acme/edge-sensors", "factory")
+	timeline := "api --paginate " + eventsRequest("acme/edge-sensors", 104)
+	f.eventually(t, 10*time.Second, "several polls", func() bool { return gh.made(t, asked) >= 5 })
+	if read := gh.made(t, timeline); read != 1 {
+		t.Errorf("the timeline was read %d times over %d polls, want once: nothing touched the issue", read, gh.made(t, asked))
+	}
+
+	// The maintainer takes the label off and puts it back on. GitHub touches the issue with it, and
+	// the factory reads the timeline again and moves the issue to the back of the line.
+	touched := openIssue(104, "Retry the upload", now.Add(-72*time.Hour))
+	touched["updated_at"] = now.Add(-time.Minute).Format(time.RFC3339)
+	gh.issues(t, "acme/edge-sensors", touched)
+	gh.timeline(t, "acme/edge-sensors", 104, labeled("factory", now.Add(-6*time.Hour)),
+		unlabeled("factory", now.Add(-2*time.Hour)), labeled("factory", now.Add(-time.Minute)))
+	f.eventually(t, 10*time.Second, "the routing time of the issue after it was touched", func() bool {
+		return f.queue(t, 1)[0].RoutedAt.After(routed)
+	})
+}
+
+// gh --paginate answers one JSON array per page, and the routing label may have been set on any of
+// them; the pages are read as the stream of arrays they are.
+func TestTheRoutingTimeIsReadFromEveryPageOfTheTimeline(t *testing.T) {
+	gh := newGhShim(t)
+	now := time.Now().UTC()
+	gh.remote(t, "acme/edge-sensors")
+	gh.issues(t, "acme/edge-sensors", openIssue(104, "Retry the upload", now.Add(-72*time.Hour)))
+	gh.answer(t, "api --paginate "+eventsRequest("acme/edge-sensors", 104),
+		marshal(t, []map[string]any{labeled("bug", now.Add(-60*time.Hour))})+"\n"+
+			marshal(t, []map[string]any{labeled("factory", now.Add(-3*time.Hour))}))
+
+	f := gh.start(t, config{"poll": "50ms", "repositories": []string{"acme/edge-sensors"}})
+	if at := f.queue(t, 1)[0].RoutedAt; at.Before(now.Add(-4 * time.Hour)) {
+		t.Errorf("the issue stands in the line by %v, want the label event on the second page", at)
+	}
+}
+
+// A clone is the one call that takes minutes, and gh does it in a git of its own. The stop has to
+// reach that child, and a clone that was cut off must leave nothing the next start would take for a
+// finished clone and hand to a worker.
+func TestACloneThatIsCutOffEndsWithTheFactoryAndLeavesNothingBehind(t *testing.T) {
+	gh := newGhShim(t)
+	gh.issues(t, "acme/edge-sensors")
+	child := gh.hang(t, 5*time.Minute)
+
+	data := filepath.Join(t.TempDir(), "data")
+	f := gh.start(t, config{"poll": "50ms", "data_dir": data, "repositories": []string{"acme/edge-sensors"}})
+	f.eventually(t, 20*time.Second, "the clone to start", func() bool {
+		return strings.Contains(f.output(t), "cloning acme/edge-sensors")
+	})
+	stopped := time.Now()
+	f.stop(t, syscall.SIGTERM)
+	if held := time.Since(stopped); held > 20*time.Second {
+		t.Errorf("the factory took %v to stop while a clone ran; the clone has to end with it", held)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(readFile(t, child)))
+	if err != nil {
+		t.Fatalf("the clone wrote no pid to %s: %v", child, err)
+	}
+	if survived(pid) {
+		t.Errorf("the child of the clone (%d) outlived the factory", pid)
+	}
+	clone := filepath.Join(data, "repos", "acme", "edge-sensors")
+	if _, err := os.Stat(clone); !os.IsNotExist(err) {
+		t.Errorf("the clone that was cut off left %s behind; the next start would take it for a whole one", clone)
+	}
 }
 
 func TestPausedAgainstGitHubShowsTheLineAndClaimsNothing(t *testing.T) {
@@ -163,6 +269,13 @@ func TestPausedAgainstGitHubShowsTheLineAndClaimsNothing(t *testing.T) {
 	for _, call := range gh.calls(t) {
 		if !strings.HasPrefix(call, "api repos/") && !strings.HasPrefix(call, "api --paginate repos/") && !strings.HasPrefix(call, "repo clone ") {
 			t.Errorf("the factory called `gh %s`; paused it reads and claims nothing", call)
+		}
+		// A reading path with a writing flag on it is a write: gh api sends a POST as soon as one of
+		// these is there.
+		for _, writes := range []string{"-X", "--method", "-f", "--field", "-F", "--raw-field", "--input"} {
+			if strings.Contains(" "+call+" ", " "+writes+" ") || strings.Contains(" "+call, " "+writes+"=") {
+				t.Errorf("the factory called `gh %s`; paused it reads and claims nothing", call)
+			}
 		}
 	}
 }
@@ -336,6 +449,8 @@ type ghShim struct {
 	answers string
 	log     string
 	remotes string
+	failing string // the file holding the pattern of requests that fail
+	hanging string // the file holding how long a clone sleeps instead of cloning
 	env     []string
 }
 
@@ -346,6 +461,8 @@ func newGhShim(t *testing.T) *ghShim {
 		answers: filepath.Join(dir, "answers"),
 		log:     filepath.Join(dir, "calls.log"),
 		remotes: filepath.Join(dir, "remotes"),
+		failing: filepath.Join(dir, "failing"),
+		hanging: filepath.Join(dir, "hanging"),
 	}
 	for _, d := range []string{g.answers, g.remotes} {
 		if err := os.MkdirAll(d, 0o700); err != nil {
@@ -354,7 +471,8 @@ func newGhShim(t *testing.T) *ghShim {
 	}
 	g.env = append(gitIsolation(),
 		"PATH="+abs(t, "testdata")+string(os.PathListSeparator)+os.Getenv("PATH"),
-		"HOME="+dir, "GH_SHIM_DIR="+g.answers, "GH_SHIM_LOG="+g.log, "GH_SHIM_REMOTES="+g.remotes)
+		"HOME="+dir, "GH_SHIM_DIR="+g.answers, "GH_SHIM_LOG="+g.log, "GH_SHIM_REMOTES="+g.remotes,
+		"GH_SHIM_FAIL="+g.failing, "GH_SHIM_HANG="+g.hanging)
 	return g
 }
 
@@ -389,10 +507,20 @@ func (g *ghShim) timeline(t *testing.T, repository string, issue int, events ...
 	g.answer(t, "api --paginate "+eventsRequest(repository, issue), marshal(t, events))
 }
 
-// fail makes every request that matches the shell pattern fail, as an unreachable GitHub does.
+// fail makes every request that matches the shell pattern fail, as an unreachable GitHub does, and
+// an empty pattern makes GitHub reachable again. It takes effect on the next call, so a test can
+// break GitHub under a running factory.
 func (g *ghShim) fail(t *testing.T, pattern string) {
 	t.Helper()
-	g.env = append(g.env, "GH_SHIM_FAIL="+pattern)
+	writeFile(t, g.failing, pattern)
+}
+
+// hang makes `gh repo clone` sleep in a child of its own instead of cloning, as a clone of a large
+// repository does, and answers with the file that child's pid is written to.
+func (g *ghShim) hang(t *testing.T, how time.Duration) string {
+	t.Helper()
+	writeFile(t, g.hanging, strconv.Itoa(int(how.Seconds())))
+	return g.hanging + ".pid"
 }
 
 // remote is a repository on the shim's GitHub: what `gh repo clone owner/name` clones from.
@@ -423,6 +551,19 @@ func (g *ghShim) calls(t *testing.T) []string {
 	return calls
 }
 
+// cloned counts how often the factory cloned one repository. Where it cloned it to is not part of
+// the count: a clone lands beside its place and is moved in when it is whole.
+func (g *ghShim) cloned(t *testing.T, repository string) int {
+	t.Helper()
+	count := 0
+	for _, call := range g.calls(t) {
+		if strings.HasPrefix(call, "repo clone "+repository+" ") {
+			count++
+		}
+	}
+	return count
+}
+
 // made counts how often the factory made one request.
 func (g *ghShim) made(t *testing.T, request string) int {
 	t.Helper()
@@ -441,6 +582,8 @@ func (g *ghShim) made(t *testing.T, request string) int {
 // the contract the frontier rule reads.
 type issueJSON map[string]any
 
+// openIssue is an issue nothing has touched since it was opened. Its updated_at is the issue's own:
+// GitHub touches it whenever a label changes, and the factory holds what it remembers against it.
 func openIssue(number int, title string, created time.Time, labels ...string) issueJSON {
 	if labels == nil {
 		labels = []string{readyLabel, "factory"}
@@ -451,7 +594,8 @@ func openIssue(number int, title string, created time.Time, labels ...string) is
 	}
 	return issueJSON{
 		"number": number, "title": title, "state": "open",
-		"created_at": created.Format(time.RFC3339), "assignees": []any{}, "labels": named,
+		"created_at": created.Format(time.RFC3339), "updated_at": created.Format(time.RFC3339),
+		"assignees": []any{}, "labels": named,
 		"issue_dependencies_summary": map[string]any{"blocked_by": 0, "blocking": 0},
 	}
 }
@@ -487,6 +631,25 @@ func (f *factory) queue(t *testing.T, want int) []apiIssue {
 	}
 	t.Fatalf("the line holds %v, want %d routed issue(s)", keys(line.Queue), want)
 	return nil
+}
+
+// repositorySaid is what /api/repositories carries as the error of one repository, empty when it
+// carries none.
+func (f *factory) repositorySaid(t *testing.T, repository string) string {
+	t.Helper()
+	var rows []struct {
+		Repository string `json:"repository"`
+		Queued     int    `json:"queued"`
+		Error      string `json:"error"`
+	}
+	f.get(t, "/api/repositories", &rows)
+	for _, row := range rows {
+		if row.Repository == repository {
+			return row.Error
+		}
+	}
+	t.Fatalf("/api/repositories does not carry %s at all", repository)
+	return ""
 }
 
 func keys(issues []apiIssue) []string {

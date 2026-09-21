@@ -84,15 +84,24 @@ func (f *Factory) status(w http.ResponseWriter, _ *http.Request) {
 	})
 }
 
-// repositories are the connected repositories with what waits in each of them.
+// repositories are the connected repositories with what waits in each of them, and what stood in the
+// way of the ones the last poll could not read: a repository whose issues cannot be read holds no
+// queue either, and without the error it would be the same sight as one with nothing routed.
 func (f *Factory) repositories(w http.ResponseWriter, _ *http.Request) {
 	queued := map[string]int{}
 	for _, issue := range f.waiting() {
 		queued[issue.Repository]++
 	}
+	f.mu.Lock()
+	unreadable := f.unreadable
+	f.mu.Unlock()
 	out := make([]map[string]any, 0, len(f.settings.Repositories))
 	for _, repository := range f.settings.Repositories {
-		out = append(out, map[string]any{"repository": repository, "queued": queued[repository]})
+		row := map[string]any{"repository": repository, "queued": queued[repository]}
+		if said := unreadable[repository]; said != "" {
+			row["error"] = said
+		}
+		out = append(out, row)
 	}
 	writeJSON(w, out)
 }

@@ -50,7 +50,9 @@ type canned struct {
 	started      time.Time
 }
 
-func (c *canned) queue(context.Context) []Issue { return cannedQueue(c.repositories, c.started) }
+func (c *canned) queue(context.Context) poll {
+	return poll{issues: cannedQueue(c.repositories, c.started)}
+}
 
 // cannedQueue spreads the canned entries over the connected repositories, so the one line visibly
 // mixes them, as a real queue across repositories does.

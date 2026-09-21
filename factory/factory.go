@@ -43,9 +43,10 @@ type Factory struct {
 	wake     chan struct{} // a run ended: the next entry need not wait for the next poll
 	active   sync.WaitGroup
 
-	mu       sync.Mutex
-	queue    []Issue
-	polledAt time.Time
+	mu         sync.Mutex
+	queue      []Issue
+	unreadable map[string]string
+	polledAt   time.Time
 	// quotaUntil is served empty until the quota check arrives (ADR 0028); the interface carries the
 	// state from the start so the ticket that fills it changes no reader.
 	quotaUntil *time.Time
@@ -54,7 +55,16 @@ type Factory struct {
 // source is where the line comes from on every poll: GitHub, or the canned queue of fake mode. It
 // answers with what it could read and reports what it could not, so nothing of it is ever stored.
 type source interface {
-	queue(ctx context.Context) []Issue
+	queue(ctx context.Context) poll
+}
+
+// poll is one reading of the line: the routed issues the source could read, and the repositories it
+// could not, with what stood in the way. The factory serves the second beside the first, because a
+// repository nobody can read holds no issues either, and an empty line is otherwise the same sight
+// as an idle one — on the one surface an unattended factory is watched through.
+type poll struct {
+	issues     []Issue
+	unreadable map[string]string // repository -> what gh said
 }
 
 // New opens the data directory and takes the runs already in it. Nothing here starts a run and
@@ -98,7 +108,8 @@ func (f *Factory) Work(ctx context.Context) {
 //
 // [ADR 0025]: ../docs/adr/0025-one-queue-one-worker-work-in-progress-first.md
 func (f *Factory) refreshQueue(ctx context.Context) {
-	queue := f.source.queue(ctx)
+	read := f.source.queue(ctx)
+	queue := read.issues
 	sort.SliceStable(queue, func(a, b int) bool {
 		if !queue[a].RoutedAt.Equal(queue[b].RoutedAt) {
 			return queue[a].RoutedAt.Before(queue[b].RoutedAt) // work in the order the maintainer routed
@@ -107,7 +118,7 @@ func (f *Factory) refreshQueue(ctx context.Context) {
 	})
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.queue, f.polledAt = queue, time.Now()
+	f.queue, f.unreadable, f.polledAt = queue, read.unreadable, time.Now()
 }
 
 // dispatch starts the head of the queue. One worker at a time: while a run is active, nothing else

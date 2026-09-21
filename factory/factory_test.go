@@ -466,7 +466,8 @@ func TestAnInvalidConfigurationIsRefusedWithTheFix(t *testing.T) {
 		{"no repositories", `{"data_dir":"data"}`, `repositories is empty; name at least one`},
 		{"repository without owner", `{"data_dir":"data","repositories":["workflows"]}`, `is not owner/name`},
 		{"repository twice", `{"data_dir":"data","repositories":["a/b","a/b"]}`, `named twice; remove the duplicate`},
-		{"repository of dots", `{"data_dir":"data","repositories":["../.."]}`, `is not owner/name`}, // it would name a directory outside the data directory
+		{"repository of dots", `{"data_dir":"data","repositories":["../.."]}`, `is not owner/name`},
+		{"repository whose name is dots", `{"data_dir":"data","repositories":["acme/.."]}`, `is not owner/name`}, // it would name a directory outside the data directory
 		{"no data directory", `{"repositories":["a/b"]}`, `data_dir is missing; name the directory`},
 		{"unknown field", `{"data_dir":"data","repositories":["a/b"],"listn":"x"}`, `unknown field "listn"; the fields are listen, label`},
 		{"not JSON", `listen = 7341`, `see factory/factory.example.json`},

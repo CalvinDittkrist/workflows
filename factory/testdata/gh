@@ -5,7 +5,12 @@
 #   GH_SHIM_DIR      the answers: one file per request, named after it (see the test's ghShim)
 #   GH_SHIM_LOG      every call, one request per line
 #   GH_SHIM_REMOTES  where `gh repo clone owner/name` clones from: the directory owner-name in here
-#   GH_SHIM_FAIL     a shell pattern; a request that matches it fails as an unreachable GitHub does
+#   GH_SHIM_FAIL     a file holding a shell pattern; a request that matches it fails as an
+#                    unreachable GitHub does. It is read per call, so a test can break GitHub and
+#                    mend it again while the factory runs
+#   GH_SHIM_HANG     a file holding a number of seconds; `gh repo clone` then sleeps that long in a
+#                    child of its own instead of cloning, as a clone of a large repository does, and
+#                    writes that child's pid beside the file
 #
 # A request without an answer fails, so a call the factory makes and the test did not plan for is
 # seen rather than answered with nothing.
@@ -14,15 +19,23 @@ set -u
 request="$*"
 printf '%s\n' "$request" >> "${GH_SHIM_LOG:-/dev/null}"
 
-if [ -n "${GH_SHIM_FAIL:-}" ]; then
+failing=$(cat "${GH_SHIM_FAIL:-/nowhere}" 2>/dev/null || true)
+if [ -n "$failing" ]; then
   # shellcheck disable=SC2254  # the variable is the pattern: the test writes it
   case "$request" in
-    $GH_SHIM_FAIL) echo "gh: error connecting to api.github.com" >&2; exit 1 ;;
+    $failing) echo "gh: error connecting to api.github.com" >&2; exit 1 ;;
   esac
 fi
 
 if [ "${1:-}" = repo ] && [ "${2:-}" = clone ]; then
   repository=${3:-}; target=${4:-}
+  hang=$(cat "${GH_SHIM_HANG:-/nowhere}" 2>/dev/null || true)
+  if [ -n "$hang" ]; then
+    sleep "$hang" &
+    echo $! > "${GH_SHIM_HANG}.pid"
+    wait
+    exit 1
+  fi
   source="${GH_SHIM_REMOTES:-/nowhere}/${repository%%/*}-${repository#*/}"
   [ -d "$source" ] || { echo "gh: Could not resolve to a Repository with the name '$repository'." >&2; exit 1; }
   exec git clone --quiet "$source" "$target"

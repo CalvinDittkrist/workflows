@@ -202,6 +202,22 @@ h2 b {
   font-weight: 400;
   font-variant-numeric: tabular-nums;
 }
+/* A repository whose issues could not be read: no count, because nobody knows, and what gh said
+   underneath it. An empty queue and an unreadable repository must not look alike. */
+.repos li.unreadable i {
+  background: var(--red);
+}
+.repos li.unreadable b {
+  color: var(--red);
+}
+.repos li small {
+  grid-column: 2 / -1;
+  overflow: hidden;
+  color: var(--red);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 .line h2:not(:first-child) {
   margin-top: 24px;

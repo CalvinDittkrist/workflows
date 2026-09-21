@@ -14,6 +14,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
+	"syscall"
 	"time"
 )
 
@@ -28,18 +30,26 @@ import (
 // [ADR 0022]: ../docs/adr/0022-the-factory-is-a-second-driver-over-the-worker-pipeline.md
 const readyLabel = "ready-for-agent"
 
-// ghTimeout bounds one call to gh. A request that hangs would hold the whole line and the stop with
-// it, and the next poll asks again anyway.
+// ghTimeout bounds one read from GitHub. A request that hangs would hold the whole line and the stop
+// with it, and the next poll asks again anyway.
 const ghTimeout = 60 * time.Second
+
+// cloneTimeout bounds a clone, which is not a request but a whole repository over the host's line:
+// minutes for a large one, and a clone that is cut off in the middle is work thrown away. It is a
+// bound all the same, so a clone that hangs cannot hold the start for ever.
+const cloneTimeout = 60 * time.Minute
 
 // ghIssue is what an issue list carries of an issue: the fields the frontier rule reads and the
 // fields the queue shows. GitHub answers the same shape for a pull request, which is why one is
 // recognised by its pull_request field rather than counted as an issue.
 type ghIssue struct {
-	Number      int                      `json:"number"`
-	Title       string                   `json:"title"`
-	State       string                   `json:"state"`
-	CreatedAt   time.Time                `json:"created_at"`
+	Number    int       `json:"number"`
+	Title     string    `json:"title"`
+	State     string    `json:"state"`
+	CreatedAt time.Time `json:"created_at"`
+	// UpdatedAt is when the issue was last touched, a label set among it. It is what a remembered
+	// routing time is held against, so the timeline of an issue nobody touched is read once.
+	UpdatedAt   time.Time                `json:"updated_at"`
 	Assignees   []struct{ Login string } `json:"assignees"`
 	Labels      []struct{ Name string }  `json:"labels"`
 	PullRequest *struct {
@@ -103,25 +113,97 @@ func routed(issue ghIssue, routingLabel string) bool {
 type gitHub struct {
 	repositories []string
 	label        string
+
+	mu sync.Mutex
+	// times is what the factory remembers of the routing times it has read, keyed by the issue.
+	// Reading a timeline is a request of its own per issue, so a line of a few dozen issues asked
+	// every minute would spend a whole hourly budget on standing still. It is memory and no file: the
+	// line itself is still derived from GitHub on every poll ([ADR 0025]).
+	times map[string]routing
+	// unreadable is the repositories the last poll could not read, with what gh said. A repository is
+	// reported when it starts failing and when it works again, not once a minute for a week.
+	unreadable map[string]string
+}
+
+// routing is one remembered routing time with the issue's updated_at it was read at. GitHub touches
+// updated_at when a label changes, so a remembered time is good until the issue is touched again.
+type routing struct {
+	updated time.Time
+	at      time.Time
 }
 
 // queue is the line across all connected repositories. A repository that cannot be read is reported
 // and left out of this poll: one unreachable repository must not empty the line of the others, and
 // the next poll asks again.
-func (g *gitHub) queue(ctx context.Context) []Issue {
-	queue := []Issue{}
+func (g *gitHub) queue(ctx context.Context) poll {
+	result := poll{issues: []Issue{}, unreadable: map[string]string{}}
+	seen := map[string]bool{}
 	for _, repository := range g.repositories {
 		issues, err := g.routedIssues(ctx, repository)
 		if err != nil {
 			if ctx.Err() != nil {
-				return queue // the factory is stopping; a cancelled request is no failure of GitHub
+				return result // the factory is stopping; a cancelled request is no failure of GitHub
 			}
-			log.Printf("error: the routed issues of %s could not be read: %v; check `gh auth status` on this host and that its token reaches the repository", repository, err)
+			result.unreadable[repository] = said(err)
 			continue
 		}
-		queue = append(queue, issues...)
+		for _, issue := range issues {
+			seen[issue.key()] = true
+		}
+		result.issues = append(result.issues, issues...)
 	}
-	return queue
+	g.settle(result.unreadable, seen)
+	return result
+}
+
+// settle reports what changed with this poll and forgets what the line no longer holds. The report
+// is the change and not the state, because the factory polls every minute and runs for weeks: a
+// journal that repeats the same line every minute is one nobody reads.
+func (g *gitHub) settle(unreadable map[string]string, seen map[string]bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	for repository, said := range unreadable {
+		if g.unreadable[repository] != said {
+			log.Printf("error: the routed issues of %s could not be read: %s; check `gh auth status` on this host and that its token reaches the repository", repository, said)
+		}
+	}
+	for repository := range g.unreadable {
+		if _, again := unreadable[repository]; !again {
+			log.Printf("the routed issues of %s can be read again", repository)
+		}
+	}
+	g.unreadable = unreadable
+	for key := range g.times {
+		if !seen[key] {
+			delete(g.times, key)
+		}
+	}
+}
+
+// remembered answers the routing time read earlier for an issue nothing has touched since.
+func (g *gitHub) remembered(key string, updated time.Time) (time.Time, bool) {
+	if updated.IsZero() { // without an updated_at there is nothing to hold the memory against
+		return time.Time{}, false
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	known, ok := g.times[key]
+	if !ok || !known.updated.Equal(updated) {
+		return time.Time{}, false
+	}
+	return known.at, true
+}
+
+func (g *gitHub) remember(key string, updated, at time.Time) {
+	if updated.IsZero() {
+		return
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.times == nil {
+		g.times = map[string]routing{}
+	}
+	g.times[key] = routing{updated: updated, at: at}
 }
 
 // routedIssues asks GitHub for the issues of one repository that carry both labels and keeps those
@@ -155,6 +237,10 @@ func (g *gitHub) routedIssues(ctx context.Context, repository string) ([]Issue, 
 
 // issuesRequest is the issue list of one repository: open, carrying ready-for-agent and the routing
 // label. GitHub reads several labels as "all of them".
+//
+// It asks for one page and does not paginate, which is the board's query exactly (board.sh): a
+// repository with more than a hundred issues routed at once has months of work waiting, and the
+// factory taking a different set than the board leaves it would be the drift the test guards.
 func issuesRequest(repository, routingLabel string) string {
 	labels := url.QueryEscape(readyLabel) + "," + url.QueryEscape(routingLabel)
 	return "repos/" + repository + "/issues?labels=" + labels + "&state=open&per_page=100"
@@ -166,35 +252,52 @@ func issuesRequest(repository, routingLabel string) string {
 //
 // An issue whose timeline does not name the label — it fell out of what GitHub keeps, or the label
 // came with the issue — counts from when it was opened. It keeps its place in the line that way,
-// where an empty time would put it at the head of every queue.
+// where an empty time would put it at the head of every queue. A timeline that could not be read at
+// all counts from then too, which is earlier than the routing and moves the issue towards the head;
+// that answer is not remembered, so the next poll reads it again.
 func (g *gitHub) routedAt(ctx context.Context, repository string, issue ghIssue) time.Time {
+	key := Issue{Repository: repository, Number: issue.Number}.key()
+	if at, ok := g.remembered(key, issue.UpdatedAt); ok {
+		return at
+	}
+	at, read := g.readRoutedAt(ctx, repository, issue)
+	if read {
+		g.remember(key, issue.UpdatedAt, at)
+	}
+	return at
+}
+
+// readRoutedAt reads the issue's timeline and says whether it got a whole answer.
+func (g *gitHub) readRoutedAt(ctx context.Context, repository string, issue ghIssue) (time.Time, bool) {
 	at := issue.CreatedAt
 	raw, err := gh(ctx, "api", "--paginate", eventsRequest(repository, issue.Number))
 	if err != nil {
 		if ctx.Err() == nil {
 			log.Printf("error: the timeline of %s#%d could not be read: %v; it stands in the line by the time it was opened", repository, issue.Number, err)
 		}
-		return at
+		return at, false
 	}
 	// --paginate answers one JSON array per page, so the pages are read as a stream of arrays.
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	for {
 		var page []ghEvent
 		if err := decoder.Decode(&page); err != nil {
-			if !errors.Is(err, io.EOF) {
-				log.Printf("error: the timeline of %s#%d is not a timeline: %v; it stands in the line by the time it was opened", repository, issue.Number, err)
+			if errors.Is(err, io.EOF) {
+				break
 			}
-			break
+			log.Printf("error: the timeline of %s#%d is not a timeline: %v; it stands in the line by the time it was opened", repository, issue.Number, err)
+			return at, false
 		}
 		for _, event := range page {
 			// The last time the label was set is the answer: a label that was removed and set again
-			// was handed over again.
-			if event.Event == "labeled" && event.Label.Name == g.label {
+			// was handed over again. It is the latest of the entries rather than the last one, so the
+			// order GitHub sends the timeline in is not part of the rule.
+			if event.Event == "labeled" && event.Label.Name == g.label && event.CreatedAt.After(at) {
 				at = event.CreatedAt
 			}
 		}
 	}
-	return at
+	return at, true
 }
 
 func eventsRequest(repository string, issue int) string {
@@ -219,9 +322,28 @@ func connect(ctx context.Context, settings Settings) {
 			continue
 		}
 		log.Printf("cloning %s into %s", repository, dir)
-		if _, err := gh(ctx, "repo", "clone", repository, dir); err != nil {
-			log.Printf("error: %s could not be cloned into %s: %v; check `gh auth status` on this host and that its token reaches the repository, then start the factory again", repository, dir, err)
+		// The clone lands beside its place and is moved in when gh is done, so a clone that was cut
+		// off — the host rebooted, the factory was stopped — leaves no half repository that the next
+		// start would take for a finished one and hand to a worker.
+		staging, err := os.MkdirTemp(filepath.Dir(dir), "."+filepath.Base(dir)+".cloning-")
+		if err != nil {
+			log.Printf("error: the clone of %s cannot be started in %s: %v; name a writable data_dir", repository, filepath.Dir(dir), err)
+			continue
 		}
+		if _, err := ghWithin(ctx, cloneTimeout, "repo", "clone", repository, staging); err != nil {
+			_ = os.RemoveAll(staging)
+			if ctx.Err() != nil {
+				return // the factory is stopping; a clone that was cut off is no failure of GitHub
+			}
+			log.Printf("error: %s could not be cloned into %s: %v; check `gh auth status` on this host and that its token reaches the repository, then start the factory again", repository, dir, err)
+			continue
+		}
+		if err := os.Rename(staging, dir); err != nil {
+			_ = os.RemoveAll(staging)
+			log.Printf("error: the clone of %s could not be put in %s: %v; make sure nothing else writes in the data_dir, then start the factory again", repository, dir, err)
+			continue
+		}
+		log.Printf("cloned %s", repository)
 	}
 }
 
@@ -232,21 +354,52 @@ func clonePath(dataDir, repository string) string {
 	return filepath.Join(dataDir, "repos", filepath.FromSlash(repository))
 }
 
-// gh runs one gh command and answers with its output. The error carries what gh printed, because
-// that line is what the operator needs: a login that expired, a repository the token cannot see.
+// ghError is a gh call that failed: the whole call, which is what the journal needs, and what gh
+// itself said, which is what the interface shows beside a repository it has already named.
+type ghError struct {
+	call string
+	said string
+}
+
+func (e ghError) Error() string { return "gh " + e.call + ": " + e.said }
+
+// said is the reason out of an error, without the call that carried it.
+func said(err error) string {
+	var failed ghError
+	if errors.As(err, &failed) {
+		return failed.said
+	}
+	return firstLine(err.Error())
+}
+
+// gh runs one read from GitHub.
 func gh(ctx context.Context, args ...string) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(ctx, ghTimeout)
+	return ghWithin(ctx, ghTimeout, args...)
+}
+
+// ghWithin runs one gh command under a deadline of its own and answers with its output. The error
+// carries what gh printed, because that line is what the operator needs: a login that expired, a
+// repository the token cannot see.
+func ghWithin(ctx context.Context, timeout time.Duration, args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "gh", args...)
+	// gh starts children of its own — git, for a clone — so the deadline and the stop have to reach
+	// them: the command gets a process group and the group is what is ended. WaitDelay closes the
+	// pipes after that, because a process that outlived the group still holds the output pipe it
+	// inherited, and waiting on that pipe would hold the factory past its own deadline.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error { return endGroup(cmd.Process.Pid, syscall.SIGTERM) }
+	cmd.WaitDelay = 5 * time.Second
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
 	if err != nil {
-		said := strings.TrimSpace(stderr.String())
-		if said == "" {
-			said = err.Error()
+		reason := strings.TrimSpace(stderr.String())
+		if reason == "" {
+			reason = err.Error()
 		}
-		return nil, fmt.Errorf("gh %s: %s", strings.Join(args, " "), firstLine(said))
+		return nil, ghError{call: strings.Join(args, " "), said: firstLine(reason)}
 	}
 	return out, nil
 }
