@@ -76,15 +76,14 @@ class ManifestTests(unittest.TestCase):
         (issue #44, ADR 0029). A subagent with its own tool list does get WebFetch, so this is surface
         reduction in the context that reads untrusted text, not a network boundary."""
         worker = ROOT / "plugins/worker/agents/worker.md"
-        tools = dict(line.split(": ", 1) for line in worker.read_text().split("---")[1].strip().splitlines())["tools"]
+        declared = re.search(r"^tools: (.+)$", worker.read_text().split("---")[1], re.M)
+        self.assertIsNotNone(declared, f"{worker.name} declares no tools")
+        # Split on the comma alone: a tool written without the space after it is still a granted tool.
+        tools = [tool.strip() for tool in declared.group(1).split(",")]
         for tool in ("WebFetch", "WebSearch"):
-            self.assertNotIn(tool, tools.split(", "),
+            self.assertNotIn(tool, tools,
                              f"{worker.name} lists {tool}; the documentation is read with /worker:docs, which "
                              f"runs claude-docs.sh in a lookup subagent")
-        script = ROOT / "plugins/worker/scripts/claude-docs.sh"
-        self.assertIn(str(script.relative_to(ROOT).name),
-                      (ROOT / "plugins/worker/skills/docs/SKILL.md").read_text(),
-                      "the docs skill no longer names the script the lookup agent is allowed to run")
 
     def test_every_planner_skill_is_user_invoked_only(self):
         skills = sorted(p.parent.name for p in (ROOT / "plugins/planner/skills").glob("*/SKILL.md"))

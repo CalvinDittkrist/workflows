@@ -10,7 +10,7 @@ out=""; url=""
 while [ $# -gt 0 ]; do
   case $1 in
     --output) out=$2; shift 2 ;;
-    --write-out|--max-redirs|--max-time|--proto|--proto-redir|--user-agent) shift 2 ;;
+    --write-out|--max-redirs|--max-time|--max-filesize|--proto|--proto-redir) shift 2 ;;
     -*) shift ;;
     *) url=$1; shift ;;
   esac

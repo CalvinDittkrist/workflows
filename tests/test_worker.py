@@ -114,7 +114,15 @@ class ClaudeDocsTests(ShimTest):
         r = self.docs("sub-agents")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("# Page sub-agents.md", r.stdout)
+        # The url: line is what the lookup agent cites, so it names the page that actually answered.
+        self.assertIn(f"url: {self.ORIGIN}en/sub-agents.md", r.stdout)
         self.assertEqual(self.requested(), [f"{self.ORIGIN}en/sub-agents.md"])
+
+    def test_a_timeout_that_is_not_a_number_of_seconds_is_refused_with_the_fix(self):
+        r = self.docs("sub-agents", WF_DOCS_TIMEOUT="soon")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("error: WF_DOCS_TIMEOUT is 'soon'", r.stderr)
+        self.assertEqual(self.requested(), [])
 
     def test_an_argument_that_is_not_a_slug_is_refused_before_any_request(self):
         # Each of these would leave the pinned path, or is not a page at all. The message names the fix.

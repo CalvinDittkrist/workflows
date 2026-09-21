@@ -9,7 +9,11 @@ set -euo pipefail
 
 # The one origin this script talks to, and the prefix every requested and every answering URL must carry.
 docs_base="https://code.claude.com/docs"
+# Seconds for the whole request, and the largest answer that is still a documentation page (the biggest one
+# on 2026-09-21 is 115 KB). Both bound what one lookup can cost a session in wall clock and in context.
 timeout=${WF_DOCS_TIMEOUT:-30}
+max_bytes=5000000
+case $timeout in ''|*[!0123456789]*) wf_die "WF_DOCS_TIMEOUT is '$timeout'; set it to a number of seconds, or unset it for 30" ;; esac
 
 case $# in
   0) url="$docs_base/llms.txt" ;;
@@ -32,7 +36,7 @@ trap 'rm -f "$body"' EXIT
 # --fail: an error page is an error, not a page. --proto/--proto-redir: https only, before and after a
 # redirect. url_effective is then checked against the origin, so a redirect that leaves it prints nothing.
 effective=$(curl --silent --show-error --fail --location --max-redirs 3 \
-  --proto '=https' --proto-redir '=https' --max-time "$timeout" \
+  --proto '=https' --proto-redir '=https' --max-time "$timeout" --max-filesize "$max_bytes" \
   --output "$body" --write-out '%{url_effective}' "$url") \
   || wf_die "could not read $url; check the network, or the slug against the index (claude-docs.sh with no argument)"
 

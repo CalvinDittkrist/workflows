@@ -10,7 +10,7 @@ Public repository of Claude Code plugins for agent-driven development: an orches
 
 ## Priorities
 - In this order when they conflict: security, low token use, throughput. One uniform workflow that adapts per repository through `WF_*` variables and its `AGENTS.md`, never through local forks.
-- Local workflow first. A factory workflow comes later as a separate unit; do not couple the two.
+- The local workflow comes first. The factory is a second driver over the same worker pipeline ([ADR 0022](docs/adr/0022-the-factory-is-a-second-driver-over-the-worker-pipeline.md)), built as its own unit that shares no code with the plugins; do not fork the pipeline for it.
 - The why is in [docs/vision.md](docs/vision.md).
 
 ## Claude Code facts

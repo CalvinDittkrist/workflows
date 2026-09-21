@@ -97,6 +97,7 @@ Repositories do not override agents or skills locally: the [repository standard]
 
 ## Design
 
+- [Vision](docs/vision.md): why the repository exists and what it optimises for
 - [Architecture](docs/architecture.md) and [ADRs](docs/adr/README.md)
 - [The local workflow, step by step](docs/local-workflow.md)
 - [Security and sandboxing](docs/security.md)
