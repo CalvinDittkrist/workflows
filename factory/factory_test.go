@@ -63,6 +63,7 @@ type apiRun struct {
 	EndedAt     *time.Time `json:"endedAt"`
 	Turns       int        `json:"turns"`
 	CostUSD     float64    `json:"costUsd"`
+	ContextPeak int        `json:"contextPeak"`
 	Tokens      struct {
 		Input         int `json:"input"`
 		Output        int `json:"output"`
@@ -142,6 +143,13 @@ func TestFakeModeWorksTheCannedQueueOneRunAtATime(t *testing.T) {
 	}
 	if got := strings.Join(ready.Stages, " "); got != "implement review pr ci reviews" {
 		t.Errorf("run 1 went through the stages %q, want %q", got, "implement review pr ci reviews")
+	}
+	// The context peak is the fullest one message of the worker itself came. The scripted session
+	// lets its subagents report a far larger context of their own, which says nothing about the
+	// worker's and must not be counted.
+	if ready.ContextPeak == 0 || ready.ContextPeak >= subagentContext {
+		t.Errorf("run 1 peaked at %d tokens of context, want the worker's own peak, under the %d a subagent reported",
+			ready.ContextPeak, subagentContext)
 	}
 	if ready.Turns != 23 || ready.CostUSD != 4.18 || ready.Tokens.Output != 24800 || ready.Tokens.CacheRead != 1204000 {
 		t.Errorf("run 1 has turns %d, cost %v and tokens %+v, want the totals of the result line", ready.Turns, ready.CostUSD, ready.Tokens)

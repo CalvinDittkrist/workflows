@@ -73,7 +73,7 @@ func scriptedWorker(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "error: %q is not an issue number; write it as a number\n", args[2])
 		return 2
 	}
-	s := &script{out: stdout}
+	s := &script{out: stdout, context: contextStart}
 
 	// The child of a hanging worker: it prints which process it is and then waits to be ended with
 	// the process group, which is what proves that no worker process survives a deadline.
@@ -169,9 +169,19 @@ func scriptedWorker(args []string, stdout, stderr io.Writer) int {
 
 // script writes the stream of a worker session, one JSON object per line.
 type script struct {
-	out   io.Writer
-	tools int
+	out     io.Writer
+	tools   int
+	context int // what the next message of the worker itself starts from
 }
+
+// The context of the scripted worker: it starts at a loaded session and grows with every message the
+// worker writes, the way a real one does. A subagent's is far above every peak a scripted run
+// reaches, so a peak taken from a subagent's line instead of the worker's could not be missed.
+const (
+	contextStart    = 22_000
+	contextStep     = 5_800
+	subagentContext = 900_000
+)
 
 func (s *script) emit(line map[string]any) {
 	raw, err := json.Marshal(line)
@@ -193,11 +203,26 @@ func (s *script) init() {
 // message is one assistant or user line. parent is the tool-use id of the Agent call a subagent runs
 // under, and empty for the worker itself.
 func (s *script) message(kind, parent string, content []map[string]any) {
-	line := map[string]any{"type": kind, "parent_tool_use_id": nil, "message": map[string]any{"content": content}}
+	message := map[string]any{"content": content}
+	if kind == "assistant" {
+		message["usage"] = s.usage(parent != "")
+	}
+	line := map[string]any{"type": kind, "parent_tool_use_id": nil, "message": message}
 	if parent != "" {
 		line["parent_tool_use_id"] = parent
 	}
 	s.emit(line)
+}
+
+// usage is the context one assistant message started from, as the stream carries it.
+func (s *script) usage(sub bool) map[string]any {
+	read := subagentContext
+	if !sub {
+		s.context += contextStep
+		read = s.context
+	}
+	return map[string]any{"input_tokens": 400, "cache_creation_input_tokens": 1200,
+		"cache_read_input_tokens": read, "output_tokens": 250}
 }
 
 func (s *script) say(text string) {
