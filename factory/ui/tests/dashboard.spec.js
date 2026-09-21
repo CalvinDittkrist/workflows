@@ -201,6 +201,36 @@ test('a run that is over is read once, and a run that is not there too', async (
   }
 })
 
+test('a factory that answers slowly is not asked again while it is still answering', async ({ page }) => {
+  // Every answer takes longer than the poll that asked for it. On a clock of its own the page would
+  // have two readings of the same endpoint in flight, and the older of the two could come back last:
+  // a run that has ended would stand as running again, and the log would be asked for events it has.
+  const open = {}
+  const most = {}
+  await page.route('**/api/**', async (route) => {
+    const where = new URL(route.request().url()).pathname
+    open[where] = (open[where] ?? 0) + 1
+    most[where] = Math.max(most[where] ?? 0, open[where])
+    const answer = await route.fetch()
+    await new Promise((done) => setTimeout(done, 2500)) // longer than either poll waits: 1s for a run, 2s for the line
+    open[where] -= 1
+    await route.fulfill({ response: answer })
+  })
+
+  await page.goto(working(`/#run=${RUNNING_RUN}`))
+  // Every answer of the first reading is held back, so the page fills slower than the usual wait.
+  await expect(detail(page).locator('h3')).toContainText('#118', { timeout: 20_000 })
+  await Promise.all([twice(page, '/api/line'), twice(page, `/api/runs/${RUNNING_RUN}`)])
+
+  // Every endpoint the page polls, each read one at a time.
+  expect(most).toEqual({
+    '/api/status': 1,
+    '/api/repositories': 1,
+    '/api/line': 1,
+    [`/api/runs/${RUNNING_RUN}`]: 1,
+  })
+})
+
 test('the dashboard sends no writing request', async ({ page }) => {
   const written = []
   page.on('request', (request) => {

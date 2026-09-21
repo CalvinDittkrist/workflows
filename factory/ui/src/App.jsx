@@ -105,6 +105,12 @@ export default function App() {
 
   useEffect(() => {
     let stop = false
+    let next = null
+    // One reading at a time, the next asked for when the last has settled: a factory that answers
+    // slowly is not asked again while it is still answering.
+    const again = () => {
+      if (!stop) next = setTimeout(load, SLOW)
+    }
     const load = () =>
       Promise.all([get('/api/status'), get('/api/repositories'), get('/api/line')])
         .then(([nextStatus, nextRepositories, nextLine]) => {
@@ -113,15 +119,17 @@ export default function App() {
           setRepositories(nextRepositories)
           setLine(nextLine)
           setError('')
+          again()
         })
         .catch((e) => {
-          if (!stop) setError(e.message)
+          if (stop) return
+          setError(e.message)
+          again()
         })
     load()
-    const t = setInterval(load, SLOW)
     return () => {
       stop = true
-      clearInterval(t)
+      if (next) clearTimeout(next)
     }
   }, [])
 
@@ -271,6 +279,12 @@ function Run({ id, now }) {
     let stop = false
     let follow = null
     seen.current = 0
+    // One request at a time: the next one is asked for when the last has settled, never on a clock of
+    // its own. Two answers in flight could come back in the other order, and the older of them would
+    // put a run that has ended back on the page and ask its log for events it already has.
+    const again = () => {
+      if (!stop) follow = setTimeout(load, FAST)
+    }
     const load = () =>
       get(`/api/runs/${id}?after=${seen.current}`)
         .then((next) => {
@@ -289,27 +303,21 @@ function Run({ id, now }) {
           setTrouble('')
           // A run that has ended is written once and never again: this answer carries its record and
           // the rest of its log, so a dashboard left open stops asking for it.
-          if (next.endedAt && follow) {
-            clearInterval(follow)
-            follow = null
-          }
+          if (!next.endedAt) again()
         })
         .catch((e) => {
           if (stop) return
           // A run this factory does not have is not going to appear later, so it is asked for once.
-          if (e.status === 404) {
-            setMissing(true)
-            if (follow) {
-              clearInterval(follow)
-              follow = null
-            }
-          } else setTrouble(e.message)
+          if (e.status === 404) setMissing(true)
+          else {
+            setTrouble(e.message)
+            again()
+          }
         })
     load()
-    follow = setInterval(load, FAST)
     return () => {
       stop = true
-      if (follow) clearInterval(follow)
+      if (follow) clearTimeout(follow)
     }
   }, [id])
 
