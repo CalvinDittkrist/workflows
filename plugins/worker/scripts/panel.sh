@@ -41,7 +41,9 @@ panel_pairs() {
         sub(/^[[:space:]]+/, "", tok[i]); sub(/[[:space:]]+$/, "", tok[i])
         if (tok[i] == "") continue
         eq = index(tok[i], "=")
-        if (eq == 0) { fail("bad:" tok[i]); break }
+        # No "=" is no verdict, and an "=" in first place is a verdict with no reviewer on it: the writer
+        # below would read the verdict as the name, and what it wrote back would parse as nothing at all.
+        if (eq <= 1) { fail("bad:" tok[i]); break }
         v = substr(tok[i], eq + 1)
         # A round states one verdict per reviewer; the chain across the rounds is derived from the records,
         # never given, so a token that already carries one is a round that would be counted twice.
@@ -88,6 +90,20 @@ disputed_lines() {
   printf '%s\n' "$disputed"
 }
 
+# Both records describe one commit: the one the fixes are in and the gate has passed on. One written over a
+# dirty tree or an ungated commit would state a verdict for work no reviewer read — and for the summary that
+# is the word `panel.sh verdict` answers, which the yolo finish stage merges on. $1 names the record and $2
+# the call that writes it, so each refusal still names the call its caller has to make again.
+gated_head() {
+  local what=$1 call=$2 dirty gate
+  dirty=$(git status --porcelain)
+  [ -z "$dirty" ] || wf_die "the working tree has uncommitted changes, so this $what would be recorded at a commit that does not carry them:
+$(printf '%s' "$dirty" | sed 's/^/  /')
+Commit what belongs to the change, run the worker's gate.sh run on that commit, then record the $what again with $call."
+  gate=$("$here/gate.sh" verdict)
+  [ "$gate" = pass ] || wf_die "the gate answers '$gate' for this head, not 'pass'; a $what is recorded for a commit the gate has passed on, so run the worker's gate.sh run, fix what it reports, commit, and record the $what again with $call"
+}
+
 # The rounds recorded for this review, counted up from 1 while their files are there.
 recorded_rounds() {
   local n=0
@@ -120,9 +136,9 @@ all_pairs() {
   done
 }
 
-# The verdicts of the first $1 rounds, and a refusal for a record this script cannot read back. Both readers
-# of the records stop here: a brief that took a "!bad" line for a reviewer name would send the next round to
-# a reviewer nobody named, and a summary would state a panel nobody ran.
+# The verdicts of the first $1 rounds, and a refusal for a record this script cannot read back. Every caller
+# that reads the records stops here: a brief that took a "!bad" line for a reviewer name would send the next
+# round to a reviewer nobody named, and a summary would state a panel nobody ran.
 readable_pairs() {
   local pairs bad
   pairs=$(all_pairs "$1")
@@ -141,7 +157,8 @@ last_verdicts() {
 }
 
 # The reviewers of the first $1 rounds whose last verdict is FIX, comma separated: the ones the next round
-# runs, because a reviewer that passed has read the code the fixes since then are in.
+# runs. A PASS is not re-litigated: the round that follows exists for the findings still open. That a reviewer
+# which passed never reads the fixes made after it did is the trade ADR 0004 makes for the contexts it saves.
 reviewers_on_fix() {
   last_verdicts "$1" | awk '$2 ~ /^FIX/ { printf "%s%s", (n++ ? "," : ""), $1 } END { if (n) print "" }'
 }
@@ -215,12 +232,7 @@ case "${1:-}" in
     block=$(cat)
     # A round is recorded for the commit its fixes are in and the gate ran on: that commit is what the next
     # context continues from, and what tells a record of this review from one of an older one.
-    dirty=$(git status --porcelain)
-    [ -z "$dirty" ] || wf_die "the working tree has uncommitted changes, so this round would be recorded at a commit that does not carry its fixes:
-$(printf '%s' "$dirty" | sed 's/^/  /')
-Commit what belongs to the change, run the worker's gate.sh run on that commit, then record the round again."
-    gate=$("$here/gate.sh" verdict)
-    [ "$gate" = pass ] || wf_die "the gate answers '$gate' for this head, not 'pass'; a round is recorded for a commit the gate has passed on, so run the worker's gate.sh run, fix what it reports, commit, and record the round again"
+    gated_head round "panel.sh round"
 
     stray=$(printf '%s\n' "$block" | grep -vE '^[[:space:]]*(panel|fixed|disputed):' | grep -v '^[[:space:]]*$' | head -1 || true)
     [ -z "$stray" ] || wf_die "the round block carries a line that is none of its three ('$stray'); a round states the panel:, the fixed: and the disputed: lines and nothing else, in the form:
@@ -246,11 +258,17 @@ COUNTS
 
     disputed=$(disputed_lines "$block" round)
 
+    # The rounds this one continues, read through the reader that refuses a record it cannot parse: the
+    # answer below names the next round's reviewers from them, and a record read as a reviewer called "!bad"
+    # would drop one still on FIX. Refused here, before anything of this round is measured or written.
+    n=$(counted_rounds)
+    readable_pairs "$n" >/dev/null
+
     # Measured before the record is written, so a checkpoint that cannot answer leaves no record behind and
     # the call is simply made again; a round recorded twice would count twice against the round limit.
     checkpoint=$("$here/checkpoint.sh" review)
 
-    next=$(( $(counted_rounds) + 1 ))
+    next=$((n + 1))
     limit=$(wf_review_rounds)
     [ "$next" -le "$limit" ] || wf_warn "this is round $next and max_rounds is $limit; the panel ends at the limit, so record the summary instead of running another round"
     mkdir -p "$state"
@@ -287,6 +305,10 @@ COUNTS
       [ "$recorded" = 0 ] || wf_die "the $recorded recorded round(s) name a commit that is no longer in this branch's history (amended or rebased), so they describe other work and the summary would state a panel nobody ran on this branch; run the panel from round 1 and record each round with panel.sh round"
       wf_die "no round of this review is recorded, so the summary would have no verdict to state; record every round with panel.sh round as it ends, then record the summary"
     fi
+    # The rounds may describe an earlier commit of this branch, but the summary describes the head it is
+    # recorded at: a commit made after the last round is one no reviewer read, so it is gated before the
+    # summary calls the panel ready for it.
+    gated_head summary "panel.sh record"
     # The only thing the caller still writes: the findings it disputes, one line each. Everything else is
     # derived, so a line that states one of those keys would contradict the record it is written into.
     stray=$(printf '%s\n' "$block" | grep -v '^[[:space:]]*disputed:' | grep -v '^[[:space:]]*$' | head -1 || true)

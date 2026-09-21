@@ -569,7 +569,10 @@ class ReviewRoundTests(PanelRecordCalls, ShimTest):
             self.assertEqual(r.returncode, 1, r.stdout)
             self.assertIn("error: WF_REVIEW_ROUNDS='abc' is not a positive number", r.stderr)
             self.assertIn("WF_REVIEW_ROUNDS=3", r.stderr, "and it names the fix")
-            self.assertNotIn("max_rounds: \n", r.stdout, "no fact states a limit nobody can read")
+        # facts.sh is the one that prints the limit, and it assigns before it prints: no brief of the
+        # session states a limit nobody can read, not even an empty one.
+        r = self.run_script(WORKER / "facts.sh", WF_REVIEW_ROUNDS="abc")
+        self.assertNotIn("max_rounds:", r.stdout, r.stdout)
 
     def test_a_round_every_reviewer_passed_ends_the_panel_at_the_summary(self):
         """The normal end of the loop, which the skill gates on: `none` in review_reviewers. A regression
@@ -609,6 +612,9 @@ class ReviewRoundTests(PanelRecordCalls, ShimTest):
             ("fixed: 0 (S1 0, S2 0, S3 0)\ndisputed: none", "has no panel: line"),
             (f"{ROUND_ONE}\npanel: code=PASS", "more than one panel: line"),
             ("panel:\nfixed: 0 (S1 0, S2 0, S3 0)\ndisputed: none", "names no reviewer"),
+            # A verdict with no reviewer on it: the writer would store the verdict as the name, and what it
+            # wrote back would be a record neither reader can parse, so the stage could not go on at all.
+            ("panel: =PASS\nfixed: 0 (S1 0, S2 0, S3 0)\ndisputed: none", "'=PASS' states no verdict"),
             ("panel: code=MAYBE\nfixed: 0 (S1 0, S2 0, S3 0)\ndisputed: none", "code=MAYBE"),
             ("panel: code=FIX→PASS\nfixed: 0 (S1 0, S2 0, S3 0)\ndisputed: none", "never a chain"),
             ("panel: code=FIX code=PASS\nfixed: 0 (S1 0, S2 0, S3 0)\ndisputed: none", "names code twice"),
@@ -616,6 +622,7 @@ class ReviewRoundTests(PanelRecordCalls, ShimTest):
             ("panel: code=PASS\nfixed: 2\ndisputed: none", "not of the form"),
             ("panel: code=PASS\nfixed: 2 (S1 1, S2 0, S3 0)\ndisputed: none", "counts 2 fixes but names 1"),
             ("panel: code=PASS\nfixed: 0 (S1 0, S2 0, S3 0)", "has no disputed: line"),
+            ("panel: code=PASS\nfixed: 0 (S1 0, S2 0, S3 0)\ndisputed:", "carries no text"),
             ("panel: code=PASS\nfixed: 0 (S1 0, S2 0, S3 0)\ndisputed: none\nreview_round: 9", "review_round: 9"),
         ):
             r = self.round(block)
@@ -623,6 +630,14 @@ class ReviewRoundTests(PanelRecordCalls, ShimTest):
             self.assertTrue(r.stderr.startswith("error: "), r.stderr)
             self.assertIn(word, r.stderr, block)
         self.assertIn("review_rounds_recorded: none", self.rounds())
+
+    def test_the_disputes_of_a_round_reach_the_context_that_continues_the_review(self):
+        """A dispute is the one thing the records hold that nothing derives: the summary carries only the
+        lines its caller writes, so a context that did not run the round has to be able to read them."""
+        dispute = "disputed: code S2 'rename the field' — the name is the one the ADR uses"
+        self.record_rounds(f"panel: code=FIX\nfixed: 0 (S1 0, S2 0, S3 0)\n{dispute}")
+        self.assertIn("    " + dispute, self.rounds())
+        self.assertIn(dispute, self.skill_brief("worker", "review", WF_BASE_BRANCH="main"))
 
     def test_the_review_stages_brief_carries_the_round_state(self):
         """End to end over the wiring: whatever the review skill injects has to name the round to run, or a
@@ -716,6 +731,49 @@ class PanelSummaryTests(PanelRecordCalls, ShimTest):
             self.assertEqual(r.returncode, 1, r.stdout)
             self.assertIn(tail.strip().split(":")[0], r.stderr)  # it names the line it refused
             self.assertTrue(self.print_brief().stdout.startswith("panel_summary: none recorded"))
+        # And the two shapes both records refuse through the one helper they share: no disputed: line at
+        # all, and one with nothing after the key. An empty dispute list is written `disputed: none`.
+        for block, word in (("", "has no disputed: line"), ("disputed:", "carries no text")):
+            r = self.record(block)
+            self.assertEqual(r.returncode, 1, r.stdout)
+            self.assertIn(word, r.stderr)
+            self.assertIn("summary block", r.stderr, "and it names the block it refused, not the round's")
+            self.assertTrue(self.print_brief().stdout.startswith("panel_summary: none recorded"))
+
+    def test_a_summary_at_a_commit_the_gate_has_not_passed_on_is_refused(self):
+        """The rounds may name an earlier commit, but the summary names the head it is recorded at, and
+        `panel.sh verdict` calls that head ready — which is the word the yolo finish stage merges on."""
+        self.record_rounds(ROUND_ONE, ROUND_TWO)
+        self.commit("late.txt")  # a commit no reviewer read and no gate ran on
+        r = self.record()
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("the gate answers 'none' for this head", r.stderr)
+        self.assertIn("panel.sh record", r.stderr, "and it names the call to make again")
+        self.assertTrue(self.print_brief().stdout.startswith("panel_summary: none recorded"))
+        # A dirty tree is the same case: what it carries is in no commit the summary could name.
+        (self.repo / "scratch.txt").write_text("not committed")
+        r = self.record()
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("scratch.txt", r.stderr)
+        (self.repo / "scratch.txt").unlink()
+        # And the way out, which is what the review stage does before it hands the summary on.
+        self.passing_gate()
+        r = self.record()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(self.run_script(WORKER / "panel.sh", "verdict").stdout, "ready\n")
+
+    def test_a_round_record_with_an_unreadable_fix_count_is_warned_about_and_counts_zero(self):
+        """The sibling of an unreadable `panel:` line, which is refused outright. A count is degraded
+        instead — the verdicts of that round are still readable — but a summary that understates what the
+        review fixed says so, because the pull request body quotes those counts."""
+        self.record_rounds(ROUND_ONE, ROUND_TWO)
+        record = Path(self.git("rev-parse", "--path-format=absolute", "--git-dir").strip()) / "worker/round.1"
+        record.write_text(record.read_text().replace("fixed_s2: 1", "fixed_s2: many"))
+        r = self.record()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("states no fixed_s2 this script can read ('many')", r.stderr)
+        self.assertIn("fixed: 2 (S1 1, S2 0, S3 1)", r.stdout, "the readable counts still sum")
+        self.assertIn("panel: code=FIX→PASS", r.stdout, "and the verdicts of that round are unaffected")
 
     def test_the_verdict_is_draft_unless_every_reviewers_last_round_passed(self):
         self.assertEqual(self.verdict("panel: code=PASS security=PASS docs=PASS tests=PASS senior=PASS"),
