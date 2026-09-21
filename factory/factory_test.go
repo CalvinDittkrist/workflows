@@ -308,10 +308,16 @@ func TestTheInterfaceIsReadOnly(t *testing.T) {
 			if allow := response.Header.Get("Allow"); allow != "GET, HEAD" {
 				t.Errorf("%s %s allows %q, want %q", method, path, allow, "GET, HEAD")
 			}
+			// A refused answer is an answer a browser reads, so it is hardened like every other one.
+			if got := response.Header.Get("X-Content-Type-Options"); got != "nosniff" {
+				t.Errorf("%s %s answers X-Content-Type-Options: %q, want %q", method, path, got, "nosniff")
+			}
 			response.Body.Close()
 		}
 	}
-	for path, want := range map[string]int{"/api": http.StatusOK, "/api/runs/1": http.StatusNotFound, "/nothing": http.StatusNotFound} {
+	// /api and /api/ are the same index; nothing else under /api is.
+	for path, want := range map[string]int{"/api": http.StatusOK, "/api/": http.StatusOK,
+		"/api/nothing": http.StatusNotFound, "/api/runs/1": http.StatusNotFound, "/nothing": http.StatusNotFound} {
 		response := f.do(t, "GET", path)
 		if response.StatusCode != want {
 			t.Errorf("GET %s answered %d, want %d", path, response.StatusCode, want)

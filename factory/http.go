@@ -14,11 +14,13 @@ func (f *Factory) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("/", uiHandler())
 	mux.HandleFunc("/api", f.index)
+	mux.HandleFunc("/api/{$}", f.index) // the same index for the reader who types the trailing slash
 	mux.HandleFunc("/api/status", f.status)
 	mux.HandleFunc("/api/repositories", f.repositories)
 	mux.HandleFunc("/api/line", f.line)
 	mux.HandleFunc("/api/runs/{id}", f.run)
-	return readOnly(browserSafe(mux))
+	// The headers are outside the refusal, so an answer that refuses carries them too.
+	return browserSafe(readOnly(mux))
 }
 
 // browserSafe is for the reader the dashboard added: a browser. The page needs nothing but what this
