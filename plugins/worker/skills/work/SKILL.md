@@ -35,6 +35,6 @@ what is unfinished, unsure or a known limit
 
 The script appends the base, the commits and the diffstat itself, so the note repeats none of them; at the second checkpoint it leaves out the pull request and the review summary too, which the next context reads from GitHub and from `panel.sh print`. A note with a section missing is refused with the section named: write it and hand over again.
 
-When the script prints `handoff: started`, say one line to the user and end your turn without another tool call. The detached process waits until you are idle, clears the session and sends `/worker:work` back to the pane, where a fresh context picks the pipeline up at that stage. Never send `/clear` yourself, and never keep working after handing over.
+When the script prints `handoff: started for pane <id>`, say one line to the user and end your turn without another tool call. The detached process waits until you are idle, clears the session and sends `/worker:work` back to the pane, where a fresh context picks the pipeline up at that stage. Never send `/clear` yourself, and never keep working after handing over.
 
 If you get blocked at any stage, say what is blocked and what you need in two lines, then stop.
