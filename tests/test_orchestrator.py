@@ -329,12 +329,12 @@ class ClaimEnvTests(ShimTest):
 
     def claim(self, *args, sandbox=False):
         """Claim issue #12 and return its output with the settings the worker session was really started with.
-        The sandboxed start passes them inside a command line for the shell of a pane, so that line is read
-        the way that shell reads it."""
+        The sandboxed start passes them inside a command line for the shell of a pane, so that line is run by
+        a real shell here: what that shell makes of it is what the sandboxed session is really started with."""
         r = self.run_script(ORCH / "claim.sh", "12", *args)
         self.assertEqual(r.returncode, 0, r.stderr)
         if sandbox:
-            words = shlex.split([c for c in self.argv_calls() if c[1:3] == ["pane", "run"]][0][-1])
+            words = self.shell_words([c for c in self.argv_calls() if c[1:3] == ["pane", "run"]][0][-1])
         else:
             words = [c for c in self.argv_calls() if c[1:3] == ["agent", "start"]][0]
         return r, json.loads(words[words.index("--settings") + 1])

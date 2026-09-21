@@ -111,3 +111,11 @@ class ShimTest(unittest.TestCase):
         # split("\n"), not splitlines(): \x1e is a line boundary to splitlines, which would undo the escape.
         records = self.argv_log.read_text().split("\n")
         return [[arg.replace("\x1e", "\n") for arg in record.split("\x1f")] for record in records if record]
+
+    def shell_words(self, line):
+        """The words a real `sh` makes of a command line a script built for another shell, expansions and all.
+        `shlex.split` performs no expansion, so it cannot tell a value that was quoted for that shell from one
+        the shell would rewrite; only running the line proves that a `$`, a quote or a space arrives as typed.
+        The words come back separated by NUL, which no argument of ours carries and no shell can produce."""
+        r = subprocess.run(["sh", "-c", 'printf "%s\\0" ' + line], capture_output=True, check=True)
+        return r.stdout.decode().split("\0")[:-1]

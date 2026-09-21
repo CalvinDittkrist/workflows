@@ -308,7 +308,7 @@ class WorkerKnobTests(ShimTest):
 
     def test_the_claim_accepts_exactly_the_documented_worker_knobs(self):
         knobs = self.documented_worker_knobs()
-        self.assertTrue(knobs, f"no worker knob read from {WORKER.name} and {self.README.name}")
+        self.assertTrue(knobs, f"no worker knob read from {WORKER.relative_to(ROOT)} and {self.README.name}")
         self.assertEqual(self.accepted_names(), knobs,
                          f"the names claim.sh accepts for --env and the worker knobs of the configuration "
                          f"table in {self.README.name} (minus {', '.join(self.CLAIM_OWNED)}, which a claim "

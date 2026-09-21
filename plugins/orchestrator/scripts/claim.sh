@@ -170,15 +170,17 @@ sl="$(wf_shell_quote "$here/statusline.sh") $compact_trigger"
 # an env block per variable across the settings levels and takes the command line's value for a key it sets
 # (https://code.claude.com/docs/en/settings.md, checked 2026-09-21), so a knob given here wins over the
 # repository's settings for this one session and leaves every other variable of theirs alone. Each value
-# enters as a jq argument and leaves as JSON: no shell ever reads it, whatever it contains.
+# enters as a jq argument and leaves as JSON: no shell inside the claim reads it, whatever it contains. The
+# knobs go in first, so the keys every claim sets are written over them and stay what this script says they
+# are however the accepted names ever change.
 env_extra='{}'
 for pair in ${env_pairs[@]+"${env_pairs[@]}"}; do
   env_extra=$(printf '%s' "$env_extra" | jq -c --arg n "${pair%%=*}" --arg v "${pair#*=}" '.[$n] = $v')
 done
 settings=$(jq -cn --arg m "$mode" --arg i "$issue" --arg sl "$sl" \
   --argjson w "$compact_window" --arg p "$compact_pct" --argjson e "$env_extra" \
-  '{env:({WF_MODE:$m, WF_ISSUE:$i, CLAUDE_CODE_DISABLE_BACKGROUND_TASKS:"1",
-          CLAUDE_AUTOCOMPACT_PCT_OVERRIDE:$p} + $e),
+  '{env:($e + {WF_MODE:$m, WF_ISSUE:$i, CLAUDE_CODE_DISABLE_BACKGROUND_TASKS:"1",
+                CLAUDE_AUTOCOMPACT_PCT_OVERRIDE:$p}),
     enabledPlugins:{"planner@workflows":false, "orchestrator@workflows":false},
     statusLine:{type:"command", command:$sl, padding:0, refreshInterval:60},
     autoCompactWindow:$w}')
