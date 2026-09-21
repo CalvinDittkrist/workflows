@@ -105,9 +105,10 @@ func (f *Factory) ingest(r *Run, line []byte) {
 			event.Title += " (" + m.TerminalReason + ")"
 		}
 		if m.IsError {
+			// The result line says that a session ended in an error, never why: the cause is in the
+			// lines before it. So it is the reason of last resort and never overwrites one of them.
 			event.Kind = "error"
-			f.error(r, event)
-			return
+			f.runs.update(r, func() { r.resultSummary = event.Title })
 		}
 		f.runs.event(r, event)
 	}

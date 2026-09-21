@@ -52,7 +52,8 @@ type Run struct {
 	// What the stream said, kept for the moment the run ends. Not part of the record.
 	reportOutcome string // ready or blocked, as the worker's final report gave it
 	reportDetail  string // the pull request for ready, the reason for blocked
-	lastError     string
+	lastError     string // the last error the session printed, which is why a failed run failed
+	resultSummary string // what the result line called an error, when the session printed no cause
 }
 
 // Tokens are the totals of the session, taken from the result line only: the assistant lines carry

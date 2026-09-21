@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -217,7 +218,11 @@ func (f *Factory) execute(parent context.Context, r *Run, issue Issue) {
 		f.runs.update(r, func() { r.Reason = r.reportDetail })
 		f.finish(r, outcomeBlocked, "", &exitCode)
 	case waitErr != nil:
-		f.finish(r, outcomeFailed, fmt.Sprintf("the session ended in an error (exit %d): %s", exitCode, r.lastError), &exitCode)
+		cause := r.lastError
+		if cause == "" {
+			cause = r.resultSummary
+		}
+		f.finish(r, outcomeFailed, strings.TrimSpace(fmt.Sprintf("the session ended in an error (exit %d): %s", exitCode, cause)), &exitCode)
 	default:
 		f.finish(r, outcomeFailed, "the session ended without a report; a worker ends by reporting ready: or blocked:", &exitCode)
 	}
