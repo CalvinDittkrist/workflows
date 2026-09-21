@@ -31,20 +31,22 @@ class ManifestTests(unittest.TestCase):
                 self.assertIn(f"name: {agent.stem}\n", fm, agent)
 
     def test_agent_models_match_their_role(self):
+        """The model of a session agent is a decision; every other agent inherits the session it serves."""
         expected = {
             "orchestrator/agents/orchestrator.md": "sonnet",
             "worker/agents/worker.md": "opus",
             "planner/agents/planner.md": "fable",
             "worker/agents/docs-reviewer.md": "sonnet",
         }
-        for rel, model in expected.items():
-            fm = (ROOT / "plugins" / rel).read_text().split("---")[1]
-            self.assertIn(f"model: {model}\n", fm, rel)
-        for agent in (ROOT / "plugins/worker/agents").glob("*.md"):
-            if f"worker/agents/{agent.name}" in expected:
-                continue
-            fm = agent.read_text().split("---")[1]
-            self.assertIn("model: inherit\n", fm, agent)
+        agents = sorted(ROOT.glob("plugins/*/agents/*.md"))
+        self.assertTrue(set(expected) <= {a.relative_to(ROOT / "plugins").as_posix() for a in agents})
+        for agent in agents:
+            rel = agent.relative_to(ROOT / "plugins").as_posix()
+            found = re.search(r"^model: (.+)$", agent.read_text().split("---")[1], re.M)
+            self.assertIsNotNone(found, rel)
+            # claude plugin validate accepts any string here, so a typo like "fabel" is only caught by this.
+            self.assertIn(found.group(1), {"fable", "opus", "sonnet", "haiku", "inherit"}, rel)
+            self.assertEqual(found.group(1), expected.get(rel, "inherit"), rel)
 
     def assert_read_only(self, agent):
         """An agent that only judges: no edit tool and no agent tool, neither granted nor reachable."""
