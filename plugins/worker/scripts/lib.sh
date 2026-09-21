@@ -27,8 +27,11 @@ wf_state_dir() {
   printf '%s/worker' "$d"
 }
 # A record a worker stage leaves for the next one (ADR 0018): headers, an empty line, then the block it
-# carries. Both records in this plugin are read through these two, so their formats cannot drift apart.
-wf_record_field() { sed -n "s/^$2: //p" "$1" | head -1; }
+# carries. Every record in this plugin is read through these two, so their formats cannot drift apart.
+# A field is read from the headers only: the block below them quotes gate output, reviewer text or a
+# handoff note, none of which the stage that reads a header wrote, and a line of it that looks like a
+# header is text in a block, not a fact about the record.
+wf_record_field() { sed -n "/^$/q; s/^$2: //p" "$1" | head -1; }
 wf_record_body() { sed '1,/^$/d' "$1"; }
 wf_repo_owner() { gh repo view --json owner -q .owner.login; }
 wf_repo_name() { gh repo view --json name -q .name; }

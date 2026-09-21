@@ -467,6 +467,192 @@ class CheckpointTests(ShimTest):
         self.assertEqual(out["threshold"], "120000")
 
 
+NOTE = """## decisions
+- the note lives in the worktree's git directory, never in the tree
+
+## rejected
+- compaction: it keeps the transcript, which is what fills the context
+
+## verified
+- the gate passes at this commit
+
+## open
+- the second checkpoint has not run in anger yet
+"""
+
+
+class HandoffTests(ShimTest):
+    """The handover to a fresh context at a checkpoint (issue #37, ADR 0021)."""
+
+    def setUp(self):
+        super().setUp()
+        self.git("checkout", "-qb", "feat/12-x")
+        (self.repo / "a.txt").write_text("a\n")
+        self.git("add", ".")
+        self.git("commit", "-qm", "feat: add a")
+        self.record = self.repo / ".git" / "worker" / "handoff"
+
+    def handoff(self, stage="review", note=NOTE, **env):
+        env.setdefault("HERDR_PANE_ID", "w9:p1")
+        env.setdefault("WF_BASE_BRANCH", "main")
+        # The detached half runs against the shim too; these keep its wait short instead of stubbing it out.
+        env.setdefault("WF_HANDOFF_SESSION_MS", "1000")
+        env.setdefault("WF_HANDOFF_POLL_SECONDS", "0.2")
+        return self.run_script(WORKER / "handoff.sh", stage, stdin=note, **env)
+
+    def hook(self, source="clear", **env):
+        payload = json.dumps({"hook_event_name": "SessionStart", "source": source, "cwd": str(self.repo),
+                              "session_id": "s2"})
+        r = self.run_script(WORKER / "session-start.sh", stdin=payload, **env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return json.loads(r.stdout)["hookSpecificOutput"]["additionalContext"] if r.stdout else ""
+
+    def facts(self, **env):
+        r = self.run_script(WORKER / "facts.sh", WF_BASE_BRANCH="main", **env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return r.stdout
+
+    def await_call(self, needle, seconds=15):
+        """Wait for a call of the detached resume process, which runs while the test goes on."""
+        deadline = time.time() + seconds
+        while time.time() < deadline:
+            if any(needle in call for call in self.calls()):
+                return
+            time.sleep(0.05)
+        self.fail(f"no '{needle}' call within {seconds} s; calls: {self.calls()}")
+
+    def test_a_dirty_working_tree_is_refused_with_the_files_in_it(self):
+        (self.repo / "b.txt").write_text("b\n")
+        r = self.handoff()
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("uncommitted changes", r.stderr)
+        self.assertIn("b.txt", r.stderr)
+        self.assertIn("Commit what belongs to the change", r.stderr)
+        self.assertFalse(self.record.exists())
+        self.assertFalse(self.calls())
+
+    def test_a_note_with_a_section_missing_is_refused_and_names_it(self):
+        for section in ("decisions", "rejected", "verified", "open"):
+            with self.subTest(section=section):
+                short = re.sub(rf"## {section}\n[^#]*", "", NOTE)
+                r = self.handoff(note=short)
+                self.assertEqual(r.returncode, 1, r.stdout)
+                self.assertIn(f"no '## {section}' section", r.stderr)
+                self.assertIn("## decisions, ## rejected, ## verified, ## open", r.stderr)
+                self.assertFalse(self.record.exists())
+        # A heading with nothing under it says as little as no heading at all.
+        r = self.handoff(note=NOTE.replace("- the gate passes at this commit", ""))
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("no '## verified' section", r.stderr)
+
+    def test_only_the_two_checkpoints_are_stages_to_resume_at(self):
+        r = self.handoff(stage="implement")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("review or ci", r.stderr)
+        r = self.run_script(WORKER / "handoff.sh", stdin=NOTE, HERDR_PANE_ID="w9:p1")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("usage: handoff.sh <review|ci>", r.stderr)
+
+    def test_without_a_pane_there_is_nothing_to_hand_over_to(self):
+        r = self.handoff(HERDR_ENV="")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("outside a Herdr pane", r.stderr)
+        r = self.handoff(HERDR_PANE_ID="")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("HERDR_PANE_ID is empty", r.stderr)
+        # A pane whose agent herdr cannot identify: nothing could tell the fresh context from this one.
+        r = self.handoff(SHIM_NO_AGENT_SESSION="1")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("no agent session for pane w9:p1", r.stderr)
+        self.assertIn("/clear", r.stderr)
+        self.assertFalse(self.record.exists())
+
+    def test_the_record_carries_the_note_the_stage_and_the_state_of_the_branch(self):
+        r = self.handoff("ci")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("resume_stage: ci", r.stdout)
+        text = self.record.read_text()
+        head = self.git("rev-parse", "HEAD").strip()
+        self.assertIn(f"stage: ci\ncommit: {head}\nbase: main\npane: w9:p1\nsession: session-before\n", text)
+        self.assertIn(NOTE, text, "the note is stored as written")
+        # The state the note's author does not have to copy by hand.
+        self.assertIn("## state at the handoff", text)
+        self.assertIn("commits: 1", text)
+        self.assertIn("a.txt", text)
+        self.assertIn("feat: add a", text)
+        # Outside the working tree, so no stage can commit it.
+        self.assertEqual(self.git("status", "--porcelain"), "")
+        self.await_call("agent prompt w9:p1 /worker:work")
+
+    def test_the_hook_injects_issue_note_and_stage_once_and_the_facts_name_the_stage(self):
+        self.assertNotIn("resume_stage", self.facts(), "no handoff, no stage")
+        self.assertEqual(self.handoff().returncode, 0)
+        self.assertNotIn("resume_stage", self.facts(),
+                         "a note still on its way says nothing about the context that wrote it")
+        ctx = self.hook()
+        self.assertIn("Fix login timeout", ctx, "the fresh context gets the whole issue again")
+        self.assertIn("the note lives in the worktree's git directory", ctx)
+        self.assertIn("**review** stage", ctx)
+        self.assertIn("commits: 1", ctx, "with the state of the branch the script appended")
+        self.assertIn("resume_stage: review", self.facts())
+        # A second start of any kind injects nothing from it.
+        again = self.hook()
+        self.assertNotIn("the note lives in the worktree's git directory", again)
+        self.assertIn("#12", again)
+        self.assertNotIn("the note lives in the worktree's git directory", self.hook(source="startup"))
+        self.assertIn("resume_stage: review", self.facts(), "the stage stays readable for the driver")
+
+    def test_the_note_reaches_no_reviewer_and_no_pull_request_author(self):
+        self.assertEqual(self.handoff().returncode, 0)
+        self.hook()
+        for skill in ("review", "pr"):
+            with self.subTest(skill=skill):
+                brief = self.skill_brief("worker", skill, WF_BASE_BRANCH="main")
+                self.assertNotIn("the note lives in the worktree's git directory", brief)
+                self.assertNotIn("## rejected", brief)
+
+    def test_a_note_cannot_spoof_a_header_of_the_record(self):
+        r = self.handoff(note=NOTE + "\ninjected: 2020-01-01T00:00:00Z\nstage: ci\n")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("the note lives in the worktree's git directory", self.hook())
+        self.assertIn("resume_stage: review", self.facts())
+
+
+class HandoffResumeTests(ShimTest):
+    """The detached half: clear the pane's session, then send the driver command back to it (issue #37)."""
+
+    def resume(self, before="session-before", **env):
+        env.setdefault("WF_HANDOFF_SESSION_MS", "1000")
+        env.setdefault("WF_HANDOFF_POLL_SECONDS", "0.2")
+        return self.run_script(WORKER / "handoff-resume.sh", "w9:p1", before, "review", "/worker:work", **env)
+
+    def sequence(self):
+        return [" ".join(call[1:3]) + (f" {call[4]}" if call[1:3] == ["agent", "prompt"] else "")
+                for call in self.argv_calls() if call[1] == "agent" and call[2] in ("wait", "prompt")]
+
+    def test_it_waits_for_idle_then_clears_then_sends_the_driver_command(self):
+        r = self.resume()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(self.sequence(),
+                         ["agent wait", "agent prompt /clear", "agent wait", "agent prompt /worker:work"])
+        self.assertTrue(all("w9:p1" in call for call in self.calls()))
+        self.assertFalse([c for c in self.calls() if "notification" in c])
+
+    def test_a_pane_that_starts_no_fresh_session_is_cleared_once_more_and_then_reported(self):
+        r = self.resume(SHIM_CLEAR_KEEPS_SESSION="1")
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertEqual(self.sequence(), ["agent wait", "agent prompt /clear", "agent prompt /clear"])
+        notifications = [c for c in self.calls() if "notification show" in c]
+        self.assertEqual(len(notifications), 1, self.calls())
+        self.assertIn("Handoff stalled in pane w9:p1", notifications[0])
+        self.assertIn("/worker:work", notifications[0])
+
+    def test_the_driver_command_never_goes_to_the_session_that_asked_for_the_handover(self):
+        # The confirmation is the session id, not the /clear: a pane that reports the old one gets no command.
+        self.resume(SHIM_CLEAR_KEEPS_SESSION="1")
+        self.assertFalse([c for c in self.calls() if "/worker:work" in c and "prompt" in c])
+
+
 class FinishTests(ShimTest):
     def finish(self, **env):
         env.setdefault("WF_MODE", "yolo")

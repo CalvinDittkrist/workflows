@@ -32,6 +32,19 @@ case "$1 $2" in
     printf '%s' "$3" > "${SHIM_WT_ROOT:?}/.agent-pane"
     echo '{"result":{"type":"ok"}}' ;;
   "agent wait") echo '{"result":{"agent_status":"idle"}}' ;;
+  "agent get")
+    # The pane's agent, with the session identity herdr 0.9 reports for it. SHIM_NO_AGENT_SESSION drops that
+    # field, the way a pane whose agent herdr has not identified answers.
+    if [ -n "${SHIM_NO_AGENT_SESSION:-}" ]; then printf '{"result":{"agent":{"pane_id":"%s"}}}\n' "$3"; exit 0; fi
+    printf '{"result":{"agent":{"pane_id":"%s","agent_session":{"agent":"claude","kind":"id","value":"%s"}}}}\n' \
+      "$3" "$(cat "${SHIM_WT_ROOT}/.agent-session" 2>/dev/null || printf 'session-before')" ;;
+  "agent prompt")
+    # `/clear` starts a fresh Claude session, which herdr reports under a new id; SHIM_CLEAR_KEEPS_SESSION=1
+    # is the pane that swallowed it and keeps the old context.
+    if [ "$4" = "/clear" ] && [ -z "${SHIM_CLEAR_KEEPS_SESSION:-}" ]; then
+      printf 'session-after-%s' "$(date +%s)$RANDOM" > "${SHIM_WT_ROOT:?}/.agent-session"
+    fi
+    echo '{"result":{"type":"ok"}}' ;;
   "pane read")
     case "${SHIM_AGENT_START_FAILS:-0}" in
       1) echo "--agent 'planner' not found. Available agents: claude, Explore" ;;

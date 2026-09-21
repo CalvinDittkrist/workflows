@@ -16,3 +16,12 @@ case "$(printf '%s' "${CLAUDE_CODE_DISABLE_BACKGROUND_TASKS:-}" | tr '[:upper:]'
   1|true|yes|on) wf_kv subagents "foreground" ;;
   *) wf_kv subagents "background" ;;
 esac
+
+# A handoff is pending once the SessionStart hook has injected its note into a fresh context (ADR 0021):
+# this line is how that context's driver learns which stage it starts at, the stages before it having run
+# in a context that is gone. Nothing is printed without a handoff, and nothing while the note is still on
+# its way to the next context, where it would describe this one instead of it. The next handoff replaces
+# the record, and the worktree takes the last one with it.
+if state=$(wf_state_dir 2>/dev/null) && [ -f "$state/handoff" ] && [ -n "$(wf_record_field "$state/handoff" injected)" ]; then
+  wf_kv resume_stage "$(wf_record_field "$state/handoff" stage)"
+fi

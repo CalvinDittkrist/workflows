@@ -14,13 +14,39 @@ mode="${WF_MODE:-manual}"
 
 emit() { jq -n --arg c "$1" '{hookSpecificOutput:{hookEventName:"SessionStart",additionalContext:$c}}'; }
 
-if [ "$source_" != "startup" ]; then
+# A handoff note is waiting when the previous context of this worktree wrote one and no session has been
+# given it yet (ADR 0021). That context cleared itself, so this session starts with the issue as if it were
+# the first — plus the note, which is the only thing the branch and the issue do not say.
+handoff=""
+if state=$(wf_state_dir 2>/dev/null) && [ -f "$state/handoff" ] && [ -z "$(wf_record_field "$state/handoff" injected)" ]; then
+  handoff="$state/handoff"
+fi
+
+if [ "$source_" != "startup" ] && [ -z "$handoff" ]; then
   emit "Worker session for issue #$issue (mode: $mode, branch: $(wf_branch)). Re-read the issue with \`gh issue view $issue\` if you lost its context."
   exit 0
 fi
 
+# The note goes to one session only: the record is marked before the context is emitted, so a second start
+# in the same worktree — a compact, a resume, a second handoff that never came — injects nothing from it,
+# and a note that is delivered twice cannot make two contexts resume the same stage.
+archive() {
+  [ -n "$handoff" ] || return 0
+  { printf 'injected: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"; cat "$handoff"; } > "$handoff.tmp" && mv "$handoff.tmp" "$handoff"
+}
+# What the fresh context is told about the handoff: the stage to resume at, and the note verbatim below it.
+handoff_context() {
+  [ -n "$handoff" ] || return 0
+  printf '\n\n# Handoff from the previous context of this worker\n'
+  printf 'This session continues a pipeline that ran out of context. Resume `/worker:work` at the **%s** stage: the stages before it are done, and what they did is in the commits of this branch, not in this note. The note below was written by that context for this one — a report, while the branch and the issue are the truth.\n\n' \
+    "$(wf_record_field "$handoff" stage)"
+  wf_record_body "$handoff"
+}
+
 if ! command -v gh >/dev/null 2>&1 || ! json=$(gh issue view "$issue" --json number,title,body,url,labels,assignees,comments 2>/dev/null); then
-  emit "Worker session for issue #$issue (mode: $mode). GitHub is unavailable in this session, so the issue text could not be loaded. Ask the user for it or run \`gh issue view $issue\` once gh works."
+  ctx="Worker session for issue #$issue (mode: $mode). GitHub is unavailable in this session, so the issue text could not be loaded. Ask the user for it or run \`gh issue view $issue\` once gh works.$(handoff_context)"
+  archive
+  emit "$ctx"
   exit 0
 fi
 
@@ -40,4 +66,6 @@ ctx=$(printf '%s' "$json" | jq -r --arg mode "$mode" --arg note "$assign_note" -
   "\n" + ((.body // "") | .[0:6000]) + (if ((.body // "")|length) > 6000 then "\n[body truncated]" else "" end) +
   (if (.comments|length) > 0 then "\n\n## Comments (last \([.comments|length,8]|min))\n" +
      ([.comments[-8:][] | "- @\(.author.login): " + (.body | .[0:1500] | gsub("\n"; " "))] | join("\n")) else "" end)')
+ctx="$ctx$(handoff_context)"
+archive
 emit "$ctx"
