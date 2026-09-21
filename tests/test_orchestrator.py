@@ -1,8 +1,10 @@
 import json
+import os
 import shlex
+import subprocess
 import unittest
 
-from helpers import ORCH, ShimTest
+from helpers import GIT_ISOLATION, ORCH, ShimTest
 
 
 class ClaimTests(ShimTest):
@@ -121,6 +123,76 @@ class ClaimTests(ShimTest):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("status: already-claimed", r.stdout)
         self.assertIn("branch: fix/12-fix-login-timeout", r.stdout)
+
+    def remote_claim(self, branch):
+        """A remote whose branch `branch` carries a commit the local repository has never seen: what the
+        factory leaves behind when it claims an issue and pushes work. Returns that commit."""
+        remote = self.base / "remote.git"
+        subprocess.run(["git", "init", "-q", "--bare", str(remote)], check=True, env={**os.environ, **GIT_ISOLATION})
+        self.git("remote", "add", "origin", str(remote))
+        self.git("push", "-q", "origin", "main")
+        self.git("checkout", "-q", "-b", "wip")
+        (self.repo / "factory-work.md").write_text("work the factory pushed\n")
+        self.git("add", ".")
+        self.git("commit", "-qm", "wip")
+        sha = self.git("rev-parse", "HEAD").strip()
+        self.git("push", "-q", "origin", f"wip:refs/heads/{branch}")
+        self.git("checkout", "-q", "main")
+        self.git("branch", "-qD", "wip")
+        return sha
+
+    def test_claim_refuses_an_issue_routed_to_the_factory(self):
+        r = self.run_script(ORCH / "claim.sh", "19")
+        self.assertNotEqual(r.returncode, 0, r.stdout)
+        self.assertIn("(labels: ready-for-agent,factory)", r.stderr)
+        self.assertIn("Remove the label factory", r.stderr)
+        self.assertIn("--force", r.stderr)
+        self.assertEqual(self.git("worktree", "list").count("\n"), 1)
+        self.assertEqual(self.git("branch", "--list", "*/19-*"), "")
+        for call in self.calls():
+            self.assertRegex(call, r"^gh (repo|issue) view ", "the refusal must only read, never create or assign")
+
+    def test_force_claims_a_routed_issue_and_warns(self):
+        r = self.run_script(ORCH / "claim.sh", "19", "--force")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("routed to the factory", r.stderr)
+        self.assertIn("--force", r.stderr)
+        self.assertIn("branch: feat/19-routed-to-the-factory", r.stdout)
+        self.assertEqual(len([c for c in self.calls() if c.startswith("herdr agent start")]), 1)
+
+    def test_claim_refuses_an_issue_already_claimed_on_the_remote(self):
+        # The remote branch is a feat/ one while the labels of #12 derive fix/: the claim on the remote is
+        # found by issue number, not by the branch type of the moment.
+        self.remote_claim("feat/12-fix-login-timeout")
+        r = self.run_script(ORCH / "claim.sh", "12")
+        self.assertNotEqual(r.returncode, 0, r.stdout)
+        self.assertIn("feat/12-fix-login-timeout", r.stderr)
+        self.assertIn("--force", r.stderr)
+        self.assertEqual(self.git("worktree", "list").count("\n"), 1)
+        self.assertEqual(self.git("branch", "--list", "*/12-*"), "")
+        self.assertFalse([c for c in self.calls() if "worktree create" in c or "agent start" in c])
+
+    def test_force_adopts_the_branch_the_remote_claim_left(self):
+        sha = self.remote_claim("feat/12-fix-login-timeout")
+        r = self.run_script(ORCH / "claim.sh", "12", "--force")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("adopts that branch", r.stderr)
+        self.assertIn("branch: feat/12-fix-login-timeout", r.stdout)
+        # The worktree continues the remote branch, so the work pushed there is in it and main is not its tip.
+        wt = self.repo / ".claude/worktrees/feat-12-fix-login-timeout"
+        self.assertTrue((wt / "factory-work.md").exists())
+        self.assertEqual(self.git("rev-parse", "HEAD", cwd=wt).strip(), sha)
+        self.assertEqual(self.git("branch", "--list", "fix/12-fix-login-timeout"), "")
+
+    def test_an_issue_claimed_locally_stays_already_claimed_when_the_factory_takes_it(self):
+        self.run_script(ORCH / "claim.sh", "12")
+        self.remote_claim("feat/12-fix-login-timeout")
+        self.reset_calls()
+        r = self.run_script(ORCH / "claim.sh", "12", SHIM_ISSUE_12_LABELS="bug,ready-for-agent,factory")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("status: already-claimed", r.stdout)
+        self.assertIn("branch: fix/12-fix-login-timeout", r.stdout)
+        self.assertFalse([c for c in self.calls() if "worktree create" in c or "agent start" in c])
 
     def test_claim_refuses_outside_herdr(self):
         r = self.run_script(ORCH / "claim.sh", "12", HERDR_ENV="")

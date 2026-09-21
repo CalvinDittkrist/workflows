@@ -5,7 +5,7 @@ Coordinator session for one repository. Start it in the main checkout inside a H
 | Skill | Script | Effect |
 | --- | --- | --- |
 | `/orchestrator:plan <idea words \| #issue> [--base b]` | `plan.sh` | branch `plan/<slug>`, topic or issue in the branch description, worktree, Herdr workspace, start `claude --agent planner … /planner:plan` |
-| `/orchestrator:claim <issue> [--sandbox] [--force] [--base b]` | `claim.sh` | validate issue (open, and `ready-for-agent` unless `--force`), branch `<type>/<n>-<slug>`, worktree in `.claude/worktrees/`, Herdr workspace, start `claude --agent worker … /worker:work` |
+| `/orchestrator:claim <issue> [--sandbox] [--force] [--base b]` | `claim.sh` | validate issue (open, `ready-for-agent`, not routed to the factory and not claimed on origin, unless `--force`), branch `<type>/<n>-<slug>`, worktree in `.claude/worktrees/`, Herdr workspace, start `claude --agent worker … /worker:work` |
 | `/orchestrator:yolo-claim <issue> [--force]` | `claim.sh --yolo` | same, worker merges itself when green |
 | `/orchestrator:board` | `board.sh` | table: issue (or `plan`), branch, agent state, PR, checks, review, workspace; then the frontier with each issue's milestone: open `ready-for-agent` issues with no open blocker, no assignee and no worktree; then the specs ready for acceptance: open `spec` issues with native sub-issues and none of them open, with the command that opens a planning session on one |
 | `/orchestrator:merge <pr>` | `merge.sh` | refuse unless CLEAN, checks pass, no unresolved threads, no changes requested; remove workspace + worktree, squash-merge, delete branches, ff main; a promotion PR from `dev` gets a merge commit and keeps `dev` |
@@ -14,6 +14,8 @@ Coordinator session for one repository. Start it in the main checkout inside a H
 | `/orchestrator:herdr` | | loads Herdr's own skill (from `herdr --skill`) for manual pane control |
 
 An issue without the `ready-for-agent` label is refused before anything is created; the error names its labels and the fix (triage it in a planning session, or for a `spec` claim its tickets). `--force` claims it anyway ([ADR 0014](../../docs/adr/0014-claims-require-ready-for-agent.md)).
+
+Work the factory owns is refused the same way, before anything is created: an issue that carries the routing label `factory`, because the factory host claims it and opens its pull request from there, and an issue for which origin already has a branch of the contract's shape (`<type>/<issue>-…`), because a claim on the remote is the creation of that branch. The error names the labels or the branch and the fix. `--force` claims both anyway; over a remote branch it adopts that branch, so the worktree starts from it and continues the work pushed there instead of from the base branch.
 
 Hook: `SessionStart` (startup only) prints the gh-axi dashboard (repo, open issues, open PRs) in GitHub repositories, via `gh-axi` or `npx -y gh-axi`. Both plugins ship a `gh-axi` discovery skill so agents prefer it over raw `gh`.
 

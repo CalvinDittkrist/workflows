@@ -125,6 +125,9 @@ case "$*" in
     echo '{"number":16,"title":"Small spec","state":"OPEN","labels":[{"name":"spec"},{"name":"ready-for-agent"}],"url":"https://github.com/o/r/issues/16"}' ;;
   "issue view 18 --json number,title,state,labels,url")
     echo '{"number":18,"title":"Comma label","state":"OPEN","labels":[{"name":"needs,ready-for-agent"}],"url":"https://github.com/o/r/issues/18"}' ;;
+  # 19 is routed to the factory: agent-ready, but the factory host claims it, so a local claim leaves it alone.
+  "issue view 19 --json number,title,state,labels,url")
+    echo '{"number":19,"title":"Routed to the factory","state":"OPEN","labels":[{"name":"ready-for-agent"},{"name":"factory"}],"url":"https://github.com/o/r/issues/19"}' ;;
   "issue view 17 --json number,title,state,labels,url")
     echo '{"number":17,"title":"Unlabelled report","state":"OPEN","labels":[],"url":"https://github.com/o/r/issues/17"}' ;;
   # SHIM_NO_LABELS=1: a repository without a single label, so a run creates the whole vocabulary.

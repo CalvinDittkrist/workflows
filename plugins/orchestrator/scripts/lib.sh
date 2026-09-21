@@ -6,6 +6,11 @@ wf_warn() { printf 'warning: %s\n' "$*" >&2; }
 wf_kv() { printf '%s: %s\n' "$1" "$2"; }
 wf_need() { command -v "$1" >/dev/null 2>&1 || wf_die "$1 is required but not on PATH"; }
 
+# The factory's routing label, as the label vocabulary defines it (plugins/planner/scripts/labels.sh). An issue
+# that carries it belongs to the factory host, which claims it on GitHub, so a local claim leaves it alone.
+# shellcheck disable=SC2034  # read by the scripts that source this file
+WF_ROUTING_LABEL=factory
+
 # Root of the main checkout, even when called from a linked worktree.
 wf_main_root() {
   local common

@@ -22,7 +22,7 @@ Every skill has `disable-model-invocation: true`: only the user invokes them, an
 
 Hook: `SessionStart` injects the topic (from the branch description `plan.sh` wrote) or the issue text, marked as data. Silent outside `plan/*` worktrees and in subagents.
 
-Labels the plugin owns and creates on demand: `ready-for-agent`, `needs-triage`, `needs-info`, `ready-for-human`, `wontfix`, `spec`, `bug`, `enhancement`. Sub-issues and blocking edges use GitHub's native APIs and fall back to body text where a repository lacks them.
+Labels the plugin owns and creates on demand: `ready-for-agent`, `needs-triage`, `needs-info`, `ready-for-human`, `wontfix`, `spec`, `factory`, `bug`, `enhancement`. Sub-issues and blocking edges use GitHub's native APIs and fall back to body text where a repository lacks them.
 
 The agent has eight tools (Bash, Read, Write, Edit, Grep, Glob, Agent, WebFetch) and no Skill tool: you type the stage skills. Requires `gh`, `jq`, `git`. `WF_PLANNER_PERMISSION_MODE` (default `auto`), `WF_PLANNER_LANGUAGE`, `WF_CLAUDE_ARGS` and `WF_PLANNER_CLAUDE_ARGS` apply at start.
 
