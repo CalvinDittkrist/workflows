@@ -116,6 +116,7 @@ make check                                        # the gate: shellcheck, plugin
 claude --plugin-dir plugins/worker                # try a plugin in a session without installing it
 scripts/dev-orchestrator.sh                       # orchestrator from the checkout, inside a Herdr pane
 scripts/context-report.py                         # diagnostic: context and tool mix of finished worker sessions
+make ui                                           # build the dashboard the factory binary embeds (a fresh clone has only a placeholder)
 go -C factory run . -fake -config factory.json    # the factory on a canned queue: no tokens, no git, no GitHub
 npm --prefix factory/ui run dev                   # the dashboard with hot reload, against a factory started beside it
 ```

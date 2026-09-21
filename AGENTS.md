@@ -4,7 +4,7 @@ Public repository of Claude Code plugins for agent-driven development: an orches
 
 ## Commands
 - Gate: `make check` runs everything CI runs (shellcheck, `claude plugin validate --strict`, the standard check, python unittest, the dashboard's lint and build, the factory's gofmt, vet, staticcheck and Go tests, and the dashboard's browser test); `make lint`, `make validate`, `make standard`, `make test`, `make ui`, `make factory`, `make browser` run one part
-- Factory without tokens, git or GitHub: `go -C factory run . -fake -config <file>` works a canned queue with scripted workers; read it at `http://<listen>/` in a browser or at `http://<listen>/api/line`. The dashboard under `/` is the Vite build in `factory/ui`, embedded in the binary; `npm --prefix factory/ui run dev` serves it with hot reload against a factory beside it
+- Factory without tokens, git or GitHub: `make ui && go -C factory run . -fake -config <file>` works a canned queue with scripted workers; read it at `http://<listen>/` in a browser or at `http://<listen>/api/line`. The dashboard under `/` is the Vite build in `factory/ui` that `make ui` writes and the binary embeds; a fresh clone has only the placeholder, and until it is built `/` answers 404 while the API works. `npm --prefix factory/ui run dev` serves the dashboard with hot reload against a factory beside it
 - Try a plugin without installing: `claude --plugin-dir plugins/<name>`
 - Release a plugin: bump `version` in `plugins/<name>/.claude-plugin/plugin.json`, commit, `scripts/release.sh <name> --push`
 
