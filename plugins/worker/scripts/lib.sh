@@ -61,6 +61,13 @@ wf_review_rounds() {
   printf '%s' "$n" | grep -Eq '^[1-9][0-9]*$' || wf_die "WF_REVIEW_ROUNDS='$n' is not a positive number of rounds, e.g. WF_REVIEW_ROUNDS=3"
   printf '%s\n' "$n"
 }
+# The uncommitted changes of this worktree, indented for a refusal that lists them, and empty when there are
+# none. Three writes refuse a dirty tree — a handoff, a round record and the summary — because each of them
+# describes a commit; what the three share is the listing, not the sentence that says why.
+wf_dirty_tree() {
+  local dirty; dirty=$(git status --porcelain)
+  [ -z "$dirty" ] || printf '%s' "$dirty" | sed 's/^/  /'
+}
 # A commit as a reader wants it, and as the caller has it when git cannot resolve it any more: a record
 # names a commit an amend or a rebase may have taken away, and a brief still has to be able to print it.
 wf_short() { git rev-parse --short "$1" 2>/dev/null || printf '%s\n' "$1"; }
