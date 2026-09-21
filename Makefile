@@ -1,7 +1,7 @@
 # The gate: `make check` runs everything CI gates on, locally and in the CI job named `check`.
 SCRIPTS := $(wildcard plugins/*/scripts/*.sh scripts/*.sh) $(wildcard tests/shims/*)
 
-.PHONY: check lint validate standard test ui factory browser
+.PHONY: check lint validate standard test ui factory factory-go browser
 check: lint validate standard test ui factory browser
 
 # The factory's dashboard: an npm package that Vite builds into factory/ui/dist/app, which the binary
@@ -49,8 +49,12 @@ browser: $(UI_BUILD)
 	npm --prefix $(UI) test
 
 # The factory is a Go service; its tests start the real binary and watch it from outside. They read
-# the dashboard out of the binary, so the build it embeds has to be there before they run.
-factory: $(UI_BUILD)
+# the dashboard out of the binary, so the build it embeds has to be there before they run. The Go part
+# stands on its own as `factory-go`, so that the gate's own tests can reach a missing tool's error line
+# without an npm build in front of it.
+factory: $(UI_BUILD) factory-go
+
+factory-go:
 	@command -v go >/dev/null || { echo 'error: go not installed; brew install go (or https://go.dev/dl), the factory is written in Go' >&2; exit 1; }
 	@command -v gofmt >/dev/null || { echo '$(NO_GOFMT)' >&2; exit 1; }
 	@files="$$(go -C factory list -f '{{$$d := .Dir}}{{range .GoFiles}}{{$$d}}/{{.}}{{"\n"}}{{end}}{{range .TestGoFiles}}{{$$d}}/{{.}}{{"\n"}}{{end}}{{range .XTestGoFiles}}{{$$d}}/{{.}}{{"\n"}}{{end}}{{range .IgnoredGoFiles}}{{$$d}}/{{.}}{{"\n"}}{{end}}' ./...)" || exit 1; \
