@@ -124,8 +124,10 @@ fi
 # their product, and it is the number the status line is given, so the pane shows the size against the point
 # this session compacts by and not against a window it never reaches. refreshInterval keeps the value
 # fresh while one long tool call runs, which changes no message and would otherwise render nothing.
+# The window is the lever for the trigger, because the percentage cannot be raised: 250 000 puts the trigger
+# at 200 000 (ADR 0034).
 here=$(cd "$(dirname "$0")" && pwd)
-compact_window=200000
+compact_window=250000
 # CLAUDE_AUTOCOMPACT_PCT_OVERRIDE can only lower the percentage ("values above the default percentage are
 # ignored", https://code.claude.com/docs/en/env-vars.md), and 80 is under the default the measured worker
 # sessions compacted at, so it is the percentage that applies rather than a request Claude Code drops.
