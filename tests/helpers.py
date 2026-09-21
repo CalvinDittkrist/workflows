@@ -1,4 +1,5 @@
 import os
+import re
 import subprocess
 import tempfile
 import unittest
@@ -58,6 +59,18 @@ class ShimTest(unittest.TestCase):
     def run_script(self, script, *args, cwd=None, stdin="", **extra):
         return subprocess.run(["bash", str(script), *args], cwd=cwd or self.repo, env=self.env(**extra),
                               input=stdin, text=True, capture_output=True)
+
+    def skill_brief(self, plugin, skill, **env):
+        """Everything a skill's !`command` injections print, run as the real scripts, in order. That text is
+        the brief a stage hands to a fresh context, so a test of the brief runs exactly this."""
+        body = (ROOT / f"plugins/{plugin}/skills/{skill}/SKILL.md").read_text().split("---")[2]
+        out = ""
+        for cmd in re.findall(r"!`([^`]+)`", body):
+            argv = cmd.replace("${CLAUDE_PLUGIN_ROOT}/", f"{ROOT}/plugins/{plugin}/").split()
+            r = self.run_script(argv[0], *argv[1:], **env)
+            self.assertEqual(r.returncode, 0, f"{skill}: {cmd}\n{r.stderr}")
+            out += r.stdout
+        return out
 
     def reset_calls(self):
         """Forget every recorded call. Both logs, so calls() and argv_calls() cannot drift apart."""

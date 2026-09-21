@@ -1,8 +1,9 @@
 import json
+import re
 import unittest
 from pathlib import Path
 
-from helpers import ROOT, WORKER, ShimTest
+from helpers import WORKER, ShimTest
 
 
 class SessionStartHookTests(ShimTest):
@@ -87,6 +88,111 @@ class FactsTests(ShimTest):
                                     CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=value)
                 self.assertEqual(r.returncode, 0, r.stderr)
                 self.assertIn(f"subagents: {shape}", r.stdout)
+
+# A Makefile whose check target is the gate of the repository under test: real `make check` runs, cheap ones.
+PASSING_GATE = "check:\n\t@echo running the gate\n\t@echo 'Ran 3 tests in 0.1s'\n\t@echo OK\n"
+FAILING_GATE = "check:\n\t@echo running the gate\n\t@echo 'FAILED (failures=1)'\n\t@exit 3\n"
+
+
+class GateRecordTests(ShimTest):
+    """The gate runs once per round and its result is the fact every reviewer is briefed with (issue #42)."""
+
+    def setUp(self):
+        super().setUp()
+        self.git("checkout", "-qb", "fix/12-x")
+        self.set_gate(PASSING_GATE)
+
+    def set_gate(self, makefile):
+        (self.repo / "Makefile").write_text(makefile)
+        self.git("add", "."); self.git("commit", "-qm", "chore: gate")
+
+    def run_gate(self, **env):
+        return self.run_script(WORKER / "gate.sh", "run", **env)
+
+    def brief(self):
+        r = self.run_script(WORKER / "gate.sh", "print")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return r.stdout
+
+    def head(self):
+        return self.git("rev-parse", "--short", "HEAD").strip()
+
+    def commit_file(self, name):
+        (self.repo / name).write_text(name)
+        self.git("add", "."); self.git("commit", "-qm", f"feat: {name}")
+
+    def test_a_recorded_run_is_the_gate_result_for_this_head(self):
+        head = self.head()
+        r = self.run_gate()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("Ran 3 tests", r.stdout)  # the output reaches the caller while it is recorded
+        self.assertIn(f"gate_recorded: pass (exit 0) at {head}", r.stdout)
+        brief = self.brief()
+        self.assertIn(f"gate_result: pass (exit 0) at {head}", brief)
+        self.assertIn("gate_command: make check", brief)
+        self.assertRegex(brief, r"gate_started: \d{4}-\d\d-\d\dT[\d:]+Z, \d+ s")
+        self.assertIn("gate_output_tail:\n  running the gate\n", brief)
+        log = Path(re.search(r"gate_log: (\S+)", brief).group(1))
+        self.assertIn("Ran 3 tests", log.read_text())
+
+    def test_a_failing_gate_is_recorded_with_its_status_and_its_output(self):
+        self.set_gate(FAILING_GATE)
+        r = self.run_gate()
+        # The caller learns the gate failed from the exit status, which is the gate's own, whatever it is.
+        self.assertNotEqual(r.returncode, 0, r.stdout)
+        self.assertIn("FAILED (failures=1)", r.stdout)
+        self.assertIn(f"gate_recorded: fail (exit {r.returncode}) at {self.head()}", r.stdout)
+        brief = self.brief()
+        self.assertIn(f"gate_result: fail (exit {r.returncode}) at {self.head()}", brief)
+        self.assertIn("  FAILED (failures=1)", brief)
+        log = Path(re.search(r"gate_log: (\S+)", brief).group(1))
+        self.assertIn("FAILED (failures=1)", log.read_text())
+
+    def test_without_a_record_the_brief_says_so_in_one_line(self):
+        brief = self.brief().splitlines()
+        self.assertEqual(len(brief), 1, brief)
+        self.assertTrue(brief[0].startswith("gate_result: none recorded for this head"), brief)
+
+    def test_a_record_from_an_older_commit_is_no_result_for_this_head(self):
+        self.run_gate()
+        recorded = self.head()
+        self.commit_file("a.txt")
+        brief = self.brief()
+        self.assertEqual(len(brief.splitlines()), 1, brief)
+        self.assertTrue(brief.startswith("gate_result: none for this head"), brief)
+        self.assertIn(recorded, brief)  # it names the commit the stale record belongs to
+        self.assertNotIn("Ran 3 tests", brief)
+
+    def test_a_record_taken_on_a_dirty_working_tree_is_marked_and_counts_as_none(self):
+        (self.repo / "scratch.txt").write_text("uncommitted\n")
+        r = self.run_gate()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("dirty working tree", r.stdout)
+        brief = self.brief()
+        self.assertEqual(len(brief.splitlines()), 1, brief)
+        self.assertTrue(brief.startswith("gate_result: none for this head"), brief)
+        self.assertIn("dirty working tree", brief)
+        self.assertNotIn("Ran 3 tests", brief)
+        # Committing that file does not resurrect the record either: it was taken at another state.
+        self.git("add", "."); self.git("commit", "-qm", "chore: scratch")
+        self.assertTrue(self.brief().startswith("gate_result: none for this head"))
+
+    def test_the_review_and_pull_request_briefs_carry_the_gate_result(self):
+        """End to end over the wiring: what those skills inject has to print the recorded gate result,
+        because that text is the whole brief a fresh-context reviewer or pull request author receives."""
+        self.run_gate()
+        for skill in ("review", "pr"):
+            with self.subTest(skill=skill):
+                brief = self.skill_brief("worker", skill, WF_BASE_BRANCH="main")
+                self.assertIn(f"gate_result: pass (exit 0) at {self.head()}", brief)
+                self.assertIn("  Ran 3 tests", brief)
+
+    def test_two_worktrees_of_one_repository_keep_separate_gate_records(self):
+        other = self.base / "other-worktree"
+        self.git("worktree", "add", "-q", "-b", "fix/13-y", str(other))
+        self.run_gate()
+        r = self.run_script(WORKER / "gate.sh", "print", cwd=other)
+        self.assertTrue(r.stdout.startswith("gate_result: none recorded for this head"), r.stdout)
 
 
 SUMMARY = """review_rounds: 2
@@ -191,14 +297,8 @@ class PanelSummaryTests(ShimTest):
     def test_the_pull_request_stages_brief_carries_the_summary_without_a_skill_argument(self):
         """End to end over the wiring: whatever the pr skill injects has to print the recorded summary,
         because the pipeline driver invokes that skill with no argument."""
-        import re
         self.record(SUMMARY)
-        body = (ROOT / "plugins/worker/skills/pr/SKILL.md").read_text().split("---")[2]
-        briefs = [self.run_script(*cmd.replace("${CLAUDE_PLUGIN_ROOT}/scripts/", str(WORKER) + "/").split())
-                  for cmd in re.findall(r"!`([^`]+)`", body)]
-        for r in briefs:
-            self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn(SUMMARY, "".join(r.stdout for r in briefs))
+        self.assertIn(SUMMARY, self.skill_brief("worker", "pr", WF_BASE_BRANCH="main"))
 
     def test_a_rewritten_history_is_reported_as_such_not_as_commits_since(self):
         self.commit("a.txt")
