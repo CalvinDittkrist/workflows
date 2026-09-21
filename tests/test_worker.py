@@ -1092,6 +1092,30 @@ class PrWaitTests(ShimTest):
         self.assertIn("draft: true;", r.stdout)
         self.assertNotIn("draft:", self.wait().stdout)
 
+    def test_the_bot_review_is_seen_among_the_reviews_the_pull_request_carries(self):
+        # Regression: the login was read inside the pipe that the bot list feeds, where the input is
+        # that list and not the review. jq failed on every review, so a reviewed PR counted none.
+        reviews = json.dumps([
+            {"author": {"login": "someone"}, "submittedAt": "2026-09-18T10:00:00Z"},
+            {"author": {"login": "chatgpt-codex-connector[bot]"}, "submittedAt": "2026-09-18T10:00:00Z"},
+        ])
+        r = self.wait(SHIM_REVIEWS=reviews)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("bot_reviews: 1 since last push", r.stdout)
+        self.assertIn("status: green", r.stdout)
+        self.assertEqual("", r.stderr.strip())  # a failed count says so here
+
+    def test_a_review_from_anyone_else_is_not_the_one_that_is_waited_for(self):
+        r = self.wait(SHIM_REVIEWS=json.dumps([{"author": {"login": "someone"}, "submittedAt": "2026-09-18T10:00:00Z"}]))
+        self.assertEqual(r.returncode, 3, r.stdout + r.stderr)
+        self.assertIn("bot_reviews: 0 since last push", r.stdout)
+        self.assertIn("status: waiting", r.stdout)
+
+    def test_a_bot_review_older_than_the_last_push_is_not_counted(self):
+        r = self.wait(SHIM_REVIEWS=json.dumps([{"author": {"login": "chatgpt-codex-connector"}, "submittedAt": "2026-09-16T10:00:00Z"}]))
+        self.assertEqual(r.returncode, 3, r.stdout + r.stderr)
+        self.assertIn("bot_reviews: 0 since last push", r.stdout)
+
     def test_zero_review_wait_does_not_block_on_the_bot(self):
         r = self.wait(WF_PR_REVIEW_WAIT="0")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
