@@ -75,6 +75,24 @@ class ClaimTests(ShimTest):
         self.assertEqual(rendered.returncode, 0, rendered.stderr)
         self.assertEqual(rendered.stdout.strip(), "#12 · manual · 78k/200k (39%)")
 
+    def test_the_sandboxed_start_survives_a_plugin_path_with_a_space(self):
+        # The sandbox start hands the whole settings object to the shell of a pane as one word. That object
+        # carries quotes of its own since the status line moved into it, so unquoted it loses the session's
+        # environment, its plugin isolation and its auto-compact window without a word of complaint.
+        spaced = self.base / "my plugins" / "orchestrator"
+        spaced.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(ORCH, spaced / "scripts")
+        r = self.run_script(spaced / "scripts" / "claim.sh", "12", "--sandbox")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        run = [c for c in self.argv_calls() if c[1:3] == ["pane", "run"]][0]
+        words = shlex.split(run[-1])
+        self.assertEqual(words[0], str(spaced / "scripts/sbx-worker.sh"))
+        settings = json.loads(words[words.index("--settings") + 1])
+        self.assertEqual(settings["env"]["WF_ISSUE"], "12")
+        self.assertEqual(settings["autoCompactWindow"], 200000)
+        self.assertEqual(shlex.split(settings["statusLine"]["command"]), [str(spaced / "scripts/statusline.sh"), "200000"])
+        self.assertEqual(words[words.index("--name") + 1], "#12")
+
     def test_yolo_flag_is_passed_to_the_worker_session(self):
         r = self.run_script(ORCH / "claim.sh", "12", "--yolo")
         self.assertEqual(r.returncode, 0, r.stderr)

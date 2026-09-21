@@ -2,7 +2,8 @@
 # The context checkpoint: how full this session's context window is, and whether it is time to hand over.
 # Usage: checkpoint.sh
 # The size is read from the value the pane's status line writes into this worktree's git directory
-# (ADR 0020). This reports; nothing in the pipeline acts on the verdict yet.
+# (ADR 0020). This reports; nothing in the pipeline acts on the verdict yet, so no skill invokes it and the
+# maintainer is its only caller until the handoff stages (#37) read it.
 set -euo pipefail
 # shellcheck source=lib.sh
 . "$(dirname "$0")/lib.sh"
