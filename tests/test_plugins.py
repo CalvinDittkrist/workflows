@@ -39,7 +39,7 @@ class ManifestTests(unittest.TestCase):
             "worker/agents/docs-reviewer.md": "sonnet",
         }
         agents = sorted(ROOT.glob("plugins/*/agents/*.md"))
-        self.assertTrue(set(expected) <= {a.relative_to(ROOT / "plugins").as_posix() for a in agents})
+        self.assertLessEqual(set(expected), {a.relative_to(ROOT / "plugins").as_posix() for a in agents})
         for agent in agents:
             rel = agent.relative_to(ROOT / "plugins").as_posix()
             found = re.search(r"^model: (.+)$", agent.read_text().split("---")[1], re.M)

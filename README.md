@@ -87,7 +87,7 @@ A worker or planner session takes its model from the first of these that is set:
 2. the `model` field of the session's agent file (`fable` for `planner`, `opus` for `worker`)
 3. `model` in your Claude Code settings
 
-Neither variable reaches the orchestrator: you start it by hand, so it runs on the `sonnet` of its agent file unless your own command line says otherwise.
+None of those variables reaches the orchestrator: you start it by hand, so it runs on the `sonnet` of its agent file unless your own command line says otherwise.
 
 The planner runs on Fable because planning has the highest leverage in the pipeline: a wrong spec multiplies into every ticket, and a planning session is interactive and small in token volume.
 
