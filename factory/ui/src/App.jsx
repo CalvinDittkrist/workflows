@@ -7,6 +7,10 @@ import { useEffect, useRef, useState } from 'react'
 // stage a run is in from the worker's skill calls; this is the line those stages are shown on.
 const STAGES = ['implement', 'review', 'pr', 'ci', 'reviews']
 
+// Of the runs that are done, the newest are drawn: the factory keeps every run it ever made, and a
+// page that drew them all would grow with the months. The older ones are reached by their id.
+const SHOWN = 100
+
 const SLOW = 2000 // the three areas
 const FAST = 1000 // the selected run, whose log is followed while it is written
 
@@ -135,6 +139,7 @@ export default function App() {
   if (!status || !line) return <div className="boot">{error || 'connecting…'}</div>
 
   const done = [...line.done].reverse() // newest first: the last run is the one being looked for
+  const shown = done.slice(0, SHOWN)
   const active = line.now[0] ?? null
   // Follow the factory until the reader picks a run.
   const current = selected ?? active?.id ?? done[0]?.id ?? null
@@ -211,7 +216,7 @@ export default function App() {
           Done<b>{done.length}</b>
         </h2>
         {done.length === 0 && <p className="none">nothing yet</p>}
-        {done.map((run) => (
+        {shown.map((run) => (
           <button
             type="button"
             key={run.id}
@@ -237,6 +242,7 @@ export default function App() {
             />
           </button>
         ))}
+        {done.length > shown.length && <p className="none">{done.length - shown.length} older</p>}
       </section>
 
       {current ? (
