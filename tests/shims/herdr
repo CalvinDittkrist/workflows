@@ -44,6 +44,12 @@ case "$1 $2" in
     if [ "$4" = "/clear" ] && [ -z "${SHIM_CLEAR_KEEPS_SESSION:-}" ]; then
       printf 'session-after-%s' "$(date +%s)$RANDOM" > "${SHIM_WT_ROOT:?}/.agent-session"
     fi
+    # SHIM_CLEAR_MARKS_RECORD=<path> is the SessionStart hook of whatever session comes up: it marks the
+    # handoff record as it injects the note, which is what the record says and not who says it.
+    if [ "$4" = "/clear" ] && [ -n "${SHIM_CLEAR_MARKS_RECORD:-}" ] && [ -f "${SHIM_CLEAR_MARKS_RECORD}" ]; then
+      { printf 'injected: 2026-09-21T12:00:00Z\n'; cat "${SHIM_CLEAR_MARKS_RECORD}"; } > "${SHIM_CLEAR_MARKS_RECORD}.tmp"
+      mv "${SHIM_CLEAR_MARKS_RECORD}.tmp" "${SHIM_CLEAR_MARKS_RECORD}"
+    fi
     echo '{"result":{"type":"ok"}}' ;;
   "pane read")
     case "${SHIM_AGENT_START_FAILS:-0}" in

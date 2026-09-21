@@ -57,20 +57,27 @@ done
 base=$(wf_base_branch)
 mb=$(wf_merge_base)
 
+# The state of the branch, which the note's author does not have to copy by hand. Collected before the
+# record is written, so a git that cannot answer ends in an error line here instead of in half a note.
+state=$("$(dirname "$0")/diff-context.sh") ||
+  wf_die "the range of this branch could not be read, so the next context would get a note without the state of the work; fix what diff-context.sh reports and hand over again"
+log=$(git log --oneline --max-count=50 "$mb..HEAD") ||
+  wf_die "the commits of $mb..HEAD could not be listed, so the note would name no work; fix that and hand over again"
+
 record="$(wf_state_dir)/handoff"
 mkdir -p "$(dirname "$record")"
 # One file, written in one move: the headers the hook and the facts read, an empty line, then the note
-# followed by the state of the branch, which the note's author does not have to copy by hand.
+# followed by the state of the branch. A half-written file is never left behind for the hook to read.
+trap 'rm -f "$record.tmp"' EXIT
 {
   printf 'stage: %s\ncommit: %s\nbase: %s\npane: %s\nsession: %s\nat: %s\n\n' \
     "$stage" "$commit" "$base" "$pane" "$session" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   printf '%s\n' "$note"
-  printf '\n## state at the handoff\n'
-  "$(dirname "$0")/diff-context.sh"
-  printf 'log:\n'
-  git log --oneline --max-count=50 "$mb..HEAD" | sed 's/^/  /'
+  printf '\n## state at the handoff\n%s\n' "$state"
+  printf 'log:\n%s\n' "$(printf '%s\n' "$log" | sed 's/^/  /')"
 } > "$record.tmp"
 mv "$record.tmp" "$record"
+trap - EXIT
 
 # The record goes with it: the detached process reads it to learn whether a fresh context has taken the note
 # already, which is the one case in which a second `/clear` would destroy what it came to deliver.
