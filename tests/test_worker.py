@@ -728,6 +728,21 @@ class HandoffResumeTests(ShimTest):
                 self.assertEqual(len(notifications), 1, self.calls())
                 self.assertIn("Handoff did not clear pane w9:p1", notifications[0])
 
+    def test_a_pane_whose_turn_has_not_ended_is_never_typed_into(self):
+        # The wait also ends on `blocked` and on its timeout. `/clear` is keystrokes: its Enter would answer a
+        # permission dialog the maintainer has not read, and a working turn would queue it behind its own work.
+        for status in ("blocked", "working", "unknown"):
+            with self.subTest(status=status):
+                self.reset_calls()
+                r = self.resume(SHIM_AGENT_STATUS=status)
+                self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+                self.assertEqual(self.sequence(), ["agent wait"], "nothing is typed into that pane")
+                notifications = [c for c in self.calls() if "notification show" in c]
+                self.assertEqual(len(notifications), 1, self.calls())
+                self.assertIn("Handoff did not clear pane w9:p1", notifications[0])
+                self.assertIn(status, notifications[0])
+                self.assertIn("/worker:work", notifications[0], "with the way to resume by hand")
+
     def test_a_note_another_context_has_taken_ends_the_handover_instead_of_driving_the_pane(self):
         # A marked record says some session has the note; it does not say the pane's has. Driving the pane
         # then would send the driver command into the context that asked for the handover, with the note

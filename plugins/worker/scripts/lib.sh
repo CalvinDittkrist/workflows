@@ -33,6 +33,11 @@ wf_merge_base() {
 wf_agent_session() {
   herdr agent get "$1" 2>/dev/null | jq -r '.result.agent.agent_session.value // empty' 2>/dev/null || true
 }
+# The state herdr reports for a pane's agent: idle, working, blocked, done or unknown. Empty when herdr knows
+# no agent there.
+wf_agent_status() {
+  herdr agent get "$1" 2>/dev/null | jq -r '.result.agent.agent_status // empty' 2>/dev/null || true
+}
 # The reviewer panel of this session: the configured list, or the five reviewers the worker ships with.
 wf_reviewers() { printf '%s\n' "${WF_REVIEWERS:-code,security,docs,tests,senior}"; }
 # Where a worker stage leaves a fact for the next one (ADR 0018): this worktree's own git directory, never

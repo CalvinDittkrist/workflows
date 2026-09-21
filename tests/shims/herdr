@@ -35,9 +35,10 @@ case "$1 $2" in
   "agent get")
     # The pane's agent, with the session identity herdr 0.9 reports for it. SHIM_NO_AGENT_SESSION drops that
     # field, the way a pane whose agent herdr has not identified answers.
-    if [ -n "${SHIM_NO_AGENT_SESSION:-}" ]; then printf '{"result":{"agent":{"pane_id":"%s"}}}\n' "$3"; exit 0; fi
-    printf '{"result":{"agent":{"pane_id":"%s","agent_session":{"agent":"claude","kind":"id","value":"%s"}}}}\n' \
-      "$3" "$(cat "${SHIM_WT_ROOT}/.agent-session" 2>/dev/null || printf 'session-before')" ;;
+    # SHIM_AGENT_STATUS is the state the pane settled in, `done` being a worker that ended its turn.
+    if [ -n "${SHIM_NO_AGENT_SESSION:-}" ]; then printf '{"result":{"agent":{"pane_id":"%s","agent_status":"unknown"}}}\n' "$3"; exit 0; fi
+    printf '{"result":{"agent":{"pane_id":"%s","agent_status":"%s","agent_session":{"agent":"claude","kind":"id","value":"%s"}}}}\n' \
+      "$3" "${SHIM_AGENT_STATUS:-done}" "$(cat "${SHIM_WT_ROOT}/.agent-session" 2>/dev/null || printf 'session-before')" ;;
   "agent prompt")
     # `/clear` starts a fresh Claude session, which herdr reports under a new id; SHIM_CLEAR_KEEPS_SESSION=1
     # is the pane that swallowed it and keeps the old context.

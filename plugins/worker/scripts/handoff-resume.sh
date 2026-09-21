@@ -3,7 +3,8 @@
 # Usage: handoff-resume.sh <pane> <session-id-before> <stage> <driver-command> [note-record]
 # Started by handoff.sh with nohup, because the session it clears is the one that started it: a worker
 # cannot clear itself from inside a turn. It waits for that worker's turn to settle, sends `/clear` into that
-# session and no other — a pane that has moved on keeps its context and the maintainer is told — and only when
+# session and no other, and only once its turn has ended — a pane that has moved on, waits on a dialog or is
+# still working keeps its context and the maintainer is told — and only when
 # the pane reports a session id other than the one it was given — the one signal that a fresh context really
 # started — sends the driver command. Nothing it does is silent: a pane that never starts one gets a second
 # `/clear` and then a Herdr notification for the maintainer, never a driver command into the old context.
@@ -48,6 +49,14 @@ now=$(session)
   stop "Handoff did not clear pane $pane" "The pane reports ${now:-no session} instead of the context that asked for the handover, so nothing was cleared."
 ! taken ||
   stop "Handoff note went to another context" "A session this handover did not start has taken the note, so pane $pane was left alone."
+# The wait also ends on `blocked` and on its timeout, and `/clear` is keystrokes: typed into a permission dialog
+# its Enter answers a question the maintainer has not read, and typed into a working turn it queues behind
+# work nobody asked for. Only a turn that has ended is cleared; every other pane is the maintainer's to look at.
+status=$(wf_agent_status "$pane")
+case "$status" in
+  idle|done) ;;
+  *) stop "Handoff did not clear pane $pane" "The pane is ${status:-in no state herdr can name} instead of at the end of its turn, so nothing was typed into it." ;;
+esac
 
 attempt=1
 while :; do
