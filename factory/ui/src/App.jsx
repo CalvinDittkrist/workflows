@@ -290,8 +290,14 @@ function Run({ id, now }) {
         })
         .catch((e) => {
           if (stop) return
-          if (e.status === 404) setMissing(true)
-          else setTrouble(e.message)
+          // A run this factory does not have is not going to appear later, so it is asked for once.
+          if (e.status === 404) {
+            setMissing(true)
+            if (follow) {
+              clearInterval(follow)
+              follow = null
+            }
+          } else setTrouble(e.message)
         })
     load()
     follow = setInterval(load, FAST)
