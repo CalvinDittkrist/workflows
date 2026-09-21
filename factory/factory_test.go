@@ -148,11 +148,13 @@ func TestFakeModeWorksTheCannedQueueOneRunAtATime(t *testing.T) {
 		t.Errorf("run 1 went through the stages %q, want %q", got, "implement review pr ci reviews")
 	}
 	// The context peak is the fullest one message of the worker itself came. The scripted session
-	// lets its subagents report a far larger context of their own, which says nothing about the
-	// worker's and must not be counted.
-	if ready.ContextPeak == 0 || ready.ContextPeak >= subagentContext {
-		t.Errorf("run 1 peaked at %d tokens of context, want the worker's own peak, under the %d a subagent reported",
-			ready.ContextPeak, subagentContext)
+	// hands the pull request to a fresh context halfway through, so the peak stands at the message
+	// before that handover: neither the last message, which carries less, nor the far larger context
+	// its subagents report, which says nothing about the worker's.
+	const readyPeak = 87_400 // the eleventh message of the worker, the one before the handover
+	if ready.ContextPeak != readyPeak {
+		t.Errorf("run 1 peaked at %d tokens of context, want %d: the fullest message of the worker itself, taken before the handover dropped it and never from the %d a subagent reported",
+			ready.ContextPeak, readyPeak, subagentContext)
 	}
 	if ready.Turns != 23 || ready.CostUSD != 4.18 || ready.Tokens.Output != 24800 || ready.Tokens.CacheRead != 1204000 {
 		t.Errorf("run 1 has turns %d, cost %v and tokens %+v, want the totals of the result line", ready.Turns, ready.CostUSD, ready.Tokens)

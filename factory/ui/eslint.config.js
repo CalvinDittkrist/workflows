@@ -14,7 +14,8 @@ export default [
     },
   },
   {
+    // The test files run in node and carry snippets that run in the page, so both are known here.
     files: ['*.js', 'tests/**/*.js'],
-    languageOptions: { globals: globals.node },
+    languageOptions: { globals: { ...globals.node, ...globals.browser } },
   },
 ]

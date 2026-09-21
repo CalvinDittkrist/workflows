@@ -104,8 +104,12 @@ func scriptedWorker(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stderr, "error: the scripted worker could not start its child: %v\n", err)
 			return 1
 		}
-		time.Sleep(time.Hour) // until the deadline ends the process group
-		return 0
+		// The stream keeps coming while the run hangs, until the deadline ends the process group.
+		// A reader that follows a running log is read against this one, so no two lines are alike.
+		for beat := 1; ; beat++ {
+			time.Sleep(time.Second)
+			s.say(fmt.Sprintf("Still working on it, minute %d.", beat))
+		}
 	case "failed":
 		s.say("Reproducing the behaviour end to end first.")
 		fmt.Fprintln(stderr, `API Error: 529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}`)
@@ -154,6 +158,9 @@ func scriptedWorker(args []string, stdout, stderr io.Writer) int {
 		return 0
 	}
 
+	// The pull request goes to a fresh context, so what the worker carries drops back to a loaded
+	// session: the peak of this run stands here, before the handover, and not at its last message.
+	s.compact()
 	s.say("Panel: five PASS. Handing the pull request to a fresh context.")
 	s.skill("worker:pr")
 	pullRequest := fmt.Sprintf("https://github.com/%s/pull/%d", repository, issue+100)
@@ -223,6 +230,12 @@ func (s *script) usage(sub bool) map[string]any {
 	}
 	return map[string]any{"input_tokens": 400, "cache_creation_input_tokens": 1200,
 		"cache_read_input_tokens": read, "output_tokens": 250}
+}
+
+// compact is what a handoff does to the worker's context: it starts from a loaded session again,
+// and every message after it carries less than the run already reached.
+func (s *script) compact() {
+	s.context = contextStart
 }
 
 func (s *script) say(text string) {

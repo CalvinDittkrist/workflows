@@ -42,8 +42,9 @@ test('the whole queue is shown in its order while the factory is paused', async 
   await page.goto(paused('/'))
 
   await expect(page.locator('.mode')).toHaveText('paused')
-  await expect(page.locator('.repos li').first()).toContainText('4') // what waits per repository
-  await expect(page.locator('.repos li').last()).toContainText('2')
+  // What waits per repository, which is the only number on that line.
+  await expect(page.locator('.repos li').first().locator('b')).toHaveText('4')
+  await expect(page.locator('.repos li').last().locator('b')).toHaveText('2')
 
   const queue = page.locator('.line ol .row')
   await expect(queue).toHaveCount(6)
@@ -123,6 +124,20 @@ test('the live log sets the events of the worker’s subagents in', async ({ pag
   await expect(call.locator('pre')).toContainText('plugins/worker/skills/work/SKILL.md')
 })
 
+test('the log of a running worker grows as it is written, and repeats nothing', async ({ page }) => {
+  await page.goto(working(`/#run=${RUNNING_RUN}`))
+  const lines = detail(page).locator('.log .ev')
+  await expect(lines.first()).toBeVisible()
+  const [started, first] = [await lines.count(), await lines.first().textContent()]
+
+  // The scripted worker of this run says something new every second, and the page asks only for what
+  // it has not seen yet: the log has to grow by those lines and keep the ones already read.
+  await expect.poll(() => lines.count(), { timeout: 15_000 }).toBeGreaterThan(started)
+  expect(await lines.first().textContent()).toBe(first)
+  const read = await lines.allTextContents()
+  expect(new Set(read).size).toBe(read.length) // an event that was read twice would stand twice
+})
+
 test('the factory says when it waits for quota and until when', async ({ page }) => {
   // The factory serves this state from the ticket that adds the quota check on; the dashboard reads
   // it from the interface it already promises, so the answer is the one under test here.
@@ -199,13 +214,16 @@ test('the layout holds', async ({ page }) => {
 
   // Everything that differs between two readings of the same state is a tick: the durations that
   // count up and the clock times in the log. The rest is compared to the screenshot approved for
-  // this operating system, with room for a machine that rasterises glyphs a little differently —
-  // far less than the smallest change of a colour or a position would move.
+  // this operating system, once the fonts it is written in have arrived.
+  await page.evaluate(() => document.fonts.ready)
+
+  // The tolerance leaves room for a machine that rasterises the same glyphs a little differently,
+  // and for nothing more: one changed number on the page moves 291 pixels, measured.
   await expect(page).toHaveScreenshot('dashboard.png', {
     mask: [page.locator('.tick')],
     maskColor: '#101010', // the background, so the approved look can be read off the baseline
     animations: 'disabled',
     caret: 'hide',
-    maxDiffPixelRatio: 0.005,
+    maxDiffPixels: 100,
   })
 })
