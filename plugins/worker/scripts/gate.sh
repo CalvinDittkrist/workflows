@@ -90,9 +90,13 @@ case "${1:-}" in
     elif [ -z "$commit" ]; then
       wf_kv gate_result "none recorded for this head; the record names no commit, so run the worker's gate.sh run again"
     elif [ "$commit" != "$(git rev-parse HEAD)" ]; then
-      wf_kv gate_result "none for this head; the newest record is for $(git rev-parse --short "$commit" 2>/dev/null || printf '%s' "$commit"), which is not this head, so run the gate again"
-    else
+      wf_kv gate_result "none for this head; the newest record is for $(wf_short "$commit"), which is not this head, so run the gate again"
+    elif [ "$(field dirty)" != no ]; then
       wf_kv gate_result "none for this head; the newest record ran with a dirty working tree, so it belongs to no commit; commit what belongs to the change, ignore or remove what does not, and run the gate again"
+    else
+      # gate_state owns the decision, so a case it grows that this chain does not name is reported as what it
+      # is rather than as the last case that happened to be written here.
+      wf_kv gate_result "none for this head; the newest record does not answer for it, so run the worker's gate.sh run again"
     fi
     ;;
   # The one word another script gates on, so it reads a contract rather than scraping the brief.

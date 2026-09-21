@@ -561,6 +561,49 @@ class ReviewRoundTests(PanelRecordCalls, ShimTest):
         self.assertIn("this is round 3 and max_rounds is 2", r.stderr, "a round past the limit is recorded, "
                       "so its work is not lost, but the panel is told it ended")
 
+    def test_a_round_limit_that_is_no_number_is_refused_where_it_is_read(self):
+        """The limit drives `[ -gt ]`, and a value bash cannot compare reads as false: without this it
+        would drop the limit or end the panel after one round, and say so in no line the worker reads."""
+        for script, args in ((WORKER / "panel.sh", ("rounds",)), (WORKER / "facts.sh", ())):
+            r = self.run_script(script, *args, WF_REVIEW_ROUNDS="abc")
+            self.assertEqual(r.returncode, 1, r.stdout)
+            self.assertIn("error: WF_REVIEW_ROUNDS='abc' is not a positive number", r.stderr)
+            self.assertIn("WF_REVIEW_ROUNDS=3", r.stderr, "and it names the fix")
+            self.assertNotIn("max_rounds: \n", r.stdout, "no fact states a limit nobody can read")
+
+    def test_a_round_every_reviewer_passed_ends_the_panel_at_the_summary(self):
+        """The normal end of the loop, which the skill gates on: `none` in review_reviewers. A regression
+        here would launch a round with no reviewer in it, or never leave the loop at all."""
+        self.record_rounds(ROUND_ONE)
+        self.commit("fix.txt")
+        r = self.round(ROUND_TWO)  # the one reviewer that was still on FIX passed
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        for out in (r.stdout, self.rounds()):
+            keys = self.keys(out)
+            self.assertEqual(keys["review_round"], "3 of at most 3", "it is not the limit that ended it")
+            self.assertTrue(keys["review_reviewers"].startswith("none;"), keys["review_reviewers"])
+            self.assertIn("panel.sh record", keys["review_reviewers"])
+
+    def test_a_round_whose_checkpoint_cannot_answer_records_nothing(self):
+        """The checkpoint is measured before the record is written, so the call is simply made again; a
+        round recorded twice would count twice against the round limit."""
+        r = self.round(ROUND_ONE, WF_HANDOFF_TOKENS="x")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("WF_HANDOFF_TOKENS", r.stderr)
+        self.assertIn("review_rounds_recorded: none", self.rounds())
+
+    def test_a_round_record_no_reader_can_parse_stops_the_stage_with_the_fix(self):
+        """Only this script writes the records, so this is a hand-edited or corrupted one. Both readers
+        refuse it: a brief that took the parser's `!bad` line for a name would send the next round to a
+        reviewer nobody named, and the summary would state a panel nobody ran."""
+        self.record_rounds(ROUND_ONE)
+        state = Path(self.git("rev-parse", "--path-format=absolute", "--git-dir").strip()) / "worker"
+        (state / "round.1").write_text((state / "round.1").read_text().replace("code=FIX", "code=BOGUS"))
+        for r in (self.run_script(WORKER / "panel.sh", "rounds"), self.record()):
+            self.assertEqual(r.returncode, 1, r.stdout)
+            self.assertIn("states no panel this script can read", r.stderr)
+            self.assertIn("run the panel again from round 1", r.stderr, "it names the fix")
+
     def test_a_block_that_is_no_round_is_refused_with_the_fix_and_records_nothing(self):
         for block, word in (
             ("fixed: 0 (S1 0, S2 0, S3 0)\ndisputed: none", "has no panel: line"),
@@ -568,6 +611,7 @@ class ReviewRoundTests(PanelRecordCalls, ShimTest):
             ("panel:\nfixed: 0 (S1 0, S2 0, S3 0)\ndisputed: none", "names no reviewer"),
             ("panel: code=MAYBE\nfixed: 0 (S1 0, S2 0, S3 0)\ndisputed: none", "code=MAYBE"),
             ("panel: code=FIX→PASS\nfixed: 0 (S1 0, S2 0, S3 0)\ndisputed: none", "never a chain"),
+            ("panel: code=FIX code=PASS\nfixed: 0 (S1 0, S2 0, S3 0)\ndisputed: none", "names code twice"),
             ("panel: code=PASS\ndisputed: none", "one fixed: line"),
             ("panel: code=PASS\nfixed: 2\ndisputed: none", "not of the form"),
             ("panel: code=PASS\nfixed: 2 (S1 1, S2 0, S3 0)\ndisputed: none", "counts 2 fixes but names 1"),

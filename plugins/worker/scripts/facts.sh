@@ -6,7 +6,10 @@ wf_kv mode "${WF_MODE:-manual}"
 wf_kv issue "#$(wf_issue)"
 wf_kv base "$(wf_base_branch)"
 wf_kv reviewers "$(wf_reviewers)"
-wf_kv max_rounds "$(wf_review_rounds)"
+# The one fact a reader compares rather than prints, so an unusable limit stops the session here, with the
+# fix named, instead of printing an empty value and letting panel.sh meet it.
+max_rounds=$(wf_review_rounds) || exit 1
+wf_kv max_rounds "$max_rounds"
 
 # A claim starts a worker with background tasks disabled, so a subagent's report is the result of the Agent
 # call; a session started or restarted by hand has no such setting and its subagents run in the background,

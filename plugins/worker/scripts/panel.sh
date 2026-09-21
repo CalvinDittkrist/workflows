@@ -22,9 +22,9 @@ $fixed_form
 disputed: none"
 
 # panel_pairs: the reviewers of a block's one panel: line as "<name> <verdict>" lines, in the order the line
-# names them, or a single line "!<problem>" for a block that states no panel, names no reviewer, carries two
-# panel: lines or a verdict that is neither PASS nor FIX. One parser: a round is written through it and read
-# back through it, so the line this script writes is the line it can read.
+# names them, or a single line "!<problem>" for a block that states no panel, names no reviewer, names one
+# twice, carries two panel: lines or a verdict that is neither PASS nor FIX. One parser: a round is written
+# through it and read back through it, so the line this script writes is the line it can read.
 panel_pairs() {
   awk '
     function fail(p) { if (problem == "") problem = p }
@@ -46,7 +46,12 @@ panel_pairs() {
         # A round states one verdict per reviewer; the chain across the rounds is derived from the records,
         # never given, so a token that already carries one is a round that would be counted twice.
         if (v !~ /^(PASS|FIX)/ || index(v, "\342\206\222") || index(v, "->")) { fail("bad:" tok[i]); break }
-        out = out substr(tok[i], 1, eq - 1) " " v "\n"
+        name = substr(tok[i], 1, eq - 1)
+        # One round is one verdict per reviewer. A second one would be appended to the chain of that
+        # reviewer in the summary, so the chain would state more rounds than review_rounds: counts.
+        if (name in named) { fail("dup:" name); break }
+        named[name] = 1
+        out = out name " " v "\n"
         count++
       }
       if (problem == "" && count == 0) fail("empty")
@@ -61,13 +66,26 @@ panel_pairs() {
 }
 
 round_file() { printf '%s/round.%s\n' "$state" "$1"; }
-# A commit as a reader wants it, and as the record has it when git cannot resolve it any more.
-short() { git rev-parse --short "$1" 2>/dev/null || printf '%s\n' "$1"; }
 # A counter from a record's headers, and 0 for a record that carries none, so arithmetic over a file that
-# was edited by hand fails as a wrong sum rather than as a syntax error.
+# was edited by hand fails as a wrong sum rather than as a syntax error. It says so, because a summary that
+# understates what a round fixed is worth a line and an unreadable panel: line of the same record is refused.
 field_num() {
   local v; v=$(wf_record_field "$1" "$2")
-  case "$v" in ''|*[!0-9]*) printf '0\n' ;; *) printf '%s\n' "$v" ;; esac
+  case "$v" in
+    ''|*[!0-9]*) wf_warn "the round record $1 states no $2 this script can read ('$v'), so the summary counts 0 for it"; printf '0\n' ;;
+    *) printf '%s\n' "$v" ;;
+  esac
+}
+# The disputed: lines of a block on stdin, normalised to one key each. Both records take them from their
+# caller and refuse the same two shapes, so they are read in one place and the two cannot drift apart.
+# $1 names what refused them, so each error still says which call the caller has to make again.
+disputed_lines() {
+  local block=$1 what=$2 disputed blank
+  disputed=$(printf '%s\n' "$block" | sed -n -E 's/^[[:space:]]*disputed:[[:space:]]*/disputed: /p')
+  [ -n "$disputed" ] || wf_die "the $what block has no disputed: line; state 'disputed: none' when nothing stands, one line per finding otherwise"
+  blank=$(printf '%s\n' "$disputed" | grep -vE '^disputed: [^[:space:]]' | head -1 || true)
+  [ -z "$blank" ] || wf_die "a disputed: line of the $what block carries no text; write 'disputed: none' when nothing stands, one line per finding otherwise"
+  printf '%s\n' "$disputed"
 }
 
 # The rounds recorded for this review, counted up from 1 while their files are there.
@@ -100,6 +118,17 @@ all_pairs() {
     wf_record_body "$(round_file "$r")" | panel_pairs
     r=$((r + 1))
   done
+}
+
+# The verdicts of the first $1 rounds, and a refusal for a record this script cannot read back. Both readers
+# of the records stop here: a brief that took a "!bad" line for a reviewer name would send the next round to
+# a reviewer nobody named, and a summary would state a panel nobody ran.
+readable_pairs() {
+  local pairs bad
+  pairs=$(all_pairs "$1")
+  bad=$(printf '%s\n' "$pairs" | grep '^!' | head -1 || true)
+  [ -z "$bad" ] || wf_die "a round record of this review states no panel this script can read ($bad); the records are in $state, so remove them and run the panel again from round 1"
+  printf '%s\n' "$pairs"
 }
 
 # The last verdict of every reviewer of the first $1 rounds, in the order the rounds first named them.
@@ -165,8 +194,9 @@ case "${1:-}" in
     elif [ "$n" = 0 ]; then
       wf_kv review_rounds_recorded "none for this head; the $recorded recorded round(s) name a commit that is no longer in this branch's history (amended or rebased), so they describe other work and the panel starts at round 1"
     else
-      wf_kv review_rounds_recorded "$n, the last at $(short "$(wf_record_field "$(round_file "$n")" commit)")"
+      wf_kv review_rounds_recorded "$n, the last at $(wf_short "$(wf_record_field "$(round_file "$n")" commit)")"
     fi
+    [ "$n" = 0 ] || readable_pairs "$n" >/dev/null
     next_keys "$n"
     # The rounds themselves, for a context that did not run them: their verdicts are what the next round
     # continues from and their disputed: lines are what the summary still has to carry. Indented, so no line
@@ -175,7 +205,7 @@ case "${1:-}" in
       printf 'review_rounds_block:\n'
       r=1
       while [ "$r" -le "$n" ]; do
-        printf '  round %s at %s\n' "$r" "$(short "$(wf_record_field "$(round_file "$r")" commit)")"
+        printf '  round %s at %s\n' "$r" "$(wf_short "$(wf_record_field "$(round_file "$r")" commit)")"
         wf_record_body "$(round_file "$r")" | sed 's/^/    /'
         r=$((r + 1))
       done
@@ -202,6 +232,7 @@ $round_form"
       '!empty') wf_die "the panel: line names no reviewer; expected one of the form: $panel_form" ;;
       '!twice') wf_die "the round block has more than one panel: line, so it states two panels for one round; keep the one the round ended on" ;;
       '!bad:'*) wf_die "'${pairs#!bad:}' states no verdict a round can carry: one PASS or FIX per reviewer, optionally with a parenthesised note, and never a chain (the chain across rounds is derived from the round records); expected a line of the form: $panel_form" ;;
+      '!dup:'*) wf_die "the panel: line names ${pairs#!dup:} twice, so this round would state two verdicts for one reviewer; a round carries the one verdict that reviewer ended it on, and the chain across rounds is derived from the round records" ;;
     esac
 
     fixed=$(printf '%s\n' "$block" | sed -n -E 's/^[[:space:]]*fixed:[[:space:]]*//p')
@@ -213,11 +244,7 @@ $counts
 COUNTS
     [ "$total" = "$((s1 + s2 + s3))" ] || wf_die "the fixed: line counts $total fixes but names $((s1 + s2 + s3)) (S1 $s1, S2 $s2, S3 $s3); the summary sums the rounds, so correct the line and record the round again"
 
-    disputed=$(printf '%s\n' "$block" | sed -n -E 's/^[[:space:]]*disputed:[[:space:]]*/disputed: /p')
-    [ -n "$disputed" ] || wf_die "the round block has no disputed: line; a round states what stands disputed in it, or 'disputed: none', in the form:
-$round_form"
-    blank=$(printf '%s\n' "$disputed" | grep -vE '^disputed: [^[:space:]]' | head -1 || true)
-    [ -z "$blank" ] || wf_die "a disputed: line of the round block carries no text; write 'disputed: none' when nothing stands, one line per finding otherwise"
+    disputed=$(disputed_lines "$block" round)
 
     # Measured before the record is written, so a checkpoint that cannot answer leaves no record behind and
     # the call is simply made again; a round recorded twice would count twice against the round limit.
@@ -264,14 +291,9 @@ $round_form"
     # derived, so a line that states one of those keys would contradict the record it is written into.
     stray=$(printf '%s\n' "$block" | grep -v '^[[:space:]]*disputed:' | grep -v '^[[:space:]]*$' | head -1 || true)
     [ -z "$stray" ] || wf_die "the summary block carries a line that is not a disputed: one ('$stray'); the rounds, the panel: line and the fixed: counts are derived from the round records, so record only the disputed: lines that still stand"
-    disputed=$(printf '%s\n' "$block" | sed -n -E 's/^[[:space:]]*disputed:[[:space:]]*/disputed: /p')
-    [ -n "$disputed" ] || wf_die "the summary block has no disputed: line; state 'disputed: none' when nothing stands, one line per finding otherwise"
-    blank=$(printf '%s\n' "$disputed" | grep -vE '^disputed: [^[:space:]]' | head -1 || true)
-    [ -z "$blank" ] || wf_die "a disputed: line carries no text; write 'disputed: none' when nothing stands, one line per finding otherwise"
+    disputed=$(disputed_lines "$block" summary)
 
-    pairs=$(all_pairs "$n")
-    unreadable=$(printf '%s\n' "$pairs" | grep '^!' | head -1 || true)
-    [ -z "$unreadable" ] || wf_die "a round record of this review states no panel this script can read ($unreadable); the records are in $state, so remove them and run the panel again from round 1"
+    pairs=$(readable_pairs "$n")
     # One verdict per round a reviewer ran in, oldest first, and the draft decision from the last of them.
     derived=$(printf '%s\n' "$pairs" | awk '
       { name = $1; $1 = ""; sub(/^ /, "")
@@ -309,7 +331,7 @@ $round_form"
     # The summary closes the rounds it was derived from: a later review of this branch is a new panel, and
     # it starts at round 1 rather than continuing a review that has already been handed on.
     rm -f "$state"/round.*
-    wf_kv panel_summary "recorded at $(short "$commit")"
+    wf_kv panel_summary "recorded at $(wf_short "$commit")"
     wf_kv panel_verdict "$verdict"
     # The summary the rounds derived, in the same shape the pull request stage reads it in: this call is
     # where the worker learns what it recorded, and it reports that instead of its memory of the rounds.
@@ -323,7 +345,7 @@ $round_form"
       exit 0
     fi
     commit=$(wf_record_field "$record" commit)
-    wf_kv panel_summary "recorded at $(short "$commit")"
+    wf_kv panel_summary "recorded at $(wf_short "$commit")"
     if [ "$(git rev-parse HEAD)" = "$commit" ]; then
       wf_kv panel_head "unchanged since the summary was recorded"
     elif ! git merge-base --is-ancestor "$commit" HEAD 2>/dev/null; then
