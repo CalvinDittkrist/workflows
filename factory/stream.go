@@ -175,7 +175,7 @@ func toolLabel(b block) string {
 	for _, key := range []string{"skill", "description", "file_path", "command", "pattern"} {
 		if v := text(b.Input[key]); v != "" {
 			if key == "description" && text(b.Input["subagent_type"]) != "" {
-				return text(b.Input["subagent_type"]) + ": " + v
+				return text(b.Input["subagent_type"]) + ": " + firstLine(v)
 			}
 			return firstLine(v)
 		}

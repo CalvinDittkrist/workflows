@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -83,8 +84,14 @@ type Event struct {
 	Sub   bool      `json:"sub,omitempty"` // written by a subagent of the worker
 }
 
-// A tool result can carry a whole file; the log keeps the head of it and says so.
-const maxEventBody = 8000
+// A tool result can carry a whole file; the log keeps the head of it and says so. One line of the
+// log is that body as JSON, where escaping can inflate it several times over, plus the rest of the
+// event: the reader's limit is well above the worst case and bounded, so a corrupt line is refused
+// rather than read into memory.
+const (
+	maxEventBody = 8000
+	maxEventLine = 1 << 20
+)
 
 // Store holds the runs: one JSON record and one append-only JSONL event log per run in the data
 // directory. There is no database. It is the only place that writes there, and it guards the run
@@ -99,7 +106,7 @@ type Store struct {
 // stopped has no process any more: it is recorded as interrupted, so it neither blocks the next run
 // nor claims to be running.
 func OpenStore(dir string) (*Store, error) {
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("the data directory %s cannot be created: %w; name a writable data_dir", dir, err)
 	}
 	s := &Store{dir: dir}
@@ -122,7 +129,7 @@ func OpenStore(dir string) (*Store, error) {
 		// The event log is the truth about how much was logged; the record's count is a copy for readers.
 		events, err := s.events(r.ID, 0)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("the event log %s cannot be read: %w; move it aside to start without it", s.eventsPath(r.ID), err)
 		}
 		r.EventCount = len(events)
 		s.runs = append(s.runs, r)
@@ -181,24 +188,37 @@ func (s *Store) finish(r *Run, outcome, reason string, exitCode *int) {
 
 // write persists a record. It writes a whole file and renames it, so a record is never half written,
 // whatever interrupts the host. Callers hold the lock.
+//
+// The data directory is the factory's only durable output, and nobody watches the host: a write that
+// fails says so in the journal, with the fix, rather than leaving a service that looks healthy and
+// records nothing.
 func (s *Store) write(r *Run) {
+	failed := func(err error) {
+		log.Printf("error: the record of run %d could not be written: %v; is %s writable and has it space left?", r.ID, err, s.dir)
+	}
 	raw, err := json.MarshalIndent(r, "", "  ")
 	if err != nil {
+		failed(err)
 		return
 	}
 	file, err := os.CreateTemp(s.dir, fmt.Sprintf(".run-%d.json.*", r.ID))
 	if err != nil {
+		failed(err)
 		return
 	}
 	defer os.Remove(file.Name())
 	if _, err := file.Write(append(raw, '\n')); err != nil {
 		file.Close()
+		failed(err)
 		return
 	}
 	if err := file.Close(); err != nil {
+		failed(err)
 		return
 	}
-	_ = os.Rename(file.Name(), s.recordPath(r.ID))
+	if err := os.Rename(file.Name(), s.recordPath(r.ID)); err != nil {
+		failed(err)
+	}
 }
 
 // event appends to a run's log. The log is append-only: it is opened, written and closed per event,
@@ -211,16 +231,23 @@ func (s *Store) event(r *Run, e Event) {
 	if len(e.Body) > maxEventBody {
 		e.Body = cut(e.Body, maxEventBody) + "\n[truncated]"
 	}
+	failed := func(err error) {
+		log.Printf("error: event %d of run %d could not be logged: %v; is %s writable and has it space left?", e.Seq, r.ID, err, s.dir)
+	}
 	line, err := json.Marshal(e)
 	if err != nil {
+		failed(err)
 		return
 	}
-	file, err := os.OpenFile(s.eventsPath(r.ID), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	file, err := os.OpenFile(s.eventsPath(r.ID), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
+		failed(err)
 		return
 	}
 	defer file.Close()
-	_, _ = file.Write(append(line, '\n'))
+	if _, err := file.Write(append(line, '\n')); err != nil {
+		failed(err)
+	}
 }
 
 // list is a copy of every run's record, oldest first.
@@ -260,17 +287,18 @@ func (s *Store) events(id, after int) ([]Event, error) {
 	defer file.Close()
 	out := []Event{}
 	scanner := bufio.NewScanner(file)
-	scanner.Buffer(make([]byte, 64*1024), maxEventBody+4096)
+	scanner.Buffer(make([]byte, 4096), maxEventLine)
 	seen := 0
 	for scanner.Scan() {
+		seen++
+		if seen <= after {
+			continue // counted, never parsed: a reader that polls pays for what it asked for
+		}
 		var e Event
 		if json.Unmarshal(scanner.Bytes(), &e) != nil {
 			continue
 		}
-		seen++
-		if seen > after {
-			out = append(out, e)
-		}
+		out = append(out, e)
 	}
 	return out, scanner.Err()
 }
@@ -289,9 +317,13 @@ func (r *Run) stage(name string) {
 
 func (r *Run) key() string { return fmt.Sprintf("%s#%d", r.Repository, r.Issue) }
 
-// cut shortens a string to at most n bytes without splitting a character in half.
+// cut shortens a string to at most n bytes without splitting a character in half. It steps back over
+// the bytes of one character at most, so a body that is not valid UTF-8 at all still keeps its head.
 func cut(s string, n int) string {
-	for n > 0 && !utf8.ValidString(s[:n]) {
+	if n >= len(s) {
+		return s
+	}
+	for i := 0; i < utf8.UTFMax && n > 0 && !utf8.RuneStart(s[n]); i++ {
 		n--
 	}
 	return s[:n]

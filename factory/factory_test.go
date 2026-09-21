@@ -20,6 +20,8 @@ import (
 // The tests start the real binary and watch it from outside: through its HTTP interface, through the
 // files in its data directory and through the processes it leaves or does not leave on the machine.
 // They read the interface as a reader of it does, by its field names, not through the Go types.
+// TestTheReportIsReadFromMarkdown is the one exception: the markdown a worker's final report can be
+// written in has more shapes than a scripted worker can end in, and they are cheapest to pin here.
 
 var binary string
 
@@ -30,7 +32,11 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 	binary = filepath.Join(dir, "factory")
-	build := exec.Command("go", "build", "-o", binary, ".")
+	args := []string{"build"}
+	if raceEnabled {
+		args = append(args, "-race")
+	}
+	build := exec.Command("go", append(args, "-o", binary, ".")...)
 	build.Stdout, build.Stderr = os.Stdout, os.Stderr
 	if err := build.Run(); err != nil {
 		fmt.Fprintln(os.Stderr, "error: the factory could not be built:", err)
@@ -100,7 +106,7 @@ func TestFakeModeWorksTheCannedQueueOneRunAtATime(t *testing.T) {
 	f.eventually(t, 60*time.Second, "the whole canned queue to be done", func() bool {
 		line = apiLine{}
 		f.get(t, "/api/line", &line)
-		return len(line.Queue) == 0 && len(line.Now) == 0 && len(line.Done) == 4
+		return len(line.Queue) == 0 && len(line.Now) == 0 && len(line.Done) == len(cannedIssues)
 	})
 
 	// The order of the queue is the order the routing label was set in, oldest first, and the entries
@@ -109,7 +115,8 @@ func TestFakeModeWorksTheCannedQueueOneRunAtATime(t *testing.T) {
 	for _, run := range line.Done {
 		worked = append(worked, fmt.Sprintf("%s#%d", run.Repository, run.Issue))
 	}
-	want := []string{"acme/edge-sensors#104", "acme/backtest#109", "acme/edge-sensors#112", "acme/backtest#118"}
+	want := []string{"acme/edge-sensors#104", "acme/backtest#109", "acme/edge-sensors#112",
+		"acme/edge-sensors#115", "acme/backtest#118"}
 	if strings.Join(worked, " ") != strings.Join(want, " ") {
 		t.Errorf("the queue was worked as %v, want %v", worked, want)
 	}
@@ -123,7 +130,8 @@ func TestFakeModeWorksTheCannedQueueOneRunAtATime(t *testing.T) {
 		}
 	}
 
-	ready, blocked, failed, timeout := line.Done[0], line.Done[1], line.Done[2], line.Done[3]
+	ready, blocked, failed := line.Done[0], line.Done[1], line.Done[2]
+	silent, timeout := line.Done[3], line.Done[4]
 
 	// ready: the pull request comes from a final report written as markdown, the stages from the
 	// skill calls, and the totals from the result line.
@@ -136,7 +144,13 @@ func TestFakeModeWorksTheCannedQueueOneRunAtATime(t *testing.T) {
 	if ready.Turns != 23 || ready.CostUSD != 4.18 || ready.Tokens.Output != 24800 || ready.Tokens.CacheRead != 1204000 {
 		t.Errorf("run 1 has turns %d, cost %v and tokens %+v, want the totals of the result line", ready.Turns, ready.CostUSD, ready.Tokens)
 	}
-	if ready.Warnings == nil || len(ready.Warnings) != 0 || ready.Versions.Worker != "" {
+	// Shape, not behaviour: nothing fills warnings or versions yet, and the record carries the fields
+	// from the start so the tickets that fill them change no reader.
+	if ready.Warnings == nil || len(ready.Warnings) != 0 || ready.Versions != (struct {
+		Worker     string `json:"worker"`
+		ClaudeCode string `json:"claudeCode"`
+		Factory    string `json:"factory"`
+	}{}) {
 		t.Errorf("run 1 has warnings %v and versions %+v, want both empty until they are filled", ready.Warnings, ready.Versions)
 	}
 
@@ -156,15 +170,38 @@ func TestFakeModeWorksTheCannedQueueOneRunAtATime(t *testing.T) {
 		t.Errorf("run 3 failed because %q, want the error the session printed", failed.Reason)
 	}
 
+	// silent: a session that ended by itself without reporting is failed, and says so.
+	if silent.Outcome != "failed" || !strings.Contains(silent.Reason, "without a report") {
+		t.Errorf("run 4 ended %q because %q, want failed because it reported nothing", silent.Outcome, silent.Reason)
+	}
+	if silent.ExitCode == nil || *silent.ExitCode != 0 {
+		t.Errorf("run 4 has the exit code %v, want 0: the session itself ended well", silent.ExitCode)
+	}
+	// Its tool result is far longer than an event keeps: the log has to hold the head of it and say so.
+	var withBody apiRun
+	f.get(t, "/api/runs/4", &withBody)
+	truncated := 0
+	for _, e := range withBody.Events {
+		if strings.HasSuffix(e.Body, "[truncated]") {
+			truncated++
+			if len(e.Body) > maxEventBody+len("\n[truncated]") {
+				t.Errorf("a truncated event body is %d bytes long, want at most %d", len(e.Body), maxEventBody)
+			}
+		}
+	}
+	if truncated != 1 {
+		t.Errorf("run 4 logged %d truncated events, want the one over-long tool result", truncated)
+	}
+
 	// timeout: the deadline passed and the whole process group was ended.
 	if timeout.Outcome != "timeout" || !strings.Contains(timeout.Reason, "deadline of 3s") {
-		t.Errorf("run 4 ended %q because %q, want timeout on the deadline", timeout.Outcome, timeout.Reason)
+		t.Errorf("run 5 ended %q because %q, want timeout on the deadline", timeout.Outcome, timeout.Reason)
 	}
 	var full apiRun
-	f.get(t, "/api/runs/4", &full)
+	f.get(t, "/api/runs/5", &full)
 	pids := workerPids(t, full)
 	if len(pids) != 2 {
-		t.Fatalf("the scripted worker of run 4 logged %d processes, want the worker and its child", len(pids))
+		t.Fatalf("the scripted worker of run 5 logged %d processes, want the worker and its child", len(pids))
 	}
 	for _, pid := range pids {
 		if survived(pid) {
@@ -183,7 +220,7 @@ func TestFakeModeWorksTheCannedQueueOneRunAtATime(t *testing.T) {
 			t.Errorf("run %d has %d events in its log and %d in its record", run.ID, lines, run.EventCount)
 		}
 	}
-	if entries, _ := filepath.Glob(filepath.Join(f.data, "*")); len(entries) != 8 {
+	if entries, _ := filepath.Glob(filepath.Join(f.data, "*")); len(entries) != 2*len(cannedIssues) {
 		t.Errorf("the data directory holds %d files, want one record and one event log per run", len(entries))
 	}
 
@@ -251,7 +288,7 @@ func TestPausedShowsTheQueueAndStartsNothing(t *testing.T) {
 	}
 	var line apiLine
 	f.get(t, "/api/line", &line)
-	if len(line.Queue) != 4 || len(line.Now) != 0 || len(line.Done) != 0 {
+	if len(line.Queue) != len(cannedIssues) || len(line.Now) != 0 || len(line.Done) != 0 {
 		t.Errorf("paused, the line is now=%d queue=%d done=%d, want the whole queue and nothing running",
 			len(line.Now), len(line.Queue), len(line.Done))
 	}
@@ -263,7 +300,7 @@ func TestPausedShowsTheQueueAndStartsNothing(t *testing.T) {
 	}
 	var repositories []map[string]any
 	f.get(t, "/api/repositories", &repositories)
-	if len(repositories) != 2 || repositories[0]["repository"] != "acme/edge-sensors" || repositories[0]["queued"] != 2.0 {
+	if len(repositories) != 2 || repositories[0]["repository"] != "acme/edge-sensors" || repositories[0]["queued"] != 3.0 {
 		t.Errorf("the connected repositories are %v, want both with what waits in them", repositories)
 	}
 	if records, _ := filepath.Glob(filepath.Join(f.data, "run-*.json")); len(records) != 0 {
@@ -304,8 +341,10 @@ func TestAnInvalidConfigurationIsRefusedWithTheFix(t *testing.T) {
 		{"not JSON", `listen = 7341`, `see factory/factory.example.json`},
 		{"deadline in words", `{"data_dir":"data","repositories":["a/b"],"deadline":"90 minutes"}`, `is not a positive duration; write it as "90m"`},
 		{"poll of zero", `{"data_dir":"data","repositories":["a/b"],"poll":"0s"}`, `is not a positive duration`},
-		{"address without host", `{"data_dir":"data","repositories":["a/b"],"listen":":7341"}`, `names no host; bind it to a host`},
+		{"address without host", `{"data_dir":"data","repositories":["a/b"],"listen":":7341"}`, `answers on every interface`},
 		{"address without port", `{"data_dir":"data","repositories":["a/b"],"listen":"127.0.0.1"}`, `is not an address; write it as host:port`},
+		{"wildcard address", `{"data_dir":"data","repositories":["a/b"],"listen":"0.0.0.0:7341"}`, `answers on every interface; bind it to one address`},
+		{"wildcard address, IPv6", `{"data_dir":"data","repositories":["a/b"],"listen":"[::]:7341"}`, `answers on every interface`},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "factory.json")
@@ -321,6 +360,19 @@ func TestAnInvalidConfigurationIsRefusedWithTheFix(t *testing.T) {
 			}
 		})
 	}
+	t.Run("without fake mode", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "factory.json")
+		if err := os.WriteFile(path, []byte(`{"data_dir":"data","repositories":["a/b"]}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		output, err := exec.Command(binary, "-config", path).CombinedOutput()
+		if err == nil {
+			t.Fatalf("the factory started without -fake, want a refusal while only fake mode works")
+		}
+		if !strings.Contains(string(output), "start it with -fake") {
+			t.Errorf("the factory said %q, want the fix for a mode that does not work yet", strings.TrimSpace(string(output)))
+		}
+	})
 	t.Run("missing file", func(t *testing.T) {
 		output, _ := exec.Command(binary, "-config", filepath.Join(t.TempDir(), "gone.json"), "-fake").CombinedOutput()
 		if !strings.Contains(string(output), "copy factory/factory.example.json") {
@@ -340,7 +392,7 @@ func TestStoppingEndsTheWorkerAndTheRunIsInterrupted(t *testing.T) {
 		}
 	}
 	record := map[string]any{}
-	read(t, filepath.Join(f.data, "run-4.json"), &record)
+	read(t, filepath.Join(f.data, fmt.Sprintf("run-%d.json", len(cannedIssues))), &record)
 	if record["outcome"] != "interrupted" || record["state"] != "ended" {
 		t.Errorf("the run that was active is recorded as %v/%v, want ended/interrupted", record["state"], record["outcome"])
 	}
@@ -357,7 +409,7 @@ func TestARestartKeepsTheRunsAndInterruptsWhatWasActive(t *testing.T) {
 		}
 	})
 	record := map[string]any{}
-	read(t, filepath.Join(f.data, "run-4.json"), &record)
+	read(t, filepath.Join(f.data, fmt.Sprintf("run-%d.json", len(cannedIssues))), &record)
 	if record["state"] != "running" {
 		t.Fatalf("the record of the active run says %v, want running before the restart", record["state"])
 	}
@@ -367,13 +419,13 @@ func TestARestartKeepsTheRunsAndInterruptsWhatWasActive(t *testing.T) {
 	again.eventually(t, 10*time.Second, "the runs of the first factory", func() bool {
 		line = apiLine{}
 		again.get(t, "/api/line", &line)
-		return len(line.Done) == 4
+		return len(line.Done) == len(cannedIssues)
 	})
 	if len(line.Now) != 0 {
 		t.Errorf("the restarted factory shows %d runs as running, want none: their processes are gone", len(line.Now))
 	}
-	if last := line.Done[3]; last.ID != 4 || last.Outcome != "interrupted" {
-		t.Errorf("the run that was active is run %d with the outcome %q, want run 4 interrupted", last.ID, last.Outcome)
+	if last := line.Done[len(line.Done)-1]; last.ID != len(cannedIssues) || last.Outcome != "interrupted" {
+		t.Errorf("the run that was active is run %d with the outcome %q, want run %d interrupted", last.ID, last.Outcome, len(cannedIssues))
 	}
 	if line.Done[0].Outcome != "ready" {
 		t.Errorf("the restarted factory reads run 1 as %q, want the outcome it was recorded with", line.Done[0].Outcome)
@@ -441,6 +493,9 @@ func start(t *testing.T, c config) *factory {
 	}
 	f.cmd = exec.Command(binary, "-config", path, "-fake")
 	f.cmd.Stdout, f.cmd.Stderr = output, output
+	// The factory and every worker it starts share one process group here, so a test that fails while
+	// a worker hangs leaves nothing behind: the factory ends its workers only when it stops itself.
+	f.cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := f.cmd.Start(); err != nil {
 		t.Fatalf("the factory could not be started: %v", err)
 	}
@@ -450,6 +505,7 @@ func start(t *testing.T, c config) *factory {
 			_ = f.cmd.Process.Signal(syscall.SIGKILL)
 			_ = f.cmd.Wait()
 		}
+		_ = syscall.Kill(-f.cmd.Process.Pid, syscall.SIGKILL)
 	})
 	f.eventually(t, 20*time.Second, "the factory to answer", func() bool {
 		response, err := http.Get("http://" + f.address + "/api/status")
@@ -482,9 +538,9 @@ func (f *factory) stop(t *testing.T, signal syscall.Signal) {
 func (f *factory) waitForTheHangingWorker(t *testing.T) []int {
 	t.Helper()
 	var run apiRun
-	f.eventually(t, 60*time.Second, "the hanging worker of run 4 and its child", func() bool {
+	f.eventually(t, 60*time.Second, "the hanging worker of the last canned entry and its child", func() bool {
 		run = apiRun{}
-		response, err := http.Get("http://" + f.address + "/api/runs/4")
+		response, err := http.Get(fmt.Sprintf("http://%s/api/runs/%d", f.address, len(cannedIssues)))
 		if err != nil || response.StatusCode != http.StatusOK {
 			if response != nil {
 				response.Body.Close()
@@ -619,7 +675,7 @@ func countLines(t *testing.T, path string) int {
 	defer file.Close()
 	lines := 0
 	scanner := bufio.NewScanner(file)
-	scanner.Buffer(make([]byte, 64*1024), 16*1024*1024)
+	scanner.Buffer(make([]byte, 4096), maxEventLine) // the limit the factory itself reads the log with
 	for scanner.Scan() {
 		lines++
 	}

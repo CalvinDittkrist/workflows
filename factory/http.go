@@ -8,7 +8,8 @@ import (
 
 // The HTTP interface is read-only. The factory is steered on GitHub — routed by a label, released by
 // an assignee, cancelled by a label — so its own interface has no endpoint that writes anything, and
-// it needs no login of its own: it binds to the loopback and is reached over the tailnet.
+// it needs no login of its own: it binds to one address, by default the loopback, and is reached
+// over the tailnet.
 func (f *Factory) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", f.index)

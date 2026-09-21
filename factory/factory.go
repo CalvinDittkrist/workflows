@@ -116,8 +116,13 @@ func (f *Factory) dispatch(ctx context.Context) {
 	}
 }
 
-// start records the run and works it in the background, so the loop keeps polling while it runs.
+// start records the run and works it in the background, so the loop keeps polling while it runs. A
+// factory that is already stopping records nothing: the run would count as worked without ever
+// having run.
 func (f *Factory) start(ctx context.Context, issue Issue) {
+	if ctx.Err() != nil {
+		return
+	}
 	r := &Run{
 		Repository: issue.Repository,
 		Issue:      issue.Number,
@@ -147,7 +152,7 @@ func (f *Factory) execute(parent context.Context, r *Run, issue Issue) {
 
 	cmd, err := f.worker(ctx, issue)
 	if err != nil {
-		f.runs.finish(r, outcomeFailed, "no worker could be started: "+err.Error(), nil)
+		f.finish(r, outcomeFailed, "no worker could be started: "+err.Error(), nil)
 		return
 	}
 	// The worker starts subprocesses of its own; the deadline and the stop have to reach all of them,
@@ -160,14 +165,14 @@ func (f *Factory) execute(parent context.Context, r *Run, issue Issue) {
 	// able to hold the factory in Wait, and after the group is ended every writer is gone.
 	stdout, stdoutWriter, err := os.Pipe()
 	if err != nil {
-		f.runs.finish(r, outcomeFailed, "the factory could not open a pipe for the worker: "+err.Error(), nil)
+		f.finish(r, outcomeFailed, "the factory could not open a pipe for the worker: "+err.Error(), nil)
 		return
 	}
 	stderr, stderrWriter, err := os.Pipe()
 	if err != nil {
 		stdout.Close()
 		stdoutWriter.Close()
-		f.runs.finish(r, outcomeFailed, "the factory could not open a pipe for the worker: "+err.Error(), nil)
+		f.finish(r, outcomeFailed, "the factory could not open a pipe for the worker: "+err.Error(), nil)
 		return
 	}
 	cmd.Stdout, cmd.Stderr = stdoutWriter, stderrWriter
@@ -176,7 +181,7 @@ func (f *Factory) execute(parent context.Context, r *Run, issue Issue) {
 		stdoutWriter.Close()
 		stderr.Close()
 		stderrWriter.Close()
-		f.runs.finish(r, outcomeFailed, "the worker could not be started: "+err.Error(), nil)
+		f.finish(r, outcomeFailed, "the worker could not be started: "+err.Error(), nil)
 		return
 	}
 	stdoutWriter.Close() // the worker holds the only writing ends now
@@ -206,10 +211,13 @@ func (f *Factory) execute(parent context.Context, r *Run, issue Issue) {
 	stderr.Close()
 
 	exitCode := cmd.ProcessState.ExitCode()
+	// A worker that ended by itself and reported is read by its report: a stop or a deadline that
+	// arrives in the same moment ended nothing, and its pull request would be lost to the record.
+	reported := waitErr == nil && r.reportOutcome != ""
 	switch {
-	case parent.Err() != nil:
+	case !reported && parent.Err() != nil:
 		f.finish(r, outcomeInterrupted, "the factory stopped while this run was active; its worker was ended", &exitCode)
-	case errors.Is(ctx.Err(), context.DeadlineExceeded):
+	case !reported && errors.Is(ctx.Err(), context.DeadlineExceeded):
 		f.finish(r, outcomeTimeout, fmt.Sprintf("the deadline of %s passed; the worker's process group was ended", f.settings.Deadline), &exitCode)
 	case r.reportOutcome == outcomeReady:
 		f.runs.update(r, func() { r.PullRequest = r.reportDetail })

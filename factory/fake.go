@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -15,7 +16,7 @@ import (
 // prints the stream a real headless worker printed, recorded on 2026-09-21 with Claude Code 2.1.278.
 
 // cannedIssue is one entry of the canned queue with the scripted worker that works it: between them
-// the four entries cover every way a run ends here.
+// the entries cover every way a run ends here.
 type cannedIssue struct {
 	number   int
 	title    string
@@ -31,6 +32,7 @@ var cannedIssues = []cannedIssue{
 	{number: 118, title: "Document the calibration procedure", labels: []string{"documentation"}, routed: 40 * time.Minute, repo: 1, scenario: "hang"},
 	{number: 104, title: "Retry the upload when the broker drops the connection", labels: []string{"bug"}, routed: 6 * time.Hour, repo: 0, scenario: "ready"},
 	{number: 112, title: "Replace the hand-written CSV parser", labels: []string{"enhancement"}, routed: 2 * time.Hour, repo: 0, scenario: "failed"},
+	{number: 115, title: "Warn when a calibration file is older than the sensor", labels: []string{"enhancement"}, routed: 1 * time.Hour, repo: 0, scenario: "silent"},
 	{number: 109, title: "Überwachung: Füllstand fällt unter den Schwellwert, ohne dass eine Warnung kommt", labels: []string{"bug"}, routed: 4 * time.Hour, repo: 1, scenario: "blocked"},
 }
 
@@ -53,10 +55,10 @@ func cannedQueue(repositories []string, now time.Time) []Issue {
 
 // scriptedWorker stands in for `claude -p --output-format stream-json --verbose`. It is a subcommand
 // of the factory's own binary, so fake mode needs nothing installed on the host.
-// Usage: factory scripted-worker <ready|blocked|failed|hang|child> <owner/name> <issue>
+// Usage: factory scripted-worker <ready|blocked|failed|silent|hang|child> <owner/name> <issue>
 func scriptedWorker(args []string, stdout, stderr io.Writer) int {
 	if len(args) < 3 {
-		fmt.Fprintln(stderr, "error: usage: factory scripted-worker <ready|blocked|failed|hang|child> <owner/name> <issue>")
+		fmt.Fprintln(stderr, "error: usage: factory scripted-worker <ready|blocked|failed|silent|hang|child> <owner/name> <issue>")
 		return 2
 	}
 	scenario, repository := args[0], args[1]
@@ -96,6 +98,13 @@ func scriptedWorker(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, `API Error: 529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}`)
 		s.result("error_during_execution", "", true, "api_error")
 		return 1
+	case "silent":
+		// A session that ends by itself without reporting, with a tool result far beyond what one
+		// event keeps: the log has to survive both, here and after a restart.
+		s.tool("Write", map[string]any{"file_path": "docs/report.html", "content": strings.Repeat(`<a href="x">&amp;</a>`, 1000)},
+			"File created successfully.")
+		s.result("success", "I have pushed the branch and stopped here.", false, "completed")
+		return 0
 	}
 
 	s.tool("Edit", map[string]any{"file_path": "plugins/worker/skills/work/SKILL.md"}, "The file has been updated.")

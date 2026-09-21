@@ -21,7 +21,7 @@ GitHub is the only thing the factory host and a developer's machine share, and t
 
 Its notifications go the same way: a review request on the pull request when a run ends `ready`, a comment that mentions the maintainer when it ends `blocked`, `failed`, `timeout` or is interrupted a second time. There is no other channel.
 
-The factory's own HTTP interface is read-only. It has no endpoint that writes anything, and a request with a writing method is refused with 405, whatever the path, so an endpoint that writes cannot appear by accident. It binds to the loopback; reaching it from elsewhere is the tailnet's job, so the factory carries no login of its own.
+The factory's own HTTP interface is read-only. It has no endpoint that writes anything, and a request with a writing method is refused with 405, whatever the path, so an endpoint that writes cannot appear by accident. It binds to one address and refuses a wildcard one, so an unauthenticated interface cannot end up on every network the host is on; by default that address is the loopback, and reaching it from elsewhere is the tailnet's job, so the factory carries no login of its own.
 
 ## Consequences
 Everything the maintainer does to the factory is done in a place that already has accounts, permissions, an audit trail and a phone client, and it survives the factory: a routed issue that the host never sees is still a routed issue.
