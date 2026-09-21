@@ -58,6 +58,6 @@ else
   report "$tokens" no
 fi
 wf_kv measured "$at ($age s ago)"
-# The model's window, as the status line read it. Not the pane's percentage, which is against the window the
-# session compacts at, so the key says whose window this is.
+# The model's window, as the status line read it. Not the pane's percentage, which is against the compact
+# trigger the claim pins (ADR 0031), so the key says whose window this is.
 if printf '%s' "$window" | grep -Eq '^[1-9][0-9]*$'; then wf_kv model_context_window "$window ($((tokens * 100 / window)) % of it used)"; fi

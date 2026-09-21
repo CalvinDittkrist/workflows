@@ -1,4 +1,4 @@
-# 0031. The dashboard is built into the factory binary
+# 0032. The dashboard is built into the factory binary
 
 Date: 2026-09-21
 Status: accepted
