@@ -1,0 +1,15 @@
+# 0021. Routing is decided in the planner, and the routing label never stands alone
+
+Date: 2026-09-21
+Status: accepted
+
+## Context
+The factory host takes every open issue that carries `ready-for-agent` and the routing label `factory` and works it unattended: no Herdr, no screen, nobody to ask ([ADR 0014](0014-claims-require-ready-for-agent.md) made the first of the two labels the gate for a claim). Whether an issue can be finished that way is decided by its acceptance criteria: a criterion that needs a workspace, a browser or a credential only the maintainer holds ends the run blocked, which costs a full worker session and a maintainer's answer to learn something that was knowable when the criterion was written. Nothing said where that judgement happens, and the label was free to appear on any issue, including one a person has to implement.
+
+## Decision
+The planner decides routing where the acceptance criteria are written. `/planner:tickets` asks once, with the breakdown in front of it, which tickets are routed, and `/planner:triage` asks the same for the one issue it triages. Both recommend per ticket against one rule in `plugins/planner/skills/tickets/routing.md` (Herdr, a screen or a person makes a ticket unsuitable, and the recommendation names the reason), and both route only the tickets the maintainer named: nothing is routed by default.
+
+The rule that a recommendation cannot break is in `issue.sh`, which is the only script that sets the label. `create` and `label` refuse a label set that would leave the routing label next to `ready-for-human`, or without `ready-for-agent`, before the call to GitHub. `label` reads the labels the issue carries now, so the rule holds over the set the call leaves behind, not over the labels one call happens to name. The planner's `WF_ROUTING_LABEL` is its own copy of the name the orchestrator's claim refuses by, and a drift test binds the two copies and the label vocabulary together.
+
+## Consequences
+A routed issue is one a worker can finish, and the reason a ticket is not routed is on the record in the conversation that cut it. Routing stays a maintainer's decision: the planner recommends, it never routes on its own, and setting or removing the label by hand on GitHub stays the way to route a ticket later or to cancel a run. The two states `ready-for-agent` and `ready-for-human` keep their meaning in the presence of the routing label, which lets the factory's queue rule stay one label check. The price is one read of an issue's labels per `label` call, which also means a call refuses when GitHub cannot be read instead of guessing; routing an issue outside the planner (`gh issue edit`) passes no guard, which is deliberate, because GitHub is the maintainer's control surface for the factory. Rejected: a per-ticket flag on the worker side (the label is the factory's queue, and the check belongs where the criteria exist), and enforcing the rule in the factory (it would find out one poll too late and have no way to tell anybody why).

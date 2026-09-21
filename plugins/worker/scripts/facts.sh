@@ -17,7 +17,7 @@ case "$(printf '%s' "${CLAUDE_CODE_DISABLE_BACKGROUND_TASKS:-}" | tr '[:upper:]'
   *) wf_kv subagents "background" ;;
 esac
 
-# A handoff is pending once the SessionStart hook has injected its note into a fresh context (ADR 0021):
+# A handoff is pending once the SessionStart hook has injected its note into a fresh context (ADR 0029):
 # this line is how that context's driver learns which stage it starts at, the stages before it having run
 # in a context that is gone. Nothing is printed without a handoff, and nothing while the note is still on
 # its way to the next context, where it would describe this one instead of it. The next handoff replaces

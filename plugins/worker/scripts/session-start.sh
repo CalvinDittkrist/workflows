@@ -16,7 +16,7 @@ mode="${WF_MODE:-manual}"
 emit() { jq -n --arg c "$1" '{hookSpecificOutput:{hookEventName:"SessionStart",additionalContext:$c}}'; }
 
 # A handoff note is waiting when the previous context of this worktree wrote one and no session has been
-# given it yet (ADR 0021). That context cleared itself, so this session starts with the issue as if it were
+# given it yet (ADR 0029). That context cleared itself, so this session starts with the issue as if it were
 # the first — plus the note, which is the only thing the branch and the issue do not say.
 # The note is for the next context, never for the one that wrote it: the record names the session that asked
 # for the handover, and a start that reaches this session again — an auto-compact firing between the note and

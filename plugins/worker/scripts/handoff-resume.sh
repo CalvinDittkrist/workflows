@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The detached half of the handoff (ADR 0021): clear this pane's session and send the driver command back.
+# The detached half of the handoff (ADR 0029): clear this pane's session and send the driver command back.
 # Usage: handoff-resume.sh <pane> <session-id-before> <stage> <driver-command> [note-record]
 # Started by handoff.sh with nohup, because the session it clears is the one that started it: a worker
 # cannot clear itself from inside a turn. It waits for that worker's turn to settle, sends `/clear` into that

@@ -1,4 +1,4 @@
-# 0021. A worker resets its context by a handoff at a checkpoint, not by compaction
+# 0029. A worker resets its context by a handoff at a checkpoint, not by compaction
 
 Date: 2026-09-21
 Status: accepted

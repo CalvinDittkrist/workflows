@@ -41,6 +41,37 @@ wf_issue_num() { local n="${1#\#}"; printf '%s' "$n" | grep -Eq '^[0-9]+$' || wf
 # GitHub's numeric database id of issue $1 (dependency and sub-issue APIs want it, not the number).
 wf_issue_db_id() { gh api "repos/$(wf_repo_nwo)/issues/$1" --jq .id 2>/dev/null; }
 
+# --- Routing to the factory ---
+
+# The factory's routing label, as the label vocabulary defines it (labels.sh). The factory host works an issue
+# that carries it unattended, with no Herdr, no screen and nobody to ask, so the planner decides per ticket
+# whether it is routed, and issue.sh (create and label) is the only script that puts the label on an issue.
+WF_ROUTING_LABEL=factory
+# True when the label set $2... contains the name $1. The names come from GitHub, so -e keeps one that opens
+# with a dash an operand instead of an option to grep.
+wf_labels_have() { local want="$1"; shift; printf '%s\n' "$@" | grep -qxF -e "$want"; }
+# Refuse a label set that routes an issue the factory cannot work: routing is only true next to
+# `ready-for-agent` (the factory takes no half-specified issue) and never next to `ready-for-human` (a person
+# implements that one). $1 names the issue in the message, $2 is how this call drops the routing label (the
+# set is the one the call would leave behind, so the label may be one the call never named), the rest is that
+# label set.
+wf_require_routable() {
+  local subject="$1" drop="$2"; shift 2
+  wf_labels_have "$WF_ROUTING_LABEL" "$@" || return 0
+  if wf_labels_have ready-for-human "$@"; then
+    wf_die "$subject would carry $WF_ROUTING_LABEL and ready-for-human: the factory works unattended, so an issue a person has to implement is never routed to it. Drop one of the two labels; $drop."
+  fi
+  if ! wf_labels_have ready-for-agent "$@"; then
+    wf_die "$subject would carry $WF_ROUTING_LABEL without ready-for-agent: the factory takes only issues a worker can finish from the brief alone. Add ready-for-agent, or $drop."
+  fi
+}
+# The labels issue $1 carries now, one per line, or a refusal: the routing rule holds over the whole set, not
+# over the labels one call happens to name.
+wf_issue_labels() {
+  gh issue view "$1" --json labels --jq '.labels[].name' 2>/dev/null \
+    || wf_die "could not read the labels of #$1; is gh authenticated for this repository, and does the issue exist?"
+}
+
 # --- The acceptance of a spec (accept-facts.sh, accept-close.sh, accept-due.sh) ---
 
 # Issue $2 of repository $1 as JSON, or a refusal naming it.

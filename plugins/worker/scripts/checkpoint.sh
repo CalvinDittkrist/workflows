@@ -3,7 +3,7 @@
 # Usage: checkpoint.sh
 # The size is read from the value the pane's status line writes into this worktree's git directory
 # (ADR 0020). This reports, and the driver acts on it: `/worker:work` runs it at its two checkpoints, before
-# the review stage and before the CI stage, and hands the pipeline over on `handoff: yes` (ADR 0021).
+# the review stage and before the CI stage, and hands the pipeline over on `handoff: yes` (ADR 0029).
 set -euo pipefail
 # shellcheck source=lib.sh
 . "$(dirname "$0")/lib.sh"

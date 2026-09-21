@@ -2,6 +2,7 @@ import json
 import re
 import shutil
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -110,6 +111,39 @@ class ManifestTests(unittest.TestCase):
             self.assertEqual(r.returncode, 0, f"{path}\n{r.stdout}{r.stderr}")
 
 
+class FactoryGateTests(unittest.TestCase):
+    """`make factory` is the Go part of the gate: a tool it needs and cannot find is named with its fix."""
+
+    def gate(self, *tools):
+        # The recipe runs with nothing on PATH but the named tools, each a stub that succeeds and prints nothing.
+        with tempfile.TemporaryDirectory() as path:
+            for tool in tools:
+                stub = Path(path) / tool
+                stub.write_text("#!/bin/sh\nexit 0\n")
+                stub.chmod(0o755)
+            return subprocess.run([shutil.which("make"), "factory"], cwd=ROOT, env={"PATH": path, "HOME": path},
+                                  text=True, capture_output=True)
+
+    def test_a_missing_go_is_named_with_the_fix(self):
+        r = self.gate()
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("error: go not installed; brew install go", r.stderr)
+
+    def test_a_gofmt_that_cannot_run_fails_the_gate_instead_of_passing_it(self):
+        r = self.gate("go")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("error: gofmt could not run", r.stderr)
+
+    def test_a_missing_staticcheck_is_named_with_the_pinned_install(self):
+        r = self.gate("go", "gofmt")
+        self.assertNotEqual(r.returncode, 0)
+        named = re.search(r"error: staticcheck not installed; go install honnef\.co/go/tools/cmd/staticcheck@([0-9.]+)", r.stderr)
+        self.assertIsNotNone(named, r.stderr)
+        # Local and CI findings match only while both run the same version.
+        ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text()
+        self.assertIn(f"go install honnef.co/go/tools/cmd/staticcheck@{named.group(1)}\n", ci)
+
+
 class ShimCallLogTests(ShimTest):
     """The harness itself: what the shims log has to be what a test reads back."""
 
@@ -172,6 +206,27 @@ class LabelVocabularyTests(ShimTest):
                          f"the label vocabulary of {self.STANDARDS_FILE} (WF_LABELS, minus {self.PRIVATE}) and of "
                          f"{self.PLANNER_FILE} differ in name, colour, description or order. One of the two copies "
                          f"was changed and the other has to follow; do not adjust this test.")
+
+    def routing_label(self, scripts):
+        """WF_ROUTING_LABEL as the scripts of one plugin read it, sourced outside a git repository."""
+        file = str((scripts / "lib.sh").relative_to(ROOT))
+        r = subprocess.run(["bash", "-c", r'. "$1/lib.sh"; printf "%s\n" "$WF_ROUTING_LABEL"', "_", str(scripts)],
+                           cwd=self.base, text=True, capture_output=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertTrue(r.stdout.strip(), f"{file} defines no WF_ROUTING_LABEL")
+        return r.stdout.strip()
+
+    def test_the_routing_label_the_local_claim_refuses_is_in_the_vocabulary(self):
+        """claim.sh refuses a routed issue by the name in WF_ROUTING_LABEL, and the planner sets the label by
+        that name; a rename in the vocabulary that leaves either behind would let a local claim take an issue
+        the factory owns, or route an issue by a name the factory never reads."""
+        routing = self.routing_label(ORCH)
+        self.assertEqual(routing, self.routing_label(PLANNER),
+                         "the orchestrator refuses and the planner sets two different routing labels")
+        for file, vocabulary in ((self.STANDARDS_FILE, self.standards_vocabulary()),
+                                 (self.PLANNER_FILE, self.planner_vocabulary())):
+            self.assertIn(routing, [name for name, _, _ in vocabulary],
+                          f"claim.sh refuses the label {routing}, which {file} does not define")
 
 
 class ContextValueContractTests(ShimTest):

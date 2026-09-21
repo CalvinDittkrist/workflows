@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The handoff: this worker's pipeline continues in a fresh context in the same pane (ADR 0021).
+# The handoff: this worker's pipeline continues in a fresh context in the same pane (ADR 0029).
 # Usage: handoff.sh <review|ci>   with the note on stdin
 # The note is the only thing the next context learns that git and GitHub do not tell it, so this script
 # refuses one that leaves a section out, and refuses a working tree whose changes are in neither. It writes

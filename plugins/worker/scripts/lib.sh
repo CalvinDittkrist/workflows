@@ -29,7 +29,7 @@ wf_merge_base() {
   git merge-base "$ref" HEAD 2>/dev/null || printf '%s\n' "$ref"
 }
 # The agent session id herdr reports for a pane: the one signal that tells one Claude context in a pane from
-# the next, which is what a handoff confirms itself with (ADR 0021). Empty when herdr knows no agent there.
+# the next, which is what a handoff confirms itself with (ADR 0029). Empty when herdr knows no agent there.
 wf_agent_session() {
   herdr agent get "$1" 2>/dev/null | jq -r '.result.agent.agent_session.value // empty' 2>/dev/null || true
 }

@@ -485,7 +485,7 @@ NOTE = """## decisions
 
 
 class HandoffTests(ShimTest):
-    """The handover to a fresh context at a checkpoint (issue #37, ADR 0021)."""
+    """The handover to a fresh context at a checkpoint (issue #37, ADR 0029)."""
 
     def setUp(self):
         super().setUp()

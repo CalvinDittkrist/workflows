@@ -56,12 +56,14 @@ if [ -n "$nwo" ]; then
     | while read -r b; do wf_issue_from_branch "$b"; done | jq -R -s -c 'split("\n") | map(select(. != "") | tonumber)')
   ready_unreadable=0
   ready=$(gh api "repos/$nwo/issues?labels=ready-for-agent&state=open&per_page=100" 2>/dev/null) || { ready='[]'; ready_unreadable=1; }
-  printf '%s' "$ready" | jq -r --argjson claimed "$claimed" '
+  # A routed issue is the factory's, and claim.sh refuses it, so the frontier does not offer it either.
+  printf '%s' "$ready" | jq -r --argjson claimed "$claimed" --arg routing "$WF_ROUTING_LABEL" '
     [.[] | select(.pull_request == null)] as $all
-    | [$all[] | select((.assignees|length) == 0 and ((.issue_dependencies_summary.blocked_by // 0) == 0) and (.number as $n | $claimed | index($n) | not))] as $free
+    | [$all[] | select((.assignees|length) == 0 and ((.issue_dependencies_summary.blocked_by // 0) == 0)
+        and ([.labels[]?.name] | index($routing) | not) and (.number as $n | $claimed | index($n) | not))] as $free
     | "frontier[\($free|length)]{issue,milestone,title}:",
       ($free[] | "  \(.number),\(.milestone.title // "-" | gsub("[[:cntrl:]\u2028\u2029]"; " ")),\(.title | gsub("[[:cntrl:]\u2028\u2029]"; " "))"),
-      (if ($all|length) > ($free|length) then "waiting: \(($all|length) - ($free|length)) ready-for-agent issue(s) blocked, assigned or claimed" else empty end)'
+      (if ($all|length) > ($free|length) then "waiting: \(($all|length) - ($free|length)) ready-for-agent issue(s) blocked, assigned, routed to the factory or claimed" else empty end)'
   if [ "$ready_unreadable" != 0 ]; then printf 'note: could not read the agent-ready issues; the frontier is empty, not idle.\n'; fi
 
   # Ready for acceptance: open specs with native sub-issues, all of them closed. Derived per run, no state.
