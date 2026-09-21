@@ -5,7 +5,7 @@ set -uo pipefail
 wf_kv mode "${WF_MODE:-manual}"
 wf_kv issue "#$(wf_issue)"
 wf_kv base "$(wf_base_branch)"
-wf_kv reviewers "${WF_REVIEWERS:-code,security,docs,tests,senior}"
+wf_kv reviewers "$(wf_reviewers)"
 wf_kv max_rounds "${WF_REVIEW_ROUNDS:-3}"
 
 # A claim starts a worker with background tasks disabled, so a subagent's report is the result of the Agent

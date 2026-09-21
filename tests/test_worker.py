@@ -101,8 +101,8 @@ class PanelSummaryTests(ShimTest):
         super().setUp()
         self.git("checkout", "-qb", "fix/12-x")
 
-    def record(self, block, cwd=None):
-        return self.run_script(WORKER / "panel.sh", "record", stdin=block, cwd=cwd)
+    def record(self, block, cwd=None, **env):
+        return self.run_script(WORKER / "panel.sh", "record", stdin=block, cwd=cwd, **env)
 
     def print_brief(self, cwd=None):
         return self.run_script(WORKER / "panel.sh", "print", cwd=cwd)
@@ -159,7 +159,7 @@ class PanelSummaryTests(ShimTest):
         self.commit("c.txt")
         brief = self.print_brief().stdout
         self.assertIn(f"panel_summary: recorded at {recorded}", brief)
-        self.assertIn("panel_head: 2 commits since", brief)
+        self.assertIn("which it does not describe: 2", brief)
 
     def test_the_pull_request_stages_brief_carries_the_summary_without_a_skill_argument(self):
         """End to end over the wiring: whatever the pr skill injects has to print the recorded summary,
@@ -173,14 +173,60 @@ class PanelSummaryTests(ShimTest):
             self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn(SUMMARY, "".join(r.stdout for r in briefs))
 
+    def test_a_rewritten_history_is_reported_as_such_not_as_commits_since(self):
+        self.commit("a.txt")
+        self.record(SUMMARY)
+        (self.repo / "a.txt").write_text("more")
+        self.git("add", "."); self.git("commit", "-q", "--amend", "-m", "feat: a")
+        brief = self.print_brief().stdout
+        self.assertIn("panel_head: the recorded commit is no longer in this branch's history", brief)
+
+    def test_a_reviewer_missing_from_the_panel_line_is_named(self):
+        r = self.record("panel: code=PASS docs=PASS")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(len(r.stderr.splitlines()), 3, r.stderr)
+        for reviewer in ("security", "tests", "senior"):
+            self.assertIn(f"does not name {reviewer}", r.stderr)
+        r = self.record("panel: code=PASS docs=PASS", WF_REVIEWERS="code,docs")
+        self.assertEqual(r.stderr, "")
+
     def test_two_worktrees_of_one_repository_keep_separate_records(self):
         other = self.base / "other-worktree"
         self.git("worktree", "add", "-q", "-b", "fix/13-y", str(other))
         self.record(SUMMARY)
         self.assertTrue(self.print_brief(cwd=other).stdout.startswith("panel_summary: none recorded"))
-        self.record(SUMMARY.replace("2", "9"), cwd=other)
-        self.assertIn("review_rounds: 9", self.print_brief(cwd=other).stdout)
-        self.assertIn("review_rounds: 2", self.print_brief().stdout)
+        other_summary = SUMMARY.replace("review_rounds: 2", "review_rounds: 9")
+        self.record(other_summary, cwd=other)
+        self.assertIn(other_summary, self.print_brief(cwd=other).stdout)
+        self.assertIn(SUMMARY, self.print_brief().stdout)
+
+
+class FinishTests(ShimTest):
+    def finish(self, **env):
+        env.setdefault("WF_MODE", "yolo")
+        return self.run_script(WORKER / "finish.sh", "7", **env)
+
+    def test_a_draft_stops_the_yolo_run_for_the_maintainer(self):
+        # The pull request stage opens a draft when the panel did not pass (issue #41, ADR 0018); nothing in
+        # the pipeline lifts it, so the run has to end here with a reason instead of a retry hint.
+        r = self.finish(SHIM_PR_DRAFT="true")
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("is a draft", r.stderr)
+        self.assertIn("maintainer", r.stderr)
+        self.assertNotIn("pr-wait.sh", r.stderr)
+        self.assertFalse([c for c in self.calls() if "pr merge" in c])
+
+    def test_an_unmergeable_pull_request_still_points_at_the_wait(self):
+        r = self.finish(SHIM_MERGE_STATE="BLOCKED")
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("not mergeable yet (BLOCKED false)", r.stderr)
+        self.assertIn("pr-wait.sh", r.stderr)
+
+    def test_manual_mode_never_merges(self):
+        r = self.finish(WF_MODE="manual")
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("only runs in yolo mode", r.stderr)
+        self.assertFalse([c for c in self.calls() if "pr merge" in c])
 
 
 class PrWaitTests(ShimTest):

@@ -16,6 +16,6 @@ Run these stages in order. Each stage ends with a one-line status to the user.
 5. **CI and reviews.** Invoke `/worker:ci`. When it reports `review-comments`, invoke `/worker:address-reviews`, then `/worker:ci` again. When it reports `checks-failed`, read the failed logs, fix, push, and run `/worker:ci` again. Three repair rounds maximum; then stop and report.
 6. **Finish.**
    - manual mode: report `ready: <pr-url>` plus the recorded panel summary, read with `"${CLAUDE_PLUGIN_ROOT}/scripts/panel.sh" print`, not from memory. The orchestrator merges with `/orchestrator:merge <pr>`. Do not merge.
-   - yolo mode: run `"${CLAUDE_PLUGIN_ROOT}/scripts/finish.sh"`; it merges, notifies and removes this worktree.
+   - yolo mode: run `"${CLAUDE_PLUGIN_ROOT}/scripts/finish.sh"`; it merges, notifies and removes this worktree. It refuses a draft pull request, which is how the stage before it says the panel did not pass: report that and stop. Never lift a draft yourself.
 
 If you get blocked at any stage, say what is blocked and what you need in two lines, then stop.

@@ -191,6 +191,9 @@ case "$*" in
   "pr view 7 --json number,url,state,isDraft,mergeStateStatus,statusCheckRollup,reviews,commits")
     if [ "${SHIM_CHECKS_EMPTY:-0}" = 1 ]; then rollup='[]'; else rollup='[{"name":"test","status":"COMPLETED","conclusion":"SUCCESS","completedAt":"'"${SHIM_CHECK_DONE:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"'"}]'; fi
     echo '{"number":7,"url":"https://github.com/o/r/pull/7","state":"OPEN","isDraft":false,"mergeStateStatus":"CLEAN","statusCheckRollup":'"$rollup"',"reviews":[],"commits":[{"committedDate":"'"${SHIM_HEAD_AT:-2026-09-17T10:00:00Z}"'"}]}' ;;
+  # finish.sh: SHIM_MERGE_STATE and SHIM_PR_DRAFT set what the PR looks like to it.
+  "pr view 7 --json mergeStateStatus,isDraft"*)
+    echo "${SHIM_MERGE_STATE:-CLEAN} ${SHIM_PR_DRAFT:-false}" ;;
   "pr list --state open --limit 100 --json"*) echo '[]' ;;
   "api graphql"*) echo "${SHIM_UNRESOLVED:-0}" ;;
   # Milestones and releases. SHIM_MILESTONES_FIXTURE: JSON array; SHIM_TAGS / SHIM_BRANCHES: space-separated names;

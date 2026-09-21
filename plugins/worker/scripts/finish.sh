@@ -8,7 +8,13 @@ wf_need gh; wf_need jq; wf_need git
 pr="${1:-}"; pr="${pr#\#}"; [ -n "$pr" ] || pr=$(wf_pr_for_branch)
 [ -n "$pr" ] || wf_die "no open PR for branch $(wf_branch)"
 state=$(gh pr view "$pr" --json mergeStateStatus,isDraft -q '"\(.mergeStateStatus) \(.isDraft)"')
-case "$state" in "CLEAN false") ;; *) wf_die "PR #$pr is not mergeable yet ($state); run pr-wait.sh and address findings first" ;; esac
+case "$state" in
+  "CLEAN false") ;;
+  # A draft is the pull request stage's verdict that the reviewer panel did not pass, or that no panel
+  # summary was recorded at all (ADR 0018). No stage of this pipeline lifts it, yolo mode included.
+  *" true") wf_die "PR #$pr is a draft, so the reviewer panel did not pass or left no summary; this run stops for the maintainer, who reads the body and lifts the draft. Do not lift it yourself" ;;
+  *) wf_die "PR #$pr is not mergeable yet ($state); run pr-wait.sh and address findings first" ;;
+esac
 branch=$(wf_branch)
 path=$(pwd)
 main_root=$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")

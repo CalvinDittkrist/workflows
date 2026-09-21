@@ -9,10 +9,10 @@ set -euo pipefail
 
 form='panel: code=PASS security=PASS docs=PASS tests=FIX→PASS senior=PASS'
 
-# wf_panel_verdict: reads a summary block on stdin and prints one line: "draft" when a reviewer's last
+# panel_verdict: reads a summary block on stdin and prints one line: "draft" when a reviewer's last
 # verdict is not PASS, "ready" when every one of them passes, "none" without a panel: line, or
 # "bad:<token>" for a verdict that begins with neither PASS nor FIX.
-wf_panel_verdict() {
+panel_verdict() {
   awk '
     done_ { next }
     /^[[:space:]]*panel:/ {
@@ -52,11 +52,17 @@ record="$(wf_state_dir)/panel"
 case "${1:-}" in
   record)
     block=$(cat)
-    verdict=$(printf '%s\n' "$block" | wf_panel_verdict)
+    verdict=$(printf '%s\n' "$block" | panel_verdict)
     case "$verdict" in
       none) wf_die "the summary has no panel: line; expected one of the form: $form" ;;
       bad*) wf_die "the panel verdict '${verdict#bad:}' is neither PASS nor FIX; expected a line of the form: $form" ;;
     esac
+    # The verdict is only as complete as the line: a reviewer the block leaves out is one nobody hears
+    # about, so name it. A warning, not a refusal, because the review stage may run a shorter panel.
+    panel_line=$(printf '%s\n' "$block" | sed -n '/^[[:space:]]*panel:/p' | head -1)
+    for reviewer in $(wf_reviewers | tr ',' ' '); do
+      case " $panel_line" in *" $reviewer="*) ;; *) wf_warn "the panel line does not name $reviewer, so the record says nothing about that reviewer" ;; esac
+    done
     commit=$(git rev-parse HEAD 2>/dev/null) || wf_die "this branch has no commit to record the summary at"
     mkdir -p "$(dirname "$record")"
     # One file, written in one move: the headers, an empty line, then the block exactly as given.
@@ -73,12 +79,12 @@ case "${1:-}" in
     fi
     commit=$(sed -n 's/^commit: //p' "$record" | head -1)
     wf_kv panel_summary "recorded at $(git rev-parse --short "$commit" 2>/dev/null || printf '%s' "$commit")"
-    if ! git rev-parse -q --verify "$commit^{commit}" >/dev/null 2>&1; then
-      wf_kv panel_head "the recorded commit is no longer in this branch's history, so the summary may describe other work"
-    elif [ "$(git rev-parse HEAD)" = "$commit" ]; then
+    if [ "$(git rev-parse HEAD)" = "$commit" ]; then
       wf_kv panel_head "unchanged since the summary was recorded"
+    elif ! git merge-base --is-ancestor "$commit" HEAD 2>/dev/null; then
+      wf_kv panel_head "the recorded commit is no longer in this branch's history (amended or rebased), so the summary may describe other work"
     else
-      wf_kv panel_head "$(git rev-list --count "$commit..HEAD") commits since the summary was recorded, which it does not describe"
+      wf_kv panel_head "commits since the summary was recorded, which it does not describe: $(git rev-list --count "$commit..HEAD")"
     fi
     wf_kv panel_verdict "$(sed -n 's/^verdict: //p' "$record" | head -1)"
     printf 'panel_summary_block:\n'
