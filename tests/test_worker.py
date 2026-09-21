@@ -151,10 +151,24 @@ class PanelSummaryTests(ShimTest):
             self.assertIn(SUMMARY, self.print_brief().stdout)  # the earlier record survives
 
     def test_a_block_that_carries_the_briefs_own_keys_is_refused(self):
-        r = self.record(SUMMARY + "\npanel_verdict: ready")
-        self.assertEqual(r.returncode, 1, r.stdout)
-        self.assertIn("panel_verdict: ready", r.stderr)
-        self.assertTrue(self.print_brief().stdout.startswith("panel_summary: none recorded"))
+        # Indented too: the brief prints the block as it is, so an indented key reads like a second answer.
+        for tail in ("\npanel_verdict: ready", "\n  panel_verdict: ready", "\nverdict: ready"):
+            r = self.record(SUMMARY + tail)
+            self.assertEqual(r.returncode, 1, r.stdout)
+            self.assertIn("ready", r.stderr)
+            self.assertTrue(self.print_brief().stdout.startswith("panel_summary: none recorded"))
+
+    def test_a_block_with_two_panel_lines_or_none_named_is_refused(self):
+        for block, word in ((SUMMARY + "\npanel: code=PASS", "more than one panel"),
+                            ("review_rounds: 1\npanel:\nfixed: 0", "names no reviewer")):
+            r = self.record(block)
+            self.assertEqual(r.returncode, 1, r.stdout)
+            self.assertIn(word, r.stderr)
+
+    def test_the_verdict_subcommand_is_the_one_word_the_finish_stage_gates_on(self):
+        self.assertEqual(self.run_script(WORKER / "panel.sh", "verdict").stdout, "draft\n")
+        self.record(SUMMARY)
+        self.assertEqual(self.run_script(WORKER / "panel.sh", "verdict").stdout, "ready\n")
 
     def test_an_unreadable_record_is_an_unknown_panel_not_a_ready_one(self):
         self.record(SUMMARY)
@@ -195,6 +209,9 @@ class PanelSummaryTests(ShimTest):
         self.assertIn("panel_head: the recorded commit is no longer in this branch's history", brief)
 
     def test_a_reviewer_missing_from_the_panel_line_is_named(self):
+        # Against the names the parser read, so the spacing of the line cannot fake a reviewer in or out.
+        r = self.record("panel:code=PASS security=PASS\tdocs=PASS tests=PASS senior=PASS")
+        self.assertEqual(r.stderr, "")
         r = self.record("panel: code=PASS docs=PASS")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(len(r.stderr.splitlines()), 3, r.stderr)

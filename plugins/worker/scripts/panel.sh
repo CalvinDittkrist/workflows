@@ -2,6 +2,7 @@
 # The reviewer panel's summary, handed from the review stage to the pull request stage (ADR 0018).
 # Usage: panel.sh record   the summary block on stdin; replaces the previous record
 #        panel.sh print    the brief the pull request stage reads
+#        panel.sh verdict  draft or ready, the one word the yolo finish stage gates on
 # The record lives in this worktree's git directory, so parallel workers never overwrite each other.
 set -euo pipefail
 # shellcheck source=lib.sh
@@ -9,11 +10,15 @@ set -euo pipefail
 
 form='panel: code=PASS security=PASS docs=PASS tests=FIX→PASS senior=PASS'
 
-# panel_verdict: reads a summary block on stdin and prints one line: "draft" when a reviewer's last
-# verdict is not PASS, "ready" when every one of them passes, "none" without a panel: line, or
-# "bad:<token>" for a verdict that begins with neither PASS nor FIX.
+# panel_verdict: reads a summary block on stdin and prints one line: the verdict, then the reviewers the
+# panel: line names. The verdict is "draft" when a reviewer's last verdict is not PASS and "ready" when
+# every one of them passes; "none" without a panel: line, "empty" for a panel: line that names nobody,
+# "twice" for a block with two of them, and "bad:<token>" for a verdict starting with neither PASS nor FIX.
 panel_verdict() {
   awk '
+    # The whole block is quoted into the pull request, so a second panel: line would show the reader a
+    # verdict this one never derived. One line, or none.
+    done_ && /^[[:space:]]*panel:/ { result = "twice"; exit }
     done_ { next }
     /^[[:space:]]*panel:/ {
       done_ = 1
@@ -26,49 +31,60 @@ panel_verdict() {
       for (i = 1; i <= n; i++) {
         sub(/^[[:space:]]+/, "", tok[i]); sub(/[[:space:]]+$/, "", tok[i])
         if (tok[i] == "") continue
-        pairs++
         eq = index(tok[i], "=")
-        if (eq == 0) { print "bad:" tok[i]; exit }
+        if (eq == 0) { result = "bad:" tok[i]; exit }
+        names = names " " substr(tok[i], 1, eq - 1)
         # A reviewer re-reviewed in a later round reads FIX→FIX→PASS; only the last verdict counts.
         v = substr(tok[i], eq + 1)
         gsub(/->/, "\342\206\222", v)
-        m = split(v, round, "\342\206\222")
-        last = round[m]
+        m = split(v, rounds, "\342\206\222")
+        last = rounds[m]
         sub(/[[:space:]]*\(.*$/, "", last)
         if (last ~ /^PASS/) continue
         if (last ~ /^FIX/) { draft = 1; continue }
-        print "bad:" tok[i]; exit
+        result = "bad:" tok[i]; exit
       }
-      if (!pairs) { print "bad:"; exit }
-      print (draft ? "draft" : "ready")
-      exit
+      if (names == "") { result = "empty"; exit }
+      result = (draft ? "draft" : "ready") names
+      next
     }
-    END { if (!done_) print "none" }
+    END { print (result != "" ? result : "none") }
   '
 }
 
 record="$(wf_state_dir)/panel"
 
+# recorded_verdict: "draft" or "ready" for the record, and "draft" for one that is missing or unreadable,
+# so an unknown panel never reads as a passed one.
+recorded_verdict() {
+  local v=""
+  [ ! -f "$record" ] || v=$(sed -n 's/^verdict: //p' "$record" | head -1)
+  case "$v" in ready) printf 'ready\n' ;; *) printf 'draft\n' ;; esac
+}
+
 case "${1:-}" in
   record)
     block=$(cat)
-    verdict=$(printf '%s\n' "$block" | panel_verdict)
+    parsed=$(printf '%s\n' "$block" | panel_verdict)
+    verdict=${parsed%% *}
     case "$verdict" in
       none) wf_die "the summary has no panel: line; expected one of the form: $form" ;;
+      empty) wf_die "the panel: line names no reviewer; expected one of the form: $form" ;;
+      twice) wf_die "the summary has more than one panel: line, so it states two verdicts; keep the one the panel ended on" ;;
       bad*) wf_die "the panel verdict '${verdict#bad:}' is neither PASS nor FIX; expected a line of the form: $form" ;;
     esac
     # The verdict is only as complete as the line: a reviewer the block leaves out is one nobody hears
     # about, so name it. A warning, not a refusal, because the review stage may run a shorter panel.
-    panel_line=$(printf '%s\n' "$block" | sed -n '/^[[:space:]]*panel:/p' | head -1 | tr '\t' ' ')
+    named=" ${parsed#"$verdict"} "
     set -f  # a reviewer name is data, so it may not glob the working directory
     for reviewer in $(wf_reviewers | tr ',' ' '); do
-      case " $panel_line" in *"panel: $reviewer="*|*" $reviewer="*) ;; *) wf_warn "the panel line does not name $reviewer, so the record says nothing about that reviewer" ;; esac
+      case "$named" in *" $reviewer "*) ;; *) wf_warn "the panel line does not name $reviewer, so the record says nothing about that reviewer" ;; esac
     done
     set +f
     # The brief prints these keys itself; a block that carries one would say something else about the
     # panel further down the same brief, so the record refuses it instead of quoting it.
-    spoof=$(printf '%s\n' "$block" | sed -n -E '/^(commit|verdict|panel_summary|panel_verdict|panel_head|panel_summary_block):/p' | head -1)
-    [ -z "$spoof" ] || wf_die "the summary carries a line the brief uses for itself ('$spoof'); indent or reword that line and record again"
+    spoof=$(printf '%s\n' "$block" | sed -n -E '/^[[:space:]]*(commit|verdict|panel_summary|panel_verdict|panel_head|panel_summary_block):/p' | head -1)
+    [ -z "$spoof" ] || wf_die "the summary carries a line the brief uses for itself ('$spoof'); reword that line and record again"
     commit=$(git rev-parse HEAD 2>/dev/null) || wf_die "this branch has no commit to record the summary at"
     mkdir -p "$(dirname "$record")"
     # One file, written in one move: the headers, an empty line, then the block exactly as given.
@@ -92,11 +108,11 @@ case "${1:-}" in
     else
       wf_kv panel_head "commits since the summary was recorded, which it does not describe: $(git rev-list --count "$commit..HEAD")"
     fi
-    verdict=$(sed -n 's/^verdict: //p' "$record" | head -1)
-    case "$verdict" in draft|ready) ;; *) verdict=draft ;; esac  # an unreadable record is an unknown panel
-    wf_kv panel_verdict "$verdict"
+    wf_kv panel_verdict "$(recorded_verdict)"
     printf 'panel_summary_block:\n'
     sed '1,/^$/d' "$record"
     ;;
-  *) wf_die "usage: panel.sh record < block | panel.sh print" ;;
+  # The one word the yolo finish stage gates on, so it reads a contract rather than scraping the brief.
+  verdict) recorded_verdict ;;
+  *) wf_die "usage: panel.sh record < block | panel.sh print | panel.sh verdict" ;;
 esac
