@@ -1,0 +1,6 @@
+# The dashboard's build output. The directory around it is in git with a placeholder, because the
+# binary embeds it and Go refuses an embed pattern that matches nothing: a fresh clone has to build.
+dist/app
+node_modules
+playwright-report
+test-results

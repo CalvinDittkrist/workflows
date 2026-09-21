@@ -1,8 +1,14 @@
 # The gate: `make check` runs everything CI gates on, locally and in the CI job named `check`.
 SCRIPTS := $(wildcard plugins/*/scripts/*.sh scripts/*.sh) $(wildcard tests/shims/*)
 
-.PHONY: check lint validate standard test factory
-check: lint validate standard test factory
+.PHONY: check lint validate standard test ui factory browser
+check: lint validate standard test ui factory browser
+
+# The factory's dashboard: an npm package that Vite builds into factory/ui/dist/app, which the binary
+# embeds. Every target below needs that build, so it is a file the others depend on.
+UI := factory/ui
+UI_BUILD := $(UI)/dist/app/index.html
+UI_SOURCES := $(UI)/index.html $(UI)/vite.config.js $(wildcard $(UI)/src/*)
 
 lint:
 	@command -v shellcheck >/dev/null || { echo 'error: shellcheck not installed; brew install shellcheck' >&2; exit 1; }
@@ -21,10 +27,30 @@ standard:
 test:
 	python3 -m unittest discover -s tests -v
 
-# The factory is a Go service; its tests start the real binary and watch it from outside.
-factory:
+# The dashboard: the same lint and build the CI job runs, on the sources the binary serves.
+ui: $(UI_BUILD)
+	npm --prefix $(UI) run lint
+
+$(UI_BUILD): $(UI)/node_modules $(UI_SOURCES)
+	npm --prefix $(UI) run build
+
+$(UI)/node_modules: $(UI)/package-lock.json
+	@command -v npm >/dev/null || { echo 'error: npm not installed; brew install node (or https://nodejs.org), the factory embeds a dashboard that is built with it' >&2; exit 1; }
+	npm --prefix $(UI) ci
+	@touch $@
+
+# The dashboard read the way the maintainer reads it: a real browser against the real binary in fake
+# mode. Chromium is downloaded once into Playwright's own cache; the call is a no-op after that.
+browser: $(UI_BUILD)
+	npm --prefix $(UI) exec -- playwright install chromium
+	npm --prefix $(UI) test
+
+# The factory is a Go service; its tests start the real binary and watch it from outside. They read
+# the dashboard out of the binary, so the build it embeds has to be there before they run.
+factory: $(UI_BUILD)
 	@command -v go >/dev/null || { echo 'error: go not installed; brew install go (or https://go.dev/dl), the factory is written in Go' >&2; exit 1; }
-	@unformatted="$$(gofmt -l factory)" || { echo 'error: gofmt could not run; it ships with Go, put the bin directory of the Go installation on PATH' >&2; exit 1; }; \
+	@dirs="$$(go -C factory list -f '{{.Dir}}' ./...)" || exit 1; \
+		unformatted="$$(gofmt -l $$dirs)" || { echo 'error: gofmt could not run; it ships with Go, put the bin directory of the Go installation on PATH' >&2; exit 1; }; \
 		[ -z "$$unformatted" ] || { echo "error: not formatted: $$unformatted; run gofmt -w factory" >&2; exit 1; }
 	go -C factory vet ./...
 	@sc="$$(command -v staticcheck 2>/dev/null || true)"; [ -n "$$sc" ] || sc="$$(go env GOPATH)/bin/staticcheck"; \

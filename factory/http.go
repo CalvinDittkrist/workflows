@@ -12,7 +12,8 @@ import (
 // over the tailnet.
 func (f *Factory) Handler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/", f.index)
+	mux.Handle("/", uiHandler())
+	mux.HandleFunc("/api", f.index)
 	mux.HandleFunc("/api/status", f.status)
 	mux.HandleFunc("/api/repositories", f.repositories)
 	mux.HandleFunc("/api/line", f.line)
@@ -33,11 +34,9 @@ func readOnly(next http.Handler) http.Handler {
 	})
 }
 
-func (f *Factory) index(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/" {
-		http.NotFound(w, r)
-		return
-	}
+// index is what the interface offers, for a reader with a terminal rather than a browser. The
+// browser gets the dashboard under /, which reads exactly these four.
+func (f *Factory) index(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	_, _ = w.Write([]byte("factory\n\n" +
 		"GET /api/status        what the factory is doing\n" +

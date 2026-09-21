@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -306,12 +307,49 @@ func TestTheInterfaceIsReadOnly(t *testing.T) {
 			response.Body.Close()
 		}
 	}
-	for path, want := range map[string]int{"/": http.StatusOK, "/api/runs/1": http.StatusNotFound, "/nothing": http.StatusNotFound} {
+	for path, want := range map[string]int{"/api": http.StatusOK, "/api/runs/1": http.StatusNotFound, "/nothing": http.StatusNotFound} {
 		response := f.do(t, "GET", path)
 		if response.StatusCode != want {
 			t.Errorf("GET %s answered %d, want %d", path, response.StatusCode, want)
 		}
 		response.Body.Close()
+	}
+}
+
+// The host runs one process. The dashboard is built into the binary, so there is no web server and
+// no Node process beside it, and the browser that opens the factory gets everything from it.
+func TestTheBinaryServesTheDashboardFromItself(t *testing.T) {
+	f := start(t, config{"paused": true})
+
+	page, contentType := f.page(t, "/")
+	if !strings.Contains(contentType, "text/html") {
+		t.Errorf("GET / is served as %q, want HTML", contentType)
+	}
+	if !strings.Contains(page, `<div id="root">`) {
+		t.Fatalf("GET / answered %.120q, want the dashboard; it is built into the binary with make ui", page)
+	}
+
+	// Everything the page asks for afterwards comes out of the binary too, the self-hosted font last.
+	assets := regexp.MustCompile(`(?:src|href)="(/assets/[^"]+)"`).FindAllStringSubmatch(page, -1)
+	if len(assets) < 2 {
+		t.Fatalf("the dashboard names %d built assets, want at least its script and its stylesheet", len(assets))
+	}
+	fonts := 0
+	for _, asset := range assets {
+		body, _ := f.page(t, asset[1])
+		for _, font := range regexp.MustCompile(`url\((/assets/[^)]+\.woff2)\)`).FindAllStringSubmatch(body, -1) {
+			f.page(t, font[1])
+			fonts++
+		}
+	}
+	if fonts == 0 {
+		t.Error("the dashboard's assets name no font file, want JetBrains Mono served by the factory itself")
+	}
+
+	// The terminal reader keeps its own page: the endpoints are listed under /api.
+	endpoints, _ := f.page(t, "/api")
+	if !strings.Contains(endpoints, "GET /api/line") {
+		t.Errorf("GET /api answered %.120q, want the list of endpoints", endpoints)
 	}
 }
 
@@ -685,6 +723,21 @@ func (f *factory) waitForTheHangingWorker(t *testing.T) []int {
 		return run.State == "running" && len(workerPids(t, run)) == 2
 	})
 	return workerPids(t, run)
+}
+
+// page reads what a browser reads: the body a GET answers, and how it is typed.
+func (f *factory) page(t *testing.T, path string) (string, string) {
+	t.Helper()
+	response := f.do(t, "GET", path)
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("GET %s answered %d, want it served from the binary", path, response.StatusCode)
+	}
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatalf("GET %s could not be read: %v", path, err)
+	}
+	return string(body), response.Header.Get("Content-Type")
 }
 
 func (f *factory) get(t *testing.T, path string, into any) {
