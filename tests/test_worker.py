@@ -706,8 +706,12 @@ class CheckpointEntryTests(ShimTest):
         # the warning too, because a skill injection may show the model stdout alone.
         self.context(150000)
         self.handoff_record()
-        self.state.chmod(0o500)
-        self.addCleanup(self.state.chmod, 0o700)
+        # A directory where the temporary file goes, because the write has to fail for whoever runs the
+        # suite: a read-only mode on the state directory stops nobody when the tests run as root, as they
+        # do in a container.
+        blocked = self.note.parent / (self.note.name + ".tmp")
+        blocked.mkdir()
+        self.addCleanup(blocked.rmdir)
         out = self.checkpoint("review")
         self.assertEqual(self.keys(out.stdout)["handoff"], "no")
         self.assertIn("could not be marked as entered", self.keys(out.stdout)["reason"])
