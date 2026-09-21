@@ -12,11 +12,11 @@ set -euo pipefail
 gate_cmd=(make check)
 record="$(wf_state_dir)/gate"
 log="$(wf_state_dir)/gate.log"
-tail_lines=20
+tail_lines=10  # five reviewers read this block; the full output is one file read away
 
 # The output is the repository's, not this script's: it is quoted into a brief, so it is indented by two
 # spaces. A line of it that imitates a key of this block therefore cannot be read as one.
-print_tail() { printf 'gate_output_tail:\n'; sed '1,/^$/d' "$record" | sed 's/^/  /'; }
+print_tail() { printf 'gate_output_tail:\n'; sed '1,/^$/d' "$record" | sed 's/^./  &/'; }
 
 field() { sed -n "s/^$1: //p" "$record" | head -1; }
 
