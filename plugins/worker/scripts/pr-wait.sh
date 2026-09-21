@@ -22,9 +22,9 @@ snapshot() {
   checks_total=$(printf '%s' "$view" | jq -r '.statusCheckRollup | length')
   checks_fail=$(printf '%s' "$view" | jq -r '[.statusCheckRollup[] | (.conclusion // .state // "") | select(. == "FAILURE" or . == "ERROR" or . == "CANCELLED" or . == "TIMED_OUT" or . == "ACTION_REQUIRED" or . == "STARTUP_FAILURE")] | length')
   checks_pending=$(printf '%s' "$view" | jq -r '[.statusCheckRollup[] | select(((.status // "COMPLETED") != "COMPLETED") or ((.state // "") == "PENDING" or (.state // "") == "EXPECTED"))] | length')
-  # The login is read before the bot list is piped into: inside that pipe the input is the list, not
-  # the review, and asking it for an author fails the whole count.
-  bot_reviews=$(printf '%s' "$view" | jq -r --arg bots ",$bots," --arg h "$head_at" '[.reviews[] | (.author.login | sub("\\[bot\\]$";"")) as $who | select(($bots | index("," + $who + ",")) != null and .submittedAt > $h)] | length')
+  # The login is bound to $l before the list is searched: inside `index(...)` the input is the list, so a
+  # `.author` there reads the list and not the review, and jq fails as soon as a PR has any review at all.
+  bot_reviews=$(printf '%s' "$view" | jq -r --arg bots ",$bots," --arg h "$head_at" '[.reviews[] | select(.submittedAt > $h) | ((.author.login // "") | sub("\\[bot\\]$";"")) as $l | select(($bots | index("," + $l + ",")) != null)] | length')
   unresolved=$(gh api graphql -f query='query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){reviewThreads(first:100){nodes{isResolved}}}}}' -F o="$owner" -F r="$repo" -F n="$pr" -q '[.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved|not)] | length' 2>/dev/null || echo 0)
   merge_state=$(printf '%s' "$view" | jq -r .mergeStateStatus)
   is_draft=$(printf '%s' "$view" | jq -r .isDraft)

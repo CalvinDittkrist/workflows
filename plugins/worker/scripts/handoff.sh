@@ -11,9 +11,9 @@ set -euo pipefail
 # shellcheck source=lib.sh
 . "$(dirname "$0")/lib.sh"
 
-# The stages of the driver a checkpoint hands over before. Both are a stage boundary at which everything the
-# next context needs is in git, in GitHub or in a record of this worktree.
-stages="review ci"
+# The stages a checkpoint hands over before: the list lib.sh shares with checkpoint.sh, so the stage it
+# accepts and the stage this script accepts cannot drift apart.
+stages=$(wf_handoff_stages)
 # Every section a note carries, in the order a reader wants them. A fresh context reads this note instead of
 # the transcript it will never see, so a missing section is a refusal, not a warning.
 sections="decisions rejected verified open"
@@ -21,7 +21,8 @@ driver="/worker:work"
 
 stage="${1:-}"
 [ -n "$stage" ] || wf_die "usage: handoff.sh <$(printf '%s' "$stages" | tr ' ' '|')> < note"
-case " $stages " in *" $stage "*) ;; *) wf_die "'$stage' is not a stage this pipeline hands over before; the two checkpoints resume at $(printf '%s' "$stages" | sed 's/ / or /')" ;; esac
+wf_in_list "$stage" "$stages" ||
+  wf_die "'$stage' is not a stage this pipeline hands over before; a checkpoint resumes at $(printf '%s' "$stages" | sed 's/ / or /')"
 
 wf_need git; wf_need jq; wf_need herdr
 [ "${HERDR_ENV:-}" = 1 ] || wf_die "this session runs outside a Herdr pane (HERDR_ENV is not 1), so nothing can clear it and send the driver command back; carry on in this context instead"
@@ -53,7 +54,7 @@ for section in $sections; do
 done
 
 # The same range the reviewers read: the commits of this branch, whether or not they are pushed already, so
-# the second checkpoint lists them as the first one does.
+# the ci entrance lists them as the review one does.
 base=$(wf_base_branch)
 mb=$(wf_merge_base)
 

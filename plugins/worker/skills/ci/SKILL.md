@@ -2,7 +2,13 @@
 name: ci
 description: Wait for CI checks and bot reviews on the open PR and report green, checks-failed, review-comments or waiting.
 argument-hint: [pr]
+allowed-tools: Bash(${CLAUDE_PLUGIN_ROOT}/scripts/checkpoint.sh*)
 ---
+Context checkpoint:
+!`${CLAUDE_PLUGIN_ROOT}/scripts/checkpoint.sh ci`
+
+The checkpoint above measured this context as you entered the stage, whichever stage you came from. On `handoff: yes` wait for nothing here: follow the `next:` procedure it printed and hand the CI stage over to a fresh context. On `no` or `unavailable` continue.
+
 Run `"${CLAUDE_PLUGIN_ROOT}/scripts/pr-wait.sh" $ARGUMENTS` with the Bash tool timeout set to 600000 ms. The script returns within about nine minutes:
 
 - `status: green` → done. Continue the pipeline.
