@@ -104,7 +104,7 @@ fi
 # context this handover started — not a third one that came up after it.
 require_ended resume
 fresh=$(session)
-[ -n "$fresh" ] && [ "$fresh" != "$before" ] ||
+[ -n "$fresh" ] && [ "$fresh" = "$now" ] ||
   stop "Handoff did not resume pane $pane" "The pane reports ${fresh:-no session} instead of the fresh context this handover started, so the driver command was not sent."
 herdr agent prompt "$pane" "$cmd" >/dev/null 2>&1 ||
   wf_notify "Handoff could not resume pane $pane" "The context was cleared but $cmd was refused; send it by hand to resume at the $stage stage." alert

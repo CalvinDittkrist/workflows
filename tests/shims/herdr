@@ -31,7 +31,13 @@ case "$1 $2" in
     # A sandboxed worker is started by a command in the pane, not by `agent start`; Herdr detects the agent after.
     printf '%s' "$3" > "${SHIM_WT_ROOT:?}/.agent-pane"
     echo '{"result":{"type":"ok"}}' ;;
-  "agent wait") echo '{"result":{"agent_status":"idle"}}' ;;
+  "agent wait")
+    # SHIM_WAIT_STARTS_SESSION=<id> is the pane somebody cleared again while the handover waited for its fresh
+    # context to settle: from the wait after the `/clear` on, it reports a session the handover never started.
+    if [ -n "${SHIM_WAIT_STARTS_SESSION:-}" ] && [ -f "${SHIM_WT_ROOT:?}/.agent-session" ]; then
+      printf '%s' "$SHIM_WAIT_STARTS_SESSION" > "${SHIM_WT_ROOT}/.agent-session"
+    fi
+    echo '{"result":{"agent_status":"idle"}}' ;;
   "agent get")
     # The pane's agent, with the session identity herdr 0.9 reports for it. SHIM_NO_AGENT_SESSION drops that
     # field, the way a pane whose agent herdr has not identified answers.
