@@ -7,6 +7,10 @@ wf_need gh; wf_need jq; wf_need git
 [ "${WF_MODE:-manual}" = "yolo" ] || wf_die "finish.sh only runs in yolo mode (WF_MODE=yolo). In manual mode the orchestrator merges with /orchestrator:merge."
 pr="${1:-}"; pr="${pr#\#}"; [ -n "$pr" ] || pr=$(wf_pr_for_branch)
 [ -n "$pr" ] || wf_die "no open PR for branch $(wf_branch)"
+# The recorded panel decides first, because it is local and deterministic: the draft flag on GitHub only
+# carries the same verdict if the pull request stage applied it (ADR 0018).
+verdict=$("$(dirname "$0")/panel.sh" print | sed -n 's/^panel_verdict: //p' | head -1)
+[ "$verdict" = ready ] || wf_die "the reviewer panel of this worktree did not pass (panel_verdict: ${verdict:-unknown}); a yolo run stops here for the maintainer, who reads the pull request body and merges by hand. Do not merge it yourself"
 state=$(gh pr view "$pr" --json mergeStateStatus,isDraft -q '"\(.mergeStateStatus) \(.isDraft)"')
 case "$state" in
   "CLEAN false") ;;

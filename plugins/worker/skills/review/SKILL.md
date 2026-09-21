@@ -26,6 +26,6 @@ disputed: <none | one line each>
 
    A reviewer that was re-reviewed carries one verdict per round, oldest first (`FIX→FIX→PASS`); a reviewer that ended on FIX at the round limit stays `FIX`.
 
-6. Hand the summary over to the pull request stage, which has a fresh context and cannot see yours: pipe the block into `"${CLAUDE_PLUGIN_ROOT}/scripts/panel.sh" record` with a heredoc. The script stores it in this worktree, derives from the `panel:` line whether the pull request opens as a draft, and refuses a block it cannot parse with an `error:` line naming the expected form — correct the block and record again. Then print the same summary to the user.
+6. Hand the summary over to the pull request stage, which has a fresh context and cannot see yours: pipe the block into `"${CLAUDE_PLUGIN_ROOT}/scripts/panel.sh" record` with a quoted heredoc (`<<'PANEL'`, never an unquoted one: the block quotes reviewer text, and the shell would expand `$x` and backticks in it). The script stores it in this worktree, derives from the `panel:` line whether the pull request opens as a draft, and refuses a block it cannot parse with an `error:` line naming the expected form — correct the block and record again. Then print the same summary to the user.
 
 Rules: reviewers never edit; you never skip a listed reviewer; never lower a reviewer's severity in the summary; you record the summary as written, including a panel that ended on FIX and every `disputed:` line.

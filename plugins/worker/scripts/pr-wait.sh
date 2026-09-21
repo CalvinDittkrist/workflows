@@ -25,6 +25,7 @@ snapshot() {
   bot_reviews=$(printf '%s' "$view" | jq -r --arg bots ",$bots," --arg h "$head_at" '[.reviews[] | select(($bots | index("," + (.author.login|sub("\\[bot\\]$";"")) + ",")) != null and .submittedAt > $h)] | length')
   unresolved=$(gh api graphql -f query='query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){reviewThreads(first:100){nodes{isResolved}}}}}' -F o="$owner" -F r="$repo" -F n="$pr" -q '[.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved|not)] | length' 2>/dev/null || echo 0)
   merge_state=$(printf '%s' "$view" | jq -r .mergeStateStatus)
+  is_draft=$(printf '%s' "$view" | jq -r .isDraft)
   # When the last check finished, from GitHub, so the review wait survives across calls of this script.
   last_check=$(printf '%s' "$view" | jq -r '[.statusCheckRollup[] | .completedAt // empty] | max // empty')
   checks_done_at=$( [ -n "$last_check" ] && wf_epoch "$last_check" || printf '%s' "${checks_done_at:-}" )
@@ -37,6 +38,9 @@ report() {
   wf_kv bot_reviews "$bot_reviews since last push (expected from: $bots)"
   wf_kv unresolved_threads "$unresolved"
   wf_kv merge_state "$merge_state"
+  # A draft is the pull request stage's verdict that the panel did not pass (ADR 0018). Nothing in the
+  # pipeline lifts it, and no bot reviews it, so say so instead of reporting a plain green.
+  [ "$is_draft" != true ] || wf_kv draft "true; the reviewer panel did not pass or left no summary, so the maintainer reads the body and lifts the draft"
   if [ "$checks_fail" -gt 0 ]; then
     printf 'failed_checks:\n'; printf '%s' "$view" | jq -r '.statusCheckRollup[] | select((.conclusion // .state // "") as $c | $c == "FAILURE" or $c == "ERROR" or $c == "CANCELLED" or $c == "TIMED_OUT") | "  - \(.name // .context): \(.detailsUrl // .targetUrl // "")"'
     printf 'help: gh run view <run-id> --log-failed  (run id is the number in the details URL)\n'
@@ -55,7 +59,7 @@ while :; do
   if [ "$checks_pending" -eq 0 ]; then
     [ -n "$checks_done_at" ] || checks_done_at=$now  # no completedAt in the rollup (statuses): count from first sight
     if [ "$checks_fail" -gt 0 ]; then report "checks-failed"; exit 0; fi
-    if [ "$bot_reviews" -gt 0 ] || [ -z "$bots" ] || [ $((now-checks_done_at)) -ge "$review_wait" ]; then
+    if [ "$bot_reviews" -gt 0 ] || [ -z "$bots" ] || [ "$is_draft" = true ] || [ $((now-checks_done_at)) -ge "$review_wait" ]; then
       if [ "$unresolved" -gt 0 ]; then report "review-comments"; else report "green"; fi
       exit 0
     fi

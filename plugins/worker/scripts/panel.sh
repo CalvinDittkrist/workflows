@@ -59,10 +59,16 @@ case "${1:-}" in
     esac
     # The verdict is only as complete as the line: a reviewer the block leaves out is one nobody hears
     # about, so name it. A warning, not a refusal, because the review stage may run a shorter panel.
-    panel_line=$(printf '%s\n' "$block" | sed -n '/^[[:space:]]*panel:/p' | head -1)
+    panel_line=$(printf '%s\n' "$block" | sed -n '/^[[:space:]]*panel:/p' | head -1 | tr '\t' ' ')
+    set -f  # a reviewer name is data, so it may not glob the working directory
     for reviewer in $(wf_reviewers | tr ',' ' '); do
-      case " $panel_line" in *" $reviewer="*) ;; *) wf_warn "the panel line does not name $reviewer, so the record says nothing about that reviewer" ;; esac
+      case " $panel_line" in *"panel: $reviewer="*|*" $reviewer="*) ;; *) wf_warn "the panel line does not name $reviewer, so the record says nothing about that reviewer" ;; esac
     done
+    set +f
+    # The brief prints these keys itself; a block that carries one would say something else about the
+    # panel further down the same brief, so the record refuses it instead of quoting it.
+    spoof=$(printf '%s\n' "$block" | sed -n -E '/^(commit|verdict|panel_summary|panel_verdict|panel_head|panel_summary_block):/p' | head -1)
+    [ -z "$spoof" ] || wf_die "the summary carries a line the brief uses for itself ('$spoof'); indent or reword that line and record again"
     commit=$(git rev-parse HEAD 2>/dev/null) || wf_die "this branch has no commit to record the summary at"
     mkdir -p "$(dirname "$record")"
     # One file, written in one move: the headers, an empty line, then the block exactly as given.
@@ -86,7 +92,9 @@ case "${1:-}" in
     else
       wf_kv panel_head "commits since the summary was recorded, which it does not describe: $(git rev-list --count "$commit..HEAD")"
     fi
-    wf_kv panel_verdict "$(sed -n 's/^verdict: //p' "$record" | head -1)"
+    verdict=$(sed -n 's/^verdict: //p' "$record" | head -1)
+    case "$verdict" in draft|ready) ;; *) verdict=draft ;; esac  # an unreadable record is an unknown panel
+    wf_kv panel_verdict "$verdict"
     printf 'panel_summary_block:\n'
     sed '1,/^$/d' "$record"
     ;;

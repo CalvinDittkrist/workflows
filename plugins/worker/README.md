@@ -11,9 +11,9 @@ Hook: `SessionStart` runs `scripts/session-start.sh`. On startup it assigns the 
 | `/worker:work` | pipeline driver: understand → implement → review → pr → ci → finish |
 | `/worker:review` | reviewer panel in parallel (`WF_REVIEWERS`), fix, re-review (`WF_REVIEW_ROUNDS`) |
 | `/worker:pr` | forked into `pr-author`: push and open the PR from a fresh context, with the recorded panel summary (`panel.sh`) in the body and a draft when it did not pass |
-| `/worker:ci` | `pr-wait.sh`: checks + bot review wait, returns `green`, `checks-failed`, `review-comments` or `waiting` |
+| `/worker:ci` | `pr-wait.sh`: checks + bot review wait (skipped on a draft, which it reports), returns `green`, `checks-failed`, `review-comments` or `waiting` |
 | `/worker:address-reviews` | `pr-threads.sh` + `pr-resolve.sh`: fix or decline each thread, reply, resolve |
 
 Agents: `worker` (main thread, opus), `code-reviewer`, `security-reviewer`, `docs-reviewer` (sonnet, no CLAUDE.md), `test-reviewer`, `senior-reviewer` (all read-only, inherit the worker model), `pr-author` (read-only, inherit).
 
-Yolo mode (`WF_MODE=yolo`): `finish.sh` squash-merges after `green`, notifies through Herdr, and `cleanup-self.sh` removes the worktree, workspace and branch from a detached process. It refuses a draft pull request, the one the PR stage opens when the reviewer panel did not pass or recorded no summary, so that run ends with the maintainer ([ADR 0018](../../docs/adr/0018-worker-stages-hand-facts-over-through-the-worktree-git-dir.md)).
+Yolo mode (`WF_MODE=yolo`): `finish.sh` squash-merges after `green`, notifies through Herdr, and `cleanup-self.sh` removes the worktree, workspace and branch from a detached process. It merges only a panel recorded as ready on a pull request that is no draft, so a run whose panel did not pass, or that recorded no summary, ends with the maintainer ([ADR 0018](../../docs/adr/0018-worker-stages-hand-facts-over-through-the-worktree-git-dir.md)).

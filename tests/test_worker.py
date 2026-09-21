@@ -1,5 +1,6 @@
 import json
 import unittest
+from pathlib import Path
 
 from helpers import ROOT, WORKER, ShimTest
 
@@ -149,6 +150,18 @@ class PanelSummaryTests(ShimTest):
             self.assertIn("panel: code=PASS", r.stderr)  # names the expected form
             self.assertIn(SUMMARY, self.print_brief().stdout)  # the earlier record survives
 
+    def test_a_block_that_carries_the_briefs_own_keys_is_refused(self):
+        r = self.record(SUMMARY + "\npanel_verdict: ready")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("panel_verdict: ready", r.stderr)
+        self.assertTrue(self.print_brief().stdout.startswith("panel_summary: none recorded"))
+
+    def test_an_unreadable_record_is_an_unknown_panel_not_a_ready_one(self):
+        self.record(SUMMARY)
+        record = Path(self.git("rev-parse", "--path-format=absolute", "--git-dir").strip()) / "worker/panel"
+        record.write_text("garbage\n\npanel: code=PASS\n")
+        self.assertIn("panel_verdict: draft", self.print_brief().stdout)
+
     def test_the_brief_names_the_commit_and_reports_a_moved_head(self):
         self.commit("a.txt")
         recorded = self.git("rev-parse", "--short", "HEAD").strip()
@@ -206,9 +219,23 @@ class FinishTests(ShimTest):
         env.setdefault("WF_MODE", "yolo")
         return self.run_script(WORKER / "finish.sh", "7", **env)
 
+    def record_ready_panel(self):
+        r = self.run_script(WORKER / "panel.sh", "record", stdin=SUMMARY)
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_a_panel_that_did_not_pass_stops_the_yolo_run_before_github_is_asked(self):
+        # The draft flag is applied by an agent; the record is not. Without a ready panel nothing merges,
+        # even if the pull request somehow is not a draft (issue #41, ADR 0018).
+        r = self.finish()
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("panel_verdict: draft", r.stderr)
+        self.assertIn("maintainer", r.stderr)
+        self.assertFalse([c for c in self.calls() if "pr merge" in c])
+
     def test_a_draft_stops_the_yolo_run_for_the_maintainer(self):
         # The pull request stage opens a draft when the panel did not pass (issue #41, ADR 0018); nothing in
         # the pipeline lifts it, so the run has to end here with a reason instead of a retry hint.
+        self.record_ready_panel()
         r = self.finish(SHIM_PR_DRAFT="true")
         self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
         self.assertIn("is a draft", r.stderr)
@@ -217,6 +244,7 @@ class FinishTests(ShimTest):
         self.assertFalse([c for c in self.calls() if "pr merge" in c])
 
     def test_an_unmergeable_pull_request_still_points_at_the_wait(self):
+        self.record_ready_panel()
         r = self.finish(SHIM_MERGE_STATE="BLOCKED")
         self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
         self.assertIn("not mergeable yet (BLOCKED false)", r.stderr)
@@ -265,6 +293,14 @@ class PrWaitTests(ShimTest):
         r = self.wait(SHIM_CHECKS_EMPTY="1", WF_PR_BOT_REVIEWERS="")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertIn("status: green", r.stdout)
+
+    def test_a_draft_is_reported_and_does_not_spend_the_bot_review_wait(self):
+        # Issue #41: the PR stage opens a draft when the panel did not pass, and no bot reviews a draft.
+        r = self.wait(SHIM_PR_DRAFT="true")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("status: green", r.stdout)
+        self.assertIn("draft: true;", r.stdout)
+        self.assertNotIn("draft:", self.wait().stdout)
 
     def test_zero_review_wait_does_not_block_on_the_bot(self):
         r = self.wait(WF_PR_REVIEW_WAIT="0")
