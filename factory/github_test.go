@@ -120,6 +120,9 @@ func TestAConnectedRepositoryIsClonedOnStartAndAFailedCloneIsReported(t *testing
 	if cloned := gh.cloned(t, "acme/edge-sensors"); cloned != 1 {
 		t.Errorf("the repository was cloned %d times, want once: a clone that is there is kept", cloned)
 	}
+	if tried := gh.cloned(t, "acme/backtest"); tried != 2 {
+		t.Errorf("the repository that is missing was cloned %d times, want one try per start", tried)
+	}
 }
 
 func TestARepositoryThatCannotBeReadIsSaidSoAndDoesNotEmptyTheLineOfTheOthers(t *testing.T) {
@@ -129,9 +132,16 @@ func TestARepositoryThatCannotBeReadIsSaidSoAndDoesNotEmptyTheLineOfTheOthers(t 
 	gh.remote(t, "acme/backtest")
 	gh.issues(t, "acme/edge-sensors", openIssue(104, "Retry the upload", now.Add(-72*time.Hour)))
 	gh.timeline(t, "acme/edge-sensors", 104, labeled("factory", now.Add(-6*time.Hour)))
-	gh.fail(t, "api repos/acme/backtest/*") // that repository answers as an unreachable GitHub does
+	gh.issues(t, "acme/backtest", openIssue(9, "Warn when a backtest is short", now.Add(-48*time.Hour)))
+	gh.timeline(t, "acme/backtest", 9, labeled("factory", now.Add(-time.Hour)))
 
 	f := gh.start(t, config{"poll": "50ms"})
+	f.queue(t, 2)
+	events := "api --paginate " + eventsRequest("acme/backtest", 9)
+	knew := gh.made(t, events)
+
+	// One of the two repositories answers as an unreachable GitHub does from here on.
+	gh.fail(t, "api repos/acme/backtest/*")
 	queue := f.queue(t, 1)
 	if got := keys(queue); !equal(got, []string{"acme/edge-sensors#104"}) {
 		t.Errorf("the line is %v, want the repository that could be read", got)
@@ -156,8 +166,6 @@ func TestARepositoryThatCannotBeReadIsSaidSoAndDoesNotEmptyTheLineOfTheOthers(t 
 	}
 
 	// GitHub answers again: the repository comes back into the line and the interface stops warning.
-	gh.issues(t, "acme/backtest", openIssue(9, "Warn when a backtest is short", now.Add(-48*time.Hour)))
-	gh.timeline(t, "acme/backtest", 9, labeled("factory", now.Add(-time.Hour)))
 	gh.fail(t, "")
 	f.queue(t, 2)
 	if said := f.repositorySaid(t, "acme/backtest"); said != "" {
@@ -166,6 +174,41 @@ func TestARepositoryThatCannotBeReadIsSaidSoAndDoesNotEmptyTheLineOfTheOthers(t 
 	if !strings.Contains(f.output(t), "the routed issues of acme/backtest can be read again") {
 		t.Errorf("the factory said %q, want a line for the repository that can be read again", f.output(t))
 	}
+	// What the factory knew of that repository's issues survived the outage: the likeliest reason for
+	// a failed read is a rate limit, and answering one by reading every event list again is the worst
+	// thing it could do.
+	if again := gh.made(t, events); again != knew {
+		t.Errorf("the events of the issue were read %d more times after the repository came back; what was known of it was thrown away", again-knew)
+	}
+}
+
+// An issue whose event list cannot be read keeps its place by the time it was opened, and is
+// reported once: the read is tried again on every poll, the line about it is not written again.
+func TestAnIssueWhoseEventsCannotBeReadStandsInTheLineAllTheSame(t *testing.T) {
+	gh := newGhShim(t)
+	now := time.Now().UTC()
+	gh.remote(t, "acme/edge-sensors")
+	gh.issues(t, "acme/edge-sensors", openIssue(104, "Retry the upload", now.Add(-72*time.Hour)))
+	gh.timeline(t, "acme/edge-sensors", 104, labeled("factory", now.Add(-6*time.Hour)))
+	gh.fail(t, "api --paginate repos/acme/edge-sensors/issues/104/*")
+
+	f := gh.start(t, config{"poll": "50ms", "repositories": []string{"acme/edge-sensors"}})
+	queue := f.queue(t, 1)
+	if at := queue[0].RoutedAt; at.After(now.Add(-71 * time.Hour)) {
+		t.Errorf("the issue stands in the line by %v, want the time it was opened", at)
+	}
+	asked := "api " + issuesRequest("acme/edge-sensors", "factory")
+	f.eventually(t, 10*time.Second, "several polls", func() bool { return gh.made(t, asked) >= 5 })
+	if said := strings.Count(f.output(t), "error: the events of acme/edge-sensors#104 could not be read"); said != 1 {
+		t.Errorf("the factory reported the unreadable event list %d times over %d polls, want once", said, gh.made(t, asked))
+	}
+
+	// It is read again on every poll all the same, so the issue takes its place as soon as GitHub
+	// answers: nothing about the failure is remembered but the line that reported it.
+	gh.fail(t, "")
+	f.eventually(t, 10*time.Second, "the routing time after the events could be read", func() bool {
+		return f.queue(t, 1)[0].RoutedAt.After(now.Add(-7 * time.Hour))
+	})
 }
 
 // The routing time of an issue costs a request of its own, so it is remembered until GitHub says the
@@ -191,9 +234,11 @@ func TestARoutingTimeIsReadAgainOnlyWhenTheIssueWasTouched(t *testing.T) {
 	// the factory reads the timeline again and moves the issue to the back of the line.
 	touched := openIssue(104, "Retry the upload", now.Add(-72*time.Hour))
 	touched["updated_at"] = now.Add(-time.Minute).Format(time.RFC3339)
-	gh.issues(t, "acme/edge-sensors", touched)
+	// The events are written before the issue that says it was touched, as GitHub has them before it
+	// answers the list: the other order would let a poll in between remember the old time for good.
 	gh.timeline(t, "acme/edge-sensors", 104, labeled("factory", now.Add(-6*time.Hour)),
 		unlabeled("factory", now.Add(-2*time.Hour)), labeled("factory", now.Add(-time.Minute)))
+	gh.issues(t, "acme/edge-sensors", touched)
 	f.eventually(t, 10*time.Second, "the routing time of the issue after it was touched", func() bool {
 		return f.queue(t, 1)[0].RoutedAt.After(routed)
 	})
@@ -226,9 +271,16 @@ func TestACloneThatIsCutOffEndsWithTheFactoryAndLeavesNothingBehind(t *testing.T
 
 	data := filepath.Join(t.TempDir(), "data")
 	f := gh.start(t, config{"poll": "50ms", "data_dir": data, "repositories": []string{"acme/edge-sensors"}})
-	f.eventually(t, 20*time.Second, "the clone to start", func() bool {
-		return strings.Contains(f.output(t), "cloning acme/edge-sensors")
+	f.eventually(t, 20*time.Second, "the clone and the child it runs in", func() bool {
+		_, err := os.Stat(child)
+		return err == nil
 	})
+	// While the clones are made there is no line yet, and the interface says which of the two it is.
+	var status map[string]any
+	f.get(t, "/api/status", &status)
+	if status["state"] != "connecting" {
+		t.Errorf("the factory says it is %q while it clones, want connecting", status["state"])
+	}
 	stopped := time.Now()
 	f.stop(t, syscall.SIGTERM)
 	if held := time.Since(stopped); held > 20*time.Second {

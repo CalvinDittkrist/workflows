@@ -64,10 +64,12 @@ func (f *Factory) index(w http.ResponseWriter, _ *http.Request) {
 // status is what the factory is doing: running, paused, or waiting for the Claude quota to reset.
 func (f *Factory) status(w http.ResponseWriter, _ *http.Request) {
 	f.mu.Lock()
-	quotaUntil, polledAt := f.quotaUntil, f.polledAt
+	quotaUntil, polledAt, connecting := f.quotaUntil, f.polledAt, f.connecting
 	f.mu.Unlock()
 	state := "running"
 	switch {
+	case connecting: // the clones of the connected repositories are being made; nothing is polled yet
+		state = "connecting"
 	case f.settings.Paused:
 		state = "paused"
 	case quotaUntil != nil:

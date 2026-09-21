@@ -47,6 +47,7 @@ type Factory struct {
 	queue      []Issue
 	unreadable map[string]string
 	polledAt   time.Time
+	connecting bool
 	// quotaUntil is served empty until the quota check arrives (ADR 0028); the interface carries the
 	// state from the start so the ticket that fills it changes no reader.
 	quotaUntil *time.Time
@@ -85,6 +86,21 @@ func New(settings Settings, fake bool) (*Factory, error) {
 		f.source = &canned{repositories: settings.Repositories, started: f.started}
 	}
 	return f, nil
+}
+
+// Connect makes sure every connected repository has a clone under the data directory before the
+// factory takes work. It says so on the interface while it runs, because a first clone takes minutes
+// and a line that has not been polled yet would otherwise be the sight of an idle factory.
+func (f *Factory) Connect(ctx context.Context) {
+	f.mu.Lock()
+	f.connecting = true
+	f.mu.Unlock()
+	defer func() {
+		f.mu.Lock()
+		f.connecting = false
+		f.mu.Unlock()
+	}()
+	connect(ctx, f.settings)
 }
 
 // Work derives the queue, starts the run at its head, and does so again on every poll and whenever a

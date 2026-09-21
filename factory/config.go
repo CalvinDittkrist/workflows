@@ -135,10 +135,12 @@ func Load(path string) (Settings, error) {
 		if !repository.MatchString(r) || strings.Trim(owner, ".") == "" || strings.Trim(name, ".") == "" {
 			return bad("repository %q is not owner/name; write it as \"CalvinDittkrist/workflows\"", r)
 		}
-		if seen[r] {
+		// GitHub reads owner and name without regard to case, and so does the filesystem of many a
+		// host: two spellings of one repository would be one clone and two places in the line.
+		if seen[strings.ToLower(r)] {
 			return bad("repository %q is named twice; remove the duplicate", r)
 		}
-		seen[r] = true
+		seen[strings.ToLower(r)] = true
 		s.Repositories = append(s.Repositories, r)
 	}
 	return s, nil

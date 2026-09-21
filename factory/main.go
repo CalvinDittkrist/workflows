@@ -85,10 +85,12 @@ func run(config string, fake, paused bool) error {
 	log.Printf("factory on http://%s (fake=%v paused=%v label=%s deadline=%s data=%s)",
 		settings.Listen, fake, settings.Paused, settings.Label, settings.Deadline, settings.DataDir)
 
-	// The clones come after the interface answers, because a first clone takes minutes and the
-	// operator watches it there. Fake mode has nothing to clone: its queue is canned.
+	// The clones come after the interface answers and before the first poll: a worker branches off a
+	// clone, so the host is made ready before there is work to give it. A first clone takes minutes,
+	// which is why the interface is up while it runs and says it is connecting. Fake mode has nothing
+	// to clone: its queue is canned.
 	if !fake {
-		connect(ctx, settings)
+		factory.Connect(ctx)
 	}
 	factory.Work(ctx)
 	log.Printf("stopping")

@@ -141,6 +141,7 @@ button {
 .mode-working i {
   animation: pulse 1.4s ease-in-out infinite;
 }
+.mode-connecting,
 .mode-paused,
 .mode-waiting-for-quota {
   color: var(--lavender);

@@ -79,8 +79,9 @@ func (i ghIssue) labelNames() []string {
 	return names
 }
 
-// ghEvent is one entry of an issue's timeline. The queue reads the labeled entries of it and nothing
-// else: when the routing label was set is the order of the line.
+// ghEvent is one entry of an issue's event list (the events endpoint of an issue, not the timeline
+// endpoint beside it). The queue reads the labeled entries and nothing else: when the routing label
+// was set is the order of the line.
 type ghEvent struct {
 	Event     string                `json:"event"`
 	CreatedAt time.Time             `json:"created_at"`
@@ -120,9 +121,11 @@ type gitHub struct {
 	// every minute would spend a whole hourly budget on standing still. It is memory and no file: the
 	// line itself is still derived from GitHub on every poll ([ADR 0025]).
 	times map[string]routing
-	// unreadable is the repositories the last poll could not read, with what gh said. A repository is
-	// reported when it starts failing and when it works again, not once a minute for a week.
+	// unreadable is the repositories the last poll could not read, with what gh said, and warned the
+	// issues whose event list could not be read. Both are reported when they start failing and not
+	// once a minute for a week: the factory polls every minute and a host runs it for weeks.
 	unreadable map[string]string
+	warned     map[string]bool
 }
 
 // routing is one remembered routing time with the issue's updated_at it was read at. GitHub touches
@@ -137,7 +140,7 @@ type routing struct {
 // the next poll asks again.
 func (g *gitHub) queue(ctx context.Context) poll {
 	result := poll{issues: []Issue{}, unreadable: map[string]string{}}
-	seen := map[string]bool{}
+	read, seen := map[string]bool{}, map[string]bool{}
 	for _, repository := range g.repositories {
 		issues, err := g.routedIssues(ctx, repository)
 		if err != nil {
@@ -147,19 +150,23 @@ func (g *gitHub) queue(ctx context.Context) poll {
 			result.unreadable[repository] = said(err)
 			continue
 		}
+		read[repository] = true
 		for _, issue := range issues {
 			seen[issue.key()] = true
 		}
 		result.issues = append(result.issues, issues...)
 	}
-	g.settle(result.unreadable, seen)
+	g.settle(result.unreadable, read, seen)
 	return result
 }
 
 // settle reports what changed with this poll and forgets what the line no longer holds. The report
 // is the change and not the state, because the factory polls every minute and runs for weeks: a
 // journal that repeats the same line every minute is one nobody reads.
-func (g *gitHub) settle(unreadable map[string]string, seen map[string]bool) {
+// It forgets an issue of a repository it has read and no longer holds, and keeps what it knows of a
+// repository it could not read this time: the likeliest reason for a failed read is a rate limit,
+// and answering one by reading every event list again is the opposite of what the memory is for.
+func (g *gitHub) settle(unreadable map[string]string, read, seen map[string]bool) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	for repository, said := range unreadable {
@@ -174,10 +181,42 @@ func (g *gitHub) settle(unreadable map[string]string, seen map[string]bool) {
 	}
 	g.unreadable = unreadable
 	for key := range g.times {
-		if !seen[key] {
+		if read[repositoryOf(key)] && !seen[key] {
 			delete(g.times, key)
 		}
 	}
+	for key := range g.warned {
+		if read[repositoryOf(key)] && !seen[key] {
+			delete(g.warned, key)
+		}
+	}
+}
+
+// repositoryOf is the repository an issue key names (owner/name#number).
+func repositoryOf(key string) string {
+	repository, _, _ := strings.Cut(key, "#")
+	return repository
+}
+
+// warn reports what could not be read of one issue, once, until it can be read again.
+func (g *gitHub) warn(key, format string, a ...any) {
+	g.mu.Lock()
+	first := !g.warned[key]
+	if g.warned == nil {
+		g.warned = map[string]bool{}
+	}
+	g.warned[key] = true
+	g.mu.Unlock()
+	if first {
+		log.Printf(format, a...)
+	}
+}
+
+// readable says that an issue could be read again, so the next failure is reported anew.
+func (g *gitHub) readable(key string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	delete(g.warned, key)
 }
 
 // remembered answers the routing time read earlier for an issue nothing has touched since.
@@ -246,34 +285,35 @@ func issuesRequest(repository, routingLabel string) string {
 	return "repos/" + repository + "/issues?labels=" + labels + "&state=open&per_page=100"
 }
 
-// routedAt is when the routing label was last set, read from the issue's timeline. That time, and
+// routedAt is when the routing label was last set, read from the issue's event list. That time, and
 // not the issue's age, is the order of the line: routing is when the maintainer handed the issue
 // over, so an old issue routed today stands behind one routed yesterday.
 //
-// An issue whose timeline does not name the label — it fell out of what GitHub keeps, or the label
+// An issue whose events do not name the label — it fell out of what GitHub keeps, or the label
 // came with the issue — counts from when it was opened. It keeps its place in the line that way,
-// where an empty time would put it at the head of every queue. A timeline that could not be read at
-// all counts from then too, which is earlier than the routing and moves the issue towards the head;
+// where an empty time would put it at the head of every queue. An event list that could not be read
+// at all counts from then too, which is earlier than the routing and moves the issue towards the head;
 // that answer is not remembered, so the next poll reads it again.
 func (g *gitHub) routedAt(ctx context.Context, repository string, issue ghIssue) time.Time {
 	key := Issue{Repository: repository, Number: issue.Number}.key()
 	if at, ok := g.remembered(key, issue.UpdatedAt); ok {
 		return at
 	}
-	at, read := g.readRoutedAt(ctx, repository, issue)
-	if read {
+	at, whole := g.readRoutedAt(ctx, key, repository, issue)
+	if whole {
+		g.readable(key)
 		g.remember(key, issue.UpdatedAt, at)
 	}
 	return at
 }
 
-// readRoutedAt reads the issue's timeline and says whether it got a whole answer.
-func (g *gitHub) readRoutedAt(ctx context.Context, repository string, issue ghIssue) (time.Time, bool) {
+// readRoutedAt reads the issue's event list and says whether it got a whole answer.
+func (g *gitHub) readRoutedAt(ctx context.Context, key, repository string, issue ghIssue) (time.Time, bool) {
 	at := issue.CreatedAt
 	raw, err := gh(ctx, "api", "--paginate", eventsRequest(repository, issue.Number))
 	if err != nil {
 		if ctx.Err() == nil {
-			log.Printf("error: the timeline of %s#%d could not be read: %v; it stands in the line by the time it was opened", repository, issue.Number, err)
+			g.warn(key, "error: the events of %s could not be read: %v; it stands in the line by the time it was opened", key, err)
 		}
 		return at, false
 	}
@@ -285,7 +325,7 @@ func (g *gitHub) readRoutedAt(ctx context.Context, repository string, issue ghIs
 			if errors.Is(err, io.EOF) {
 				break
 			}
-			log.Printf("error: the timeline of %s#%d is not a timeline: %v; it stands in the line by the time it was opened", repository, issue.Number, err)
+			g.warn(key, "error: the events of %s are no event list: %v; it stands in the line by the time it was opened", key, err)
 			return at, false
 		}
 		for _, event := range page {
@@ -325,6 +365,13 @@ func connect(ctx context.Context, settings Settings) {
 		// The clone lands beside its place and is moved in when gh is done, so a clone that was cut
 		// off — the host rebooted, the factory was stopped — leaves no half repository that the next
 		// start would take for a finished one and hand to a worker.
+		// A staging directory of an earlier start is a clone nobody finished: it is swept, not kept,
+		// because a host that was rebooted mid-clone would otherwise collect half repositories.
+		if left, err := filepath.Glob(filepath.Join(filepath.Dir(dir), "."+filepath.Base(dir)+".cloning-*")); err == nil {
+			for _, path := range left {
+				_ = os.RemoveAll(path)
+			}
+		}
 		staging, err := os.MkdirTemp(filepath.Dir(dir), "."+filepath.Base(dir)+".cloning-")
 		if err != nil {
 			log.Printf("error: the clone of %s cannot be started in %s: %v; name a writable data_dir", repository, filepath.Dir(dir), err)
