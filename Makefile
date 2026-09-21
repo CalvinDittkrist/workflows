@@ -8,7 +8,9 @@ check: lint validate standard test ui factory browser
 # embeds. Every target below needs that build, so it is a file the others depend on.
 UI := factory/ui
 UI_BUILD := $(UI)/dist/app/index.html
-UI_SOURCES := $(UI)/index.html $(UI)/vite.config.js $(UI)/package.json $(shell find $(UI)/src -type f)
+# The source tree, its directories included: a deleted file leaves the list, and only the mtime of the
+# directory it was in still says that the build is older than the checkout.
+UI_SOURCES := $(UI)/index.html $(UI)/vite.config.js $(UI)/package.json $(shell find $(UI)/src)
 
 # Said when gofmt is not there and when it cannot do its work, which the gate must not pass over.
 NO_GOFMT := error: gofmt could not run; it ships with Go, put the bin directory of the Go installation on PATH
