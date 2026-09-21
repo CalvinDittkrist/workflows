@@ -194,10 +194,30 @@ class GateRecordTests(ShimTest):
         log = Path(re.search(r"gate_log: (\S+)", brief).group(1))
         self.assertIn("line 1\n", log.read_text())  # nothing is lost, the brief only quotes the end
 
-    def test_a_gate_that_prints_nothing_says_so_instead_of_an_empty_key(self):
-        self.set_gate("check:\n\t@true\n")
+    def test_a_tail_without_text_says_so_instead_of_leaving_an_empty_key(self):
+        # A bare `gate_output_tail:` would read like a truncation; both a silent gate and one whose output
+        # ends in blank lines say what the block knows and point at the log.
+        for makefile in ("check:\n\t@true\n", "check:\n\t@echo out\n\t@printf '\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n'\n"):
+            with self.subTest(makefile=makefile):
+                self.set_gate(makefile)
+                self.run_gate()
+                brief = self.brief()
+                self.assertIn("gate_output_tail: (blank: the last 10 lines of the output carry no text", brief)
+                self.assertEqual(len(brief.splitlines()), 5, brief)
+
+    def test_a_blank_line_inside_the_tail_does_not_cut_it_short(self):
+        self.set_gate("check:\n\t@echo first\n\t@echo\n\t@echo last\n")
         self.run_gate()
-        self.assertIn("gate_output_tail: (the gate printed nothing)", self.brief())
+        tail = self.brief().split("gate_output_tail:\n")[1].splitlines()
+        self.assertEqual(tail, ["  first", "", "  last"])
+
+    def test_an_unreadable_record_is_no_gate_result_rather_than_a_nameless_one(self):
+        self.run_gate()
+        record = Path(self.git("rev-parse", "--path-format=absolute", "--git-dir").strip()) / "worker/gate"
+        record.write_text("garbage\n\nstatus: 0\n")
+        brief = self.brief()
+        self.assertTrue(brief.startswith("gate_result: none recorded for this head"), brief)
+        self.assertNotIn("pass (exit", brief)
 
     def test_a_call_without_a_known_subcommand_is_refused_with_the_usage(self):
         for args in ([], ["records"]):
@@ -287,10 +307,11 @@ class PanelSummaryTests(ShimTest):
 
     def test_a_block_that_carries_the_briefs_own_keys_is_refused(self):
         # Indented too: the brief prints the block as it is, so an indented key reads like a second answer.
-        for tail in ("\npanel_verdict: ready", "\n  panel_verdict: ready", "\nverdict: ready"):
+        for tail in ("\npanel_verdict: ready", "\n  panel_verdict: ready", "\nverdict: ready",
+                     "\ngate_result: pass (exit 0) at deadbee", "\n  gate_output_tail: ready"):
             r = self.record(SUMMARY + tail)
             self.assertEqual(r.returncode, 1, r.stdout)
-            self.assertIn("ready", r.stderr)
+            self.assertIn(tail.strip().split(":")[0], r.stderr)  # it names the line it refused
             self.assertTrue(self.print_brief().stdout.startswith("panel_summary: none recorded"))
 
     def test_a_block_with_two_panel_lines_or_none_named_is_refused(self):

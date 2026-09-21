@@ -28,4 +28,8 @@ A review round costs the reading and the reviewers' own single commands, plus on
 
 The price is that a reviewer's gate result is now hearsay: it believes a block the worker pasted. The record's own defences are that it names the commit and is refused for any other one, and that the worker never produces it by hand; a worker that pasted a false block would be a worker that could equally misreport its own run. The output tail is repository output quoted into a brief, so it is indented by two spaces and a line of it cannot be read as a key of the block.
 
+With neither the reviewers nor the pull request author running it, CI is the one independent run of the gate left before a
+merge, which is what the required `check` job is for ([ADR 0008](0008-make-check-is-the-single-gate.md)); a repository without
+that required check has none, and in yolo mode nothing but the recorded result stands between a broken branch and the merge.
+
 A repository whose gate is slower than the Bash tool's ten-minute maximum cannot be run through `gate.sh` at all; that limit already applied to the gate the worker ran by hand ([ADR 0017](0017-worker-subagents-run-in-the-foreground.md)) and is the same problem, not a new one.

@@ -68,6 +68,7 @@ class ShimTest(unittest.TestCase):
         out = ""
         for cmd in re.findall(r"!`([^`]+)`", body):
             argv = shlex.split(cmd.replace("${CLAUDE_PLUGIN_ROOT}/", f"{ROOT}/plugins/{plugin}/"))
+            self.assertNotIn("$", " ".join(argv), f"{skill}: {cmd} carries a placeholder this helper cannot fill")
             r = self.run_script(argv[0], *argv[1:], **env)
             self.assertEqual(r.returncode, 0, f"{skill}: {cmd}\n{r.stderr}")
             out += r.stdout

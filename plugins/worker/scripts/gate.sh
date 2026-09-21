@@ -17,10 +17,14 @@ tail_lines=10  # five reviewers read this block; the full output is one file rea
 # The output is the repository's, not this script's: it is quoted into a brief, so it is indented by two
 # spaces. A line of it that imitates a key of this block therefore cannot be read as one.
 print_tail() {
-  local body; body=$(wf_record_body "$record")
-  # Empty is stated, not shown as a bare key a reader would have to tell apart from a truncation.
-  [ -n "$body" ] || { wf_kv gate_output_tail "(the gate printed nothing)"; return; }
-  printf 'gate_output_tail:\n'; printf '%s\n' "$body" | sed 's/^./  &/'
+  # A tail without text is stated, not shown as a bare key a reader would have to tell apart from a
+  # truncation. It says what it knows: these lines carry nothing. Whether the gate printed anything at all
+  # is a question for the log, because the record keeps the last lines only.
+  if ! wf_record_body "$record" | grep -q .; then
+    wf_kv gate_output_tail "(blank: the last $tail_lines lines of the output carry no text; gate_log has all of it)"
+    return
+  fi
+  printf 'gate_output_tail:\n'; wf_record_body "$record" | sed 's/^./  &/'
 }
 
 field() { wf_record_field "$record" "$1"; }
@@ -30,6 +34,7 @@ gate_outcome() { if [ "$1" = 0 ]; then printf 'pass (exit 0)'; else printf 'fail
 
 case "${1:-}" in
   run)
+    wf_need make
     commit=$(git rev-parse HEAD 2>/dev/null) || wf_die "this branch has no commit to record a gate run at"
     dirty=no; [ -z "$(git status --porcelain)" ] || dirty=yes
     started=$(date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -59,7 +64,9 @@ case "${1:-}" in
     commit=$(field commit)
     # A record is only ever read for the commit it was taken at: an older one says nothing about this head,
     # and one taken on a dirty working tree says nothing about any commit. Neither is shown in its place.
-    if [ "$commit" != "$(git rev-parse HEAD)" ]; then
+    if [ -z "$commit" ]; then
+      wf_kv gate_result "none recorded for this head; the record names no commit, so run the worker's gate.sh run again"
+    elif [ "$commit" != "$(git rev-parse HEAD)" ]; then
       wf_kv gate_result "none for this head; the newest record is for $(git rev-parse --short "$commit" 2>/dev/null || printf '%s' "$commit"), which is not this head, so run the gate again"
     elif [ "$(field dirty)" != no ]; then
       wf_kv gate_result "none for this head; the newest record ran with a dirty working tree, so it belongs to no commit; commit what belongs to the change, ignore or remove what does not, and run the gate again"
