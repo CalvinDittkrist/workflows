@@ -3,7 +3,7 @@
 #   claude-docs.sh          the index of every page (llms.txt)
 #   claude-docs.sh <slug>   one page, https://code.claude.com/docs/en/<slug>.md
 # The origin and the shape of the URL are built here, never passed in: a worker reads issue text written by
-# someone else, so the one network call it has must not be steerable into another host (ADR 0029).
+# someone else, so the one network call it has must not be steerable into another host (ADR 0030).
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 

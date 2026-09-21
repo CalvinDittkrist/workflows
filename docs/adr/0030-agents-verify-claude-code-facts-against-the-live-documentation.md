@@ -1,4 +1,4 @@
-# 0029. Agents verify Claude Code facts against the live documentation, and the worker reads it through a pinned script
+# 0030. Agents verify Claude Code facts against the live documentation, and the worker reads it through a pinned script
 
 Date: 2026-09-21
 Status: accepted

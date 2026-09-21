@@ -73,7 +73,7 @@ class ManifestTests(unittest.TestCase):
     def test_the_worker_reaches_the_documentation_through_its_script_and_not_through_the_web_tools(self):
         """The worker's main context holds issue text written by someone else, so its own tool list carries
         no free web access; the documentation arrives through the pinned script and a lookup subagent
-        (issue #44, ADR 0029). A subagent with its own tool list does get WebFetch, so this is surface
+        (issue #44, ADR 0030). A subagent with its own tool list does get WebFetch, so this is surface
         reduction in the context that reads untrusted text, not a network boundary."""
         worker = ROOT / "plugins/worker/agents/worker.md"
         tools = self.declared_tools(worker)
@@ -99,7 +99,7 @@ class ManifestTests(unittest.TestCase):
         """A subagent's declared tools are granted, not intersected with the worker's, so a bare `Agent`
         hands the worker every built-in type, the ones with `WebFetch` and `WebSearch` among them
         (`general-purpose`, `claude-code-guide`). The allowlist names the plugin's own subagents and
-        nothing else (ADR 0029). A type missing from it fails at the Agent call, so a new agent file
+        nothing else (ADR 0030). A type missing from it fails at the Agent call, so a new agent file
         has to be listed here to be reachable at all."""
         agents = ROOT / "plugins/worker/agents"
         own = {f"worker:{a.stem}" for a in agents.glob("*.md")} - {"worker:worker"}
