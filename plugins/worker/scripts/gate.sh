@@ -2,6 +2,7 @@
 # The gate result, run once per review round and handed to the reviewers as a fact (ADR 0019).
 # Usage: gate.sh run     run the gate, record the result for this head, print the output only when it failed
 #        gate.sh print   the gate block the review and pull request briefs carry
+#        gate.sh verdict pass, fail or none for this head, the one word another script gates on
 # The record lives beside the panel summary in this worktree's git directory (ADR 0018), so the workers of
 # two issues never overwrite each other's gate result.
 set -euo pipefail
@@ -32,6 +33,20 @@ field() { wf_record_field "$record" "$1"; }
 # The same phrasing of an exit status wherever a reader meets it.
 gate_outcome() { if [ "$1" = 0 ]; then printf 'pass (exit 0)'; else printf 'fail (exit %s)' "$1"; fi; }
 
+# What the record says about this head, in one word. A record is only ever read for the commit it was taken
+# at on a clean tree: an older one says nothing about this head, and one taken on a dirty working tree says
+# nothing about any commit, so both read as "none" rather than as a result. `print` states the same decision
+# at length, and `panel.sh round` gates on this word, so the two cannot drift apart.
+gate_state() {
+  local commit
+  [ -f "$record" ] || { printf 'none\n'; return; }
+  commit=$(field commit)
+  if [ -z "$commit" ] || [ "$commit" != "$(git rev-parse HEAD 2>/dev/null)" ] || [ "$(field dirty)" != no ]; then
+    printf 'none\n'; return
+  fi
+  if [ "$(field status)" = 0 ]; then printf 'pass\n'; else printf 'fail\n'; fi
+}
+
 case "${1:-}" in
   run)
     wf_need make
@@ -61,26 +76,30 @@ case "${1:-}" in
     exit "$status"
     ;;
   print)
-    if [ ! -f "$record" ]; then
-      wf_kv gate_result "none recorded for this head; run the worker's gate.sh run before the reviewers"
-      exit 0
-    fi
-    commit=$(field commit)
-    # A record is only ever read for the commit it was taken at: an older one says nothing about this head,
-    # and one taken on a dirty working tree says nothing about any commit. Neither is shown in its place.
-    if [ -z "$commit" ]; then
-      wf_kv gate_result "none recorded for this head; the record names no commit, so run the worker's gate.sh run again"
-    elif [ "$commit" != "$(git rev-parse HEAD)" ]; then
-      wf_kv gate_result "none for this head; the newest record is for $(git rev-parse --short "$commit" 2>/dev/null || printf '%s' "$commit"), which is not this head, so run the gate again"
-    elif [ "$(field dirty)" != no ]; then
-      wf_kv gate_result "none for this head; the newest record ran with a dirty working tree, so it belongs to no commit; commit what belongs to the change, ignore or remove what does not, and run the gate again"
-    else
+    commit=""; [ ! -f "$record" ] || commit=$(field commit)
+    # Why the record is no result for this head, in the words of the case it is: the decision itself is
+    # gate_state's, so the block and the one word can never say different things about the same record.
+    if [ "$(gate_state)" != none ]; then
       wf_kv gate_result "$(gate_outcome "$(field status)") at $(git rev-parse --short "$commit")"
       wf_kv gate_command "$(field command)"
       wf_kv gate_started "$(field started), $(field duration) s"
       wf_kv gate_log "$(field log) (the full output)"
       print_tail
+    elif [ ! -f "$record" ]; then
+      wf_kv gate_result "none recorded for this head; run the worker's gate.sh run before the reviewers"
+    elif [ -z "$commit" ]; then
+      wf_kv gate_result "none recorded for this head; the record names no commit, so run the worker's gate.sh run again"
+    elif [ "$commit" != "$(git rev-parse HEAD)" ]; then
+      wf_kv gate_result "none for this head; the newest record is for $(wf_short "$commit"), which is not this head, so run the gate again"
+    elif [ "$(field dirty)" != no ]; then
+      wf_kv gate_result "none for this head; the newest record ran with a dirty working tree, so it belongs to no commit; commit what belongs to the change, ignore or remove what does not, and run the gate again"
+    else
+      # gate_state owns the decision, so a case it grows that this chain does not name is reported as what it
+      # is rather than as the last case that happened to be written here.
+      wf_kv gate_result "none for this head; the newest record does not answer for it, so run the worker's gate.sh run again"
     fi
     ;;
-  *) wf_die "usage: gate.sh run | gate.sh print" ;;
+  # The one word another script gates on, so it reads a contract rather than scraping the brief.
+  verdict) gate_state ;;
+  *) wf_die "usage: gate.sh run | gate.sh print | gate.sh verdict" ;;
 esac

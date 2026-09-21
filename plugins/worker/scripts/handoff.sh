@@ -30,9 +30,9 @@ pane="${HERDR_PANE_ID:-}"
 [ -n "$pane" ] || wf_die "HERDR_PANE_ID is empty, so this session cannot name the pane to clear; carry on in this context instead"
 
 # The next context reads the branch, not this working tree, and never learns what was left in it.
-dirty=$(git status --porcelain)
+dirty=$(wf_dirty_tree)
 [ -z "$dirty" ] || wf_die "the working tree has uncommitted changes, which the next context would not see:
-$(printf '%s' "$dirty" | sed 's/^/  /')
+$dirty
 Commit what belongs to the change, remove what does not, then hand over again."
 commit=$(git rev-parse HEAD 2>/dev/null) || wf_die "this branch has no commit, so the next context would find none of the work; commit it first"
 

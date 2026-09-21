@@ -52,6 +52,25 @@ wf_agent_status() {
 }
 # The reviewer panel of this session: the configured list, or the five reviewers the worker ships with.
 wf_reviewers() { printf '%s\n' "${WF_REVIEWERS:-code,security,docs,tests,senior}"; }
+# How many review rounds this session runs at most. The facts print it and panel.sh counts recorded rounds
+# against it, so the limit holds across the contexts one review may be spread over. A limit that is no
+# number is refused here rather than at the comparison that reads it: a failing `[` reads as false, which
+# would end the panel after one round or drop the limit altogether, and say so in no line a reader sees.
+wf_review_rounds() {
+  local n="${WF_REVIEW_ROUNDS:-3}"
+  printf '%s' "$n" | grep -Eq '^[1-9][0-9]*$' || wf_die "WF_REVIEW_ROUNDS='$n' is not a positive number of rounds, e.g. WF_REVIEW_ROUNDS=3"
+  printf '%s\n' "$n"
+}
+# The uncommitted changes of this worktree, indented for a refusal that lists them, and empty when there are
+# none. Three writes refuse a dirty tree — a handoff, a round record and the summary — because each of them
+# describes a commit; what the three share is the listing, not the sentence that says why.
+wf_dirty_tree() {
+  local dirty; dirty=$(git status --porcelain)
+  [ -z "$dirty" ] || printf '%s' "$dirty" | sed 's/^/  /'
+}
+# A commit as a reader wants it, and as the caller has it when git cannot resolve it any more: a record
+# names a commit an amend or a rebase may have taken away, and a brief still has to be able to print it.
+wf_short() { git rev-parse --short "$1" 2>/dev/null || printf '%s\n' "$1"; }
 # Where a worker stage leaves a fact for the next one (ADR 0018): this worktree's own git directory, never
 # the common one, so the workers of two issues in two worktrees keep separate records. Removed with the
 # worktree, which is what a pipeline run lives in.
