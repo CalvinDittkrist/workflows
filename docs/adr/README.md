@@ -23,3 +23,4 @@ One file per decision, numbered, never edited after acceptance (supersede instea
 | [0017](0017-worker-subagents-run-in-the-foreground.md) | Worker sessions run subagents in the foreground, and the agent never waits by polling | accepted |
 | [0018](0018-worker-stages-hand-facts-over-through-the-worktree-git-dir.md) | A worker stage hands a fact to the next one through the worktree's git directory | accepted |
 | [0019](0019-the-gate-runs-once-per-review-round.md) | The gate runs once per review round, and its result is a fact in the brief | accepted |
+| [0020](0020-the-pane-measures-the-context-and-the-worktree-carries-the-value.md) | The pane's status line measures a worker's context, and the worktree carries the value | accepted |

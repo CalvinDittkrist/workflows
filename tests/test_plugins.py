@@ -5,7 +5,7 @@ import subprocess
 import unittest
 from pathlib import Path
 
-from helpers import ORCH, PLANNER, ROOT, STANDARDS, ShimTest
+from helpers import ORCH, PLANNER, ROOT, STANDARDS, WORKER, ShimTest
 
 PLUGINS = sorted(p for p in (ROOT / "plugins").iterdir() if (p / ".claude-plugin/plugin.json").exists())
 
@@ -185,6 +185,21 @@ class LabelVocabularyTests(ShimTest):
                                  (self.PLANNER_FILE, self.planner_vocabulary())):
             self.assertIn(routing, [name for name, _, _ in vocabulary],
                           f"claim.sh refuses the label {routing}, which {file} does not define")
+
+
+class ContextValueContractTests(ShimTest):
+    """The context value file is the only thing the orchestrator and the worker share (ADR 0020): the status
+    line of the pane writes it, the worker's checkpoint reads it, and no code crosses between the plugins."""
+
+    def test_the_status_line_writes_what_the_checkpoint_reads(self):
+        payload = json.dumps({"cwd": str(self.repo), "context_window": {"total_input_tokens": 130000, "context_window_size": 200000}})
+        written = self.run_script(ORCH / "statusline.sh", stdin=payload, WF_ISSUE="12", WF_MODE="manual")
+        self.assertEqual(written.returncode, 0, written.stderr)
+        self.assertIn("130k/200k", written.stdout)
+        read = self.run_script(WORKER / "checkpoint.sh", WF_ISSUE="12")
+        self.assertEqual(read.returncode, 0, read.stderr)
+        self.assertIn("context_tokens: 130000", read.stdout)
+        self.assertIn("handoff: yes", read.stdout)
 
 
 if __name__ == "__main__":
