@@ -131,9 +131,11 @@ class ClaimTests(ShimTest):
         self.git("remote", "add", "origin", str(remote))
         self.git("push", "-q", "origin", "main")
 
-    def remote_claim(self, branch):
-        """An origin whose branch `branch` carries a commit the local repository has never seen: what the
-        factory leaves behind when it claims an issue and pushes work. Returns that commit."""
+    def remote_claim(self, branch, *, also=()):
+        """An origin whose branch `branch` carries work this repository does not know: what the factory leaves
+        behind when it claims an issue and pushes. The remote-tracking ref the push created is deleted again,
+        so the branch is as unknown here as one another machine pushed. Returns the commit. `also` names
+        further branches to put on origin at main, for the near misses a lookup has to ignore."""
         self.origin()
         self.git("checkout", "-q", "-b", "wip")
         (self.repo / "factory-work.md").write_text("work the factory pushed\n")
@@ -141,8 +143,11 @@ class ClaimTests(ShimTest):
         self.git("commit", "-qm", "wip")
         sha = self.git("rev-parse", "HEAD").strip()
         self.git("push", "-q", "origin", f"wip:refs/heads/{branch}")
+        for other in also:
+            self.git("push", "-q", "origin", f"main:refs/heads/{other}")
         self.git("checkout", "-q", "main")
         self.git("branch", "-qD", "wip")
+        self.git("update-ref", "-d", f"refs/remotes/origin/{branch}")
         return sha
 
     def test_claim_refuses_an_issue_routed_to_the_factory(self):
@@ -166,8 +171,9 @@ class ClaimTests(ShimTest):
 
     def test_claim_refuses_an_issue_already_claimed_on_the_remote(self):
         # The remote branch is a feat/ one while the labels of #12 derive fix/: the claim on the remote is
-        # found by issue number, not by the branch type of the moment.
-        self.remote_claim("feat/12-fix-login-timeout")
+        # found by issue number, not by the branch type of the moment. The other two branches are near
+        # misses of the contract shape that belong to no issue or to another one.
+        self.remote_claim("feat/12-fix-login-timeout", also=("feat/120-another-issue", "plan/12-a-topic"))
         r = self.run_script(ORCH / "claim.sh", "12")
         self.assertNotEqual(r.returncode, 0, r.stdout)
         self.assertIn("feat/12-fix-login-timeout", r.stderr)
@@ -689,6 +695,20 @@ class BoardAndAbandonTests(ShimTest):
         self.assertIn("frontier[2]{issue,milestone,title}:\n  40,v1.2.0,Expand schema\n  44,-,Loose end\n", r.stdout)
         self.assertNotIn("41,", r.stdout); self.assertNotIn("43,", r.stdout); self.assertNotIn("12,Fix", r.stdout)
         self.assertIn("waiting: 3 ready-for-agent issue(s)", r.stdout)
+
+    def test_the_frontier_leaves_out_what_the_claim_refuses(self):
+        fixture = self.base / "ready.json"
+        fixture.write_text(json.dumps([
+            {"number": 40, "title": "Expand schema", "assignees": [], "issue_dependencies_summary": {"blocked_by": 0},
+             "milestone": None, "labels": [{"name": "ready-for-agent"}]},
+            {"number": 45, "title": "Routed to the factory", "assignees": [], "milestone": None,
+             "issue_dependencies_summary": {"blocked_by": 0}, "labels": [{"name": "ready-for-agent"}, {"name": "factory"}]},
+        ]))
+        r = self.run_script(ORCH / "board.sh", SHIM_FRONTIER_FIXTURE=str(fixture))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("frontier[1]{issue,milestone,title}:\n  40,-,Expand schema\n", r.stdout)
+        self.assertNotIn("45,", r.stdout, "the factory works a routed issue; a local claim of it is refused")
+        self.assertIn("waiting: 1 ready-for-agent issue(s) blocked, assigned, routed to the factory or claimed", r.stdout)
 
     def specs(self):
         """Four open specs on the shim: one accepted-ready, one with an open ticket, one without sub-issues, one closed."""
