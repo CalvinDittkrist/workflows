@@ -1,4 +1,4 @@
-# 0027. The quota check is a courtesy, not a guard
+# 0028. The quota check is a courtesy, not a guard
 
 Date: 2026-09-21
 Status: accepted
@@ -18,7 +18,7 @@ The check fails open. When it cannot answer — quota-axi missing, exiting non-z
 quota-axi is installed on the host in a pinned version and the configuration names its path. Without that entry the check is off. It is never fetched from npm at run time.
 
 ## Consequences
-The maintainer keeps a margin on their own subscription without the host needing a rule about working hours, and a run that hits the limit anyway is resumed after the reset ([ADR 0025](0025-the-factory-never-deletes-work-on-its-own.md)), so the common case needs no decision from anybody.
+The maintainer keeps a margin on their own subscription without the host needing a rule about working hours, and a run that hits the limit anyway is resumed after the reset ([ADR 0026](0026-the-factory-never-deletes-work-on-its-own.md)), so the common case needs no decision from anybody.
 
 A broken check costs quota, not availability: the factory keeps working and says on every run that it did not know. That is the trade this decision makes, and it is the right way round only because the worst case of failing open is a slow lunchtime, while the worst case of failing closed is a host that stopped for days without telling anyone.
 

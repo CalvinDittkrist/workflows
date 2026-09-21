@@ -1,4 +1,4 @@
-# 0025. The factory never deletes work on its own
+# 0026. The factory never deletes work on its own
 
 Date: 2026-09-21
 Status: accepted
@@ -26,6 +26,6 @@ A power cut, a timeout after 100 minutes or a misunderstood issue costs time, ne
 
 The host accumulates: worktrees of open pull requests, remote branches of runs nobody has decided about, records and logs of every run ever made. That is deliberate, and it makes disk space an operator's job — as is deleting a record, which is a delete by hand or not at all.
 
-Every branch the factory leaves behind blocks a later claim on that issue ([ADR 0023](0023-a-claim-is-the-creation-of-the-branch-through-the-api.md)), which is what makes the release signal and `--force` adoption the two ways back in.
+Every branch the factory leaves behind blocks a later claim on that issue ([ADR 0024](0024-a-claim-is-the-creation-of-the-branch-through-the-api.md)), which is what makes the release signal and `--force` adoption the two ways back in.
 
 A run that stops for a reason that would pass — a network blip in the middle of the night — still waits for a person, because the factory cannot tell that case from an issue that is simply wrong.

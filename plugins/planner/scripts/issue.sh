@@ -9,10 +9,11 @@
 #        issue.sh comment <n> --body-file <f>
 #        issue.sh close <n> [--comment-file <f>] [--reason completed|not-planned]
 #        create with --parent and --milestone also attaches the parent to that milestone when it carries none
+#        create and label refuse the routing label factory without ready-for-agent, or next to ready-for-human
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 wf_need gh; wf_need jq
-usage() { sed -n '3,11p' "$0"; exit "${1:-0}"; }
+usage() { sed -n '3,12p' "$0"; exit "${1:-0}"; }
 cmd="${1:-}"; [ -n "$cmd" ] || usage 1; shift
 version() { printf '%s' "$1" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' || wf_die "milestone must be named vX.Y.Z, got '$1'"; printf '%s' "$1"; }
 # The milestone titled $1 as JSON (open or closed), or empty.
@@ -51,6 +52,7 @@ case "$cmd" in
     done
     if [ -z "$title" ] || [ -z "$body" ]; then wf_die "create needs --title and --body-file"; fi
     [ -f "$body" ] || wf_die "body file $body not found"
+    wf_require_routable "the new issue" "leave --label $WF_ROUTING_LABEL off" "${labels[@]+"${labels[@]}"}"
     args=(); for l in "${labels[@]+"${labels[@]}"}"; do args+=(--label "$l"); done
     if [ -n "$milestone" ]; then open_milestone "$milestone"; args+=(--milestone "$milestone"); fi
     url=$(gh issue create --title "$title" --body-file "$body" "${args[@]+"${args[@]}"}") || wf_die "gh issue create failed (missing label? run labels.sh)"
@@ -103,9 +105,29 @@ case "$cmd" in
     gh issue edit "$n" --milestone "$milestone" >/dev/null || wf_die "gh issue edit failed"
     wf_kv milestone "#$n attached to $milestone" ;;
   label)
-    n=$(wf_issue_num "${1:-}"); shift; args=()
-    while [ $# -gt 0 ]; do case "$1" in --add) shift; args+=(--add-label "$1") ;; --remove) shift; args+=(--remove-label "$1") ;; *) wf_die "unknown argument $1" ;; esac; shift; done
+    n=$(wf_issue_num "${1:-}"); shift; args=(); add=(); remove=()
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --add) shift; add+=("$1"); args+=(--add-label "$1") ;;
+        --remove) shift; remove+=("$1"); args+=(--remove-label "$1") ;;
+        *) wf_die "unknown argument $1" ;;
+      esac; shift
+    done
     [ "${#args[@]}" -gt 0 ] || wf_die "label needs --add or --remove"
+    # The routing rule holds over the labels the issue ends up with, not over the ones this call names, so
+    # what it carries now is read first: routing an issue that is already agent-ready is one --add.
+    resulting=("${add[@]+"${add[@]}"}")
+    current=$(wf_issue_labels "$n")
+    while IFS= read -r l; do
+      [ -n "$l" ] || continue
+      if ! wf_labels_have "$l" "${remove[@]+"${remove[@]}"}"; then resulting+=("$l"); fi
+    done <<EOF
+$current
+EOF
+    # The fix line names the route this call can drop: the one it adds, or the one the issue already carries.
+    if wf_labels_have "$WF_ROUTING_LABEL" "${add[@]+"${add[@]}"}"; then drop="leave --add $WF_ROUTING_LABEL off"
+    else drop="take the routing label off with --remove $WF_ROUTING_LABEL"; fi
+    wf_require_routable "#$n" "$drop" "${resulting[@]+"${resulting[@]}"}"
     gh issue edit "$n" "${args[@]}" >/dev/null || wf_die "gh issue edit failed (missing label? run labels.sh)"
     wf_kv labels "#$n updated" ;;
   comment)

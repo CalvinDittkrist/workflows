@@ -45,7 +45,7 @@ type Factory struct {
 	mu       sync.Mutex
 	queue    []Issue
 	polledAt time.Time
-	// quotaUntil is served empty until the quota check arrives (ADR 0027); the interface carries the
+	// quotaUntil is served empty until the quota check arrives (ADR 0028); the interface carries the
 	// state from the start so the ticket that fills it changes no reader.
 	quotaUntil *time.Time
 }

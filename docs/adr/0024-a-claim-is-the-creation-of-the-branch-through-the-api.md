@@ -1,4 +1,4 @@
-# 0023. A claim is the creation of the branch through the GitHub API
+# 0024. A claim is the creation of the branch through the GitHub API
 
 Date: 2026-09-21
 Status: accepted
@@ -29,6 +29,6 @@ Exactly one claimer works an issue, without a lock, a lease or a database: the a
 
 A claim is visible before a single commit exists. A branch with no commit beyond its base is what a claim looks like, and tools that list branches will show them.
 
-The claim outlives the claimer. A factory that dies after the claim leaves a branch that refuses every later claimer, which is what the release signal and the cleanup rules of [ADR 0025](0025-the-factory-never-deletes-work-on-its-own.md) exist for.
+The claim outlives the claimer. A factory that dies after the claim leaves a branch that refuses every later claimer, which is what the release signal and the cleanup rules of [ADR 0026](0026-the-factory-never-deletes-work-on-its-own.md) exist for.
 
 A local claim now has two more ways to refuse, and both are about a machine the developer cannot see. The error lines say which one it is, and `--force` answers both — by adopting the remote branch rather than ignoring it, because ignoring it is how work gets lost.

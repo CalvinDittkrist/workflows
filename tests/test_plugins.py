@@ -207,14 +207,22 @@ class LabelVocabularyTests(ShimTest):
                          f"{self.PLANNER_FILE} differ in name, colour, description or order. One of the two copies "
                          f"was changed and the other has to follow; do not adjust this test.")
 
-    def test_the_routing_label_the_local_claim_refuses_is_in_the_vocabulary(self):
-        """claim.sh refuses a routed issue by the name in WF_ROUTING_LABEL; a rename in the vocabulary that
-        leaves that name behind would let a local claim take an issue the factory owns."""
-        r = subprocess.run(["bash", "-c", r'. "$1/lib.sh"; printf "%s\n" "$WF_ROUTING_LABEL"', "_", str(ORCH)],
+    def routing_label(self, scripts):
+        """WF_ROUTING_LABEL as the scripts of one plugin read it, sourced outside a git repository."""
+        file = str((scripts / "lib.sh").relative_to(ROOT))
+        r = subprocess.run(["bash", "-c", r'. "$1/lib.sh"; printf "%s\n" "$WF_ROUTING_LABEL"', "_", str(scripts)],
                            cwd=self.base, text=True, capture_output=True)
         self.assertEqual(r.returncode, 0, r.stderr)
-        routing = r.stdout.strip()
-        self.assertTrue(routing, "plugins/orchestrator/scripts/lib.sh defines no WF_ROUTING_LABEL")
+        self.assertTrue(r.stdout.strip(), f"{file} defines no WF_ROUTING_LABEL")
+        return r.stdout.strip()
+
+    def test_the_routing_label_the_local_claim_refuses_is_in_the_vocabulary(self):
+        """claim.sh refuses a routed issue by the name in WF_ROUTING_LABEL, and the planner sets the label by
+        that name; a rename in the vocabulary that leaves either behind would let a local claim take an issue
+        the factory owns, or route an issue by a name the factory never reads."""
+        routing = self.routing_label(ORCH)
+        self.assertEqual(routing, self.routing_label(PLANNER),
+                         "the orchestrator refuses and the planner sets two different routing labels")
         for file, vocabulary in ((self.STANDARDS_FILE, self.standards_vocabulary()),
                                  (self.PLANNER_FILE, self.planner_vocabulary())):
             self.assertIn(routing, [name for name, _, _ in vocabulary],
