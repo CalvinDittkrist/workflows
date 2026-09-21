@@ -289,27 +289,33 @@ func issuesRequest(repository, routingLabel string) string {
 // not the issue's age, is the order of the line: routing is when the maintainer handed the issue
 // over, so an old issue routed today stands behind one routed yesterday.
 //
-// An issue whose events do not name the label — it fell out of what GitHub keeps, or the label
-// came with the issue — counts from when it was opened. It keeps its place in the line that way,
-// where an empty time would put it at the head of every queue. An event list that could not be read
-// at all counts from then too, which is earlier than the routing and moves the issue towards the head;
-// that answer is not remembered, so the next poll reads it again.
+// An issue whose events do not name the label — it fell out of what GitHub keeps, the label came
+// with the issue, or the timeline is still catching up with the list that already carries it —
+// counts from when it was opened. It keeps its place in the line that way, where an empty time
+// would put it at the head of every queue. An event list that could not be read at all counts from
+// then too, which is earlier than the routing and moves the issue towards the head.
+//
+// Only an answer that names the label is remembered. The two views GitHub answers with are not one
+// moment: the issue list carries the label seconds before the timeline names the event, and an
+// answer without it, written down against the issue's updated_at, would hold that wrong time until
+// somebody touched the issue again. So a fallback is read again on the next poll, which is one call
+// per poll for as long as the label event is missing, and the issue takes its place as it appears.
 func (g *gitHub) routedAt(ctx context.Context, repository string, issue ghIssue) time.Time {
 	key := Issue{Repository: repository, Number: issue.Number}.key()
 	if at, ok := g.remembered(key, issue.UpdatedAt); ok {
 		return at
 	}
-	at, whole := g.readRoutedAt(ctx, key, repository, issue)
-	if whole {
-		g.readable(key)
+	at, found := g.readRoutedAt(ctx, key, repository, issue)
+	if found {
 		g.remember(key, issue.UpdatedAt, at)
 	}
 	return at
 }
 
-// readRoutedAt reads the issue's event list and says whether it got a whole answer.
+// readRoutedAt reads the issue's event list and says whether the routing label was in it.
 func (g *gitHub) readRoutedAt(ctx context.Context, key, repository string, issue ghIssue) (time.Time, bool) {
 	at := issue.CreatedAt
+	found := false
 	raw, err := gh(ctx, "api", "--paginate", eventsRequest(repository, issue.Number))
 	if err != nil {
 		if ctx.Err() == nil {
@@ -332,12 +338,17 @@ func (g *gitHub) readRoutedAt(ctx context.Context, key, repository string, issue
 			// The last time the label was set is the answer: a label that was removed and set again
 			// was handed over again. It is the latest of the entries rather than the last one, so the
 			// order GitHub sends the timeline in is not part of the rule.
-			if event.Event == "labeled" && event.Label.Name == g.label && event.CreatedAt.After(at) {
-				at = event.CreatedAt
+			if event.Event == "labeled" && event.Label.Name == g.label {
+				found = true
+				if event.CreatedAt.After(at) {
+					at = event.CreatedAt
+				}
 			}
 		}
 	}
-	return at, true
+	// The list was read, whatever it held: an issue this poll could read is no issue to warn about.
+	g.readable(key)
+	return at, found
 }
 
 func eventsRequest(repository string, issue int) string {
@@ -397,8 +408,13 @@ func connect(ctx context.Context, settings Settings) {
 // clonePath is where a connected repository lives on the host: one clone per repository under the
 // data directory. The name is owner/name, which the configuration has already refused unless it is
 // exactly that, so the path stays inside the data directory.
+//
+// It is the name in lower case, because that is the repository GitHub answers for either spelling:
+// a configuration rewritten from Acme/Repo to acme/repo names the same repository, and on a host
+// whose file system tells the two apart the next start would clone it again beside the first and
+// leave the old clone behind.
 func clonePath(dataDir, repository string) string {
-	return filepath.Join(dataDir, "repos", filepath.FromSlash(repository))
+	return filepath.Join(dataDir, "repos", filepath.FromSlash(strings.ToLower(repository)))
 }
 
 // ghError is a gh call that failed: the whole call, which is what the journal needs, and what gh

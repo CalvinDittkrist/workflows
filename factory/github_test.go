@@ -134,6 +134,37 @@ func TestAConnectedRepositoryIsClonedOnStartAndAFailedCloneIsReported(t *testing
 	}
 }
 
+// GitHub answers for either spelling of a repository, so the host keeps one clone of it whatever
+// the configuration spells: an operator who rewrites acme/edge-sensors as Acme/Edge-Sensors has
+// renamed nothing, and a second clone of the same repository beside the first is a data directory
+// growing by a spelling.
+func TestARepositoryIsClonedOnceHoweverTheConfigurationSpellsIt(t *testing.T) {
+	gh := newGhShim(t)
+	for _, spelling := range []string{"acme/edge-sensors", "Acme/Edge-Sensors"} {
+		gh.remote(t, spelling)
+		gh.issues(t, spelling)
+	}
+
+	data := filepath.Join(t.TempDir(), "data")
+	f := gh.start(t, config{"poll": "50ms", "data_dir": data, "repositories": []string{"acme/edge-sensors"}})
+	f.queue(t, 0)
+	f.stop(t, syscall.SIGTERM)
+
+	gh.start(t, config{"poll": "50ms", "data_dir": data, "repositories": []string{"Acme/Edge-Sensors"}}).queue(t, 0)
+	if cloned := gh.cloned(t, "acme/edge-sensors") + gh.cloned(t, "Acme/Edge-Sensors"); cloned != 1 {
+		t.Errorf("the repository was cloned %d times, want once: the clone of the other spelling is the same clone", cloned)
+	}
+	if _, err := os.Stat(filepath.Join(data, "repos", "acme", "edge-sensors", ".git")); err != nil {
+		t.Errorf("the clone is not where the first start put it: %v", err)
+	}
+	// The path itself, because the host that runs the factory tells the two spellings apart and the
+	// one a developer runs this on may not: on a case-insensitive file system the start above would
+	// have found the clone either way.
+	if got, want := clonePath(data, "Acme/Edge-Sensors"), filepath.Join(data, "repos", "acme", "edge-sensors"); got != want {
+		t.Errorf("the clone of Acme/Edge-Sensors belongs in %s, want %s: one repository, one directory", got, want)
+	}
+}
+
 func TestARepositoryThatCannotBeReadIsSaidSoAndDoesNotEmptyTheLineOfTheOthers(t *testing.T) {
 	gh := newGhShim(t)
 	now := time.Now().UTC()
@@ -253,6 +284,34 @@ func TestARoutingTimeIsReadAgainOnlyWhenTheIssueWasTouched(t *testing.T) {
 	gh.issues(t, "acme/edge-sensors", touched)
 	f.eventually(t, 10*time.Second, "the routing time of the issue after it was touched", func() bool {
 		return f.queue(t, 1)[0].RoutedAt.After(routed)
+	})
+}
+
+// The two views GitHub answers with are not one moment: the issue list carries the routing label
+// while the timeline has yet to name the event that set it. The issue stands in the line by its age
+// until then, and because that answer is nothing GitHub confirmed, it is not written down: the next
+// poll looks again and the issue takes the place its routing gives it, without anybody touching it.
+func TestARoutingTimeTheTimelineDoesNotCarryYetIsReadAgain(t *testing.T) {
+	gh := newGhShim(t)
+	now := time.Now().UTC()
+	gh.remote(t, "acme/edge-sensors")
+	gh.issues(t, "acme/edge-sensors",
+		openIssue(11, "Routed while the timeline was catching up", now.Add(-90*time.Hour)),
+		openIssue(12, "Routed yesterday", now.Add(-48*time.Hour)))
+	gh.timeline(t, "acme/edge-sensors", 11) // the label is on the issue, the event is not there yet
+	gh.timeline(t, "acme/edge-sensors", 12, labeled("factory", now.Add(-24*time.Hour)))
+
+	f := gh.start(t, config{"poll": "50ms", "repositories": []string{"acme/edge-sensors"}})
+	if got := keys(f.queue(t, 2)); !equal(got, []string{"acme/edge-sensors#11", "acme/edge-sensors#12"}) {
+		t.Fatalf("the line is %v, want the issue the timeline says nothing about in the place its age gives it", got)
+	}
+	// Seconds later GitHub names the event. Nothing touched the issue, so its updated_at is the one
+	// the factory already saw: only an answer that was never remembered is read again.
+	gh.timeline(t, "acme/edge-sensors", 11, labeled("factory", now.Add(-time.Minute)))
+	f.eventually(t, 10*time.Second, "the issue behind the one routed a day before it", func() bool {
+		var line apiLine
+		f.get(t, "/api/line", &line)
+		return equal(keys(line.Queue), []string{"acme/edge-sensors#12", "acme/edge-sensors#11"})
 	})
 }
 
