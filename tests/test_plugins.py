@@ -38,6 +38,7 @@ class ManifestTests(unittest.TestCase):
             "worker/agents/worker.md": "opus",
             "planner/agents/planner.md": "fable",
             "worker/agents/docs-reviewer.md": "sonnet",
+            "worker/agents/docs-lookup.md": "sonnet",
         }
         agents = sorted(ROOT.glob("plugins/*/agents/*.md"))
         self.assertLessEqual(set(expected), {a.relative_to(ROOT / "plugins").as_posix() for a in agents})
@@ -65,6 +66,25 @@ class ManifestTests(unittest.TestCase):
 
     def test_the_spec_checker_is_read_only_by_its_declared_tools(self):
         self.assert_read_only(ROOT / "plugins/planner/agents/spec-checker.md")
+
+    def test_the_documentation_lookup_is_read_only_by_its_declared_tools(self):
+        self.assert_read_only(ROOT / "plugins/worker/agents/docs-lookup.md")
+
+    def test_the_worker_reaches_the_documentation_through_its_script_and_not_through_the_web_tools(self):
+        """The worker's main context holds issue text written by someone else, so its own tool list carries
+        no free web access; the documentation arrives through the pinned script and a lookup subagent
+        (issue #44, ADR 0029). A subagent with its own tool list does get WebFetch, so this is surface
+        reduction in the context that reads untrusted text, not a network boundary."""
+        worker = ROOT / "plugins/worker/agents/worker.md"
+        tools = dict(line.split(": ", 1) for line in worker.read_text().split("---")[1].strip().splitlines())["tools"]
+        for tool in ("WebFetch", "WebSearch"):
+            self.assertNotIn(tool, tools.split(", "),
+                             f"{worker.name} lists {tool}; the documentation is read with /worker:docs, which "
+                             f"runs claude-docs.sh in a lookup subagent")
+        script = ROOT / "plugins/worker/scripts/claude-docs.sh"
+        self.assertIn(str(script.relative_to(ROOT).name),
+                      (ROOT / "plugins/worker/skills/docs/SKILL.md").read_text(),
+                      "the docs skill no longer names the script the lookup agent is allowed to run")
 
     def test_every_planner_skill_is_user_invoked_only(self):
         skills = sorted(p.parent.name for p in (ROOT / "plugins/planner/skills").glob("*/SKILL.md"))

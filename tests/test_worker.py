@@ -90,6 +90,81 @@ class FactsTests(ShimTest):
                 self.assertEqual(r.returncode, 0, r.stderr)
                 self.assertIn(f"subagents: {shape}", r.stdout)
 
+class ClaudeDocsTests(ShimTest):
+    """The one network call a worker has is pinned to the documentation origin: nothing an argument carries
+    may leave that path, and nothing from another host is printed (issue #44, ADR 0029)."""
+
+    ORIGIN = "https://code.claude.com/docs/"
+
+    def docs(self, *args, **env):
+        return self.run_script(WORKER / "claude-docs.sh", *args, **env)
+
+    def requested(self):
+        """The URLs curl was asked for, in order."""
+        return [call[-1] for call in self.argv_calls() if call[0] == "curl"]
+
+    def test_without_an_argument_it_prints_the_index(self):
+        r = self.docs()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("# Claude Code Docs", r.stdout)
+        self.assertIn(f"url: {self.ORIGIN}llms.txt", r.stdout)
+        self.assertEqual(self.requested(), [f"{self.ORIGIN}llms.txt"])
+
+    def test_a_slug_prints_that_page_as_markdown(self):
+        r = self.docs("sub-agents")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("# Page sub-agents.md", r.stdout)
+        self.assertEqual(self.requested(), [f"{self.ORIGIN}en/sub-agents.md"])
+
+    def test_an_argument_that_is_not_a_slug_is_refused_before_any_request(self):
+        # Each of these would leave the pinned path, or is not a page at all. The message names the fix.
+        for argument in ("../x", "../../etc/passwd", "https://evil.example/x", "//evil.example/x", "a/b",
+                         "a.b", "a b", "A", "a?b", "a#b", "a%2fb", "a\nb", ""):
+            with self.subTest(argument=argument):
+                self.reset_calls()
+                r = self.docs(argument)
+                self.assertEqual(r.returncode, 1, r.stdout)
+                self.assertIn("error: not a documentation page", r.stderr)
+                self.assertIn("slug of lowercase letters, digits and hyphens", r.stderr)
+                self.assertEqual(self.requested(), [], "a refused argument still reached the network")
+                self.assertEqual(r.stdout, "")
+
+    def test_a_second_argument_is_refused_with_the_usage(self):
+        r = self.docs("sub-agents", "hooks")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("error: usage: claude-docs.sh", r.stderr)
+        self.assertEqual(self.requested(), [])
+
+    def test_a_failed_request_is_an_error_naming_the_fix_not_an_empty_page(self):
+        r = self.docs("no-such-page", SHIM_CURL_FAIL="1")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("error: could not read https://code.claude.com/docs/en/no-such-page.md", r.stderr)
+        self.assertIn("claude-docs.sh with no argument", r.stderr)
+        self.assertEqual(r.stdout, "")
+
+    def test_an_answer_from_another_host_prints_nothing(self):
+        """The URL is built here, so a redirect is the only way out of the origin; the body is discarded."""
+        r = self.docs("sub-agents", SHIM_CURL_REDIRECT="https://evil.example/collect")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("outside https://code.claude.com/docs/", r.stderr)
+        self.assertEqual(r.stdout, "")
+
+    def test_only_https_to_the_pinned_origin_is_ever_requested(self):
+        for args in ((), ("sub-agents",), ("hooks",), ("cli-reference",)):
+            self.docs(*args)
+        self.assertTrue(self.requested())
+        for url in self.requested():
+            self.assertTrue(url.startswith(self.ORIGIN), url)
+        for call in self.argv_calls():
+            if call[0] != "curl":
+                continue
+            self.assertIn("--proto", call)
+            self.assertEqual(call[call.index("--proto") + 1], "=https")
+            self.assertEqual(call[call.index("--proto-redir") + 1], "=https")
+            self.assertIn("--fail", call)
+            self.assertIn("--max-time", call, "a documentation call without a timeout can hang a session")
+
+
 # A Makefile whose check target is the gate of the repository under test: real `make check` runs, cheap ones.
 PASSING_GATE = "check:\n\t@echo running the gate\n\t@echo 'Ran 3 tests in 0.1s'\n\t@echo OK\n"
 FAILING_GATE = "check:\n\t@echo running the gate\n\t@echo 'FAILED (failures=1)'\n\t@exit 3\n"

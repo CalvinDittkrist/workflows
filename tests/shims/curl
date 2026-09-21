@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# Test shim for curl: logs every call, writes a canned body to --output and prints the effective URL to
+# --write-out, the way claude-docs.sh reads it. No network is touched.
+#   SHIM_CURL_FAIL=1          the request fails, as a 404 or an unreachable host does
+#   SHIM_CURL_REDIRECT=<url>  the request answers from that URL instead of the requested one
+printf 'curl %s\n' "$*" >> "${SHIM_LOG:-/dev/null}"
+{ printf 'curl'; for a in "$@"; do printf '\037%s' "${a//$'\n'/$'\036'}"; done; printf '\n'; } >> "${SHIM_ARGV_LOG:-/dev/null}"
+
+out=""; url=""
+while [ $# -gt 0 ]; do
+  case $1 in
+    --output) out=$2; shift 2 ;;
+    --write-out|--max-redirs|--max-time|--proto|--proto-redir|--user-agent) shift 2 ;;
+    -*) shift ;;
+    *) url=$1; shift ;;
+  esac
+done
+
+if [ "${SHIM_CURL_FAIL:-0}" = 1 ]; then
+  echo "curl: (22) The requested URL returned error: 404" >&2
+  exit 22
+fi
+
+case $url in
+  *llms.txt) printf '# Claude Code Docs\n- [Subagents](https://code.claude.com/docs/en/sub-agents.md)\n' ;;
+  *) printf '# Page %s\nmodel: sonnet, opus, haiku, inherit\n' "${url##*/}" ;;
+esac > "${out:-/dev/stdout}"
+printf '%s' "${SHIM_CURL_REDIRECT:-$url}"

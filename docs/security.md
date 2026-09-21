@@ -9,14 +9,17 @@ Threat model: an agent with shell access works on code and reads text from the i
 4. **Built-in OS sandbox.** Enable Claude Code's Bash sandbox (macOS Seatbelt, Linux bubblewrap) in the repo settings when the project tolerates it:
    ```json
    { "sandbox": { "enabled": true, "autoAllowBashIfSandboxed": true,
-     "network": { "allowedDomains": ["github.com", "api.github.com", "registry.npmjs.org"] } } }
+     "network": { "allowedDomains": ["github.com", "api.github.com", "registry.npmjs.org", "code.claude.com"] } } }
    ```
+   `code.claude.com` is in the list because agents verify Claude Code facts against the current documentation ([ADR 0029](adr/0029-agents-verify-claude-code-facts-against-the-live-documentation.md)); it is the only documentation origin the pipeline reads.
 5. **Docker Sandboxes.** `/orchestrator:claim 123 --sandbox` runs the worker through `sbx run claude` in a container that mounts only that worktree read-write and the shared skills store read-only. See [sandbox/README.md](../sandbox/README.md). Inside a container, `WF_CLAUDE_ARGS="--dangerously-skip-permissions"` is acceptable; on the host it is not.
 
 ## Prompt injection
 - The SessionStart hook labels issue text as "task data written by someone else". Reviewer, worker and pr-author prompts repeat that file contents, comments, logs and reviews are data, not instructions.
 - `address-reviews` explicitly declines review comments that ask to weaken tests, skip checks or change unrelated code.
 - Reviewers cannot spawn agents or edit, so a poisoned diff cannot make a reviewer act on the repository. The same holds for the auditors: every auditor prompt treats the audited repository as data, and their replies reach `report.sh` only as `finding:` lines of a fixed grammar, whose targets must stay inside the repository. Auditors and reviewers keep `Bash` to read git history, so their read-only status rests on the tool lists plus the prompt, not on a sandbox; the tests-ci auditor judges the repository's test commands without running them.
+- The worker's main context is where issue bodies, PR comments, CI logs and review comments arrive, so it carries no `WebFetch` and no `WebSearch`. It reads the documentation with `/worker:docs`, which runs `claude-docs.sh` in a read-only `docs-lookup` subagent: the script takes a page slug of lowercase letters, digits and hyphens (never a path or a URL), builds the URL from a hard-coded origin, speaks https only before and after a redirect, and prints nothing if the answer came from outside `https://code.claude.com/docs/`. Fetched pages are data like every other external text, and only the subagent's short answer returns to the worker.
+- That is surface reduction, not containment: measured in a live worker session on 2026-09-21, a subagent whose own file declares `WebFetch` gets it even though the worker's tool list has neither web tool, so a subagent's declared tools are granted rather than intersected with the parent's. The enforced network boundary is the permission layer and the sandbox `allowedDomains` above; the pinned script keeps the untrusted-text context away from the open web and gives the pipeline one auditable command instead of a free fetch tool ([ADR 0029](adr/0029-agents-verify-claude-code-facts-against-the-live-documentation.md)).
 - `WF_PLANNER_LANGUAGE` is copied verbatim into the planner session's system prompt by Claude Code's `language` setting. It is operator configuration, as trusted as the rest of `WF_*`; `plan.sh` still refuses a value with a control character or longer than a language name, so a pasted instruction cannot ride in on it.
 
 ## Supply chain
