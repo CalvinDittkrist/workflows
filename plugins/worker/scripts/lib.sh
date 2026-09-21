@@ -16,6 +16,28 @@ wf_base_branch() {
   if [ -n "$ref" ]; then printf '%s\n' "${ref#origin/}"; return; fi
   gh repo view --json defaultBranchRef -q .defaultBranchRef.name 2>/dev/null || printf 'main\n'
 }
+# The ref this branch is reviewed against, and the commit it forked from. Every stage that names a range
+# resolves it through these two, so the range in a brief, in a handoff note and in the diff context is one
+# range: the remote base when it is fetched, the local branch when it is not.
+wf_base_ref() {
+  local base ref; base=$(wf_base_branch); ref="origin/$base"
+  git rev-parse -q --verify "$ref" >/dev/null 2>&1 || ref="$base"
+  printf '%s\n' "$ref"
+}
+wf_merge_base() {
+  local ref; ref=$(wf_base_ref)
+  git merge-base "$ref" HEAD 2>/dev/null || printf '%s\n' "$ref"
+}
+# The agent session id herdr reports for a pane: the one signal that tells one Claude context in a pane from
+# the next, which is what a handoff confirms itself with (ADR 0029). Empty when herdr knows no agent there.
+wf_agent_session() {
+  herdr agent get "$1" 2>/dev/null | jq -r '.result.agent.agent_session.value // empty' 2>/dev/null || true
+}
+# The state herdr reports for a pane's agent: idle, working, blocked, done or unknown. Empty when herdr knows
+# no agent there.
+wf_agent_status() {
+  herdr agent get "$1" 2>/dev/null | jq -r '.result.agent.agent_status // empty' 2>/dev/null || true
+}
 # The reviewer panel of this session: the configured list, or the five reviewers the worker ships with.
 wf_reviewers() { printf '%s\n' "${WF_REVIEWERS:-code,security,docs,tests,senior}"; }
 # Where a worker stage leaves a fact for the next one (ADR 0018): this worktree's own git directory, never
@@ -27,8 +49,11 @@ wf_state_dir() {
   printf '%s/worker' "$d"
 }
 # A record a worker stage leaves for the next one (ADR 0018): headers, an empty line, then the block it
-# carries. Both records in this plugin are read through these two, so their formats cannot drift apart.
-wf_record_field() { sed -n "s/^$2: //p" "$1" | head -1; }
+# carries. Every record in this plugin is read through these two, so their formats cannot drift apart.
+# A field is read from the headers only: the block below them quotes gate output, reviewer text or a
+# handoff note, none of which the stage that reads a header wrote, and a line of it that looks like a
+# header is text in a block, not a fact about the record.
+wf_record_field() { sed -n "/^$/q; s/^$2: //p" "$1" | head -1; }
 wf_record_body() { sed '1,/^$/d' "$1"; }
 wf_repo_owner() { gh repo view --json owner -q .owner.login; }
 wf_repo_name() { gh repo view --json name -q .name; }

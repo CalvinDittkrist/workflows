@@ -32,3 +32,4 @@ One file per decision, numbered, never edited after acceptance (supersede instea
 | [0026](0026-the-factory-never-deletes-work-on-its-own.md) | The factory never deletes work on its own | accepted |
 | [0027](0027-the-factorys-isolation-boundary-is-the-host.md) | The factory's isolation boundary is the host | accepted |
 | [0028](0028-the-quota-check-is-a-courtesy-not-a-guard.md) | The quota check is a courtesy, not a guard | accepted |
+| [0029](0029-a-worker-resets-its-context-by-a-handoff-not-by-compaction.md) | A worker resets its context by a handoff at a checkpoint, not by compaction | accepted |

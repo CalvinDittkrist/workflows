@@ -31,7 +31,40 @@ case "$1 $2" in
     # A sandboxed worker is started by a command in the pane, not by `agent start`; Herdr detects the agent after.
     printf '%s' "$3" > "${SHIM_WT_ROOT:?}/.agent-pane"
     echo '{"result":{"type":"ok"}}' ;;
-  "agent wait") echo '{"result":{"agent_status":"idle"}}' ;;
+  "agent wait")
+    # SHIM_WAIT_STARTS_SESSION=<id> is the pane somebody cleared again while the handover waited for its fresh
+    # context to settle: from the wait after the `/clear` on, it reports a session the handover never started.
+    if [ -n "${SHIM_WAIT_STARTS_SESSION:-}" ] && [ -f "${SHIM_WT_ROOT:?}/.agent-session" ]; then
+      printf '%s' "$SHIM_WAIT_STARTS_SESSION" > "${SHIM_WT_ROOT}/.agent-session"
+    fi
+    echo '{"result":{"agent_status":"idle"}}' ;;
+  "agent get")
+    # The pane's agent, with the session identity herdr 0.9 reports for it. SHIM_NO_AGENT_SESSION drops that
+    # field, the way a pane whose agent herdr has not identified answers.
+    # SHIM_AGENT_STATUS is the state the pane settled in, `done` being a worker that ended its turn; a pane
+    # whose state changed since (see SHIM_AGENT_STATUS_AFTER_CLEAR) reports what that left behind.
+    if [ -n "${SHIM_NO_AGENT_SESSION:-}" ]; then printf '{"result":{"agent":{"pane_id":"%s","agent_status":"unknown"}}}\n' "$3"; exit 0; fi
+    printf '{"result":{"agent":{"pane_id":"%s","agent_status":"%s","agent_session":{"agent":"claude","kind":"id","value":"%s"}}}}\n' \
+      "$3" "$(cat "${SHIM_WT_ROOT}/.agent-status" 2>/dev/null || printf '%s' "${SHIM_AGENT_STATUS:-done}")" \
+      "$(cat "${SHIM_WT_ROOT}/.agent-session" 2>/dev/null || printf 'session-before')" ;;
+  "agent prompt")
+    # `/clear` starts a fresh Claude session, which herdr reports under a new id; SHIM_CLEAR_KEEPS_SESSION=1
+    # is the pane that swallowed it and keeps the old context.
+    if [ "$4" = "/clear" ] && [ -z "${SHIM_CLEAR_KEEPS_SESSION:-}" ]; then
+      printf 'session-after-%s' "$(date +%s)$RANDOM" > "${SHIM_WT_ROOT:?}/.agent-session"
+    fi
+    # SHIM_AGENT_STATUS_AFTER_CLEAR=<state> is the pane the `/clear` itself left busy or waiting on a dialog:
+    # from the next `agent get` on, that is what herdr reports there.
+    if [ "$4" = "/clear" ] && [ -n "${SHIM_AGENT_STATUS_AFTER_CLEAR:-}" ]; then
+      printf '%s' "$SHIM_AGENT_STATUS_AFTER_CLEAR" > "${SHIM_WT_ROOT:?}/.agent-status"
+    fi
+    # SHIM_CLEAR_MARKS_RECORD=<path> is the SessionStart hook of whatever session comes up: it marks the
+    # handoff record as it injects the note, which is what the record says and not who says it.
+    if [ "$4" = "/clear" ] && [ -n "${SHIM_CLEAR_MARKS_RECORD:-}" ] && [ -f "${SHIM_CLEAR_MARKS_RECORD}" ]; then
+      { printf 'injected: 2026-09-21T12:00:00Z\n'; cat "${SHIM_CLEAR_MARKS_RECORD}"; } > "${SHIM_CLEAR_MARKS_RECORD}.tmp"
+      mv "${SHIM_CLEAR_MARKS_RECORD}.tmp" "${SHIM_CLEAR_MARKS_RECORD}"
+    fi
+    echo '{"result":{"type":"ok"}}' ;;
   "pane read")
     case "${SHIM_AGENT_START_FAILS:-0}" in
       1) echo "--agent 'planner' not found. Available agents: claude, Explore" ;;
