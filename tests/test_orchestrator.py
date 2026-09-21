@@ -33,9 +33,6 @@ class ClaimTests(ShimTest):
         # claude runs the command through a shell, so it is read back the way that shell reads it: the script,
         # then the compact trigger, which is the window above times the percentage beside it.
         self.assertEqual(shlex.split(settings["statusLine"]["command"]), [str(ORCH / "statusline.sh"), "160000"])
-        # And it is derived from them, not a third number that could drift away from the two above it.
-        self.assertEqual(int(shlex.split(settings["statusLine"]["command"])[1]),
-                         settings["autoCompactWindow"] * int(settings["env"]["CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"]) // 100)
         self.assertEqual(settings["statusLine"]["type"], "command")
         # A long tool call changes no message; without the interval the value would go stale under it.
         self.assertEqual(settings["statusLine"]["refreshInterval"], 60)

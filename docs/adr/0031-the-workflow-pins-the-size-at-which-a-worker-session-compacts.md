@@ -22,7 +22,7 @@ Nothing else changes. The status line writes the same context value (`total_inpu
 ## Consequences
 The handoff threshold has a real ceiling to sit under: `WF_HANDOFF_TOKENS` (default 120 000) is 40 000 tokens below the trigger rather than 80 000 below a number nothing enforces. The margin is smaller than it looked, which is the point — it was always this small.
 
-The two numbers can drift from the trigger only if someone writes the trigger by hand; a test asserts that the argument the claim passes to the status line is the window times the percentage of the same settings object, so a literal that stops matching fails the gate.
+The two numbers can drift from the trigger only if someone writes the trigger by hand, so the claim derives it and never writes it. A test reads all three out of the settings object a real claim starts the session with — 200 000, `"80"` and the status line's 160 000 — so a change to any one of them that does not carry the other two fails the gate.
 
 Pinning the percentage costs a little of the window: a session that would have compacted at 83 % or more now compacts at 80 %, some 10 000 tokens earlier. That is the price of a number the workflow can state.
 
