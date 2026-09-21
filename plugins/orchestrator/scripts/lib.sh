@@ -4,6 +4,9 @@
 wf_die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 wf_warn() { printf 'warning: %s\n' "$*" >&2; }
 wf_kv() { printf '%s: %s\n' "$1" "$2"; }
+# Quote $1 as one word of a shell command line: a Herdr pane runs a command string, and a path with a space
+# or a JSON object with quotes in it has to survive that shell unchanged. Single quotes, inner ones escaped.
+wf_shell_quote() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 wf_need() { command -v "$1" >/dev/null 2>&1 || wf_die "$1 is required but not on PATH"; }
 
 # Root of the main checkout, even when called from a linked worktree.

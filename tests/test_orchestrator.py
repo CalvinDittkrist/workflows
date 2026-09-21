@@ -1,6 +1,9 @@
 import json
 import shlex
+import shutil
+import subprocess
 import unittest
+from pathlib import Path
 
 from helpers import ORCH, ShimTest
 
@@ -21,6 +24,15 @@ class ClaimTests(ShimTest):
         # The background switch keeps the session's subagents in the foreground, so the worker never waits in a
         # sleep loop for its reviewer panel (issue #34: 328 sleep turns and 120k -> 412k tokens in one session).
         self.assertEqual(settings["env"], {"WF_MODE": "manual", "WF_ISSUE": "12", "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1"})
+        # The pane shows the worker's context size and writes it into the worktree for the checkpoint, and the
+        # session compacts at 200k rather than growing until the model refuses (issue #36).
+        # claude runs the command through a shell, so it is read back the way that shell reads it: the script,
+        # then the window it compacts at, which is the same number as the setting below it.
+        self.assertEqual(shlex.split(settings["statusLine"]["command"]), [str(ORCH / "statusline.sh"), "200000"])
+        self.assertEqual(settings["statusLine"]["type"], "command")
+        # A long tool call changes no message; without the interval the value would go stale under it.
+        self.assertEqual(settings["statusLine"]["refreshInterval"], 60)
+        self.assertEqual(settings["autoCompactWindow"], 200000)
         self.assertTrue((self.repo / ".claude/worktrees/fix-12-fix-login-timeout/README.md").exists())
         self.assertIn(".claude/worktrees/", (self.repo / ".git/info/exclude").read_text())
         self.assertEqual(self.git("status", "--porcelain"), "", "worktree dir must not show up as untracked")
@@ -39,7 +51,47 @@ class ClaimTests(ShimTest):
         self.assertIn("sbx-worker.sh", words[0])
         settings = json.loads(words[words.index("--settings") + 1])
         self.assertEqual(settings["env"], {"WF_MODE": "manual", "WF_ISSUE": "12", "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1"})
+        self.assertEqual(shlex.split(settings["statusLine"]["command"]), [str(ORCH / "statusline.sh"), "200000"])
+        self.assertEqual(settings["autoCompactWindow"], 200000)
         self.assertEqual(words[-1], "/worker:work")
+        # The pane the command runs in has its own working directory, so the script is named by its full path.
+        self.assertEqual(words[0], str(ORCH / "sbx-worker.sh"))
+
+    def test_the_status_line_command_survives_a_plugin_path_with_a_space(self):
+        # claude runs the command through a shell. Unquoted, a checkout under "/Users/John Smith" splits into
+        # words, nothing renders, and the worker reads the missing value as a handoff for the rest of the run.
+        spaced = self.base / "my plugins" / "orchestrator"
+        spaced.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(ORCH, spaced / "scripts")
+        r = self.run_script(spaced / "scripts" / "claim.sh", "12")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        start = [c for c in self.argv_calls() if c[1:3] == ["agent", "start"]][0]
+        command = json.loads(start[start.index("--settings") + 1])["statusLine"]["command"]
+        self.assertEqual(shlex.split(command), [str(spaced / "scripts/statusline.sh"), "200000"])
+        # And the shell really runs it: the line it prints is what the pane would show.
+        payload = json.dumps({"cwd": str(self.repo), "context_window": {"total_input_tokens": 78231, "context_window_size": 200000}})
+        rendered = subprocess.run(["sh", "-c", command], input=payload, text=True, capture_output=True,
+                                  env=self.env(WF_ISSUE="12", WF_MODE="manual"))
+        self.assertEqual(rendered.returncode, 0, rendered.stderr)
+        self.assertEqual(rendered.stdout.strip(), "#12 · manual · 78k/200k (39%)")
+
+    def test_the_sandboxed_start_survives_a_plugin_path_with_a_space(self):
+        # The sandbox start hands the whole settings object to the shell of a pane as one word. That object
+        # carries quotes of its own since the status line moved into it, so unquoted it loses the session's
+        # environment, its plugin isolation and its auto-compact window without a word of complaint.
+        spaced = self.base / "my plugins" / "orchestrator"
+        spaced.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(ORCH, spaced / "scripts")
+        r = self.run_script(spaced / "scripts" / "claim.sh", "12", "--sandbox")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        run = [c for c in self.argv_calls() if c[1:3] == ["pane", "run"]][0]
+        words = shlex.split(run[-1])
+        self.assertEqual(words[0], str(spaced / "scripts/sbx-worker.sh"))
+        settings = json.loads(words[words.index("--settings") + 1])
+        self.assertEqual(settings["env"]["WF_ISSUE"], "12")
+        self.assertEqual(settings["autoCompactWindow"], 200000)
+        self.assertEqual(shlex.split(settings["statusLine"]["command"]), [str(spaced / "scripts/statusline.sh"), "200000"])
+        self.assertEqual(words[words.index("--name") + 1], "#12")
 
     def test_yolo_flag_is_passed_to_the_worker_session(self):
         r = self.run_script(ORCH / "claim.sh", "12", "--yolo")
@@ -664,6 +716,73 @@ class BoardAndAbandonTests(ShimTest):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertFalse(path.exists())
         self.assertNotIn("fix/12", self.git("branch", "--list"))
+
+
+class StatusLineTests(ShimTest):
+    """The pane line and the context value file, from the JSON Claude Code pipes into the status line."""
+
+    LINE = {"cwd": None, "model": {"id": "claude-opus-5", "display_name": "Opus"},
+            "context_window": {"total_input_tokens": 78231, "context_window_size": 200000}}
+
+    def statusline(self, payload, cwd=None, **env):
+        payload = {**payload, "cwd": str(cwd or self.repo)}
+        r = self.run_script(ORCH / "statusline.sh", stdin=json.dumps(payload), **env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stderr, "", "a status line renders on every turn and must stay quiet")
+        return r.stdout.strip()
+
+    def value_file(self, path=None):
+        return Path(self.git("rev-parse", "--path-format=absolute", "--git-dir", cwd=path or self.repo).strip()) / "worker/context"
+
+    def test_shows_issue_mode_and_context_and_records_the_size(self):
+        line = self.statusline(self.LINE, WF_ISSUE="12", WF_MODE="yolo")
+        self.assertEqual(line, "#12 · yolo · 78k/200k (39%)")
+        recorded = dict(l.split(": ", 1) for l in self.value_file().read_text().splitlines())
+        self.assertEqual(recorded["total_input_tokens"], "78231")
+        self.assertEqual(recorded["context_window_size"], "200000")
+        self.assertRegex(recorded["at"], r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+
+    def test_the_size_is_shown_against_the_window_the_session_compacts_at(self):
+        # A worker on a million-token model compacts at 200k, so 78k is well over a third of what it has; the
+        # model's 7 % would read as room the session never gets.
+        big = {**self.LINE, "context_window": {"total_input_tokens": 78231, "context_window_size": 1000000}}
+        self.assertEqual(self.statusline(big, WF_ISSUE="12", WF_MODE="manual"), "#12 · manual · 78k/1000k (7%)")
+        r = self.run_script(ORCH / "statusline.sh", "200000", stdin=json.dumps({**big, "cwd": str(self.repo)}),
+                            WF_ISSUE="12", WF_MODE="manual")
+        self.assertEqual(r.stdout.strip(), "#12 · manual · 78k/200k (39%)")
+        # The model's window wins when it is the smaller one, and the recorded value stays the model's.
+        r = self.run_script(ORCH / "statusline.sh", "500000", stdin=json.dumps({**self.LINE, "cwd": str(self.repo)}),
+                            WF_ISSUE="12", WF_MODE="manual")
+        self.assertEqual(r.stdout.strip(), "#12 · manual · 78k/200k (39%)")
+        self.assertIn("context_window_size: 200000", self.value_file().read_text())
+
+    def test_input_without_context_numbers_prints_a_line_and_leaves_no_stale_value(self):
+        # Before the first response of a session the input carries no context numbers at all.
+        line = self.statusline({"model": {"id": "claude-opus-5"}}, WF_ISSUE="12", WF_MODE="manual")
+        self.assertEqual(line, "#12 · manual · context n/a")
+        self.assertFalse(self.value_file().exists(), "an invented zero would read as a nearly empty context")
+        # And it does not overwrite a value an earlier render wrote either.
+        self.statusline(self.LINE, WF_ISSUE="12", WF_MODE="manual")
+        before = self.value_file().read_text()
+        self.assertEqual(self.statusline({"context_window": {}}, WF_ISSUE="12", WF_MODE="manual"), "#12 · manual · context n/a")
+        self.assertEqual(self.value_file().read_text(), before)
+
+    def test_the_issue_comes_from_the_branch_when_the_session_carries_none(self):
+        self.git("checkout", "-qb", "feat/12-x")
+        self.assertEqual(self.statusline(self.LINE, WF_MODE="manual"), "#12 · manual · 78k/200k (39%)")
+        self.git("checkout", "-q", "main")
+        self.assertEqual(self.statusline(self.LINE, WF_MODE="manual"), "no issue · manual · 78k/200k (39%)")
+
+    def test_each_worktree_records_into_its_own_git_directory(self):
+        # Two workers run in parallel; the checkpoint of one must never read the size of the other.
+        other = self.base / "wt-13"
+        self.git("worktree", "add", "-q", "-b", "feat/13-y", str(other))
+        self.statusline(self.LINE, WF_ISSUE="12", WF_MODE="manual")
+        self.statusline({**self.LINE, "context_window": {"total_input_tokens": 5000, "context_window_size": 200000}},
+                        cwd=other, WF_ISSUE="13", WF_MODE="manual")
+        self.assertIn("total_input_tokens: 78231", self.value_file().read_text())
+        self.assertIn("total_input_tokens: 5000", self.value_file(other).read_text())
+        self.assertNotEqual(self.value_file(), self.value_file(other))
 
 
 class GhAxiContextHookTests(ShimTest):

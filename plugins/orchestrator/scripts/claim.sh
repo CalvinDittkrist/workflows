@@ -72,13 +72,33 @@ fi
 # The worker session disables the planner and orchestrator plugins so their skills and agents stay out of its context.
 # CLAUDE_CODE_DISABLE_BACKGROUND_TASKS keeps subagents in the foreground: the reviewer reports come back as the
 # results of the Agent calls, so the worker never spends turns waiting for them (ADR 0017).
-settings=$(jq -cn --arg m "$mode" --arg i "$issue" '{env:{WF_MODE:$m, WF_ISSUE:$i, CLAUDE_CODE_DISABLE_BACKGROUND_TASKS:"1"}, enabledPlugins:{"planner@workflows":false, "orchestrator@workflows":false}}')
+# The status line makes the worker's context size visible in its pane and writes it into the worktree, where
+# the worker's own checkpoint reads it (ADR 0020). It is this plugin's script by absolute path: the worker
+# session has this plugin disabled, which hides its skills and agents, not its files.
+# autoCompactWindow is the safety net under that: a session that is not handed over in time compacts instead of
+# growing until the model refuses. The status line is given the same number, so the pane shows the size against
+# the window this session really has and not against a model window it never reaches. refreshInterval keeps the
+# value fresh while one long tool call runs, which changes no message and would otherwise render nothing.
+here=$(cd "$(dirname "$0")" && pwd)
+compact=200000
+# claude runs statusLine.command through a shell, so the path is quoted: a checkout under "/Users/John Smith"
+# would otherwise split into words, nothing would render, and the worker's checkpoint would read a missing
+# value as a handoff for the rest of the run.
+sl="$(wf_shell_quote "$here/statusline.sh") $compact"
+settings=$(jq -cn --arg m "$mode" --arg i "$issue" --arg sl "$sl" --argjson c "$compact" \
+  '{env:{WF_MODE:$m, WF_ISSUE:$i, CLAUDE_CODE_DISABLE_BACKGROUND_TASKS:"1"},
+    enabledPlugins:{"planner@workflows":false, "orchestrator@workflows":false},
+    statusLine:{type:"command", command:$sl, padding:0, refreshInterval:60},
+    autoCompactWindow:$c}')
 perm="${WF_WORKER_PERMISSION_MODE:-auto}"
 name=$(wf_agent_name "issue-$issue")
 # WF_CLAUDE_ARGS applies to every session, WF_WORKER_CLAUDE_ARGS to workers only (e.g. "--model sonnet", "--plugin-dir /path" while developing).
 extra="${WF_CLAUDE_ARGS:-} ${WF_WORKER_CLAUDE_ARGS:-}"
 if [ "$sandbox" = 1 ]; then
-  herdr pane run "$pane" "$(dirname "$0")/sbx-worker.sh '$path' -- --agent worker --strict-mcp-config --permission-mode $perm --settings '$settings' --name '#$issue' $extra '/worker:work'" >/dev/null
+  # A command line for the shell in the new pane: every value is quoted for it (the settings JSON carries
+  # quotes of its own since the status line moved in), the script by its full path because that pane's
+  # working directory is not this script's, and only $extra stays bare, because it is a list of flags.
+  herdr pane run "$pane" "$(wf_shell_quote "$here/sbx-worker.sh") $(wf_shell_quote "$path") -- --agent worker --strict-mcp-config --permission-mode $(wf_shell_quote "$perm") --settings $(wf_shell_quote "$settings") --name $(wf_shell_quote "#$issue") $extra '/worker:work'" >/dev/null
   herdr agent wait "$pane" --until idle --until blocked --timeout 300000 >/dev/null || wf_warn "worker did not become ready within 5 minutes; inspect pane $pane"
   wf_wait_agent "$pane"
 else
