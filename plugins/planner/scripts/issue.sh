@@ -124,7 +124,10 @@ case "$cmd" in
     done <<EOF
 $current
 EOF
-    wf_require_routable "#$n" "take the routing label off with --remove $WF_ROUTING_LABEL" "${resulting[@]+"${resulting[@]}"}"
+    # The fix line names the route this call can drop: the one it adds, or the one the issue already carries.
+    if wf_labels_have "$WF_ROUTING_LABEL" "${add[@]+"${add[@]}"}"; then drop="leave --add $WF_ROUTING_LABEL off"
+    else drop="take the routing label off with --remove $WF_ROUTING_LABEL"; fi
+    wf_require_routable "#$n" "$drop" "${resulting[@]+"${resulting[@]}"}"
     gh issue edit "$n" "${args[@]}" >/dev/null || wf_die "gh issue edit failed (missing label? run labels.sh)"
     wf_kv labels "#$n updated" ;;
   comment)
