@@ -8,12 +8,17 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
 // Fake mode: a canned queue and a scripted worker, so the factory can be watched from start to end
 // without tokens, git or GitHub. The scripted worker is this binary again (`scripted-worker`), which
 // prints the stream a real headless worker printed, recorded on 2026-09-21 with Claude Code 2.1.278.
+
+// daemonLifetime is how long the process a detached scripted worker leaves behind lives: far longer
+// than its run may take, and short enough that the ones the tests leave behind go away by themselves.
+const daemonLifetime = 2 * time.Minute
 
 // cannedIssue is one entry of the canned queue with the scripted worker that works it: between them
 // the entries cover every way a run ends here.
@@ -33,6 +38,7 @@ var cannedIssues = []cannedIssue{
 	{number: 104, title: "Retry the upload when the broker drops the connection", labels: []string{"bug"}, routed: 6 * time.Hour, repo: 0, scenario: "ready"},
 	{number: 112, title: "Replace the hand-written CSV parser", labels: []string{"enhancement"}, routed: 2 * time.Hour, repo: 0, scenario: "failed"},
 	{number: 115, title: "Warn when a calibration file is older than the sensor", labels: []string{"enhancement"}, routed: 1 * time.Hour, repo: 0, scenario: "silent"},
+	{number: 121, title: "Serve the dashboard preview from the device", labels: []string{"enhancement"}, routed: 50 * time.Minute, repo: 0, scenario: "detached"},
 	{number: 109, title: "Überwachung: Füllstand fällt unter den Schwellwert, ohne dass eine Warnung kommt", labels: []string{"bug"}, routed: 4 * time.Hour, repo: 1, scenario: "blocked"},
 }
 
@@ -55,10 +61,10 @@ func cannedQueue(repositories []string, now time.Time) []Issue {
 
 // scriptedWorker stands in for `claude -p --output-format stream-json --verbose`. It is a subcommand
 // of the factory's own binary, so fake mode needs nothing installed on the host.
-// Usage: factory scripted-worker <ready|blocked|failed|silent|hang|child> <owner/name> <issue>
+// Usage: factory scripted-worker <ready|blocked|failed|silent|detached|hang|child|daemon> <owner/name> <issue>
 func scriptedWorker(args []string, stdout, stderr io.Writer) int {
 	if len(args) < 3 {
-		fmt.Fprintln(stderr, "error: usage: factory scripted-worker <ready|blocked|failed|silent|hang|child> <owner/name> <issue>")
+		fmt.Fprintln(stderr, "error: usage: factory scripted-worker <ready|blocked|failed|silent|detached|hang|child|daemon> <owner/name> <issue>")
 		return 2
 	}
 	scenario, repository := args[0], args[1]
@@ -74,6 +80,13 @@ func scriptedWorker(args []string, stdout, stderr io.Writer) int {
 	if scenario == "child" {
 		s.say(fmt.Sprintf("worker child process %d", os.Getpid()))
 		time.Sleep(time.Hour)
+		return 0
+	}
+
+	// What a detached worker leaves behind: it says nothing and holds the worker's output open, the
+	// way a server started with nohup does, for longer than any run here takes.
+	if scenario == "daemon" {
+		time.Sleep(daemonLifetime)
 		return 0
 	}
 
@@ -110,6 +123,19 @@ func scriptedWorker(args []string, stdout, stderr io.Writer) int {
 			"File created successfully.")
 		s.result("success", "I have pushed the branch and stopped here.", false, "completed")
 		return 0
+	}
+
+	// A worker that reports ready and leaves a process behind that the process group does not reach:
+	// it has a session of its own and still holds the worker's output. The run has to end all the same.
+	if scenario == "detached" {
+		daemon := exec.Command(os.Args[0], "scripted-worker", "daemon", repository, strconv.Itoa(issue))
+		daemon.Stdout, daemon.Stderr = stdout, stderr
+		daemon.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+		if err := daemon.Start(); err != nil {
+			fmt.Fprintf(stderr, "error: the scripted worker could not start its daemon: %v\n", err)
+			return 1
+		}
+		s.say(fmt.Sprintf("worker detached process %d", daemon.Process.Pid))
 	}
 
 	s.tool("Edit", map[string]any{"file_path": "plugins/worker/skills/work/SKILL.md"}, "The file has been updated.")

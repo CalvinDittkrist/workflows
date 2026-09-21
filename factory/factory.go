@@ -176,7 +176,8 @@ func (f *Factory) execute(parent context.Context, r *Run, issue Issue) {
 	cmd.WaitDelay = 10 * time.Second
 
 	// The pipes belong to the factory, not to exec: a worker that leaves a process behind must not be
-	// able to hold the factory in Wait, and after the group is ended every writer is gone.
+	// able to hold the factory in Wait. After the group is ended every writer in it is gone; one that
+	// left the group is not, which is why the reading below has an end of its own.
 	stdout, stdoutWriter, err := os.Pipe()
 	if err != nil {
 		f.finish(r, outcomeFailed, "the factory could not open a pipe for the worker: "+err.Error(), nil)
@@ -223,7 +224,22 @@ func (f *Factory) execute(parent context.Context, r *Run, issue Issue) {
 	// deadline. The group is ended right after the worker was reaped, which also closes the pipes a
 	// process it left behind would still hold open.
 	_ = endGroup(cmd.Process.Pid, syscall.SIGKILL)
-	readers.Wait()
+	// What the group wrote before it ended is in the pipes and is read in a moment. A process that
+	// took a session of its own — a server started with nohup — is outside the group and keeps the
+	// pipes open for as long as it lives, which no deadline ends: the factory stops reading instead,
+	// or this run would never end and no other would ever start.
+	drained := make(chan struct{})
+	go func() { readers.Wait(); close(drained) }()
+	select {
+	case <-drained:
+	case <-time.After(drainGrace):
+		stdout.Close() // ends the two readers
+		stderr.Close()
+		<-drained
+		warning := "the worker left a process behind that is outside its process group and still held its output; the factory cannot end it, look for it on the host"
+		f.runs.update(r, func() { r.Warnings = append(r.Warnings, warning) })
+		f.runs.event(r, Event{Kind: "error", Title: "the worker left a process behind", Body: warning})
+	}
 	stdout.Close()
 	stderr.Close()
 
@@ -274,6 +290,10 @@ func endGroup(pid int, signal syscall.Signal) error {
 	return nil
 }
 
+// drainGrace is how long the factory reads on after the worker and its process group are gone. What
+// they wrote is already in the pipes, so this is only ever waited out for a process that left the group.
+const drainGrace = 3 * time.Second
+
 // One line of the worker's stream carries a whole tool result, so the reader's buffer is generous; a
 // line beyond it is refused rather than split into halves that are not JSON.
 const maxStreamLine = 64 << 20
@@ -287,7 +307,8 @@ func (f *Factory) read(r *Run, what string, stream io.Reader, line func([]byte))
 	for scanner.Scan() {
 		line(scanner.Bytes())
 	}
-	if err := scanner.Err(); err != nil {
+	// A stream the factory closed itself is not an error of the stream: see drainGrace.
+	if err := scanner.Err(); err != nil && !errors.Is(err, os.ErrClosed) {
 		f.error(r, Event{Kind: "error", Title: what + " could not be read to its end", Body: err.Error()})
 		_, _ = io.Copy(io.Discard, stream)
 	}

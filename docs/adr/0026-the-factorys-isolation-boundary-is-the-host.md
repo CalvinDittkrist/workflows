@@ -17,13 +17,15 @@ The factory's isolation boundary is the host. A dedicated machine runs it, with:
 - a GitHub machine user of its own, whose token reaches the connected repositories and nothing else,
 - no Claude Code login, no SSH key and no credential of the maintainer's beyond the one subscription the worker runs on,
 - workers started with a cleaned environment that carries no Herdr variables, so an issue that needs Herdr ends `blocked` instead of acting in somebody's session,
-- each worker in a process group of its own, ended with its group on a deadline or a stop, so no process outlives its run,
+- each worker in a process group of its own, ended with its group when the run ends, on a deadline or on a stop, so no process of the group outlives its run,
 - no container per run.
 
 Workers run with the auto permission mode. That is a consequence of being unattended, not a decision of its own: the prompts have no one to ask.
 
 ## Consequences
 The blast radius of a worker that goes wrong is the host and the repositories the token names: it cannot reach a developer's machine, a private repository nobody connected, or a Herdr session.
+
+The process group is not a cage. A process that takes a session of its own, as a server started with `nohup` does, is outside the group, and without a container the factory cannot end it. Such a process must not be able to stop the factory, which runs one worker at a time: the factory stops reading the worker's output a moment after the group is gone, ends the run by what the worker reported, and puts a warning on the run that names what was left on the host.
 
 On the host itself a worker is unconstrained. It runs arbitrary commands as the host user under the auto permission mode, so the host is treated as compromised by design — nothing is kept on it that is not already on GitHub, and its token is scoped so that a compromise stays inside what it was going to work on anyway.
 

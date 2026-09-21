@@ -118,7 +118,7 @@ func TestFakeModeWorksTheCannedQueueOneRunAtATime(t *testing.T) {
 		worked = append(worked, fmt.Sprintf("%s#%d", run.Repository, run.Issue))
 	}
 	want := []string{"acme/edge-sensors#104", "acme/backtest#109", "acme/edge-sensors#112",
-		"acme/edge-sensors#115", "acme/backtest#118"}
+		"acme/edge-sensors#115", "acme/edge-sensors#121", "acme/backtest#118"}
 	if strings.Join(worked, " ") != strings.Join(want, " ") {
 		t.Errorf("the queue was worked as %v, want %v", worked, want)
 	}
@@ -133,7 +133,7 @@ func TestFakeModeWorksTheCannedQueueOneRunAtATime(t *testing.T) {
 	}
 
 	ready, blocked, failed := line.Done[0], line.Done[1], line.Done[2]
-	silent, timeout := line.Done[3], line.Done[4]
+	silent, detached, timeout := line.Done[3], line.Done[4], line.Done[5]
 
 	// ready: the pull request comes from a final report written as markdown, the stages from the
 	// skill calls, and the totals from the result line.
@@ -204,15 +204,36 @@ func TestFakeModeWorksTheCannedQueueOneRunAtATime(t *testing.T) {
 		}
 	}
 
-	// timeout: the deadline passed and the whole process group was ended.
-	if timeout.Outcome != "timeout" || !strings.Contains(timeout.Reason, "deadline of 15s") {
-		t.Errorf("run 5 ended %q because %q, want timeout on the deadline", timeout.Outcome, timeout.Reason)
-	}
+	// detached: the worker reported and left a process behind that has a session of its own, so the
+	// process group does not reach it, and that still holds the worker's output. The run ends by its
+	// report all the same, long before that process does, and says what it left behind.
 	var full apiRun
 	f.get(t, "/api/runs/5", &full)
+	for _, e := range full.Events {
+		if match := detachedPidInEvent.FindStringSubmatch(e.Title); match != nil {
+			pid, _ := strconv.Atoi(match[1])
+			t.Cleanup(func() { _ = syscall.Kill(pid, syscall.SIGKILL) })
+		}
+	}
+	if detached.Outcome != "ready" || detached.PullRequest != "https://github.com/acme/edge-sensors/pull/221" {
+		t.Errorf("run 5 ended %q with the pull request %q, want ready by its report", detached.Outcome, detached.PullRequest)
+	}
+	if took := detached.EndedAt.Sub(detached.StartedAt); took > daemonLifetime/4 {
+		t.Errorf("run 5 took %s, want it to end without waiting for the process its worker left behind", took)
+	}
+	if len(detached.Warnings) != 1 || !strings.Contains(detached.Warnings[0], "left a process behind") {
+		t.Errorf("run 5 has the warnings %q, want the one that says its worker left a process behind", detached.Warnings)
+	}
+
+	// timeout: the deadline passed and the whole process group was ended.
+	if timeout.Outcome != "timeout" || !strings.Contains(timeout.Reason, "deadline of 15s") {
+		t.Errorf("run 6 ended %q because %q, want timeout on the deadline", timeout.Outcome, timeout.Reason)
+	}
+	full = apiRun{} // a field the interface omits would keep the value of the run read before
+	f.get(t, "/api/runs/6", &full)
 	pids := workerPids(t, full)
 	if len(pids) != 2 {
-		t.Fatalf("the scripted worker of run 5 logged %d processes, want the worker and its child", len(pids))
+		t.Fatalf("the scripted worker of run 6 logged %d processes, want the worker and its child", len(pids))
 	}
 	for _, pid := range pids {
 		if survived(pid) {
@@ -236,6 +257,7 @@ func TestFakeModeWorksTheCannedQueueOneRunAtATime(t *testing.T) {
 	}
 
 	// A subagent's events are told apart from the worker's own by the tool-use id they carry.
+	full = apiRun{} // a field the interface omits would keep the value of the run read before
 	f.get(t, "/api/runs/1", &full)
 	subs, agents := 0, 0
 	for _, e := range full.Events {
@@ -313,7 +335,7 @@ func TestPausedShowsTheQueueAndStartsNothing(t *testing.T) {
 	}
 	var repositories []map[string]any
 	f.get(t, "/api/repositories", &repositories)
-	if len(repositories) != 2 || repositories[0]["repository"] != "acme/edge-sensors" || repositories[0]["queued"] != 3.0 {
+	if len(repositories) != 2 || repositories[0]["repository"] != "acme/edge-sensors" || repositories[0]["queued"] != 4.0 {
 		t.Errorf("the connected repositories are %v, want both with what waits in them", repositories)
 	}
 	if records, _ := filepath.Glob(filepath.Join(f.data, "run-*.json")); len(records) != 0 {
@@ -464,6 +486,12 @@ func TestARestartKeepsTheRunsAndInterruptsWhatWasActive(t *testing.T) {
 	if last := line.Done[len(line.Done)-1]; last.ID != len(cannedIssues) || last.Outcome != "interrupted" {
 		t.Errorf("the run that was active is run %d with the outcome %q, want run %d interrupted", last.ID, last.Outcome, len(cannedIssues))
 	}
+	// The log of the run that was active reads to its end: its last event says how the run ended.
+	var interrupted apiRun
+	again.get(t, fmt.Sprintf("/api/runs/%d", len(cannedIssues)), &interrupted)
+	if n := len(interrupted.Events); n == 0 || interrupted.Events[n-1].Title != "interrupted" || interrupted.EventCount != n {
+		t.Errorf("the log of the interrupted run has %d events for an event count of %d and does not end in the interruption", n, interrupted.EventCount)
+	}
 	if line.Done[0].Outcome != "ready" {
 		t.Errorf("the restarted factory reads run 1 as %q, want the outcome it was recorded with", line.Done[0].Outcome)
 	}
@@ -477,6 +505,12 @@ func TestOnlyThePullRequestOfTheRunIsTakenFromAReport(t *testing.T) {
 		name, detail, url string
 	}{
 		{"the pull request of the run", "https://github.com/acme/edge-sensors/pull/204", "https://github.com/acme/edge-sensors/pull/204"},
+		{"a sentence that ends after it", "https://github.com/acme/edge-sensors/pull/204.", "https://github.com/acme/edge-sensors/pull/204"},
+		{"a markdown link", "[#204](https://github.com/acme/edge-sensors/pull/204)", "https://github.com/acme/edge-sensors/pull/204"},
+		{"an autolink after a word", "pull request <https://github.com/acme/edge-sensors/pull/204>", "https://github.com/acme/edge-sensors/pull/204"},
+		{"the repository as GitHub spells it, not as the configuration does", "https://github.com/Acme/Edge-Sensors/pull/204", "https://github.com/acme/edge-sensors/pull/204"},
+		{"a longer path under the pull request", "https://github.com/acme/edge-sensors/pull/204/files", "https://github.com/acme/edge-sensors/pull/204"},
+		{"a repository whose name only starts the same", "https://github.com/acme/edge-sensors-fork/pull/204", ""},
 		{"another repository", "https://github.com/acme/backtest/pull/204", ""},
 		{"another host", "https://attacker.example/acme/edge-sensors/pull/204", ""},
 		{"another scheme", "javascript:alert(1)", ""},
@@ -525,6 +559,7 @@ func TestTheReportIsReadFromMarkdown(t *testing.T) {
 	}{
 		{"bold", "**ready: https://github.com/a/b/pull/7**\n\nReview: 5/5 PASS.", "ready", "https://github.com/a/b/pull/7"},
 		{"plain", "ready: https://github.com/a/b/pull/7", "ready", "https://github.com/a/b/pull/7"},
+		{"a sentence around the pull request", "ready: the pull request is https://github.com/a/b/pull/7.", "ready", "the pull request is https://github.com/a/b/pull/7."},
 		{"a heading over a summary", "## ready: https://github.com/a/b/pull/7\n\nCI green.", "ready", "https://github.com/a/b/pull/7"},
 		{"a list item after a preamble", "Here is where I got to.\n\n- `blocked: the issue needs Herdr`", "blocked", "the issue needs Herdr"},
 		{"a reason over several lines", "blocked: the brief contradicts ADR 0012.\n\ndecision needed: drop the step.", "blocked", "the brief contradicts ADR 0012.\n\ndecision needed: drop the step."},
@@ -713,7 +748,10 @@ func freeAddress(t *testing.T) string {
 	return listener.Addr().String()
 }
 
-var pidInEvent = regexp.MustCompile(`worker (?:child )?process (\d+)`)
+var (
+	pidInEvent         = regexp.MustCompile(`worker (?:child )?process (\d+)`)
+	detachedPidInEvent = regexp.MustCompile(`worker detached process (\d+)`)
+)
 
 // workerPids are the processes the scripted worker said it is, read from the run's log.
 func workerPids(t *testing.T, run apiRun) []int {
