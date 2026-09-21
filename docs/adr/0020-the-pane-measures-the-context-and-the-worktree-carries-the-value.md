@@ -1,7 +1,7 @@
 # 0020. The pane's status line measures a worker's context, and the worktree carries the value
 
 Date: 2026-09-21
-Status: accepted
+Status: accepted; the 200 000 safety net is superseded by [ADR 0031](0031-the-workflow-pins-the-size-at-which-a-worker-session-compacts.md)
 
 ## Context
 A worker session's context size was invisible while it worked: the maintainer saw panes, not sizes, and the worker itself could not say how full its window was, so nothing could decide when to hand work over to a fresh session. The measured runs behind [ADR 0017](0017-worker-subagents-run-in-the-foreground.md) had grown from 120k to 412k tokens before anyone noticed. Claude Code answers this question only in one place: the JSON it pipes into the `statusLine` command on every render, which carries `context_window.total_input_tokens`. That is a per-session hook of the session's own settings, which the orchestrator writes when it claims an issue — while the number is needed in the worker session, in a different plugin, whose skills and agents the worker session is the only one to load.

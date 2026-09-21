@@ -4,7 +4,7 @@
 # The size is read from the value the pane's status line writes into this worktree's git directory
 # (ADR 0020). With a stage it is the checkpoint that stage's skill runs on entry, wherever the context came
 # from, and a `handoff: yes` carries the procedure the answer asks for; without one it only reports, which is
-# how a maintainer reads the size by hand (ADR 0031).
+# how a maintainer reads the size by hand (ADR 0032).
 set -euo pipefail
 # shellcheck source=lib.sh
 . "$(dirname "$0")/lib.sh"
@@ -155,8 +155,8 @@ if [ "$age" -gt "$max_age" ]; then
 fi
 
 details=$(wf_kv measured "$at ($age s ago)")
-# The model's window, as the status line read it. Not the pane's percentage, which is against the window the
-# session compacts at, so the key says whose window this is.
+# The model's window, as the status line read it. Not the pane's percentage, which is against the compact
+# trigger the claim pins (ADR 0031), so the key says whose window this is.
 if printf '%s' "$window" | grep -Eq '^[1-9][0-9]*$'; then
   details="$details
 $(wf_kv model_context_window "$window ($((tokens * 100 / window)) % of it used)")"

@@ -1,4 +1,4 @@
-# 0031. The stage measures the context on entry, and the context a handoff started does one unit of work before the next
+# 0032. The stage measures the context on entry, and the context a handoff started does one unit of work before the next
 
 Date: 2026-09-21
 Status: accepted
@@ -25,7 +25,7 @@ That the two identifiers are one is not an assumption: the session the hook rece
 
 For the same reason a mark the script cannot write is a warning and not a refusal, which is the opposite of the hook's rule for the same record. The invariants differ: the hook fails closed because injecting without the mark would give one note to two contexts, while a checkpoint that failed closed would start that loop. Failing open costs at most a stage that measures late in one session, and the answer says so, on stdout as well as on stderr, because a skill injection may show the model stdout alone.
 
-**One threshold.** `WF_HANDOFF_TOKENS` keeps its meaning and its single value for both stages, with the default lowered to 100 000: the threshold plus one review round has to stay under the compact trigger, and 100k covers rounds up to about 60k under a trigger of 160k. A round at the 90th percentile still reaches it, which is what the round checkpoint of #74 is for. A stage-specific threshold would need a second number to explain and would not change which stage grows.
+**One threshold.** `WF_HANDOFF_TOKENS` keeps its meaning and its single value for both stages, with the default lowered to 100 000: the threshold plus one review round has to stay under the compact trigger [ADR 0031](0031-the-workflow-pins-the-size-at-which-a-worker-session-compacts.md) pins at 160 000, and 100k covers rounds up to about 60k under it. A round at the 90th percentile still reaches it, which is what the round checkpoint of #74 is for. A stage-specific threshold would need a second number to explain and would not change which stage grows.
 
 The number lives in three places that are kept current — the `WF_*` table of the README, [the token budget](../token-budget.md) and this ADR — and in none of the ADRs that mention it in passing. An ADR body is the record of its date and is not edited afterwards; ADR 0029's `Status:` line names what this one supersedes, the way [ADR 0011](0011-github-workspace-configured-by-an-idempotent-script.md) names [ADR 0013](0013-promotions-merge-with-a-merge-commit-and-releases-tag-it.md).
 

@@ -1,7 +1,7 @@
 # 0029. A worker resets its context by a handoff at a checkpoint, not by compaction
 
 Date: 2026-09-21
-Status: accepted; the two checkpoints of the driver, the default threshold and the last paragraph, on the seconds after a handover, are superseded by [ADR 0031](0031-the-stage-measures-the-context-on-entry-and-a-handoff-grants-one-skip.md)
+Status: accepted; the two checkpoints of the driver, the default threshold and the last paragraph, on the seconds after a handover, are superseded by [ADR 0032](0032-the-stage-measures-the-context-on-entry-and-a-handoff-grants-one-skip.md)
 
 ## Context
 A worker session runs one issue from reading it to the merge, and its context only grows: the issue, the implementation, five reviewer reports per round, the pull request, CI logs, review comments. The sessions measured for [ADR 0017](0017-worker-subagents-run-in-the-foreground.md) reached 412k tokens. What a long context costs is not only money: the model's attention over it thins out, the early instructions compete with a transcript of dead ends, and the last stages of the pipeline — the ones that decide what gets merged — run in the worst context of the run.
@@ -21,7 +21,7 @@ The clearing is done by a detached process, because a session cannot clear itsel
 
 In the new session the worker's SessionStart hook injects the full issue context again, the note — indented like the issue body and the comments above it, and framed as the report of a context that had read them, so it is read as data and no more able to imitate the framing around it than the issue text is — and the stage to resume at, exactly once: it marks the record before it emits, so a resume or a second handoff that never arrived injects nothing from it, and a mark it fails to write stops the injection rather than going ahead without the guard, and it passes over a record that names the session it is starting, so an auto-compact in the context that wrote the note cannot consume the note meant for its successor. `facts.sh` then prints `resume_stage:`, and the driver starts at that stage after reading the commit log and the diffstat instead of at stage 1. The note reaches no reviewer and no pull request author: their briefs are built from the diff, the gate record and the panel record, and a fresh reviewer that read the previous context's reasoning would no longer be the independent reader [ADR 0004](0004-reviewers-as-fresh-read-only-subagents.md) asks for.
 
-The threshold stays `WF_HANDOFF_TOKENS` (default 120 000), under the `autoCompactWindow: 200000` a claim sets, so the handoff happens well before the safety net.
+The threshold stays `WF_HANDOFF_TOKENS` (default 120 000), under the compact trigger of 160 000 a claim pins ([ADR 0031](0031-the-workflow-pins-the-size-at-which-a-worker-session-compacts.md)), so the handoff happens before the safety net.
 
 ## Consequences
 The review stage and the CI stage run in a context that holds the issue, a page of notes and the diff, instead of one that holds everything that happened before them. The work itself is never at risk in a handover: it is committed before the note is written, and the note is a page beside it.

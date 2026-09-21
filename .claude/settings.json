@@ -15,6 +15,6 @@
     "pr": ""
   },
   "env": {
-    "WF_PR_BOT_REVIEWERS": ""
+    "WF_PR_BOT_REVIEWERS": "chatgpt-codex-connector"
   }
 }

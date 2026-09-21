@@ -604,7 +604,7 @@ class CheckpointTests(ShimTest):
 
 class CheckpointEntryTests(ShimTest):
     """The checkpoint a stage skill runs on entering the stage, wherever the context came from, and the one
-    skip the context a handoff started gets there (issue #71, ADR 0031)."""
+    skip the context a handoff started gets there (issue #71, ADR 0032)."""
 
     def setUp(self):
         super().setUp()
@@ -1048,7 +1048,7 @@ class HandoffTests(ShimTest):
 
     def test_the_mark_names_the_session_the_note_reached_and_that_session_skips_its_stage(self):
         # The hook marks the record with the session it injected the note into, and that session — and no
-        # other — passes its stage's entry checkpoint once without handing over again (ADR 0031).
+        # other — passes its stage's entry checkpoint once without handing over again (ADR 0032).
         self.assertEqual(self.handoff().returncode, 0)
         self.hook(session_id="fresh-context")
         self.assertIn("injected_session: fresh-context\n", self.record.read_text())

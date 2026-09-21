@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # The status line of a worker pane: issue, mode and context size, and the context value the worker reads.
-# Usage: statusline.sh [auto-compact-window]   configured by claim.sh as the session's statusLine.command;
-#        Claude Code pipes its status line JSON in. The argument is the window the session compacts at, when
-#        it is set: the size is shown against the smaller of it and the model's window.
+# Usage: statusline.sh [compact-trigger]   configured by claim.sh as the session's statusLine.command;
+#        Claude Code pipes its status line JSON in. The argument is the context size the session compacts at,
+#        when it is set: the size is shown against the smaller of it and the model's window.
 # It is rendered on every turn, so it prints a line whatever the input is: a missing field costs a segment,
 # never the line. The value it writes is the contract with the worker plugin (ADR 0020); no code is shared.
 # No -e: this runs on every render and a lookup that fails costs a segment of the line, never the line.
@@ -58,9 +58,10 @@ if [ "$here_ok" = 1 ] && [ -n "$tokens" ] && [ "$tokens" -gt 0 ]; then
 fi
 
 # The line itself: what the maintainer sees of this pane across the whole workspace, so it is short and the
-# context size is the part that changes. The size is shown against the window this session really has: the
-# model's, or the auto-compact window given as the argument when that is smaller. A session on a million-token
-# model that compacts at 200k is at a fifth of its window there, and 7 % would read as room it does not have.
+# context size is the part that changes. The size is shown against the size this session really reaches: the
+# model's window, or the compact trigger given as the argument when that is smaller. A session on a
+# million-token model that compacts at 160k is at a sixth of its window there, and 7 % would read as room it
+# does not have.
 shown="$window"
 if num "${1:-}" && [ "${1:-0}" -gt 0 ]; then
   { [ -n "$shown" ] && [ "$shown" -le "$1" ]; } || shown="$1"

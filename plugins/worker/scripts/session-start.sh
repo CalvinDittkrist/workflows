@@ -37,7 +37,7 @@ fi
 # and a note that is delivered twice cannot make two contexts resume the same stage.
 # The mark names the session the note went to, which is what the entry checkpoint of that stage reads: the
 # context a handoff started skips exactly one checkpoint, and no session that merely finds the record
-# inherits that skip (ADR 0031).
+# inherits that skip (ADR 0032).
 archive() {
   [ -n "$handoff" ] || return 0
   { printf 'injected: %s\ninjected_session: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${session_id:-}"; cat "$handoff"; } > "$handoff.tmp" &&
