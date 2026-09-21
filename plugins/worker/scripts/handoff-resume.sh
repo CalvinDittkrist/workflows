@@ -2,12 +2,13 @@
 # The detached half of the handoff (ADR 0029): clear this pane's session and send the driver command back.
 # Usage: handoff-resume.sh <pane> <session-id-before> <stage> <driver-command> [note-record]
 # Started by handoff.sh with nohup, because the session it clears is the one that started it: a worker
-# cannot clear itself from inside a turn. It waits for that worker's turn to settle, sends `/clear` into that
-# session and no other, and only once its turn has ended — a pane that has moved on, waits on a dialog or is
-# still working keeps its context and the maintainer is told — and only when
-# the pane reports a session id other than the one it was given — the one signal that a fresh context really
-# started — sends the driver command. Nothing it does is silent: a pane that never starts one gets a second
-# `/clear` and then a Herdr notification for the maintainer, never a driver command into the old context.
+# cannot clear itself from inside a turn. It waits for that worker's turn to settle and sends `/clear` into
+# that session and no other, never before its turn has ended — a pane that has moved on, waits on a dialog or
+# is still working keeps its context and the maintainer is told. The driver command follows two signals and
+# no guess: the pane reports a session id other than the one it was given, so a fresh context really started,
+# and the record is marked, so that context really has the note. Nothing it does is silent: a pane that starts
+# no fresh session gets a second `/clear` and then a Herdr notification for the maintainer, and a pane that
+# never took the note is reported instead of driven, never a driver command into a context without it.
 set -uo pipefail
 # shellcheck source=lib.sh
 . "$(dirname "$0")/lib.sh"
@@ -49,17 +50,18 @@ now=$(session)
   stop "Handoff did not clear pane $pane" "The pane reports ${now:-no session} instead of the context that asked for the handover, so nothing was cleared."
 ! taken ||
   stop "Handoff note went to another context" "A session this handover did not start has taken the note, so pane $pane was left alone."
-# The wait also ends on `blocked` and on its timeout, and `/clear` is keystrokes: typed into a permission dialog
-# its Enter answers a question the maintainer has not read, and typed into a working turn it queues behind
-# work nobody asked for. Only a turn that has ended is cleared; every other pane is the maintainer's to look at.
-status=$(wf_agent_status "$pane")
-case "$status" in
-  idle|done) ;;
-  *) stop "Handoff did not clear pane $pane" "The pane is ${status:-in no state herdr can name} instead of at the end of its turn, so nothing was typed into it." ;;
-esac
-
 attempt=1
 while :; do
+  # The wait also ends on `blocked` and on its timeout, and `/clear` is keystrokes: typed into a permission
+  # dialog its Enter answers a question the maintainer has not read, and typed into a working turn it queues
+  # behind work nobody asked for. Only a turn that has ended is cleared, and the retry asks again rather than
+  # trusting the first answer: the `/clear` that went unanswered is itself the thing that may have opened a
+  # dialog, and a minute of waiting is long enough for the maintainer to take the pane over.
+  status=$(wf_agent_status "$pane")
+  case "$status" in
+    idle|done) ;;
+    *) stop "Handoff did not clear pane $pane" "The pane is ${status:-in no state herdr can name} instead of at the end of its turn, so nothing was typed into it." ;;
+  esac
   herdr agent prompt "$pane" "/clear" >/dev/null 2>&1 || true
   # The fresh session reports itself under a new id. Nothing else confirms it: a `/clear` that was swallowed
   # and a `/clear` that worked look the same from here, and the driver command must never reach the context
@@ -78,8 +80,20 @@ while :; do
   attempt=$(( attempt + 1 ))
 done
 
-# The fresh context is up and its SessionStart hook has injected the note; the driver command is what tells
-# it to read that note and carry on. A pane that is busy with its own start-up gets the moment it needs.
+# The fresh context is up; the driver command is what tells it to read the note and carry on. A pane that is
+# busy with its own start-up gets the moment it needs.
 herdr agent wait "$pane" --timeout 60000 >/dev/null 2>&1 || true
+# That the note reached it is the second signal, and it is read rather than assumed: a hook that produced
+# nothing — no `jq`, an unwritable git dir — leaves a context without the issue and without its stage, and the
+# driver command would start it at stage 1 on a branch that already carries the work. The mark is the hook's
+# own, so waiting for it is waiting for the hook to have run.
+if [ -n "$record" ]; then
+  deadline=$(( $(date +%s) + limit ))
+  while ! taken; do
+    [ "$(date +%s)" -lt "$deadline" ] ||
+      stop "Handoff note never reached pane $pane" "A fresh context started there, but nothing injected the note, so the driver command was not sent."
+    sleep "$poll"
+  done
+fi
 herdr agent prompt "$pane" "$cmd" >/dev/null 2>&1 ||
   wf_notify "Handoff could not resume pane $pane" "The context was cleared but $cmd was refused; send it by hand to resume at the $stage stage." alert
