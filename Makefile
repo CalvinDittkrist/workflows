@@ -49,8 +49,8 @@ browser: $(UI_BUILD)
 # the dashboard out of the binary, so the build it embeds has to be there before they run.
 factory: $(UI_BUILD)
 	@command -v go >/dev/null || { echo 'error: go not installed; brew install go (or https://go.dev/dl), the factory is written in Go' >&2; exit 1; }
-	@dirs="$$(go -C factory list -f '{{.Dir}}' ./...)" || exit 1; \
-		unformatted="$$(gofmt -l $$dirs)" || { echo 'error: gofmt could not run; it ships with Go, put the bin directory of the Go installation on PATH' >&2; exit 1; }; \
+	@files="$$(go -C factory list -f '{{$$d := .Dir}}{{range .GoFiles}}{{$$d}}/{{.}} {{end}}{{range .TestGoFiles}}{{$$d}}/{{.}} {{end}}{{range .XTestGoFiles}}{{$$d}}/{{.}} {{end}}{{range .IgnoredGoFiles}}{{$$d}}/{{.}} {{end}}' ./...)" || exit 1; \
+		unformatted="$$(gofmt -l $$files)" || { echo 'error: gofmt could not run; it ships with Go, put the bin directory of the Go installation on PATH' >&2; exit 1; }; \
 		[ -z "$$unformatted" ] || { echo "error: not formatted: $$unformatted; run gofmt -w factory" >&2; exit 1; }
 	go -C factory vet ./...
 	@sc="$$(command -v staticcheck 2>/dev/null || true)"; [ -n "$$sc" ] || sc="$$(go env GOPATH)/bin/staticcheck"; \
