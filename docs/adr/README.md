@@ -22,3 +22,4 @@ One file per decision, numbered, never edited after acceptance (supersede instea
 | [0016](0016-approval-is-per-category-and-scripts-own-what-they-apply.md) | Approval is per category, and scripts own what they apply | accepted |
 | [0017](0017-worker-subagents-run-in-the-foreground.md) | Worker sessions run subagents in the foreground, and the agent never waits by polling | accepted |
 | [0018](0018-worker-stages-hand-facts-over-through-the-worktree-git-dir.md) | A worker stage hands a fact to the next one through the worktree's git directory | accepted |
+| [0019](0019-the-gate-runs-once-per-review-round.md) | The gate runs once per review round, and its result is a fact in the brief | accepted |
