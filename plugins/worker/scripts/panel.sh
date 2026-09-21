@@ -75,7 +75,7 @@ field_num() {
   local v; v=$(wf_record_field "$1" "$2")
   case "$v" in
     ''|*[!0-9]*) wf_warn "the round record $1 states no $2 this script can read ('$v'), so the summary counts 0 for it"; printf '0\n' ;;
-    *) printf '%s\n' "$v" ;;
+    *) printf '%s\n' "$((10#$v))" ;;  # base ten, so a zero-padded count is no octal number to the sum below
   esac
 }
 # The disputed: lines of a block on stdin, normalised to one key each. Both records take them from their
@@ -268,6 +268,9 @@ $round_form"
     read -r total s1 s2 s3 <<COUNTS
 $counts
 COUNTS
+    # Base ten, whatever the caller wrote: the regex above accepts a zero-padded count, and the shell reads
+    # `08` as octal and aborts the arithmetic below with a message of its own, not an error: line with a fix.
+    total=$((10#$total)); s1=$((10#$s1)); s2=$((10#$s2)); s3=$((10#$s3))
     [ "$total" = "$((s1 + s2 + s3))" ] || wf_die "the fixed: line counts $total fixes but names $((s1 + s2 + s3)) (S1 $s1, S2 $s2, S3 $s3); the summary sums the rounds, so correct the line and record the round again"
 
     disputed=$(disputed_lines "$block" round)
@@ -359,11 +362,24 @@ COUNTS
     done
     set +f
     commit=$(git rev-parse HEAD 2>/dev/null) || wf_die "this branch has no commit to record the summary at"
+    # The rounds read the commit they were recorded at; the summary describes the head. A commit in between
+    # is gated (above) but read by no reviewer, so the summary that covers it is a draft however the panel
+    # ended: `verdict` is the word the yolo finish stage merges on, and nothing merges code nobody read. Not
+    # a refusal, because the way on is a round at this head, which the round limit may no longer allow; the
+    # line below says it in the block itself, which is the text the pull request body carries.
+    unread=""
+    last_round=$(wf_record_field "$(round_file "$n")" commit)
+    if [ "$last_round" != "$commit" ]; then
+      unread="unreviewed: $(git rev-list --count "$last_round..$commit") commit(s) since round $n at $(wf_short "$last_round"), which no reviewer read, so this summary is a draft"
+      [ "$verdict" = draft ] || wf_warn "the panel passed, but $unread"
+      verdict=draft
+    fi
     mkdir -p "$state"
     # One file, written in one move: the headers, an empty line, then the summary the round records derive.
     { printf 'commit: %s\nverdict: %s\n\n' "$commit" "$verdict"
       printf 'review_rounds: %s\n%s\nfixed: %s (S1 %s, S2 %s, S3 %s)\n%s\n' \
-        "$n" "$panel_line" "$((s1 + s2 + s3))" "$s1" "$s2" "$s3" "$disputed"; } > "$record.tmp"
+        "$n" "$panel_line" "$((s1 + s2 + s3))" "$s1" "$s2" "$s3" "$disputed"
+      [ -z "$unread" ] || printf '%s\n' "$unread"; } > "$record.tmp"
     mv "$record.tmp" "$record"
     # The summary closes the rounds it was derived from: a later review of this branch is a new panel, and
     # it starts at round 1 rather than continuing a review that has already been handed on.

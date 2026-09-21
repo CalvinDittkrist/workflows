@@ -650,6 +650,16 @@ class ReviewRoundTests(PanelRecordCalls, ShimTest):
             self.assertIn("panel.sh record", r.stderr)
             self.assertTrue(self.print_brief().stdout.startswith("panel_summary: none recorded"))
 
+    def test_a_zero_padded_count_is_read_as_a_decimal_number(self):
+        """The fixed: line is written by a model, and the shell reads `08` as an octal number: the sums
+        below it would abort with the shell's own message instead of an error: line that names a fix."""
+        r = self.round("panel: code=PASS\nfixed: 08 (S1 08, S2 0, S3 0)\ndisputed: none")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("fixed: 8 (S1 8, S2 0, S3 0)", self.rounds(), "the record states the number it read")
+        r = self.record()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("fixed: 8 (S1 8, S2 0, S3 0)", r.stdout, "and the summary sums it as eight")
+
     def test_the_disputes_of_a_round_reach_the_context_that_continues_the_review(self):
         """A dispute is the one thing the records hold that nothing derives: the summary carries only the
         lines its caller writes, so a context that did not run the round has to be able to read them."""
@@ -732,6 +742,21 @@ class PanelSummaryTests(PanelRecordCalls, ShimTest):
         self.assertIn("no longer in this branch's history", r.stderr)
         self.assertTrue(self.print_brief().stdout.startswith("panel_summary: none recorded"))
 
+    def test_a_summary_that_covers_a_commit_no_round_read_is_a_draft(self):
+        """A round reads the commit it is recorded at; one made after the last round is gated but read by
+        nobody, and `verdict` is the word the yolo finish stage merges on."""
+        self.record_rounds("panel: code=PASS security=PASS docs=PASS tests=PASS senior=PASS\n"
+                           "fixed: 0 (S1 0, S2 0, S3 0)\ndisputed: none")
+        self.commit("late.txt")
+        self.passing_gate()  # gated, so the head is recordable — but no reviewer has read it
+        r = self.record()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("panel_verdict: draft", r.stdout, "a passed panel says nothing about this commit")
+        self.assertIn("unreviewed: 1 commit(s) since round 1", r.stdout, "and the block says why")
+        self.assertIn("the panel passed, but unreviewed: 1 commit(s)", r.stderr)
+        self.assertEqual(self.run_script(WORKER / "panel.sh", "verdict").stdout, "draft\n")
+        self.assertIn("unreviewed: 1 commit(s)", self.print_brief().stdout, "which the PR body carries")
+
     def test_recording_the_summary_closes_the_rounds_it_derived(self):
         self.summary(ROUND_ONE, ROUND_TWO)
         self.assertIn("review_rounds_recorded: none", self.rounds(),
@@ -775,11 +800,12 @@ class PanelSummaryTests(PanelRecordCalls, ShimTest):
         self.assertEqual(r.returncode, 1, r.stdout)
         self.assertIn("scratch.txt", r.stderr)
         (self.repo / "scratch.txt").unlink()
-        # And the way out, which is what the review stage does before it hands the summary on.
+        # And the way out, which is what the review stage does before it hands the summary on: the gate
+        # makes the head recordable, and the verdict stays draft while no round has read that commit.
         self.passing_gate()
         r = self.record()
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        self.assertEqual(self.run_script(WORKER / "panel.sh", "verdict").stdout, "ready\n")
+        self.assertEqual(self.run_script(WORKER / "panel.sh", "verdict").stdout, "draft\n")
 
     def test_a_round_record_with_an_unreadable_fix_count_is_warned_about_and_counts_zero(self):
         """The sibling of an unreadable `panel:` line, which is refused outright. A count is degraded
