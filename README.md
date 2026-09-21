@@ -68,9 +68,10 @@ All knobs are environment variables, set per repository in `.claude/settings.jso
 | `WF_BASE_BRANCH` | remote default branch | base for worktrees and PRs |
 | `WF_REVIEWERS` | `code,security,docs,tests,senior` | reviewer panel members |
 | `WF_REVIEW_ROUNDS` | `3` | max fix-and-re-review rounds, counted over the rounds the review recorded, so the limit holds across a hand-over |
+| `WF_CI_REPAIR_ROUNDS` | `3` | max repair rounds per pull request in the CI stage (a fix for failed checks, a round of `/worker:address-reviews`); counted in the worktree, so the limit holds across a handover |
 | `WF_PR_BOT_REVIEWERS` | `chatgpt-codex-connector` | bot logins whose PR review the worker waits for; set to `""` in repositories without a bot reviewer |
 | `WF_PR_REVIEW_WAIT` | `600` | seconds to wait for a bot review after checks pass |
-| `WF_HANDOFF_TOKENS` | `100000` | context size at which a worker hands the stage it is entering to a fresh context; leave room for one review round under the compact trigger of 160 000 a claim pins, an upper bound rather than an exact size ([ADR 0031](docs/adr/0031-the-workflow-pins-the-size-at-which-a-worker-session-compacts.md)) |
+| `WF_HANDOFF_TOKENS` | `100000` | context size at which a worker hands the stage it is entering to a fresh context; leave room for one review round under the compact trigger of 200 000 a claim pins, an upper bound rather than an exact size ([ADR 0031](docs/adr/0031-the-workflow-pins-the-size-at-which-a-worker-session-compacts.md), [ADR 0034](docs/adr/0034-the-compact-trigger-is-raised-through-the-window.md)) |
 | `WF_CONTEXT_MAX_AGE` | `900` | seconds after which a recorded context size is too old to answer for this turn, and the checkpoint says hand over |
 | `WF_HANDOFF_SESSION_MS` | `60000` | how long the handover waits for the pane to report a fresh session |
 | `WF_HANDOFF_POLL_SECONDS` | `1` | how often it asks the pane while it waits |
@@ -112,14 +113,16 @@ Repositories do not override agents or skills locally: the [repository standard]
 ## Develop
 
 ```sh
-make check                                        # the gate: shellcheck, plugin validate --strict, standard check, unit tests, Go vet/staticcheck/tests
+make check                                        # the gate: shellcheck, plugin validate --strict, standard check, unit tests, Go vet/staticcheck/tests, the dashboard's lint, build and browser test
 claude --plugin-dir plugins/worker                # try a plugin in a session without installing it
 scripts/dev-orchestrator.sh                       # orchestrator from the checkout, inside a Herdr pane
 scripts/context-report.py                         # diagnostic: context and tool mix of finished worker sessions
+make ui                                           # build the dashboard the factory binary embeds (a fresh clone has only a placeholder)
 go -C factory run . -fake -config factory.json    # the factory on a canned queue: no tokens, no git, no GitHub
+npm --prefix factory/ui run dev                   # the dashboard with hot reload, against a factory started beside it
 ```
 
-`factory/` is the factory: a Go service, not a plugin, that works the issues routed to it unattended on a host of its own, as a second driver over the same worker pipeline ([ADR 0022](docs/adr/0022-the-factory-is-a-second-driver-over-the-worker-pipeline.md)). It is steered on GitHub and shows what it did over a read-only HTTP interface; today it runs in fake mode only.
+`factory/` is the factory: a Go service, not a plugin, that works the issues routed to it unattended on a host of its own, as a second driver over the same worker pipeline ([ADR 0022](docs/adr/0022-the-factory-is-a-second-driver-over-the-worker-pipeline.md)). It is steered on GitHub and shows what it did over a read-only HTTP interface, with a dashboard built into the binary that reads those endpoints and writes nothing ([ADR 0033](docs/adr/0033-the-dashboard-is-built-into-the-factory-binary.md)); today it runs in fake mode only. Developing the dashboard needs Node: `make check` builds it, installs its dependencies with `npm ci` and the Chromium its browser test drives, and names the fix when npm itself is missing.
 
 `dev-orchestrator.sh` points `WF_PLANNER_CLAUDE_ARGS` and `WF_WORKER_CLAUDE_ARGS` at the checkout's plugins, so the sessions the orchestrator opens use them too. Without that (or the plugins installed), a started session exits with `--agent 'planner' not found`; `plan.sh` and `claim.sh` detect that, remove the worktree again and print the fix. The same rollback runs when Herdr refuses the start itself (its error is printed as is) or when the pane is back at a shell prompt. Herdr agent names are derived from the branch and cut to its 32-character limit.
 

@@ -94,5 +94,15 @@ wf_notify() {
 }
 # ISO-8601 UTC timestamp (2026-09-17T18:45:09Z) to epoch seconds; macOS and GNU date.
 wf_epoch() { date -u -j -f '%Y-%m-%dT%H:%M:%SZ' "$1" +%s 2>/dev/null || date -u -d "$1" +%s 2>/dev/null; }
-# PR number for the current branch, or empty.
-wf_pr_for_branch() { gh pr list --head "$(wf_branch)" --state open --json number -q '.[0].number' 2>/dev/null || true; }
+# PR number for the current branch, or empty when it has none. A gh that cannot answer is said as itself
+# (gh documents exit 4 for "authentication required"), never as a branch without a pull request: the two
+# ask for different fixes, and a caller that guesses sends the worker to open a second pull request.
+wf_pr_for_branch() {
+  local branch answer status
+  branch=$(wf_branch)
+  answer=$(gh pr list --head "$branch" --state open --json number -q '.[0].number') || {
+    status=$?
+    wf_die "gh could not list the open pull requests of branch $branch (gh exit $status); fix gh itself — 'gh auth status' for exit 4, the network otherwise — and run this again"
+  }
+  printf '%s' "$answer"
+}

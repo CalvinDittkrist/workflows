@@ -12,12 +12,29 @@ import (
 // over the tailnet.
 func (f *Factory) Handler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/", f.index)
+	mux.Handle("/", uiHandler())
+	mux.HandleFunc("/api", f.index)
+	mux.HandleFunc("/api/{$}", f.index) // the same index for the reader who types the trailing slash
 	mux.HandleFunc("/api/status", f.status)
 	mux.HandleFunc("/api/repositories", f.repositories)
 	mux.HandleFunc("/api/line", f.line)
 	mux.HandleFunc("/api/runs/{id}", f.run)
-	return readOnly(mux)
+	// The headers are outside the refusal, so an answer that refuses carries them too.
+	return browserSafe(readOnly(mux))
+}
+
+// browserSafe is for the reader the dashboard added: a browser. The page needs nothing but what this
+// binary serves, so everything it may load is narrowed to the binary itself, and what a factory
+// serves — a worker's tool calls, with the content of private repositories in them — can then not be
+// read by a script some other page brought along.
+func browserSafe(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'self'; "+
+			"font-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("Referrer-Policy", "no-referrer")
+		next.ServeHTTP(w, r)
+	})
 }
 
 // readOnly refuses every writing method, whatever the path, so the interface cannot grow one by
@@ -33,11 +50,9 @@ func readOnly(next http.Handler) http.Handler {
 	})
 }
 
-func (f *Factory) index(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/" {
-		http.NotFound(w, r)
-		return
-	}
+// index is what the interface offers, for a reader with a terminal rather than a browser. The
+// browser gets the dashboard under /, which reads exactly these four.
+func (f *Factory) index(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	_, _ = w.Write([]byte("factory\n\n" +
 		"GET /api/status        what the factory is doing\n" +

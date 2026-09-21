@@ -153,16 +153,17 @@ class ManifestTests(unittest.TestCase):
 
 
 class FactoryGateTests(unittest.TestCase):
-    """`make factory` is the Go part of the gate: a tool it needs and cannot find is named with its fix."""
+    """`factory-go`, the Go part of `make factory`: a tool it needs and cannot find is named with its fix."""
 
     def gate(self, *tools):
         # The recipe runs with nothing on PATH but the named tools, each a stub that succeeds and prints nothing.
+        # It is the Go part alone: `make factory` builds the dashboard first, which needs an npm this PATH has not.
         with tempfile.TemporaryDirectory() as path:
             for tool in tools:
                 stub = Path(path) / tool
                 stub.write_text("#!/bin/sh\nexit 0\n")
                 stub.chmod(0o755)
-            return subprocess.run([shutil.which("make"), "factory"], cwd=ROOT, env={"PATH": path, "HOME": path},
+            return subprocess.run([shutil.which("make"), "factory-go"], cwd=ROOT, env={"PATH": path, "HOME": path},
                                   text=True, capture_output=True)
 
     def test_a_missing_go_is_named_with_the_fix(self):
