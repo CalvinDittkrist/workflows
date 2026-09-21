@@ -2,6 +2,7 @@ import json
 import re
 import shutil
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -108,6 +109,39 @@ class ManifestTests(unittest.TestCase):
         for path in [ROOT, *PLUGINS]:
             r = subprocess.run(["claude", "plugin", "validate", str(path), "--strict"], text=True, capture_output=True)
             self.assertEqual(r.returncode, 0, f"{path}\n{r.stdout}{r.stderr}")
+
+
+class FactoryGateTests(unittest.TestCase):
+    """`make factory` is the Go part of the gate: a tool it needs and cannot find is named with its fix."""
+
+    def gate(self, *tools):
+        # The recipe runs with nothing on PATH but the named tools, each a stub that succeeds and prints nothing.
+        with tempfile.TemporaryDirectory() as path:
+            for tool in tools:
+                stub = Path(path) / tool
+                stub.write_text("#!/bin/sh\nexit 0\n")
+                stub.chmod(0o755)
+            return subprocess.run([shutil.which("make"), "factory"], cwd=ROOT, env={"PATH": path, "HOME": path},
+                                  text=True, capture_output=True)
+
+    def test_a_missing_go_is_named_with_the_fix(self):
+        r = self.gate()
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("error: go not installed; brew install go", r.stderr)
+
+    def test_a_gofmt_that_cannot_run_fails_the_gate_instead_of_passing_it(self):
+        r = self.gate("go")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("error: gofmt could not run", r.stderr)
+
+    def test_a_missing_staticcheck_is_named_with_the_pinned_install(self):
+        r = self.gate("go", "gofmt")
+        self.assertNotEqual(r.returncode, 0)
+        named = re.search(r"error: staticcheck not installed; go install honnef\.co/go/tools/cmd/staticcheck@([0-9.]+)", r.stderr)
+        self.assertIsNotNone(named, r.stderr)
+        # Local and CI findings match only while both run the same version.
+        ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text()
+        self.assertIn(f"go install honnef.co/go/tools/cmd/staticcheck@{named.group(1)}\n", ci)
 
 
 class ShimCallLogTests(ShimTest):

@@ -24,7 +24,8 @@ test:
 # The factory is a Go service; its tests start the real binary and watch it from outside.
 factory:
 	@command -v go >/dev/null || { echo 'error: go not installed; brew install go (or https://go.dev/dl), the factory is written in Go' >&2; exit 1; }
-	@test -z "$$(gofmt -l factory)" || { echo "error: not formatted: $$(gofmt -l factory); run gofmt -w factory" >&2; exit 1; }
+	@unformatted="$$(gofmt -l factory)" || { echo 'error: gofmt could not run; it ships with Go, put the bin directory of the Go installation on PATH' >&2; exit 1; }; \
+		[ -z "$$unformatted" ] || { echo "error: not formatted: $$unformatted; run gofmt -w factory" >&2; exit 1; }
 	go -C factory vet ./...
 	@sc="$$(command -v staticcheck 2>/dev/null || true)"; [ -n "$$sc" ] || sc="$$(go env GOPATH)/bin/staticcheck"; \
 		[ -x "$$sc" ] || { echo 'error: staticcheck not installed; go install honnef.co/go/tools/cmd/staticcheck@2026.2.1' >&2; exit 1; }; \
