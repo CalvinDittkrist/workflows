@@ -7,8 +7,18 @@ wf_need gh; wf_need jq; wf_need git
 [ "${WF_MODE:-manual}" = "yolo" ] || wf_die "finish.sh only runs in yolo mode (WF_MODE=yolo). In manual mode the orchestrator merges with /orchestrator:merge."
 pr="${1:-}"; pr="${pr#\#}"; [ -n "$pr" ] || pr=$(wf_pr_for_branch)
 [ -n "$pr" ] || wf_die "no open PR for branch $(wf_branch)"
+# The recorded panel decides first, because it is local and deterministic: the draft flag on GitHub only
+# carries the same verdict if the pull request stage applied it (ADR 0018).
+verdict=$("$(dirname "$0")/panel.sh" verdict)
+[ "$verdict" = ready ] || wf_die "the reviewer panel of this worktree did not pass (panel_verdict: ${verdict:-unknown}); a yolo run stops here for the maintainer, who reads the pull request body and merges by hand. Do not merge it yourself"
 state=$(gh pr view "$pr" --json mergeStateStatus,isDraft -q '"\(.mergeStateStatus) \(.isDraft)"')
-case "$state" in "CLEAN false") ;; *) wf_die "PR #$pr is not mergeable yet ($state); run pr-wait.sh and address findings first" ;; esac
+case "$state" in
+  "CLEAN false") ;;
+  # A draft is the pull request stage's verdict that the reviewer panel did not pass, or that no panel
+  # summary was recorded at all (ADR 0018). No stage of this pipeline lifts it, yolo mode included.
+  *" true") wf_die "PR #$pr is a draft, so the reviewer panel did not pass or left no summary; this run stops for the maintainer, who reads the body and lifts the draft. Do not lift it yourself" ;;
+  *) wf_die "PR #$pr is not mergeable yet ($state); run pr-wait.sh and address findings first" ;;
+esac
 branch=$(wf_branch)
 path=$(pwd)
 main_root=$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")

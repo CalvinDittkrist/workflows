@@ -29,7 +29,7 @@ while [ "$(printf '%s' "$json" | jq -r .mergeable)" = "UNKNOWN" ] && [ "$waited"
 done
 state=$(printf '%s' "$json" | jq -r .state)
 [ "$state" = "OPEN" ] || wf_die "PR #$pr is $state"
-[ "$(printf '%s' "$json" | jq -r .isDraft)" = "false" ] || wf_die "PR #$pr is a draft"
+[ "$(printf '%s' "$json" | jq -r .isDraft)" = "false" ] || wf_die "PR #$pr is a draft, which is how the worker says its reviewer panel did not pass or left no summary; read the panel summary in the body, then lift it with gh pr ready $pr and merge again"
 branch=$(printf '%s' "$json" | jq -r .headRefName)
 mergeable=$(printf '%s' "$json" | jq -r .mergeable)
 [ "$mergeable" != "UNKNOWN" ] || wf_die "GitHub is still computing mergeability of PR #$pr after ${waited}s; try again in a moment"

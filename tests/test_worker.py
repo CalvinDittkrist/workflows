@@ -1,7 +1,8 @@
 import json
 import unittest
+from pathlib import Path
 
-from helpers import WORKER, ShimTest
+from helpers import ROOT, WORKER, ShimTest
 
 
 class SessionStartHookTests(ShimTest):
@@ -88,6 +89,191 @@ class FactsTests(ShimTest):
                 self.assertIn(f"subagents: {shape}", r.stdout)
 
 
+SUMMARY = """review_rounds: 2
+panel: code=FIX→PASS security=PASS docs=PASS tests=PASS senior=PASS
+fixed: 3 (S1 1, S2 1, S3 1)
+disputed: none"""
+
+
+class PanelSummaryTests(ShimTest):
+    """The hand-over from the review stage to the pull request stage (issue #41, ADR 0018)."""
+
+    def setUp(self):
+        super().setUp()
+        self.git("checkout", "-qb", "fix/12-x")
+
+    def record(self, block, cwd=None, **env):
+        return self.run_script(WORKER / "panel.sh", "record", stdin=block, cwd=cwd, **env)
+
+    def print_brief(self, cwd=None):
+        return self.run_script(WORKER / "panel.sh", "print", cwd=cwd)
+
+    def commit(self, name):
+        (self.repo / name).write_text(name)
+        self.git("add", "."); self.git("commit", "-qm", f"feat: {name}")
+
+    def verdict(self, panel_line):
+        r = self.record(f"review_rounds: 1\n{panel_line}\nfixed: 0\ndisputed: none")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return [l for l in self.print_brief().stdout.splitlines() if l.startswith("panel_verdict:")][0]
+
+    def test_a_recorded_summary_reaches_the_pull_request_brief_unchanged(self):
+        self.commit("a.txt")
+        r = self.record(SUMMARY)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        brief = self.print_brief().stdout
+        self.assertIn("panel_summary_block:\n" + SUMMARY + "\n", brief)
+        self.assertIn("panel_verdict: ready", brief)
+
+    def test_without_a_record_the_brief_says_so_in_one_line_and_the_verdict_is_draft(self):
+        brief = self.print_brief().stdout.splitlines()
+        self.assertEqual(len(brief), 2, brief)
+        self.assertTrue(brief[0].startswith("panel_summary: none recorded"), brief)
+        self.assertEqual(brief[1], "panel_verdict: draft")
+
+    def test_the_verdict_is_draft_unless_every_reviewer_ends_on_pass(self):
+        self.assertEqual(self.verdict("panel: code=PASS security=PASS docs=PASS tests=PASS senior=PASS"),
+                         "panel_verdict: ready")
+        # The last verdict of each reviewer counts, and a parenthesised suffix is accepted and ignored.
+        self.assertEqual(self.verdict("panel: code=FIX→FIX→PASS security=PASS(S3 only) docs=PASS"),
+                         "panel_verdict: ready")
+        self.assertEqual(self.verdict("panel: code=FIX→FIX→FIX security=PASS docs=PASS"),
+                         "panel_verdict: draft")
+        self.assertEqual(self.verdict("panel: code=PASS tests=PASS→FIX(S2 open)"), "panel_verdict: draft")
+
+    def test_a_block_without_a_parseable_panel_line_records_nothing(self):
+        self.record(SUMMARY)
+        for block in ("review_rounds: 1\nfixed: 0", "panel: code=MAYBE", "panel:"):
+            r = self.record(block)
+            self.assertEqual(r.returncode, 1, block)
+            self.assertTrue(r.stderr.startswith("error: "), r.stderr)
+            self.assertIn("panel: code=PASS", r.stderr)  # names the expected form
+            self.assertIn(SUMMARY, self.print_brief().stdout)  # the earlier record survives
+
+    def test_a_block_that_carries_the_briefs_own_keys_is_refused(self):
+        # Indented too: the brief prints the block as it is, so an indented key reads like a second answer.
+        for tail in ("\npanel_verdict: ready", "\n  panel_verdict: ready", "\nverdict: ready"):
+            r = self.record(SUMMARY + tail)
+            self.assertEqual(r.returncode, 1, r.stdout)
+            self.assertIn("ready", r.stderr)
+            self.assertTrue(self.print_brief().stdout.startswith("panel_summary: none recorded"))
+
+    def test_a_block_with_two_panel_lines_or_none_named_is_refused(self):
+        for block, word in ((SUMMARY + "\npanel: code=PASS", "more than one panel"),
+                            ("review_rounds: 1\npanel:\nfixed: 0", "names no reviewer")):
+            r = self.record(block)
+            self.assertEqual(r.returncode, 1, r.stdout)
+            self.assertIn(word, r.stderr)
+
+    def test_the_verdict_subcommand_is_the_one_word_the_finish_stage_gates_on(self):
+        self.assertEqual(self.run_script(WORKER / "panel.sh", "verdict").stdout, "draft\n")
+        self.record(SUMMARY)
+        self.assertEqual(self.run_script(WORKER / "panel.sh", "verdict").stdout, "ready\n")
+
+    def test_an_unreadable_record_is_an_unknown_panel_not_a_ready_one(self):
+        self.record(SUMMARY)
+        record = Path(self.git("rev-parse", "--path-format=absolute", "--git-dir").strip()) / "worker/panel"
+        record.write_text("garbage\n\npanel: code=PASS\n")
+        self.assertIn("panel_verdict: draft", self.print_brief().stdout)
+
+    def test_the_brief_names_the_commit_and_reports_a_moved_head(self):
+        self.commit("a.txt")
+        recorded = self.git("rev-parse", "--short", "HEAD").strip()
+        self.record(SUMMARY)
+        self.assertIn(f"panel_summary: recorded at {recorded}", self.print_brief().stdout)
+        self.assertIn("panel_head: unchanged", self.print_brief().stdout)
+        self.commit("b.txt")
+        self.commit("c.txt")
+        brief = self.print_brief().stdout
+        self.assertIn(f"panel_summary: recorded at {recorded}", brief)
+        self.assertIn("which it does not describe: 2", brief)
+
+    def test_the_pull_request_stages_brief_carries_the_summary_without_a_skill_argument(self):
+        """End to end over the wiring: whatever the pr skill injects has to print the recorded summary,
+        because the pipeline driver invokes that skill with no argument."""
+        import re
+        self.record(SUMMARY)
+        body = (ROOT / "plugins/worker/skills/pr/SKILL.md").read_text().split("---")[2]
+        briefs = [self.run_script(*cmd.replace("${CLAUDE_PLUGIN_ROOT}/scripts/", str(WORKER) + "/").split())
+                  for cmd in re.findall(r"!`([^`]+)`", body)]
+        for r in briefs:
+            self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn(SUMMARY, "".join(r.stdout for r in briefs))
+
+    def test_a_rewritten_history_is_reported_as_such_not_as_commits_since(self):
+        self.commit("a.txt")
+        self.record(SUMMARY)
+        (self.repo / "a.txt").write_text("more")
+        self.git("add", "."); self.git("commit", "-q", "--amend", "-m", "feat: a")
+        brief = self.print_brief().stdout
+        self.assertIn("panel_head: the recorded commit is no longer in this branch's history", brief)
+
+    def test_a_reviewer_missing_from_the_panel_line_is_named(self):
+        # Against the names the parser read, so the spacing of the line cannot fake a reviewer in or out.
+        r = self.record("panel:code=PASS security=PASS\tdocs=PASS tests=PASS senior=PASS")
+        self.assertEqual(r.stderr, "")
+        r = self.record("panel: code=PASS docs=PASS")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(len(r.stderr.splitlines()), 3, r.stderr)
+        for reviewer in ("security", "tests", "senior"):
+            self.assertIn(f"does not name {reviewer}", r.stderr)
+        r = self.record("panel: code=PASS docs=PASS", WF_REVIEWERS="code,docs")
+        self.assertEqual(r.stderr, "")
+
+    def test_two_worktrees_of_one_repository_keep_separate_records(self):
+        other = self.base / "other-worktree"
+        self.git("worktree", "add", "-q", "-b", "fix/13-y", str(other))
+        self.record(SUMMARY)
+        self.assertTrue(self.print_brief(cwd=other).stdout.startswith("panel_summary: none recorded"))
+        other_summary = SUMMARY.replace("review_rounds: 2", "review_rounds: 9")
+        self.record(other_summary, cwd=other)
+        self.assertIn(other_summary, self.print_brief(cwd=other).stdout)
+        self.assertIn(SUMMARY, self.print_brief().stdout)
+
+
+class FinishTests(ShimTest):
+    def finish(self, **env):
+        env.setdefault("WF_MODE", "yolo")
+        return self.run_script(WORKER / "finish.sh", "7", **env)
+
+    def record_ready_panel(self):
+        r = self.run_script(WORKER / "panel.sh", "record", stdin=SUMMARY)
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_a_panel_that_did_not_pass_stops_the_yolo_run_before_github_is_asked(self):
+        # The draft flag is applied by an agent; the record is not. Without a ready panel nothing merges,
+        # even if the pull request somehow is not a draft (issue #41, ADR 0018).
+        r = self.finish()
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("panel_verdict: draft", r.stderr)
+        self.assertIn("maintainer", r.stderr)
+        self.assertFalse([c for c in self.calls() if "pr merge" in c])
+
+    def test_a_draft_stops_the_yolo_run_for_the_maintainer(self):
+        # The pull request stage opens a draft when the panel did not pass (issue #41, ADR 0018); nothing in
+        # the pipeline lifts it, so the run has to end here with a reason instead of a retry hint.
+        self.record_ready_panel()
+        r = self.finish(SHIM_PR_DRAFT="true")
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("is a draft", r.stderr)
+        self.assertIn("maintainer", r.stderr)
+        self.assertNotIn("pr-wait.sh", r.stderr)
+        self.assertFalse([c for c in self.calls() if "pr merge" in c])
+
+    def test_an_unmergeable_pull_request_still_points_at_the_wait(self):
+        self.record_ready_panel()
+        r = self.finish(SHIM_MERGE_STATE="BLOCKED")
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("not mergeable yet (BLOCKED false)", r.stderr)
+        self.assertIn("pr-wait.sh", r.stderr)
+
+    def test_manual_mode_never_merges(self):
+        r = self.finish(WF_MODE="manual")
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("only runs in yolo mode", r.stderr)
+        self.assertFalse([c for c in self.calls() if "pr merge" in c])
+
+
 class PrWaitTests(ShimTest):
     def wait(self, **env):
         env.setdefault("WF_POLL_SECONDS", "1")
@@ -124,6 +310,14 @@ class PrWaitTests(ShimTest):
         r = self.wait(SHIM_CHECKS_EMPTY="1", WF_PR_BOT_REVIEWERS="")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertIn("status: green", r.stdout)
+
+    def test_a_draft_is_reported_and_does_not_spend_the_bot_review_wait(self):
+        # Issue #41: the PR stage opens a draft when the panel did not pass, and no bot reviews a draft.
+        r = self.wait(SHIM_PR_DRAFT="true")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("status: green", r.stdout)
+        self.assertIn("draft: true;", r.stdout)
+        self.assertNotIn("draft:", self.wait().stdout)
 
     def test_zero_review_wait_does_not_block_on_the_bot(self):
         r = self.wait(WF_PR_REVIEW_WAIT="0")

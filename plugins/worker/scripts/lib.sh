@@ -16,6 +16,16 @@ wf_base_branch() {
   if [ -n "$ref" ]; then printf '%s\n' "${ref#origin/}"; return; fi
   gh repo view --json defaultBranchRef -q .defaultBranchRef.name 2>/dev/null || printf 'main\n'
 }
+# The reviewer panel of this session: the configured list, or the five reviewers the worker ships with.
+wf_reviewers() { printf '%s\n' "${WF_REVIEWERS:-code,security,docs,tests,senior}"; }
+# Where a worker stage leaves a fact for the next one (ADR 0018): this worktree's own git directory, never
+# the common one, so the workers of two issues in two worktrees keep separate records. Removed with the
+# worktree, which is what a pipeline run lives in.
+wf_state_dir() {
+  local d
+  d=$(git rev-parse --path-format=absolute --git-dir 2>/dev/null) || wf_die "not inside a git repository"
+  printf '%s/worker' "$d"
+}
 wf_repo_owner() { gh repo view --json owner -q .owner.login; }
 wf_repo_name() { gh repo view --json name -q .name; }
 wf_notify() {
