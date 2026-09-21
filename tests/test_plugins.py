@@ -76,14 +76,36 @@ class ManifestTests(unittest.TestCase):
         (issue #44, ADR 0029). A subagent with its own tool list does get WebFetch, so this is surface
         reduction in the context that reads untrusted text, not a network boundary."""
         worker = ROOT / "plugins/worker/agents/worker.md"
-        declared = re.search(r"^tools: (.+)$", worker.read_text().split("---")[1], re.M)
-        self.assertIsNotNone(declared, f"{worker.name} declares no tools")
-        # Split on the comma alone: a tool written without the space after it is still a granted tool.
-        tools = [tool.strip() for tool in declared.group(1).split(",")]
+        tools = self.declared_tools(worker)
         for tool in ("WebFetch", "WebSearch"):
             self.assertNotIn(tool, tools,
                              f"{worker.name} lists {tool}; the documentation is read with /worker:docs, which "
                              f"runs claude-docs.sh in a lookup subagent")
+
+    def declared_tools(self, agent):
+        """The tools of an agent file, each name mapped to its specifier list: `Agent(a, b)` is
+        {"Agent": ["a", "b"]}, a bare `Bash` is {"Bash": None}."""
+        declared = re.search(r"^tools: (.+)$", agent.read_text().split("---")[1], re.M)
+        self.assertIsNotNone(declared, f"{agent.name} declares no tools")
+        # Split on the comma alone, outside parentheses: a tool written without the space after it is
+        # still a granted tool, and the commas of a specifier list belong to their tool.
+        tools = {}
+        for entry in re.split(r",(?![^(]*\))", declared.group(1)):
+            name, _, inner = entry.strip().partition("(")
+            tools[name] = [item.strip() for item in inner.rstrip(")").split(",")] if inner else None
+        return tools
+
+    def test_the_worker_spawns_its_own_subagents_and_no_other_type(self):
+        """A subagent's declared tools are granted, not intersected with the worker's, so a bare `Agent`
+        hands the worker every built-in type, the ones with `WebFetch` and `WebSearch` among them
+        (`general-purpose`, `claude-code-guide`). The allowlist names the plugin's own subagents and
+        nothing else (ADR 0029). A type missing from it fails at the Agent call, so a new agent file
+        has to be listed here to be reachable at all."""
+        agents = ROOT / "plugins/worker/agents"
+        own = {f"worker:{a.stem}" for a in agents.glob("*.md")} - {"worker:worker"}
+        allowed = self.declared_tools(agents / "worker.md").get("Agent")
+        self.assertIsNotNone(allowed, "worker.md has no Agent(...) allowlist; a bare Agent spawns every built-in type")
+        self.assertEqual(sorted(allowed), sorted(own))
 
     def test_every_planner_skill_is_user_invoked_only(self):
         skills = sorted(p.parent.name for p in (ROOT / "plugins/planner/skills").glob("*/SKILL.md"))

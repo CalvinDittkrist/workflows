@@ -1,6 +1,6 @@
 # worker
 
-The main agent has eight tools (Bash, Read, Write, Edit, Grep, Glob, Agent, Skill); everything else stays out of its context. The reviewers, the PR author and the documentation lookup run as subagents with read-only tools plus Bash.
+The main agent has eight tools (Bash, Read, Write, Edit, Grep, Glob, Agent, Skill); everything else stays out of its context. Its `Agent` tool is an allowlist of the plugin's own subagents, so an agent file added here has to be added to the `tools` line of `agents/worker.md` too (tested). The reviewers, the PR author and the documentation lookup run as subagents with read-only tools plus Bash.
 
 One session per issue worktree, started by the orchestrator as `claude --agent worker … "/worker:work"`. Works standalone too: check out a branch named `<type>/<issue>-<slug>`, run `claude --agent worker --settings '{"env":{"CLAUDE_CODE_DISABLE_BACKGROUND_TASKS":"1"}}'`, type `/worker:work`. Without that setting the subagents run in the background and the pipeline waits a turn longer for every panel; `facts.sh` prints which of the two it is as `subagents:` ([ADR 0017](../../docs/adr/0017-worker-subagents-run-in-the-foreground.md)).
 
