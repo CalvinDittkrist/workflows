@@ -1,0 +1,475 @@
+/* Vesper, the palette of the terminal this factory is watched from: near-black, white text, a peach
+   accent. Dark only — the host is watched at night, and a second theme is one more thing to hold. */
+:root {
+  --bg: #101010;
+  --line: #262626;
+  --hover: #181818;
+  --sel: #202020;
+  --text: #ffffff;
+  --dim: #a0a0a0;
+  --faint: #7e7e7e;
+  --accent: #ffc799;
+  --mint: #99ffe4;
+  --red: #ff8080;
+  --lavender: #aca1cf;
+  color-scheme: dark;
+  font:
+    13px/20px 'JetBrains Mono',
+    ui-monospace,
+    'SF Mono',
+    Menlo,
+    Consolas,
+    monospace;
+  color: var(--text);
+  background: var(--bg);
+  scrollbar-width: thin;
+  scrollbar-color: #343434 transparent;
+}
+* {
+  box-sizing: border-box;
+}
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+h2,
+h3,
+p,
+ul,
+ol,
+pre {
+  margin: 0;
+  padding: 0;
+  font: inherit;
+}
+ul,
+ol {
+  list-style: none;
+}
+em {
+  font-style: normal;
+}
+button {
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+::selection {
+  background: #343434;
+}
+.boot {
+  display: grid;
+  place-items: center;
+  height: 100%;
+  color: var(--faint);
+}
+
+/* One colour per state of a run, set as --c and read by everything that shows that run. */
+.state-running {
+  --c: var(--accent);
+}
+.state-ready {
+  --c: var(--mint);
+}
+.state-blocked,
+.state-interrupted,
+.state-cancelled,
+.state-quota {
+  --c: var(--lavender);
+}
+.state-failed,
+.state-timeout {
+  --c: var(--red);
+}
+.state-lost {
+  --c: var(--faint);
+}
+@keyframes pulse {
+  50% {
+    opacity: 0.25;
+  }
+}
+
+.app {
+  display: grid;
+  /* Header, a row for the banner that is nothing while there is no banner, and the three panes. */
+  grid-template: 40px auto minmax(0, 1fr) / 240px 460px minmax(0, 1fr);
+  height: 100%;
+}
+.top {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--line);
+  color: var(--dim);
+  white-space: nowrap;
+}
+.top b {
+  color: var(--accent);
+  font-weight: 700;
+}
+.top .where {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.scripted {
+  color: var(--lavender);
+}
+.mode {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--faint);
+}
+.mode i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.mode-working {
+  color: var(--accent);
+}
+.mode-working i {
+  animation: pulse 1.4s ease-in-out infinite;
+}
+.mode-paused,
+.mode-waiting-for-quota {
+  color: var(--lavender);
+}
+.banner {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  padding: 6px 16px;
+  border-bottom: 1px solid var(--line);
+  color: var(--red);
+}
+
+.pane {
+  grid-row: 3;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px 0;
+  border-right: 1px solid var(--line);
+}
+h2 {
+  display: flex;
+  gap: 8px;
+  padding: 0 16px 8px;
+  color: var(--dim);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+h2 b {
+  color: var(--accent);
+  font-weight: 400;
+  letter-spacing: 0;
+}
+.none {
+  padding: 0 16px;
+  color: var(--faint);
+}
+
+.repos li {
+  display: grid;
+  grid-template-columns: 8px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0 10px;
+  padding: 4px 16px;
+}
+.repos li i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--mint);
+}
+.repos li span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.repos li b {
+  color: var(--dim);
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
+
+.line h2:not(:first-child) {
+  margin-top: 24px;
+}
+.row {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  gap: 0 8px;
+  width: 100%;
+  padding: 6px 16px 6px 14px;
+  border-left: 2px solid transparent;
+}
+button.row:hover {
+  background: var(--hover);
+}
+.row.on {
+  background: var(--sel);
+  border-left-color: var(--c, var(--accent));
+}
+.row .pos {
+  grid-row: 1 / 3;
+  color: var(--accent);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.row .pos i {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--c, var(--accent));
+}
+.row .title,
+h3 {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.row .title em,
+h3 em {
+  margin-right: 8px;
+  color: var(--dim);
+}
+.facts {
+  color: var(--faint);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.outcome-word {
+  color: var(--c);
+}
+.now .pos i {
+  animation: pulse 1.4s ease-in-out infinite;
+}
+.now .facts {
+  color: var(--accent);
+}
+/* The line is read top down: what runs, then who is next. Only the head of the queue is lit. */
+.line ol .row:not(:first-child) .pos {
+  color: var(--faint);
+  font-weight: 400;
+}
+.line ol .row:not(:first-child) .title {
+  color: var(--dim);
+}
+
+.detail {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  border-right: 0;
+  padding-bottom: 0;
+}
+.detail > * {
+  flex: none;
+  margin: 0 20px;
+}
+.head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 16px;
+}
+h3 {
+  font-size: 15px;
+  font-weight: 700;
+}
+h3 em {
+  font-weight: 400;
+}
+.state {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--c);
+  white-space: nowrap;
+}
+.state i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.state-running i {
+  animation: pulse 1.4s ease-in-out infinite;
+}
+.trouble {
+  color: var(--red);
+}
+.detail .facts {
+  margin-top: -8px;
+  white-space: normal;
+}
+.versions {
+  margin-top: -16px;
+}
+
+.steps {
+  display: flex;
+  flex-wrap: wrap;
+  color: var(--faint);
+}
+.steps li + li::before {
+  content: '›';
+  margin: 0 10px;
+  color: var(--faint);
+  font-weight: 400;
+}
+.steps .done {
+  color: var(--mint);
+}
+.steps .at {
+  color: var(--c);
+  font-weight: 700;
+}
+
+.warnings {
+  padding: 6px 12px;
+  border-left: 2px solid var(--accent);
+  background: var(--hover);
+  color: var(--accent);
+  overflow-wrap: anywhere;
+}
+
+.outcome {
+  padding: 8px 12px;
+  border-left: 2px solid var(--c, var(--faint));
+  background: var(--hover);
+  overflow-wrap: anywhere;
+  max-height: 34%;
+  overflow-y: auto;
+}
+.outcome b {
+  color: var(--c);
+  font-weight: 700;
+}
+.outcome a {
+  margin-left: 12px;
+  color: var(--accent);
+  text-underline-offset: 3px;
+}
+.outcome p {
+  margin-top: 4px;
+  color: var(--dim);
+  white-space: pre-wrap;
+}
+
+.detail .log {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  padding: 6px 0 12px;
+  overflow-y: auto;
+  border-top: 1px solid var(--line);
+  font-size: 12px;
+}
+.ev button {
+  display: grid;
+  grid-template-columns: 60px 72px minmax(0, 1fr);
+  gap: 8px;
+  width: 100%;
+  padding: 1px 20px;
+}
+.ev button:disabled {
+  cursor: default;
+}
+.ev button:not(:disabled):hover,
+.ev-open button {
+  background: var(--hover);
+}
+.ev time,
+.ev .kind {
+  color: var(--faint);
+}
+.ev .what {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--dim);
+}
+.ev .what b {
+  margin-right: 8px;
+  color: var(--text);
+  font-weight: 700;
+}
+.ev-text .what,
+.ev-result .what,
+.ev-factory .what {
+  color: var(--text);
+}
+.ev-tool .kind {
+  color: var(--lavender);
+}
+.ev-factory .kind,
+.ev-result .kind {
+  color: var(--mint);
+}
+.ev-error .kind,
+.ev-error .what {
+  color: var(--red);
+}
+.ev-thinking .what,
+.ev-hook .what,
+.ev-init .what {
+  color: var(--faint);
+}
+/* A subagent's events are set in under the call that started them. */
+.ev-sub .what {
+  padding-left: 18px;
+  background: linear-gradient(var(--line), var(--line)) 4px 0 / 2px 100% no-repeat;
+}
+.ev pre {
+  margin: 2px 20px 8px 160px;
+  padding: 8px 12px;
+  border-left: 2px solid var(--line);
+  background: var(--hover);
+  color: var(--dim);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+/* Narrow enough that three columns no longer fit: the areas go under each other. */
+@media (max-width: 1000px) {
+  .app {
+    display: block;
+    height: auto;
+  }
+  .top {
+    height: 40px;
+  }
+  .pane {
+    overflow: visible;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .repos ul {
+    display: flex;
+    flex-wrap: wrap;
+  }
+  .detail {
+    height: 80vh;
+    border-bottom: 0;
+  }
+  .ev pre {
+    margin-left: 20px;
+  }
+}

@@ -36,3 +36,4 @@ One file per decision, numbered, never edited after acceptance (supersede instea
 | [0030](0030-agents-verify-claude-code-facts-against-the-live-documentation.md) | Agents verify Claude Code facts against the live documentation, and the worker reads it through a pinned script | accepted |
 | [0031](0031-the-workflow-pins-the-size-at-which-a-worker-session-compacts.md) | The workflow pins the size at which a worker session compacts | accepted |
 | [0032](0032-the-stage-measures-the-context-on-entry-and-a-handoff-grants-one-skip.md) | The stage measures the context on entry, and the context a handoff started does one unit of work before the next | accepted |
+| [0033](0033-the-dashboard-is-built-into-the-factory-binary.md) | The dashboard is built into the factory binary | accepted |

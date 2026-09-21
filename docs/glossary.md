@@ -41,3 +41,4 @@
 | local claim | What was called "claim" until the factory existed: the orchestrator's claim of an issue into a Herdr worktree on a developer's machine (`/orchestrator:claim`). It refuses an issue the factory owns. |
 | release signal | Removing the assignee from an issue the factory holds, which queues a resumed run. |
 | connected repository | A repository named in the factory's configuration, as `owner/name`. |
+| dashboard | The page the factory serves at `/`, built into the binary from `factory/ui`. It reads the four endpoints and writes nothing ([ADR 0033](adr/0033-the-dashboard-is-built-into-the-factory-binary.md)). |

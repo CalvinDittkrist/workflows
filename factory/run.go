@@ -46,6 +46,7 @@ type Run struct {
 	Turns       int        `json:"turns"`
 	CostUSD     float64    `json:"costUsd"`
 	Tokens      Tokens     `json:"tokens"`
+	ContextPeak int        `json:"contextPeak"` // the largest context one message of the worker carried
 	ExitCode    *int       `json:"exitCode"`
 	EventCount  int        `json:"eventCount"`
 	Warnings    []string   `json:"warnings"`
@@ -180,6 +181,20 @@ func (s *Store) update(r *Run, change func()) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	change()
+	s.write(r)
+}
+
+// raiseContextPeak keeps the largest context the worker's own messages carried. The comparison and
+// the write are made under the lock. A context usually grows with every message, so this writes the
+// record about as often as the worker speaks; it stops only once the peak stands, after a handoff or
+// a long run of reading.
+func (s *Store) raiseContextPeak(r *Run, tokens int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if tokens <= r.ContextPeak {
+		return
+	}
+	r.ContextPeak = tokens
 	s.write(r)
 }
 

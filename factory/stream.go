@@ -26,6 +26,7 @@ type streamLine struct {
 	Usage          usage   `json:"usage"`
 	Message        struct {
 		Content json.RawMessage `json:"content"`
+		Usage   usage           `json:"usage"`
 	} `json:"message"`
 }
 
@@ -73,6 +74,13 @@ func (f *Factory) ingest(r *Run, line []byte) {
 		f.runs.update(r, func() { r.Model, r.SessionID = m.Model, m.SessionID })
 		f.runs.event(r, Event{Kind: "init", Title: "session " + m.Model + ", permission mode " + m.PermissionMode, Body: m.SessionID})
 	case m.Type == "assistant":
+		// What a message started from is its input plus everything read from the cache: the context it
+		// was answered with. A subagent has a context of its own, which says nothing about how full the
+		// worker's is, so only the worker's own messages count.
+		if !sub {
+			u := m.Message.Usage
+			f.runs.raiseContextPeak(r, u.Input+u.CacheCreation+u.CacheRead)
+		}
 		for _, b := range blocks(m.Message.Content) {
 			switch b.Type {
 			case "text":
