@@ -173,6 +173,25 @@ test('a factory that stops answering is said so, and a run it does not have too'
   await expect(detail(page).locator('.trouble')).toContainText(`/api/runs/${RUNNING_RUN}`)
 })
 
+test('a run that is over is read once, and a run that is not there too', async ({ page }) => {
+  // Both of these are written once and never again, so the page stops asking after the first answer.
+  // Counting starts once that answer stands: what is counted here is what a poll would have added.
+  for (const [run, shown] of [
+    [READY_RUN, detail(page).locator('.ev-result')],
+    [999, detail(page).locator('.none')],
+  ]) {
+    await page.goto(working(`/#run=${run}`))
+    await expect(shown).toBeVisible()
+
+    const asked = []
+    const count = (request) => asked.push(request.url())
+    page.on('request', count)
+    await twice(page, '/api/line') // the slower poll of the line, so the run's would have asked four times
+    page.off('request', count)
+    expect(asked.filter((url) => url.includes(`/api/runs/${run}`))).toEqual([])
+  }
+})
+
 test('the dashboard sends no writing request', async ({ page }) => {
   const written = []
   page.on('request', (request) => {
