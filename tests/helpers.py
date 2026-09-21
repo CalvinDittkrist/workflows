@@ -42,8 +42,11 @@ class ShimTest(unittest.TestCase):
 
     def env(self, **extra):
         # CLAUDE_CODE_* is stripped with the rest: the suite runs inside worker sessions, whose own settings
-        # carry CLAUDE_CODE_DISABLE_BACKGROUND_TASKS, and facts.sh reads it.
-        env = {k: v for k, v in os.environ.items() if not k.startswith(("WF_", "HERDR_", "SHIM_", "CLAUDE_CODE_"))}
+        # carry CLAUDE_CODE_DISABLE_BACKGROUND_TASKS, and facts.sh reads it. MAKEFLAGS and MFLAGS go too: the
+        # suite itself runs under `make test`, and GNU make 4 passes -w down, so a `make check` a script under
+        # test runs would print "Entering directory" lines that no worker's gate ever prints.
+        dropped = ("WF_", "HERDR_", "SHIM_", "CLAUDE_CODE_", "MAKEFLAGS", "MFLAGS")
+        env = {k: v for k, v in os.environ.items() if not k.startswith(dropped)}
         env.update({
             "PATH": f"{SHIMS}:{env['PATH']}",
             "SHIM_LOG": str(self.log),
