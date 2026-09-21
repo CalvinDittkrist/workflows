@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # The gate result, run once per review round and handed to the reviewers as a fact (ADR 0019).
-# Usage: gate.sh run     run the gate, print its output, record the result for this head
+# Usage: gate.sh run     run the gate, record the result for this head, print the output only when it failed
 #        gate.sh print   the gate block the review and pull request briefs carry
 # The record lives beside the panel summary in this worktree's git directory (ADR 0018), so the workers of
 # two issues never overwrite each other's gate result.
