@@ -1,0 +1,12 @@
+{
+  "listen": "127.0.0.1:7341",
+  "label": "factory",
+  "deadline": "100m",
+  "poll": "60s",
+  "data_dir": "/var/lib/factory",
+  "worker_args": [],
+  "paused": false,
+  "repositories": [
+    "CalvinDittkrist/workflows"
+  ]
+}

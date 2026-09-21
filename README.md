@@ -106,11 +106,14 @@ Repositories do not override agents or skills locally: the [repository standard]
 ## Develop
 
 ```sh
-make check                                        # the gate: shellcheck, plugin validate --strict, standard check, unit tests
+make check                                        # the gate: shellcheck, plugin validate --strict, standard check, unit tests, Go vet/staticcheck/tests
 claude --plugin-dir plugins/worker                # try a plugin in a session without installing it
 scripts/dev-orchestrator.sh                       # orchestrator from the checkout, inside a Herdr pane
 scripts/context-report.py                         # diagnostic: context and tool mix of finished worker sessions
+go -C factory run . -fake -config factory.json    # the factory on a canned queue: no tokens, no git, no GitHub
 ```
+
+`factory/` is the factory: a Go service, not a plugin, that works the issues routed to it unattended on a host of its own, as a second driver over the same worker pipeline ([ADR 0022](docs/adr/0022-the-factory-is-a-second-driver-over-the-worker-pipeline.md)). It is steered on GitHub and shows what it did over a read-only HTTP interface; today it runs in fake mode only.
 
 `dev-orchestrator.sh` points `WF_PLANNER_CLAUDE_ARGS` and `WF_WORKER_CLAUDE_ARGS` at the checkout's plugins, so the sessions the orchestrator opens use them too. Without that (or the plugins installed), a started session exits with `--agent 'planner' not found`; `plan.sh` and `claim.sh` detect that, remove the worktree again and print the fix. The same rollback runs when Herdr refuses the start itself (its error is printed as is) or when the pane is back at a shell prompt. Herdr agent names are derived from the branch and cut to its 32-character limit.
 
