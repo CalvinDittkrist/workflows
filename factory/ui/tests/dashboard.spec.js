@@ -130,12 +130,21 @@ test('the log of a running worker grows as it is written, and repeats nothing', 
   await expect(lines.first()).toBeVisible()
   const [started, first] = [await lines.count(), await lines.first().textContent()]
 
-  // The scripted worker of this run says something new every second, and the page asks only for what
-  // it has not seen yet: the log has to grow by those lines and keep the ones already read.
+  // What the page asks for: the events after the last one it has, and never the log again.
+  const after = []
+  page.on('request', (request) => {
+    const asked = request.url().match(new RegExp(`/api/runs/${RUNNING_RUN}\\?after=(\\d+)`))
+    if (asked) after.push(Number(asked[1]))
+  })
+
+  // The scripted worker of this run says something new every second: the log has to grow by those
+  // lines and keep the ones already read.
   await expect.poll(() => lines.count(), { timeout: 15_000 }).toBeGreaterThan(started)
   expect(await lines.first().textContent()).toBe(first)
   const read = await lines.allTextContents()
   expect(new Set(read).size).toBe(read.length) // an event that was read twice would stand twice
+  // And what it asks for moves on: the next request starts after the last event it was given.
+  await expect.poll(() => after.at(-1) > after[0], { timeout: 15_000 }).toBe(true)
 })
 
 test('the factory says when it waits for quota and until when', async ({ page }) => {
