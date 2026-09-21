@@ -34,6 +34,8 @@ The same decision covers two units built under their own tickets: a checkpoint a
 ## Consequences
 Every entrance into the two stages that decide what gets merged is measured, including the entrances nobody planned: the review stage of the session above would have handed over before its first round instead of compacting in its third.
 
+Both halves were run, not only reasoned about. In a scratch worktree of this change on 2026-09-21, a worker session that entered `/worker:review` on a branch whose implementation was done, with no note in its worktree and `WF_HANDOFF_TOKENS=1000`, answered `handoff: yes` at 17 379 tokens, launched no reviewer and handed the stage over; the fresh context that handover started entered the same stage at 25 810 tokens and answered `handoff: no` with the skip, marked `skip_used:` in the record, and carried on into the panel.
+
 `checkpoint.sh` now talks to Herdr, which it did not before. It asks only when a record could grant a skip — a note for this stage, injected, unspent — so the ordinary reading stays inside the worktree with no process outside it, and a Herdr that does not answer means the sessions cannot be compared, never an error.
 
 The skip is one per handover and per stage, and it is spent at the first entrance whatever the measurement says. A fresh context that is genuinely over the threshold at its first entrance therefore runs that stage in a large context; the cost is bounded, because the handover that started it has just reset the context, and the next checkpoint of that session measures normally.
