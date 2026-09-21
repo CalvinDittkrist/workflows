@@ -291,13 +291,16 @@ class WorkerKnobTests(ShimTest):
         return sorted(listed.group(1).split())
 
     def documented_worker_knobs(self):
-        """The variables of the README's configuration table that the worker plugin's own scripts read."""
+        """The variables of the README's configuration table that the worker plugin names anywhere: its
+        scripts read most of them, but a skill or an agent may name one too, and a knob a worker is told
+        about is a knob a claim can set."""
         rows = [row for row in self.README.read_text().splitlines() if row.startswith("| `WF_")]
         self.assertTrue(rows, f"no configuration table found in {self.README.name}")
         documented = {name for row in rows for name in re.findall(r"`(WF_[A-Z0-9_]+)`", row.split("|")[1])}
         read = set()
-        for script in sorted(WORKER.glob("*.sh")):
-            read |= set(re.findall(r"\$\{?(WF_[A-Z0-9_]+)", script.read_text()))
+        for path in sorted(WORKER.parent.rglob("*")):
+            if path.is_file() and path.suffix in (".sh", ".md", ".json"):
+                read |= set(re.findall(r"WF_[A-Z0-9_]+", path.read_text()))
         return sorted((documented & read) - set(self.CLAIM_OWNED))
 
     def readme_list(self):
@@ -308,7 +311,8 @@ class WorkerKnobTests(ShimTest):
 
     def test_the_claim_accepts_exactly_the_documented_worker_knobs(self):
         knobs = self.documented_worker_knobs()
-        self.assertTrue(knobs, f"no worker knob read from {WORKER.relative_to(ROOT)} and {self.README.name}")
+        self.assertTrue(knobs, f"no worker knob named in {WORKER.parent.relative_to(ROOT)} "
+                               f"and {self.README.name}")
         self.assertEqual(self.accepted_names(), knobs,
                          f"the names claim.sh accepts for --env and the worker knobs of the configuration "
                          f"table in {self.README.name} (minus {', '.join(self.CLAIM_OWNED)}, which a claim "

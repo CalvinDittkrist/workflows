@@ -39,7 +39,7 @@ while [ $# -gt 0 ]; do
     --yolo) mode="yolo" ;;
     --sandbox) sandbox=1 ;;
     --force) force=1 ;;
-    --base) shift; base="${1:-}" ;;
+    --base) [ $# -gt 1 ] || wf_die "--base needs a branch name, e.g. --base dev"; shift; base="$1" ;;
     --env) [ $# -gt 1 ] || wf_die "--env needs an argument. $env_shape"; shift; wf_read_env_arg "$1" ;;
     -h|--help) sed -n '2,3p' "$0"; exit 0 ;;
     -*) wf_die "unknown flag $1" ;;

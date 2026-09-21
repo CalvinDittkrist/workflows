@@ -317,6 +317,13 @@ class ClaimTests(ShimTest):
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("HERDR_ENV", r.stderr)
 
+    def test_base_without_a_branch_name_says_so(self):
+        # The trailing shift of the argument loop fails on an empty list, which used to end the claim with
+        # exit 1 and nothing said at all; a flag that takes a value asks for it by name instead.
+        r = self.run_script(ORCH / "claim.sh", "12", "--base")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("error: --base needs a branch name", r.stderr)
+
 
 class ClaimEnvTests(ShimTest):
     """`--env NAME=VALUE` sets a worker knob for the one session a claim starts. It rides in the env block of
