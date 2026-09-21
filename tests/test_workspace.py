@@ -70,7 +70,7 @@ class WorkspaceTests(ShimTest):
                      "security_and_analysis": None})
         self.put("repo.json", repo)
         self.put("labels.json", [{"name": n} for n in ("ready-for-agent", "needs-triage", "needs-info", "ready-for-human",
-                                                        "wontfix", "spec", "bug", "enhancement", "skill-candidate")])
+                                                        "wontfix", "spec", "factory", "bug", "enhancement", "skill-candidate")])
         (self.ws / "vulnerability-alerts").touch()
         self.put("automated-security-fixes.json", {"enabled": True, "paused": False})
         self.put("actions-workflow.json", {"default_workflow_permissions": "read"})
@@ -148,6 +148,7 @@ class WorkspaceTests(ShimTest):
             "diff: label needs-info: missing -> create",
             "diff: label ready-for-human: missing -> create",
             "diff: label spec: missing -> create",
+            "diff: label factory: missing -> create",
             "diff: label skill-candidate: missing -> create",
             "diff: dependabot alerts: off -> on",
             "diff: dependabot security-updates: off -> on",
@@ -160,7 +161,7 @@ class WorkspaceTests(ShimTest):
             "diff: milestone v0.2.0: open, empty -> closed",
             "diff: project: none linked -> copy of tpl-owner/1",
             f"manual: project (the copy): {AUTOADD}",
-            "differences: 23",
+            "differences: 24",
             "next: run workspace.sh --apply to make these changes",
             ""]))
         self.assertEqual(self.writes(), [])
@@ -174,7 +175,7 @@ class WorkspaceTests(ShimTest):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn(f"snapshot: {snap}", r.stdout)
         self.assertIn("project: https://github.com/users/o/projects/12", r.stdout)
-        self.assertTrue(r.stdout.endswith("applied: 23\n"), r.stdout)
+        self.assertTrue(r.stdout.endswith("applied: 24\n"), r.stdout)
 
         s = json.loads(snap.read_text())
         self.assertEqual(s["repository"], "o/r")
@@ -195,7 +196,7 @@ class WorkspaceTests(ShimTest):
             "gh api --method POST repos/o/r/rulesets",
             "gh api --method POST repos/o/r/rulesets",
             "gh api --method DELETE repos/o/r/branches/main/protection",
-            *["gh api --method POST repos/o/r/labels"] * 5,
+            *["gh api --method POST repos/o/r/labels"] * 6,
             "gh api --method PUT repos/o/r/vulnerability-alerts",
             "gh api --method PUT repos/o/r/automated-security-fixes",
             "gh api --method PUT repos/o/r/actions/permissions/workflow",
@@ -295,7 +296,7 @@ class WorkspaceTests(ShimTest):
         r = self.ws_run()
         self.assertIn("manual: project: none linked; set WF_PROJECT_TEMPLATE=<owner>/<number> and run again to copy "
                       "the template project, or create one by hand", r.stdout)
-        self.assertIn("differences: 22", r.stdout)
+        self.assertIn("differences: 23", r.stdout)
         self.assertNotIn("diff: project", r.stdout)
         r = self.ws_run(WF_PROJECT_TEMPLATE="not a project")
         self.assertEqual(r.returncode, 1)
@@ -336,7 +337,7 @@ class WorkspaceTests(ShimTest):
                       "then run workspace.sh again", r.stdout)
         self.assertNotIn("diff: project", r.stdout)
         self.assertNotIn(" field ", r.stdout, "no field is checked without the scope")
-        self.assertIn("differences: 22", r.stdout)
+        self.assertIn("differences: 23", r.stdout)
 
     def test_a_default_branch_outside_the_two_models_blocks_apply(self):
         self.public_main()
@@ -378,7 +379,7 @@ class WorkspaceTests(ShimTest):
                        "Triage, Ready, In progress, In review, Done; change them by hand (replacing an option list "
                        "clears the field on every item)")
         self.assertIn(status_line, r.stdout)
-        self.assertIn("differences: 23", r.stdout)
+        self.assertIn("differences: 24", r.stdout)
         self.assertEqual(self.writes(), [])
 
         snap = self.base / "snapshot.json"

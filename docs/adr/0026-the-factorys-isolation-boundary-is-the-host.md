@@ -1,4 +1,4 @@
-# 0025. The factory's isolation boundary is the host
+# 0026. The factory's isolation boundary is the host
 
 Date: 2026-09-21
 Status: accepted

@@ -1,4 +1,4 @@
-# 0023. One queue, one worker, and work in progress before new work
+# 0024. One queue, one worker, and work in progress before new work
 
 Date: 2026-09-21
 Status: accepted

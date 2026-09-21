@@ -1,4 +1,4 @@
-# 0021. GitHub is the only control surface of the factory
+# 0022. GitHub is the only control surface of the factory
 
 Date: 2026-09-21
 Status: accepted

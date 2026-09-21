@@ -5,7 +5,7 @@ import subprocess
 import unittest
 from pathlib import Path
 
-from helpers import PLANNER, ROOT, STANDARDS, ShimTest
+from helpers import ORCH, PLANNER, ROOT, STANDARDS, WORKER, ShimTest
 
 PLUGINS = sorted(p for p in (ROOT / "plugins").iterdir() if (p / ".claude-plugin/plugin.json").exists())
 
@@ -172,6 +172,34 @@ class LabelVocabularyTests(ShimTest):
                          f"the label vocabulary of {self.STANDARDS_FILE} (WF_LABELS, minus {self.PRIVATE}) and of "
                          f"{self.PLANNER_FILE} differ in name, colour, description or order. One of the two copies "
                          f"was changed and the other has to follow; do not adjust this test.")
+
+    def test_the_routing_label_the_local_claim_refuses_is_in_the_vocabulary(self):
+        """claim.sh refuses a routed issue by the name in WF_ROUTING_LABEL; a rename in the vocabulary that
+        leaves that name behind would let a local claim take an issue the factory owns."""
+        r = subprocess.run(["bash", "-c", r'. "$1/lib.sh"; printf "%s\n" "$WF_ROUTING_LABEL"', "_", str(ORCH)],
+                           cwd=self.base, text=True, capture_output=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        routing = r.stdout.strip()
+        self.assertTrue(routing, "plugins/orchestrator/scripts/lib.sh defines no WF_ROUTING_LABEL")
+        for file, vocabulary in ((self.STANDARDS_FILE, self.standards_vocabulary()),
+                                 (self.PLANNER_FILE, self.planner_vocabulary())):
+            self.assertIn(routing, [name for name, _, _ in vocabulary],
+                          f"claim.sh refuses the label {routing}, which {file} does not define")
+
+
+class ContextValueContractTests(ShimTest):
+    """The context value file is the only thing the orchestrator and the worker share (ADR 0020): the status
+    line of the pane writes it, the worker's checkpoint reads it, and no code crosses between the plugins."""
+
+    def test_the_status_line_writes_what_the_checkpoint_reads(self):
+        payload = json.dumps({"cwd": str(self.repo), "context_window": {"total_input_tokens": 130000, "context_window_size": 200000}})
+        written = self.run_script(ORCH / "statusline.sh", stdin=payload, WF_ISSUE="12", WF_MODE="manual")
+        self.assertEqual(written.returncode, 0, written.stderr)
+        self.assertIn("130k/200k", written.stdout)
+        read = self.run_script(WORKER / "checkpoint.sh", WF_ISSUE="12")
+        self.assertEqual(read.returncode, 0, read.stderr)
+        self.assertIn("context_tokens: 130000", read.stdout)
+        self.assertIn("handoff: yes", read.stdout)
 
 
 if __name__ == "__main__":

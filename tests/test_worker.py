@@ -1,5 +1,6 @@
 import json
 import re
+import time
 import unittest
 from pathlib import Path
 
@@ -390,6 +391,80 @@ class PanelSummaryTests(ShimTest):
         self.record(other_summary, cwd=other)
         self.assertIn(other_summary, self.print_brief(cwd=other).stdout)
         self.assertIn(SUMMARY, self.print_brief().stdout)
+
+
+class CheckpointTests(ShimTest):
+    """How full this session's context is, read from the value the pane's status line writes (issue #36)."""
+
+    def record(self, tokens, age=0, window=200000, at=None):
+        d = self.repo / ".git" / "worker"
+        d.mkdir(parents=True, exist_ok=True)
+        stamp = at if at is not None else time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - age))
+        (d / "context").write_text(f"total_input_tokens: {tokens}\ncontext_window_size: {window}\nat: {stamp}\n")
+
+    def checkpoint(self, **env):
+        r = self.run_script(WORKER / "checkpoint.sh", **env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return dict(line.split(": ", 1) for line in r.stdout.splitlines())
+
+    def test_below_the_threshold_is_no_handoff(self):
+        self.record(78231)
+        out = self.checkpoint()
+        self.assertEqual(out["context_tokens"], "78231")
+        self.assertEqual(out["threshold"], "120000")
+        self.assertEqual(out["handoff"], "no")
+        self.assertIn("39 % of it used", out["model_context_window"])
+
+    def test_at_and_above_the_threshold_is_a_handoff(self):
+        for tokens in (120000, 180000):
+            self.record(tokens)
+            out = self.checkpoint()
+            self.assertEqual(out["handoff"], "yes", tokens)
+            self.assertEqual(out["context_tokens"], str(tokens))
+
+    def test_the_threshold_is_configurable(self):
+        self.record(60000)
+        self.assertEqual(self.checkpoint()["handoff"], "no")
+        out = self.checkpoint(WF_HANDOFF_TOKENS="50000")
+        self.assertEqual(out["threshold"], "50000")
+        self.assertEqual(out["handoff"], "yes")
+        r = self.run_script(WORKER / "checkpoint.sh", WF_HANDOFF_TOKENS="120k")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("WF_HANDOFF_TOKENS='120k'", r.stderr)
+
+    def test_a_missing_value_hands_over_rather_than_guessing(self):
+        out = self.checkpoint()
+        self.assertEqual(out["context_tokens"], "unknown")
+        self.assertEqual(out["handoff"], "yes")
+        self.assertIn("status line", out["reason"])
+
+    def test_a_stale_value_hands_over_and_the_age_limit_is_configurable(self):
+        self.record(78231, age=1000)
+        out = self.checkpoint()
+        self.assertEqual(out["context_tokens"], "78231", "a stale value is still shown, with the reason")
+        self.assertEqual(out["handoff"], "yes")
+        self.assertIn("900 s limit", out["reason"])
+        self.assertEqual(self.checkpoint(WF_CONTEXT_MAX_AGE="2000")["handoff"], "no")
+
+    def test_a_value_without_a_readable_token_count_hands_over(self):
+        (self.repo / ".git" / "worker").mkdir(parents=True, exist_ok=True)
+        (self.repo / ".git/worker/context").write_text("total_input_tokens: \nat: 2026-09-21T10:00:00Z\n")
+        out = self.checkpoint()
+        self.assertEqual(out["context_tokens"], "unknown")
+        self.assertEqual(out["handoff"], "yes")
+
+    def test_a_value_without_a_readable_time_hands_over(self):
+        self.record(78231, at="not-a-time")
+        out = self.checkpoint()
+        self.assertEqual(out["handoff"], "yes")
+        self.assertIn("time", out["reason"])
+
+    def test_outside_herdr_nothing_measures_the_context(self):
+        self.record(78231)
+        out = self.checkpoint(HERDR_ENV="")
+        self.assertEqual(out["context_tokens"], "unavailable")
+        self.assertEqual(out["handoff"], "unavailable")
+        self.assertEqual(out["threshold"], "120000")
 
 
 class FinishTests(ShimTest):

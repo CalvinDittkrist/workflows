@@ -4,7 +4,15 @@
 wf_die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 wf_warn() { printf 'warning: %s\n' "$*" >&2; }
 wf_kv() { printf '%s: %s\n' "$1" "$2"; }
+# Quote $1 as one word of a shell command line: a Herdr pane runs a command string, and a path with a space
+# or a JSON object with quotes in it has to survive that shell unchanged. Single quotes, inner ones escaped.
+wf_shell_quote() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 wf_need() { command -v "$1" >/dev/null 2>&1 || wf_die "$1 is required but not on PATH"; }
+
+# The factory's routing label, as the label vocabulary defines it (plugins/planner/scripts/labels.sh). An issue
+# that carries it belongs to the factory host, which claims it on GitHub, so a local claim leaves it alone.
+# shellcheck disable=SC2034  # read by the scripts that source this file
+WF_ROUTING_LABEL=factory
 
 # Root of the main checkout, even when called from a linked worktree.
 wf_main_root() {
@@ -57,14 +65,29 @@ wf_workspace_for_path() {
   herdr workspace list 2>/dev/null | jq -r --arg p "$1" '.result.workspaces[]? | select(.worktree.checkout_path == $p) | .workspace_id' | head -n1
 }
 
-# Branch of the linked worktree that belongs to issue $1, or empty. Derived from the branch names, not from
-# the issue's labels, so a claim or an abandon still finds the worktree after the labels changed.
-wf_branch_for_issue() {
+# First branch of the list on stdin (one name per line) that belongs to issue $1, or empty. The local and
+# the remote lookup below share it, so both answer "whose issue is this branch" the same way.
+wf_first_issue_branch() {
   local b found=""
   while read -r b; do
     if [ -z "$found" ] && [ "$(wf_issue_from_branch "$b")" = "$1" ]; then found="$b"; fi
-  done < <(git worktree list --porcelain | sed -nE 's#^branch refs/heads/##p')
+  done
   printf '%s\n' "$found"
+}
+
+# Branch of the linked worktree that belongs to issue $1, or empty. Derived from the branch names, not from
+# the issue's labels, so a claim or an abandon still finds the worktree after the labels changed.
+wf_branch_for_issue() {
+  git worktree list --porcelain | sed -nE 's#^branch refs/heads/##p' | wf_first_issue_branch "$1"
+}
+
+# Branch on origin that belongs to issue $1, or empty; returns 1 when origin cannot be read. A claim on the
+# remote is the creation of that branch, so one that exists means another claimer (the factory host, a second
+# machine, an earlier claim of this one) owns the issue.
+wf_remote_branch_for_issue() {
+  local heads
+  heads=$(git ls-remote --heads origin 2>/dev/null) || return 1
+  printf '%s\n' "$heads" | sed -nE 's#^[^[:space:]]+[[:space:]]+refs/heads/##p' | wf_first_issue_branch "$1"
 }
 
 # Path of the linked worktree checked out on branch $1 (from the main root), or empty.

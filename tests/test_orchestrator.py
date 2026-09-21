@@ -1,6 +1,9 @@
 import json
 import shlex
+import shutil
+import subprocess
 import unittest
+from pathlib import Path
 
 from helpers import ORCH, ShimTest
 
@@ -21,6 +24,15 @@ class ClaimTests(ShimTest):
         # The background switch keeps the session's subagents in the foreground, so the worker never waits in a
         # sleep loop for its reviewer panel (issue #34: 328 sleep turns and 120k -> 412k tokens in one session).
         self.assertEqual(settings["env"], {"WF_MODE": "manual", "WF_ISSUE": "12", "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1"})
+        # The pane shows the worker's context size and writes it into the worktree for the checkpoint, and the
+        # session compacts at 200k rather than growing until the model refuses (issue #36).
+        # claude runs the command through a shell, so it is read back the way that shell reads it: the script,
+        # then the window it compacts at, which is the same number as the setting below it.
+        self.assertEqual(shlex.split(settings["statusLine"]["command"]), [str(ORCH / "statusline.sh"), "200000"])
+        self.assertEqual(settings["statusLine"]["type"], "command")
+        # A long tool call changes no message; without the interval the value would go stale under it.
+        self.assertEqual(settings["statusLine"]["refreshInterval"], 60)
+        self.assertEqual(settings["autoCompactWindow"], 200000)
         self.assertTrue((self.repo / ".claude/worktrees/fix-12-fix-login-timeout/README.md").exists())
         self.assertIn(".claude/worktrees/", (self.repo / ".git/info/exclude").read_text())
         self.assertEqual(self.git("status", "--porcelain"), "", "worktree dir must not show up as untracked")
@@ -39,7 +51,47 @@ class ClaimTests(ShimTest):
         self.assertIn("sbx-worker.sh", words[0])
         settings = json.loads(words[words.index("--settings") + 1])
         self.assertEqual(settings["env"], {"WF_MODE": "manual", "WF_ISSUE": "12", "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1"})
+        self.assertEqual(shlex.split(settings["statusLine"]["command"]), [str(ORCH / "statusline.sh"), "200000"])
+        self.assertEqual(settings["autoCompactWindow"], 200000)
         self.assertEqual(words[-1], "/worker:work")
+        # The pane the command runs in has its own working directory, so the script is named by its full path.
+        self.assertEqual(words[0], str(ORCH / "sbx-worker.sh"))
+
+    def test_the_status_line_command_survives_a_plugin_path_with_a_space(self):
+        # claude runs the command through a shell. Unquoted, a checkout under "/Users/John Smith" splits into
+        # words, nothing renders, and the worker reads the missing value as a handoff for the rest of the run.
+        spaced = self.base / "my plugins" / "orchestrator"
+        spaced.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(ORCH, spaced / "scripts")
+        r = self.run_script(spaced / "scripts" / "claim.sh", "12")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        start = [c for c in self.argv_calls() if c[1:3] == ["agent", "start"]][0]
+        command = json.loads(start[start.index("--settings") + 1])["statusLine"]["command"]
+        self.assertEqual(shlex.split(command), [str(spaced / "scripts/statusline.sh"), "200000"])
+        # And the shell really runs it: the line it prints is what the pane would show.
+        payload = json.dumps({"cwd": str(self.repo), "context_window": {"total_input_tokens": 78231, "context_window_size": 200000}})
+        rendered = subprocess.run(["sh", "-c", command], input=payload, text=True, capture_output=True,
+                                  env=self.env(WF_ISSUE="12", WF_MODE="manual"))
+        self.assertEqual(rendered.returncode, 0, rendered.stderr)
+        self.assertEqual(rendered.stdout.strip(), "#12 · manual · 78k/200k (39%)")
+
+    def test_the_sandboxed_start_survives_a_plugin_path_with_a_space(self):
+        # The sandbox start hands the whole settings object to the shell of a pane as one word. That object
+        # carries quotes of its own since the status line moved into it, so unquoted it loses the session's
+        # environment, its plugin isolation and its auto-compact window without a word of complaint.
+        spaced = self.base / "my plugins" / "orchestrator"
+        spaced.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(ORCH, spaced / "scripts")
+        r = self.run_script(spaced / "scripts" / "claim.sh", "12", "--sandbox")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        run = [c for c in self.argv_calls() if c[1:3] == ["pane", "run"]][0]
+        words = shlex.split(run[-1])
+        self.assertEqual(words[0], str(spaced / "scripts/sbx-worker.sh"))
+        settings = json.loads(words[words.index("--settings") + 1])
+        self.assertEqual(settings["env"]["WF_ISSUE"], "12")
+        self.assertEqual(settings["autoCompactWindow"], 200000)
+        self.assertEqual(shlex.split(settings["statusLine"]["command"]), [str(spaced / "scripts/statusline.sh"), "200000"])
+        self.assertEqual(words[words.index("--name") + 1], "#12")
 
     def test_yolo_flag_is_passed_to_the_worker_session(self):
         r = self.run_script(ORCH / "claim.sh", "12", "--yolo")
@@ -120,6 +172,137 @@ class ClaimTests(ShimTest):
         r = self.run_script(ORCH / "claim.sh", "12", SHIM_ISSUE_12_LABELS="enhancement")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("status: already-claimed", r.stdout)
+        self.assertIn("branch: fix/12-fix-login-timeout", r.stdout)
+
+    def origin(self):
+        """A bare repository as origin, with main on it."""
+        remote = self.base / "remote.git"
+        self.git("init", "-q", "--bare", str(remote), cwd=self.base)
+        self.git("remote", "add", "origin", str(remote))
+        self.git("push", "-q", "origin", "main")
+
+    def remote_claim(self, branch, *, also=()):
+        """An origin whose branch `branch` carries work this repository does not know: what the factory leaves
+        behind when it claims an issue and pushes. The remote-tracking ref the push created is deleted again,
+        so the branch is as unknown here as one another machine pushed. Returns the commit. `also` names
+        further branches to put on origin at main, for the near misses a lookup has to ignore."""
+        self.origin()
+        self.git("checkout", "-q", "-b", "wip")
+        (self.repo / "factory-work.md").write_text("work the factory pushed\n")
+        self.git("add", ".")
+        self.git("commit", "-qm", "wip")
+        sha = self.git("rev-parse", "HEAD").strip()
+        self.git("push", "-q", "origin", f"wip:refs/heads/{branch}")
+        for other in also:
+            self.git("push", "-q", "origin", f"main:refs/heads/{other}")
+        self.git("checkout", "-q", "main")
+        self.git("branch", "-qD", "wip")
+        self.git("update-ref", "-d", f"refs/remotes/origin/{branch}")
+        return sha
+
+    def test_claim_refuses_an_issue_routed_to_the_factory(self):
+        r = self.run_script(ORCH / "claim.sh", "19")
+        self.assertNotEqual(r.returncode, 0, r.stdout)
+        self.assertIn("(labels: ready-for-agent,factory)", r.stderr)
+        self.assertIn("Remove the label factory", r.stderr)
+        self.assertIn("--force", r.stderr)
+        self.assertEqual(self.git("worktree", "list").count("\n"), 1)
+        self.assertEqual(self.git("branch", "--list", "*/19-*"), "")
+        for call in self.calls():
+            self.assertRegex(call, r"^gh (repo|issue) view ", "the refusal must only read, never create or assign")
+
+    def test_force_claims_a_routed_issue_and_warns(self):
+        r = self.run_script(ORCH / "claim.sh", "19", "--force")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("routed to the factory", r.stderr)
+        self.assertIn("--force", r.stderr)
+        self.assertIn("branch: feat/19-routed-to-the-factory", r.stdout)
+        self.assertEqual(len([c for c in self.calls() if c.startswith("herdr agent start")]), 1)
+
+    def test_force_claims_a_routed_issue_whose_branch_the_factory_already_pushed(self):
+        # The whole factory case in one: routed and claimed on the remote. Both refusals warn, and the worktree
+        # continues the factory's branch under its name, not the one this machine's labels derive.
+        sha = self.remote_claim("fix/19-an-earlier-slug")
+        r = self.run_script(ORCH / "claim.sh", "19", "--force")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("routed to the factory", r.stderr)
+        self.assertIn("adopts that branch", r.stderr)
+        self.assertIn("branch: fix/19-an-earlier-slug", r.stdout)
+        wt = self.repo / ".claude/worktrees/fix-19-an-earlier-slug"
+        self.assertEqual(self.git("rev-parse", "HEAD", cwd=wt).strip(), sha)
+        self.assertTrue((wt / "factory-work.md").exists())
+
+    def test_claim_refuses_an_issue_already_claimed_on_the_remote(self):
+        # The remote branch is a feat/ one while the labels of #12 derive fix/: the claim on the remote is
+        # found by issue number, not by the branch type of the moment. The other two branches are near
+        # misses of the contract shape that belong to no issue or to another one.
+        self.remote_claim("feat/12-fix-login-timeout", also=("feat/120-another-issue", "plan/12-a-topic"))
+        r = self.run_script(ORCH / "claim.sh", "12")
+        self.assertNotEqual(r.returncode, 0, r.stdout)
+        self.assertIn("feat/12-fix-login-timeout", r.stderr)
+        self.assertIn("--force", r.stderr)
+        self.assertEqual(self.git("worktree", "list").count("\n"), 1)
+        self.assertEqual(self.git("branch", "--list", "*/12-*"), "")
+        self.assertFalse([c for c in self.calls() if "worktree create" in c or "agent start" in c])
+
+    def test_force_adopts_the_branch_the_remote_claim_left(self):
+        sha = self.remote_claim("feat/12-fix-login-timeout")
+        r = self.run_script(ORCH / "claim.sh", "12", "--force")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("adopts that branch", r.stderr)
+        self.assertIn("branch: feat/12-fix-login-timeout", r.stdout)
+        # The worktree continues the remote branch, so the work pushed there is in it and main is not its tip.
+        wt = self.repo / ".claude/worktrees/feat-12-fix-login-timeout"
+        self.assertTrue((wt / "factory-work.md").exists())
+        self.assertEqual(self.git("rev-parse", "HEAD", cwd=wt).strip(), sha)
+        self.assertEqual(self.git("branch", "--list", "fix/12-fix-login-timeout"), "")
+
+    def test_an_issue_claimed_locally_stays_already_claimed_when_the_factory_takes_it(self):
+        self.run_script(ORCH / "claim.sh", "12")
+        self.remote_claim("feat/12-fix-login-timeout")
+        self.reset_calls()
+        r = self.run_script(ORCH / "claim.sh", "12", SHIM_ISSUE_12_LABELS="bug,ready-for-agent,factory")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("status: already-claimed", r.stdout)
+        self.assertIn("branch: fix/12-fix-login-timeout", r.stdout)
+        self.assertFalse([c for c in self.calls() if "worktree create" in c or "agent start" in c])
+
+    def test_a_claim_of_an_abandoned_issue_names_the_abandoned_claim_and_force_continues_it(self):
+        # The single-machine loop: claim, push, abandon (which keeps the remote branch by design), claim again.
+        self.origin()
+        self.run_script(ORCH / "claim.sh", "12")
+        wt = self.repo / ".claude/worktrees/fix-12-fix-login-timeout"
+        (wt / "local-work.md").write_text("work this machine pushed\n")
+        self.git("add", ".", cwd=wt)
+        self.git("commit", "-qm", "wip", cwd=wt)
+        self.git("push", "-q", "origin", "HEAD:refs/heads/fix/12-fix-login-timeout", cwd=wt)
+        sha = self.git("rev-parse", "HEAD", cwd=wt).strip()
+        r = self.run_script(ORCH / "abandon.sh", "12")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("a claim of your own you abandoned", self.run_script(ORCH / "claim.sh", "12").stderr)
+
+        r = self.run_script(ORCH / "claim.sh", "12", "--force")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.git("rev-parse", "HEAD", cwd=wt).strip(), sha, "the abandoned work is continued")
+
+    def test_a_stale_local_branch_stops_the_adoption_instead_of_starting_from_it(self):
+        # A local branch that outlived its worktree would be checked out at its own tip, and the worktree would
+        # not carry the work the claim says it continues.
+        self.remote_claim("feat/12-fix-login-timeout")
+        self.git("branch", "feat/12-fix-login-timeout", "main")
+        r = self.run_script(ORCH / "claim.sh", "12", "--force")
+        self.assertNotEqual(r.returncode, 0, r.stdout)
+        self.assertIn("the local branch feat/12-fix-login-timeout exists at", r.stderr)
+        self.assertIn("git branch -D feat/12-fix-login-timeout", r.stderr)
+        self.assertEqual(self.git("worktree", "list").count("\n"), 1)
+        self.assertFalse([c for c in self.calls() if "worktree create" in c or "agent start" in c])
+
+    def test_an_unreadable_origin_warns_and_claims(self):
+        # Offline, or a remote that is gone: the check is a courtesy and must not be able to stop a claim.
+        self.git("remote", "add", "origin", str(self.base / "nowhere.git"))
+        r = self.run_script(ORCH / "claim.sh", "12")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("could not read the branches of origin", r.stderr)
         self.assertIn("branch: fix/12-fix-login-timeout", r.stdout)
 
     def test_claim_refuses_outside_herdr(self):
@@ -576,6 +759,20 @@ class BoardAndAbandonTests(ShimTest):
         self.assertNotIn("41,", r.stdout); self.assertNotIn("43,", r.stdout); self.assertNotIn("12,Fix", r.stdout)
         self.assertIn("waiting: 3 ready-for-agent issue(s)", r.stdout)
 
+    def test_the_frontier_leaves_out_what_the_claim_refuses(self):
+        fixture = self.base / "ready.json"
+        fixture.write_text(json.dumps([
+            {"number": 40, "title": "Expand schema", "assignees": [], "issue_dependencies_summary": {"blocked_by": 0},
+             "milestone": None, "labels": [{"name": "ready-for-agent"}]},
+            {"number": 45, "title": "Routed to the factory", "assignees": [], "milestone": None,
+             "issue_dependencies_summary": {"blocked_by": 0}, "labels": [{"name": "ready-for-agent"}, {"name": "factory"}]},
+        ]))
+        r = self.run_script(ORCH / "board.sh", SHIM_FRONTIER_FIXTURE=str(fixture))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("frontier[1]{issue,milestone,title}:\n  40,-,Expand schema\n", r.stdout)
+        self.assertNotIn("45,", r.stdout, "the factory works a routed issue; a local claim of it is refused")
+        self.assertIn("waiting: 1 ready-for-agent issue(s) blocked, assigned, routed to the factory or claimed", r.stdout)
+
     def specs(self):
         """Four open specs on the shim: one accepted-ready, one with an open ticket, one without sub-issues, one closed."""
         fixture = self.base / "specs.json"
@@ -664,6 +861,73 @@ class BoardAndAbandonTests(ShimTest):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertFalse(path.exists())
         self.assertNotIn("fix/12", self.git("branch", "--list"))
+
+
+class StatusLineTests(ShimTest):
+    """The pane line and the context value file, from the JSON Claude Code pipes into the status line."""
+
+    LINE = {"cwd": None, "model": {"id": "claude-opus-5", "display_name": "Opus"},
+            "context_window": {"total_input_tokens": 78231, "context_window_size": 200000}}
+
+    def statusline(self, payload, cwd=None, **env):
+        payload = {**payload, "cwd": str(cwd or self.repo)}
+        r = self.run_script(ORCH / "statusline.sh", stdin=json.dumps(payload), **env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stderr, "", "a status line renders on every turn and must stay quiet")
+        return r.stdout.strip()
+
+    def value_file(self, path=None):
+        return Path(self.git("rev-parse", "--path-format=absolute", "--git-dir", cwd=path or self.repo).strip()) / "worker/context"
+
+    def test_shows_issue_mode_and_context_and_records_the_size(self):
+        line = self.statusline(self.LINE, WF_ISSUE="12", WF_MODE="yolo")
+        self.assertEqual(line, "#12 · yolo · 78k/200k (39%)")
+        recorded = dict(l.split(": ", 1) for l in self.value_file().read_text().splitlines())
+        self.assertEqual(recorded["total_input_tokens"], "78231")
+        self.assertEqual(recorded["context_window_size"], "200000")
+        self.assertRegex(recorded["at"], r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+
+    def test_the_size_is_shown_against_the_window_the_session_compacts_at(self):
+        # A worker on a million-token model compacts at 200k, so 78k is well over a third of what it has; the
+        # model's 7 % would read as room the session never gets.
+        big = {**self.LINE, "context_window": {"total_input_tokens": 78231, "context_window_size": 1000000}}
+        self.assertEqual(self.statusline(big, WF_ISSUE="12", WF_MODE="manual"), "#12 · manual · 78k/1000k (7%)")
+        r = self.run_script(ORCH / "statusline.sh", "200000", stdin=json.dumps({**big, "cwd": str(self.repo)}),
+                            WF_ISSUE="12", WF_MODE="manual")
+        self.assertEqual(r.stdout.strip(), "#12 · manual · 78k/200k (39%)")
+        # The model's window wins when it is the smaller one, and the recorded value stays the model's.
+        r = self.run_script(ORCH / "statusline.sh", "500000", stdin=json.dumps({**self.LINE, "cwd": str(self.repo)}),
+                            WF_ISSUE="12", WF_MODE="manual")
+        self.assertEqual(r.stdout.strip(), "#12 · manual · 78k/200k (39%)")
+        self.assertIn("context_window_size: 200000", self.value_file().read_text())
+
+    def test_input_without_context_numbers_prints_a_line_and_leaves_no_stale_value(self):
+        # Before the first response of a session the input carries no context numbers at all.
+        line = self.statusline({"model": {"id": "claude-opus-5"}}, WF_ISSUE="12", WF_MODE="manual")
+        self.assertEqual(line, "#12 · manual · context n/a")
+        self.assertFalse(self.value_file().exists(), "an invented zero would read as a nearly empty context")
+        # And it does not overwrite a value an earlier render wrote either.
+        self.statusline(self.LINE, WF_ISSUE="12", WF_MODE="manual")
+        before = self.value_file().read_text()
+        self.assertEqual(self.statusline({"context_window": {}}, WF_ISSUE="12", WF_MODE="manual"), "#12 · manual · context n/a")
+        self.assertEqual(self.value_file().read_text(), before)
+
+    def test_the_issue_comes_from_the_branch_when_the_session_carries_none(self):
+        self.git("checkout", "-qb", "feat/12-x")
+        self.assertEqual(self.statusline(self.LINE, WF_MODE="manual"), "#12 · manual · 78k/200k (39%)")
+        self.git("checkout", "-q", "main")
+        self.assertEqual(self.statusline(self.LINE, WF_MODE="manual"), "no issue · manual · 78k/200k (39%)")
+
+    def test_each_worktree_records_into_its_own_git_directory(self):
+        # Two workers run in parallel; the checkpoint of one must never read the size of the other.
+        other = self.base / "wt-13"
+        self.git("worktree", "add", "-q", "-b", "feat/13-y", str(other))
+        self.statusline(self.LINE, WF_ISSUE="12", WF_MODE="manual")
+        self.statusline({**self.LINE, "context_window": {"total_input_tokens": 5000, "context_window_size": 200000}},
+                        cwd=other, WF_ISSUE="13", WF_MODE="manual")
+        self.assertIn("total_input_tokens: 78231", self.value_file().read_text())
+        self.assertIn("total_input_tokens: 5000", self.value_file(other).read_text())
+        self.assertNotEqual(self.value_file(), self.value_file(other))
 
 
 class GhAxiContextHookTests(ShimTest):

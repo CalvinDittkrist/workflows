@@ -1,6 +1,6 @@
 # workflows
 
-Public repository of Claude Code plugins for agent-driven development: an orchestrator that claims GitHub issues into Herdr worktree sessions, a worker pipeline with a fresh-context reviewer panel, and repository standards. Beside the plugins, `factory/` is the factory: a Go service that works routed issues unattended on a host of its own, as a second driver over the same worker pipeline ([ADR 0020](docs/adr/0020-the-factory-is-a-second-driver-over-the-worker-pipeline.md)).
+Public repository of Claude Code plugins for agent-driven development: an orchestrator that claims GitHub issues into Herdr worktree sessions, a worker pipeline with a fresh-context reviewer panel, and repository standards. Beside the plugins, `factory/` is the factory: a Go service that works routed issues unattended on a host of its own, as a second driver over the same worker pipeline ([ADR 0021](docs/adr/0021-the-factory-is-a-second-driver-over-the-worker-pipeline.md)).
 
 ## Commands
 - Gate: `make check` runs everything CI runs (shellcheck, `claude plugin validate --strict`, the standard check, python unittest, and the factory's gofmt, vet, staticcheck and Go tests); `make lint`, `make validate`, `make standard`, `make test`, `make factory` run one part
