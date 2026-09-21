@@ -711,9 +711,9 @@ class CheckpointEntryTests(ShimTest):
         out = self.checkpoint("review")
         self.assertEqual(self.keys(out.stdout)["handoff"], "no")
         self.assertIn("could not be marked as entered", self.keys(out.stdout)["reason"])
-        self.assertEqual([line for line in out.stderr.splitlines() if line.strip()],
-                         [line for line in out.stderr.splitlines() if line.startswith("warning: ")],
-                         f"one warning and no raw shell error:\n{out.stderr}")
+        said = [line for line in out.stderr.splitlines() if line.strip()]
+        self.assertEqual(len(said), 1, f"one warning and no raw shell error about the redirection:\n{out.stderr}")
+        self.assertTrue(said[0].startswith("warning: "), said[0])
 
     def test_the_skip_belongs_to_the_stage_the_note_was_written_for(self):
         self.context(150000)
@@ -758,7 +758,9 @@ class CheckpointEntryTests(ShimTest):
         self.assertNotIn("next:", self.checkpoint("ci").stdout, "nothing to do, nothing to say")
 
     def test_an_unknown_stage_is_refused_with_the_usage(self):
-        for args in (["implement"], ["review", "ci"]):
+        # "review ci" as one argument is the case a `case " $list " in *" $word "*` match let through, which
+        # would have put `stage: review ci` in the record the hook and facts.sh read.
+        for args in (["implement"], ["review ci"], ["review", "ci"]):
             with self.subTest(args=args):
                 r = self.run_script(WORKER / "checkpoint.sh", *args, HERDR_PANE_ID="w9:p1")
                 self.assertEqual(r.returncode, 1, r.stdout)
@@ -771,6 +773,7 @@ class CheckpointEntryTests(ShimTest):
         self.assertEqual(self.keys(out.stdout)["handoff"], "unavailable")
         self.assertNotIn("next:", out.stdout)
         self.assertFalse(self.calls(), "and no pane was asked anything")
+        self.assertNotIn("skip_used: ", self.note.read_text(), "and the skip is left for the stage")
 
     def test_entering_the_review_and_the_ci_stage_measures_this_context(self):
         # The measurement is an injection of both stage skills, so it reaches whoever enters the stage,
@@ -872,9 +875,14 @@ class HandoffTests(ShimTest):
         self.assertIn("no '## verified' section", r.stderr)
 
     def test_only_the_two_checkpoints_are_stages_to_resume_at(self):
-        r = self.handoff(stage="implement")
-        self.assertEqual(r.returncode, 1, r.stdout)
-        self.assertIn("review or ci", r.stderr)
+        # "review ci" as one argument too: it named both stages at once, and the record it would write is the
+        # one the SessionStart hook and facts.sh read back as the stage to resume at.
+        for stage in ("implement", "review ci"):
+            with self.subTest(stage=stage):
+                r = self.handoff(stage=stage)
+                self.assertEqual(r.returncode, 1, r.stdout)
+                self.assertIn("review or ci", r.stderr)
+                self.assertFalse(self.record.exists(), "and nothing was recorded")
         r = self.run_script(WORKER / "handoff.sh", stdin=NOTE, HERDR_PANE_ID="w9:p1")
         self.assertEqual(r.returncode, 1, r.stdout)
         self.assertIn("usage: handoff.sh <review|ci>", r.stderr)

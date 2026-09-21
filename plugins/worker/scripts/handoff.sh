@@ -11,9 +11,9 @@ set -euo pipefail
 # shellcheck source=lib.sh
 . "$(dirname "$0")/lib.sh"
 
-# The stages a checkpoint hands over before. Both are a stage boundary at which everything the next context
-# needs is in git, in GitHub or in a record of this worktree.
-stages="review ci"
+# The stages a checkpoint hands over before: the list lib.sh shares with checkpoint.sh, so the stage it
+# accepts and the stage this script accepts cannot drift apart.
+stages=$(wf_handoff_stages)
 # Every section a note carries, in the order a reader wants them. A fresh context reads this note instead of
 # the transcript it will never see, so a missing section is a refusal, not a warning.
 sections="decisions rejected verified open"

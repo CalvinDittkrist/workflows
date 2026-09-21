@@ -7,11 +7,11 @@ allowed-tools: Bash(${CLAUDE_PLUGIN_ROOT}/scripts/checkpoint.sh*), Bash(${CLAUDE
 Context checkpoint:
 !`${CLAUDE_PLUGIN_ROOT}/scripts/checkpoint.sh review`
 
+The checkpoint above measured this context as you entered the stage, whichever stage you came from. On `handoff: yes` run no round and launch no reviewer here: follow the `next:` procedure it printed and hand the review stage over to a fresh context. On `no` or `unavailable` review as below.
+
 Diff context:
 !`${CLAUDE_PLUGIN_ROOT}/scripts/diff-context.sh`
 !`${CLAUDE_PLUGIN_ROOT}/scripts/facts.sh`
-
-The checkpoint above measured this context as you entered the stage, whichever stage you came from. On `handoff: yes` this stage runs in no round here: follow the `next:` procedure it printed and hand the review stage over to a fresh context. On `no` or `unavailable` review as below.
 
 Use `reviewers` and `max_rounds` from above unless the argument overrides the reviewer list.
 

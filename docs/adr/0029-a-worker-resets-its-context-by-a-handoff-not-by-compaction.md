@@ -1,7 +1,7 @@
 # 0029. A worker resets its context by a handoff at a checkpoint, not by compaction
 
 Date: 2026-09-21
-Status: accepted; the two checkpoints of the driver, the default threshold and the window in which the context value is stale are superseded by [ADR 0031](0031-the-stage-measures-the-context-on-entry-and-a-handoff-grants-one-skip.md)
+Status: accepted; the two checkpoints of the driver, the default threshold and the last paragraph, on the seconds after a handover, are superseded by [ADR 0031](0031-the-stage-measures-the-context-on-entry-and-a-handoff-grants-one-skip.md)
 
 ## Context
 A worker session runs one issue from reading it to the merge, and its context only grows: the issue, the implementation, five reviewer reports per round, the pull request, CI logs, review comments. The sessions measured for [ADR 0017](0017-worker-subagents-run-in-the-foreground.md) reached 412k tokens. What a long context costs is not only money: the model's attention over it thins out, the early instructions compete with a transcript of dead ends, and the last stages of the pipeline — the ones that decide what gets merged — run in the worst context of the run.

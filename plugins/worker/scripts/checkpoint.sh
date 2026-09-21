@@ -9,9 +9,9 @@ set -euo pipefail
 # shellcheck source=lib.sh
 . "$(dirname "$0")/lib.sh"
 
-# The stages whose skill measures on entry. The same two a handoff resumes at, because a checkpoint hands
-# over before the work of the stage it stands in.
-stages="review ci"
+# The stages whose skill measures on entry: the list lib.sh shares with handoff.sh, because a checkpoint
+# hands over before the work of the stage it stands in.
+stages=$(wf_handoff_stages)
 stage="${1:-}"
 [ $# -le 1 ] || wf_die "usage: checkpoint.sh [$(printf '%s' "$stages" | tr ' ' '|')]"
 if [ -n "$stage" ]; then
@@ -154,12 +154,12 @@ if [ "$age" -gt "$max_age" ]; then
   exit 0
 fi
 
-details="measured: $at ($age s ago)"
+details=$(wf_kv measured "$at ($age s ago)")
 # The model's window, as the status line read it. Not the pane's percentage, which is against the window the
 # session compacts at, so the key says whose window this is.
 if printf '%s' "$window" | grep -Eq '^[1-9][0-9]*$'; then
   details="$details
-model_context_window: $window ($((tokens * 100 / window)) % of it used)"
+$(wf_kv model_context_window "$window ($((tokens * 100 / window)) % of it used)")"
 fi
 
 if [ "$tokens" -ge "$threshold" ]; then
