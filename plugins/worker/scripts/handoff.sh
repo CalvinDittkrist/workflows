@@ -70,7 +70,7 @@ mkdir -p "$(dirname "$record")"
 # followed by the state of the branch. A half-written file is never left behind for the hook to read.
 trap 'rm -f "$record.tmp"' EXIT
 {
-  printf 'stage: %s\ncommit: %s\nbase: %s\npane: %s\nsession: %s\nat: %s\n\n' \
+  printf 'stage: %s\ncommit: %s\nbase_branch: %s\npane: %s\nsession: %s\nat: %s\n\n' \
     "$stage" "$commit" "$base" "$pane" "$session" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   printf '%s\n' "$note"
   printf '\n## state at the handoff\n%s\n' "$state"

@@ -16,11 +16,12 @@ pane="${1:-}"; before="${2:-}"; stage="${3:-}"; cmd="${4:-}"; record="${5:-}"
   wf_die "usage: handoff-resume.sh <pane> <session-id-before> <stage> <driver-command> [note-record]"
 
 # How long a fresh session may take to report itself, and how often the pane is asked. Both are knobs of the
-# wait only: nothing here decides anything by time except when to try again. A value that is not a number
-# falls back to the default rather than ending the handoff, because a detached process has nobody to tell.
+# wait only: nothing here decides anything by time except when to try again. A value that is not a positive
+# number falls back to the default rather than ending the handoff, because a detached process has nobody to
+# tell; zero is one of them, since `sleep 0` would turn the wait into a loop hammering herdr.
 ms="${WF_HANDOFF_SESSION_MS:-60000}"; printf '%s' "$ms" | grep -Eq '^[1-9][0-9]*$' || ms=60000
 limit=$(( ms / 1000 )); [ "$limit" -gt 0 ] || limit=1
-poll="${WF_HANDOFF_POLL_SECONDS:-1}"; printf '%s' "$poll" | grep -Eq '^[0-9]+(\.[0-9]+)?$' || poll=1
+poll="${WF_HANDOFF_POLL_SECONDS:-1}"; printf '%s' "$poll" | grep -Eq '^([1-9][0-9]*|[0-9]*\.[0-9]*[1-9][0-9]*)$' || poll=1
 attempts=2  # the first /clear, and one retry for the pane that swallowed it
 
 session() { wf_agent_session "$pane"; }
