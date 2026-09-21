@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -41,6 +42,15 @@ var cannedIssues = []cannedIssue{
 	{number: 121, title: "Serve the dashboard preview from the device", labels: []string{"enhancement"}, routed: 50 * time.Minute, repo: 0, scenario: "detached"},
 	{number: 109, title: "Überwachung: Füllstand fällt unter den Schwellwert, ohne dass eine Warnung kommt", labels: []string{"bug"}, routed: 4 * time.Hour, repo: 1, scenario: "blocked"},
 }
+
+// canned is the queue of fake mode: the same entries on every poll, so a run of the factory can be
+// watched from start to end without tokens, git or GitHub.
+type canned struct {
+	repositories []string
+	started      time.Time
+}
+
+func (c *canned) queue(context.Context) []Issue { return cannedQueue(c.repositories, c.started) }
 
 // cannedQueue spreads the canned entries over the connected repositories, so the one line visibly
 // mixes them, as a real queue across repositories does.

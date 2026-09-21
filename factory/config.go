@@ -129,7 +129,10 @@ func Load(path string) (Settings, error) {
 	}
 	seen := map[string]bool{}
 	for _, r := range c.Repositories {
-		if !repository.MatchString(r) {
+		// The clone of a repository is a directory named after it under the data directory, so an
+		// owner or a name of nothing but dots would step out of that directory. GitHub has neither.
+		owner, name, _ := strings.Cut(r, "/")
+		if !repository.MatchString(r) || strings.Trim(owner, ".") == "" || strings.Trim(name, ".") == "" {
 			return bad("repository %q is not owner/name; write it as \"CalvinDittkrist/workflows\"", r)
 		}
 		if seen[r] {
