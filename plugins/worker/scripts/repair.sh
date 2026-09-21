@@ -9,11 +9,16 @@
 set -euo pipefail
 # shellcheck source=lib.sh
 . "$(dirname "$0")/lib.sh"
+
+# The one dispatch: a call that names no subcommand of this script is answered with the usage before it
+# costs a GitHub round trip.
+usage="usage: repair.sh round | repair.sh print"
+[ $# -eq 1 ] || wf_die "$usage"
+case "$1" in round | print) command="$1" ;; *) wf_die "$usage" ;; esac
+
 # The pull request the record belongs to is read from GitHub, so a missing gh is said as itself and never
 # mistaken for a branch without a pull request.
 wf_need gh
-
-usage="usage: repair.sh round | repair.sh print"
 record="$(wf_state_dir)/repair"
 limit="${WF_CI_REPAIR_ROUNDS:-3}"
 printf '%s' "$limit" | grep -Eq '^[1-9][0-9]*$' ||
@@ -45,8 +50,7 @@ report() {
   wf_kv repair_limit "$limit"
 }
 
-[ $# -eq 1 ] || wf_die "$usage"
-case "$1" in
+case "$command" in
   round)
     [ -n "$pr" ] ||
       wf_die "branch $(wf_branch) has no open pull request, so there is no repair round to count; open it with /worker:pr first"
@@ -63,5 +67,4 @@ case "$1" in
       printf 'next: this is the last repair round for pull request #%s; if it does not end green, stop and report to the maintainer.\n' "$pr"
     ;;
   print) report ;;
-  *) wf_die "$usage" ;;
 esac
