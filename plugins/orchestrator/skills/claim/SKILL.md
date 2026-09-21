@@ -1,7 +1,7 @@
 ---
 name: claim
 description: Claim a ready-for-agent GitHub issue. Creates a worktree and Herdr workspace and starts a worker session that implements it through review, PR and CI.
-argument-hint: <issue> [--sandbox] [--force] [--base <branch>]
+argument-hint: <issue> [--sandbox] [--force] [--base <branch>] [--env NAME=VALUE]
 disable-model-invocation: true
 ---
 Run this exact command and relay its output:

@@ -318,6 +318,115 @@ class ClaimTests(ShimTest):
         self.assertIn("HERDR_ENV", r.stderr)
 
 
+class ClaimEnvTests(ShimTest):
+    """`--env NAME=VALUE` sets a worker knob for the one session a claim starts. It rides in the env block of
+    the --settings object the claim builds, so the session keeps the status line, the compact trigger and the
+    plugin isolation every claim gives it, and the knob reaches no other session."""
+
+    # What the env block of a claim without --env holds; a knob is expected next to these, never instead of one.
+    SESSION_ENV = {"WF_MODE": "manual", "WF_ISSUE": "12", "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1",
+                   "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "80"}
+
+    def claim(self, *args, sandbox=False):
+        """Claim issue #12 and return its output with the settings the worker session was really started with.
+        The sandboxed start passes them inside a command line for the shell of a pane, so that line is read
+        the way that shell reads it."""
+        r = self.run_script(ORCH / "claim.sh", "12", *args)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        if sandbox:
+            words = shlex.split([c for c in self.argv_calls() if c[1:3] == ["pane", "run"]][0][-1])
+        else:
+            words = [c for c in self.argv_calls() if c[1:3] == ["agent", "start"]][0]
+        return r, json.loads(words[words.index("--settings") + 1])
+
+    def test_a_knob_given_on_the_claim_reaches_that_session_and_changes_nothing_else(self):
+        r, settings = self.claim("--env", "WF_HANDOFF_TOKENS=5000")
+        self.assertEqual(settings["env"], {**self.SESSION_ENV, "WF_HANDOFF_TOKENS": "5000"})
+        self.assertEqual(settings["autoCompactWindow"], 250000)
+        self.assertEqual(shlex.split(settings["statusLine"]["command"]), [str(ORCH / "statusline.sh"), "200000"])
+        self.assertEqual(settings["enabledPlugins"],
+                         {"planner@workflows": False, "orchestrator@workflows": False})
+        # The transcript of the orchestrator shows the effect beside the command that asked for it.
+        self.assertIn("env: WF_HANDOFF_TOKENS", r.stdout)
+
+    def test_a_sandboxed_claim_carries_the_knob_the_same_way(self):
+        r, settings = self.claim("--env", "WF_HANDOFF_TOKENS=5000", "--sandbox", sandbox=True)
+        self.assertEqual(settings["env"], {**self.SESSION_ENV, "WF_HANDOFF_TOKENS": "5000"})
+        self.assertEqual(settings["autoCompactWindow"], 250000)
+        self.assertEqual(shlex.split(settings["statusLine"]["command"]), [str(ORCH / "statusline.sh"), "200000"])
+        self.assertIn("env: WF_HANDOFF_TOKENS", r.stdout)
+
+    def test_a_yolo_claim_carries_the_knob_beside_its_mode(self):
+        r, settings = self.claim("--env", "WF_HANDOFF_TOKENS=5000", "--yolo")
+        self.assertEqual(settings["env"], {**self.SESSION_ENV, "WF_MODE": "yolo", "WF_HANDOFF_TOKENS": "5000"})
+        self.assertIn("env: WF_HANDOFF_TOKENS", r.stdout)
+
+    # A value no shell would leave alone: spaces, both quotes, and a $ that a shell would expand away. It
+    # travels through jq into JSON, and in the sandboxed start through one more shell on the way to the pane.
+    HOSTILE = """a b 'c' "d" $HOME"""
+
+    def test_two_knobs_both_arrive_and_no_shell_reads_their_values(self):
+        r, settings = self.claim("--env", "WF_REVIEWERS=code,tests", "--env", f"WF_PR_BOT_REVIEWERS={self.HOSTILE}")
+        self.assertEqual(settings["env"], {**self.SESSION_ENV, "WF_REVIEWERS": "code,tests",
+                                           "WF_PR_BOT_REVIEWERS": self.HOSTILE})
+        self.assertIn("env: WF_REVIEWERS WF_PR_BOT_REVIEWERS", r.stdout)
+
+    def test_the_sandboxed_start_passes_the_same_values_byte_for_byte(self):
+        _, settings = self.claim("--env", "WF_REVIEWERS=code,tests", "--env", f"WF_PR_BOT_REVIEWERS={self.HOSTILE}",
+                                 "--sandbox", sandbox=True)
+        self.assertEqual(settings["env"], {**self.SESSION_ENV, "WF_REVIEWERS": "code,tests",
+                                           "WF_PR_BOT_REVIEWERS": self.HOSTILE})
+
+    def test_an_empty_value_is_a_setting_of_its_own(self):
+        # WF_PR_BOT_REVIEWERS="" is how a repository without a bot reviewer is configured, so it is not malformed.
+        _, settings = self.claim("--env", "WF_PR_BOT_REVIEWERS=")
+        self.assertEqual(settings["env"]["WF_PR_BOT_REVIEWERS"], "")
+
+    def assert_refused(self, *args, expect):
+        """The claim refuses before anything exists: no worktree, no branch, no workspace, no session."""
+        r = self.run_script(ORCH / "claim.sh", "12", *args)
+        self.assertNotEqual(r.returncode, 0, r.stdout)
+        self.assertIn("error:", r.stderr)
+        self.assertIn(expect, r.stderr)
+        self.assertEqual(self.git("branch", "--list", "fix/12-fix-login-timeout"), "")
+        self.assertFalse((self.repo / ".claude/worktrees").exists())
+        self.assertFalse([c for c in self.calls() if "worktree create" in c or "agent start" in c])
+        return r
+
+    def test_a_name_that_is_not_a_worker_knob_is_refused_with_the_names_that_are(self):
+        # WF_MODE and CLAUDE_AUTOCOMPACT_PCT_OVERRIDE are the session's own keys, PATH is everything else.
+        for name in ("WF_MODE", "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", "PATH"):
+            with self.subTest(name=name):
+                r = self.assert_refused("--env", f"{name}=x", expect="Accepted names:")
+                # The error is the whole list, so the fix is in it and nobody has to look the names up.
+                for knob in ("WF_HANDOFF_TOKENS", "WF_REVIEWERS", "WF_DOCS_TIMEOUT"):
+                    self.assertIn(knob, r.stderr)
+
+    def test_a_malformed_argument_is_refused_with_the_shape_it_needs(self):
+        for args in (["--env", "WF_HANDOFF_TOKENS"], ["--env", "=5000"], ["--env"]):
+            with self.subTest(args=args):
+                self.assert_refused(*args, expect="--env takes NAME=VALUE")
+
+    def test_the_same_name_twice_is_refused_rather_than_resolved(self):
+        self.assert_refused("--env", "WF_HANDOFF_TOKENS=5000", "--env", "WF_HANDOFF_TOKENS=9000",
+                            expect="was given twice")
+
+    def test_a_claim_of_a_claimed_issue_says_the_values_were_not_applied(self):
+        self.run_script(ORCH / "claim.sh", "12")
+        self.reset_calls()
+        r = self.run_script(ORCH / "claim.sh", "12", "--env", "WF_HANDOFF_TOKENS=5000")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("status: already-claimed", r.stdout)
+        self.assertIn("env: not applied (WF_HANDOFF_TOKENS)", r.stdout)
+        self.assertFalse([c for c in self.calls() if "worktree create" in c or "agent start" in c])
+
+    def test_the_dry_run_names_the_variables_it_would_pass(self):
+        r = self.run_script(ORCH / "claim.sh", "12", "--env", "WF_HANDOFF_TOKENS=5000", WF_DRY_RUN="1")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("status: dry-run", r.stdout)
+        self.assertIn("env: WF_HANDOFF_TOKENS", r.stdout)
+
+
 class PlanTests(ShimTest):
     def test_plan_from_idea_opens_a_plan_worktree_and_starts_the_planner(self):
         r = self.run_script(ORCH / "plan.sh", "Offline", "mode", "for", "the", "app")
