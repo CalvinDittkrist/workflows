@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"regexp"
 	"strings"
 )
 
@@ -116,8 +117,9 @@ func (f *Factory) ingest(r *Run, line []byte) {
 
 // report reads the worker's final report. It is markdown written for a person, so the line that
 // carries the outcome may be bold, quoted, a heading or a list item: `**ready: <url>**`. The first
-// line that says ready or blocked decides. For ready the detail is the pull request, for blocked it
-// is the reason, which runs to the end of the report because a blocker takes more than one line.
+// line that says ready or blocked decides. For ready the detail is the rest of that line, which
+// names the pull request; for blocked it is the reason, which runs to the end of the report because
+// a blocker takes more than one line.
 func report(final string) (outcome, detail string) {
 	lines := strings.Split(final, "\n")
 	for i, line := range lines {
@@ -128,11 +130,7 @@ func report(final string) (outcome, detail string) {
 			}
 			rest := strings.TrimSpace(bare[len(want)+1:])
 			if want == outcomeReady {
-				pullRequest := ""
-				if fields := strings.Fields(rest); len(fields) > 0 {
-					pullRequest = fields[0]
-				}
-				return outcomeReady, pullRequest
+				return outcomeReady, rest
 			}
 			reason := []string{rest}
 			for _, more := range lines[i+1:] {
@@ -144,17 +142,23 @@ func report(final string) (outcome, detail string) {
 	return "", ""
 }
 
+// A pull request as a report names it. GitHub spells a repository as its owner did and takes any
+// case, so the repository is compared without it.
+var pullRequestURL = regexp.MustCompile(`(?i)https://github\.com/([a-z0-9._-]+/[a-z0-9._-]+)/pull/([0-9]+)`)
+
 // pullRequest is the pull request a ready report names, as the record may carry it. The report is
 // written by a model and read by a browser later, and the text of an issue can steer what a worker
-// writes, so only the one shape a real report has is taken: the pull request of the repository this
-// run is for. Anything else is given back as the reason it was not taken.
+// writes, so nothing of the report itself reaches the record: the line is searched for a pull
+// request of the repository this run is for — a model ends a sentence after it, or writes it as a
+// link — and the URL is built from that repository and the number found. A line without one is
+// given back as the reason nothing was taken.
 func pullRequest(detail, repository string) (url, reason string) {
-	want := "https://github.com/" + repository + "/pull/"
-	number, found := strings.CutPrefix(detail, want)
-	if !found || number == "" || strings.Trim(number, "0123456789") != "" {
-		return "", "the report says ready but names no pull request of " + repository + ": " + firstLine(detail)
+	for _, match := range pullRequestURL.FindAllStringSubmatch(detail, -1) {
+		if strings.EqualFold(match[1], repository) {
+			return "https://github.com/" + repository + "/pull/" + match[2], ""
+		}
 	}
-	return detail, ""
+	return "", "the report says ready but names no pull request of " + repository + ": " + firstLine(detail)
 }
 
 // undecorate strips the markdown around a line, so the text of the line can be read as text.

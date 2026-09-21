@@ -143,7 +143,10 @@ func OpenStore(dir string) (*Store, error) {
 	sort.Slice(s.runs, func(a, b int) bool { return s.runs[a].ID < s.runs[b].ID })
 	for _, r := range s.runs {
 		if r.EndedAt == nil {
-			s.finish(r, outcomeInterrupted, "the factory stopped while this run was active", nil)
+			// The log reads to its end like that of every other run: its last event says how it ended.
+			reason := "the factory stopped while this run was active"
+			s.event(r, Event{Kind: "error", Title: outcomeInterrupted, Body: reason})
+			s.finish(r, outcomeInterrupted, reason, nil)
 		}
 	}
 	return s, nil
