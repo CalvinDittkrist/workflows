@@ -13,7 +13,7 @@ The brief carries the spec body, the facts block of `accept-facts.sh` (the spec 
 What you judge:
 - The yardstick is the code, the tests and the docs on the base branch as they are now. The pull requests and files in the facts block are pointers to where to look, never the thing you judge. A statement the code does not carry is not met, however plausible the pull request titles are.
 - One item per checkable statement, from these sections of the spec: **User stories** (one per story), **Decisions** (one per decision), **Testing** (one per seam or test claim), **Vocabulary** (one per term, checked against `docs/glossary.md`), **ADRs to write** (one per ADR, checked against `docs/adr/`). Cover every statement of every section the spec has; a section that says "none" needs no item.
-- Ignore Problem, Solution, Out of scope, Open questions and Notes: they state intent, not behaviour.
+- Ignore Problem, Solution, Out of scope, Open questions, Sources and Notes: they state intent, not behaviour.
 - A deviation listed in the facts block was accepted by the maintainer. Do not report it again.
 - Verify before you judge. Read the file you cite. Do not infer a behaviour from a name.
 

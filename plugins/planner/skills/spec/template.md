@@ -26,5 +26,8 @@ What this spec deliberately leaves out.
 ## Open questions
 What is still undecided, if anything. Empty is the goal.
 
+## Sources
+Facts from outside the repository this spec relies on, one line each: the URL and the date it was checked. Claude Code facts come from `https://code.claude.com/docs/en/<slug>.md`. Or "none".
+
 ## Notes
 Prototype links, research findings, anything else the implementer should know.

@@ -93,6 +93,124 @@ class FactsTests(ShimTest):
                 self.assertEqual(r.returncode, 0, r.stderr)
                 self.assertIn(f"subagents: {shape}", r.stdout)
 
+class ClaudeDocsTests(ShimTest):
+    """The one network call a worker has is pinned to the documentation origin: nothing an argument carries
+    may leave that path, and nothing from another host is printed (issue #44, ADR 0030)."""
+
+    ORIGIN = "https://code.claude.com/docs/"
+
+    def docs(self, *args, **env):
+        return self.run_script(WORKER / "claude-docs.sh", *args, **env)
+
+    def curl_calls(self):
+        """The argv of every curl invocation, in order."""
+        return [call for call in self.argv_calls() if call[0] == "curl"]
+
+    def requested(self):
+        """The URLs curl was asked for, in order."""
+        return [call[-1] for call in self.curl_calls()]
+
+    def timeout_of(self, result):
+        """The seconds the one curl call of `result` was bounded by."""
+        self.assertEqual(result.returncode, 0, result.stderr)
+        call = self.curl_calls()[-1]
+        return call[call.index("--max-time") + 1]
+
+    def test_without_an_argument_it_prints_the_index(self):
+        r = self.docs()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("# Claude Code Docs", r.stdout)
+        self.assertIn(f"url: {self.ORIGIN}llms.txt", r.stdout)
+        self.assertEqual(self.requested(), [f"{self.ORIGIN}llms.txt"])
+
+    def test_a_slug_prints_that_page_as_markdown(self):
+        r = self.docs("sub-agents")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("# Page sub-agents.md", r.stdout)
+        # The url: line is what the lookup agent cites, so it names the page that actually answered.
+        self.assertIn(f"url: {self.ORIGIN}en/sub-agents.md", r.stdout)
+        self.assertEqual(self.requested(), [f"{self.ORIGIN}en/sub-agents.md"])
+
+    def test_a_nested_slug_reaches_the_nested_page(self):
+        """A quarter of the index is nested (agent-sdk/..., whats-new/...); those pages are reachable."""
+        r = self.docs("agent-sdk/hooks")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn(f"url: {self.ORIGIN}en/agent-sdk/hooks.md", r.stdout)
+        self.assertEqual(self.requested(), [f"{self.ORIGIN}en/agent-sdk/hooks.md"])
+
+    def test_the_request_carries_the_timeout_and_a_size_bound(self):
+        self.assertEqual(self.timeout_of(self.docs("sub-agents")), "30")
+        self.reset_calls()
+        # An operator may raise or lower it; whatever they set is what curl is given.
+        self.assertEqual(self.timeout_of(self.docs("sub-agents", WF_DOCS_TIMEOUT="7")), "7")
+        self.assertIn("--max-filesize", self.curl_calls()[0], "a page of any size would land in a context")
+
+    def test_a_timeout_that_is_not_a_number_of_seconds_above_zero_is_refused_with_the_fix(self):
+        # "0" is a number, and `curl --max-time 0` means no timeout at all, so it is refused with the rest.
+        for value in ("soon", "0", "00", "-1", "1.5", " 5"):
+            with self.subTest(timeout=value):
+                self.reset_calls()
+                r = self.docs("sub-agents", WF_DOCS_TIMEOUT=value)
+                self.assertEqual(r.returncode, 1, r.stdout)
+                self.assertIn(f"error: WF_DOCS_TIMEOUT is '{value}'", r.stderr)
+                self.assertEqual(self.requested(), [])
+
+    def test_an_argument_that_is_not_a_slug_is_refused_before_any_request(self):
+        # Each of these would leave the pinned path, or is not a page at all. The message names the fix.
+        for argument in ("../x", "../../etc/passwd", "https://evil.example/x", "//evil.example/x", "/a",
+                         "a/", "a//b", "a.b", "a b", "A", "a?b", "a#b", "a%2fb", "a\nb", ""):
+            with self.subTest(argument=argument):
+                self.reset_calls()
+                r = self.docs(argument)
+                self.assertEqual(r.returncode, 1, r.stdout)
+                self.assertIn("error: not a documentation page", r.stderr)
+                self.assertIn("slug of lowercase letters, digits and hyphens", r.stderr)
+                self.assertEqual(self.requested(), [], "a refused argument still reached the network")
+                self.assertEqual(r.stdout, "")
+
+    def test_a_second_argument_is_refused_with_the_usage(self):
+        r = self.docs("sub-agents", "hooks")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("error: usage: claude-docs.sh", r.stderr)
+        self.assertEqual(self.requested(), [])
+
+    def test_a_failed_request_is_an_error_naming_the_fix_not_an_empty_page(self):
+        r = self.docs("no-such-page", SHIM_CURL_FAIL="1")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("error: could not read https://code.claude.com/docs/en/no-such-page.md", r.stderr)
+        self.assertIn("claude-docs.sh with no argument", r.stderr)
+        self.assertEqual(r.stdout, "")
+
+    def test_an_answer_from_another_host_prints_nothing(self):
+        """The URL is built here, so a redirect is the only way out of the origin; the body is discarded."""
+        r = self.docs("sub-agents", SHIM_CURL_REDIRECT="https://evil.example/collect")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("outside https://code.claude.com/docs/", r.stderr)
+        self.assertEqual(r.stdout, "")
+
+    def test_a_redirect_inside_the_origin_is_followed_and_the_page_that_answered_is_named(self):
+        """The documentation renames pages; the answer is printed and cited under the URL it came from."""
+        r = self.docs("sub-agents", SHIM_CURL_REDIRECT=f"{self.ORIGIN}en/subagents.md")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn(f"url: {self.ORIGIN}en/subagents.md", r.stdout)
+        self.assertIn("# Page subagents.md", r.stdout, "the body of the page that answered is printed")
+
+    def test_only_https_to_the_pinned_origin_is_ever_requested(self):
+        for args in ((), ("sub-agents",), ("hooks",), ("cli-reference",)):
+            self.docs(*args)
+        self.assertTrue(self.requested())
+        for url in self.requested():
+            self.assertTrue(url.startswith(self.ORIGIN), url)
+        for call in self.argv_calls():
+            if call[0] != "curl":
+                continue
+            self.assertIn("--proto", call)
+            self.assertEqual(call[call.index("--proto") + 1], "=https")
+            self.assertEqual(call[call.index("--proto-redir") + 1], "=https")
+            self.assertIn("--fail", call)
+            self.assertIn("--max-time", call, "a documentation call without a timeout can hang a session")
+
+
 # A Makefile whose check target is the gate of the repository under test: real `make check` runs, cheap ones.
 PASSING_GATE = "check:\n\t@echo running the gate\n\t@echo 'Ran 3 tests in 0.1s'\n\t@echo OK\n"
 FAILING_GATE = "check:\n\t@echo running the gate\n\t@echo 'FAILED (failures=1)'\n\t@exit 3\n"

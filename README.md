@@ -75,6 +75,7 @@ All knobs are environment variables, set per repository in `.claude/settings.jso
 | `WF_HANDOFF_SESSION_MS` | `60000` | how long the handover waits for the pane to report a fresh session |
 | `WF_HANDOFF_POLL_SECONDS` | `1` | how often it asks the pane while it waits |
 | `WF_WORKER_PERMISSION_MODE` | `auto` | permission mode for worker sessions |
+| `WF_DOCS_TIMEOUT` | `30` | seconds one documentation request of `claude-docs.sh` may take (`/worker:docs`) |
 | `WF_PLANNER_PERMISSION_MODE` | `auto` | permission mode for planner sessions |
 | `WF_PLANNER_LANGUAGE` | empty | conversation language of planner sessions (claude's `language` setting, e.g. `german`); what the planner writes stays English |
 | `WF_CLAUDE_ARGS` | empty | extra flags for every worker and planner (`--model sonnet`, `--plugin-dir …`) |
@@ -101,6 +102,7 @@ Repositories do not override agents or skills locally: the [repository standard]
 
 ## Design
 
+- [Vision](docs/vision.md): why the repository exists and what it optimises for
 - [Architecture](docs/architecture.md) and [ADRs](docs/adr/README.md)
 - [The local workflow, step by step](docs/local-workflow.md)
 - [Security and sandboxing](docs/security.md)
