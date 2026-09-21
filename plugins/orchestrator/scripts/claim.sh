@@ -118,21 +118,30 @@ fi
 # The status line makes the worker's context size visible in its pane and writes it into the worktree, where
 # the worker's own checkpoint reads it (ADR 0020). It is this plugin's script by absolute path: the worker
 # session has this plugin disabled, which hides its skills and agents, not its files.
-# autoCompactWindow is the safety net under that: a session that is not handed over in time compacts instead of
-# growing until the model refuses. The status line is given the same number, so the pane shows the size against
-# the window this session really has and not against a model window it never reaches. refreshInterval keeps the
-# value fresh while one long tool call runs, which changes no message and would otherwise render nothing.
+# The safety net under that is the compact trigger: a session that is not handed over in time compacts instead
+# of growing until the model refuses. Claude Code compacts at a percentage of autoCompactWindow, and that
+# percentage is not documented, so the claim pins both numbers here and nowhere else (ADR 0031). The trigger is
+# their product, and it is the number the status line is given, so the pane shows the size against the point
+# this session compacts by and not against a window it never reaches. refreshInterval keeps the value
+# fresh while one long tool call runs, which changes no message and would otherwise render nothing.
 here=$(cd "$(dirname "$0")" && pwd)
-compact=200000
+compact_window=200000
+# CLAUDE_AUTOCOMPACT_PCT_OVERRIDE can only lower the percentage ("values above the default percentage are
+# ignored", https://code.claude.com/docs/en/env-vars.md), and 80 is under the default the measured worker
+# sessions compacted at, so it is the percentage that applies rather than a request Claude Code drops.
+compact_pct=80
+compact_trigger=$((compact_window * compact_pct / 100))
 # claude runs statusLine.command through a shell, so the path is quoted: a checkout under "/Users/John Smith"
 # would otherwise split into words, nothing would render, and the worker's checkpoint would read a missing
 # value as a handoff for the rest of the run.
-sl="$(wf_shell_quote "$here/statusline.sh") $compact"
-settings=$(jq -cn --arg m "$mode" --arg i "$issue" --arg sl "$sl" --argjson c "$compact" \
-  '{env:{WF_MODE:$m, WF_ISSUE:$i, CLAUDE_CODE_DISABLE_BACKGROUND_TASKS:"1"},
+sl="$(wf_shell_quote "$here/statusline.sh") $compact_trigger"
+settings=$(jq -cn --arg m "$mode" --arg i "$issue" --arg sl "$sl" \
+  --argjson w "$compact_window" --arg p "$compact_pct" \
+  '{env:{WF_MODE:$m, WF_ISSUE:$i, CLAUDE_CODE_DISABLE_BACKGROUND_TASKS:"1",
+         CLAUDE_AUTOCOMPACT_PCT_OVERRIDE:$p},
     enabledPlugins:{"planner@workflows":false, "orchestrator@workflows":false},
     statusLine:{type:"command", command:$sl, padding:0, refreshInterval:60},
-    autoCompactWindow:$c}')
+    autoCompactWindow:$w}')
 perm="${WF_WORKER_PERMISSION_MODE:-auto}"
 name=$(wf_agent_name "issue-$issue")
 # WF_CLAUDE_ARGS applies to every session, WF_WORKER_CLAUDE_ARGS to workers only (e.g. "--model sonnet", "--plugin-dir /path" while developing).
