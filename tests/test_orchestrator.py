@@ -169,6 +169,19 @@ class ClaimTests(ShimTest):
         self.assertIn("branch: feat/19-routed-to-the-factory", r.stdout)
         self.assertEqual(len([c for c in self.calls() if c.startswith("herdr agent start")]), 1)
 
+    def test_force_claims_a_routed_issue_whose_branch_the_factory_already_pushed(self):
+        # The whole factory case in one: routed and claimed on the remote. Both refusals warn, and the worktree
+        # continues the factory's branch under its name, not the one this machine's labels derive.
+        sha = self.remote_claim("fix/19-an-earlier-slug")
+        r = self.run_script(ORCH / "claim.sh", "19", "--force")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("routed to the factory", r.stderr)
+        self.assertIn("adopts that branch", r.stderr)
+        self.assertIn("branch: fix/19-an-earlier-slug", r.stdout)
+        wt = self.repo / ".claude/worktrees/fix-19-an-earlier-slug"
+        self.assertEqual(self.git("rev-parse", "HEAD", cwd=wt).strip(), sha)
+        self.assertTrue((wt / "factory-work.md").exists())
+
     def test_claim_refuses_an_issue_already_claimed_on_the_remote(self):
         # The remote branch is a feat/ one while the labels of #12 derive fix/: the claim on the remote is
         # found by issue number, not by the branch type of the moment. The other two branches are near
