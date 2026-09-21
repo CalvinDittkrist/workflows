@@ -70,7 +70,7 @@ All knobs are environment variables, set per repository in `.claude/settings.jso
 | `WF_REVIEW_ROUNDS` | `3` | max fix-and-re-review rounds |
 | `WF_PR_BOT_REVIEWERS` | `chatgpt-codex-connector` | bot logins whose PR review the worker waits for; set to `""` in repositories without a bot reviewer |
 | `WF_PR_REVIEW_WAIT` | `600` | seconds to wait for a bot review after checks pass |
-| `WF_HANDOFF_TOKENS` | `120000` | context size at which a worker hands the next stage to a fresh context; keep it under the compact trigger of 160 000 a claim pins, an upper bound rather than an exact size ([ADR 0031](docs/adr/0031-the-workflow-pins-the-size-at-which-a-worker-session-compacts.md)) |
+| `WF_HANDOFF_TOKENS` | `100000` | context size at which a worker hands the stage it is entering to a fresh context; leave room for one review round under the compact trigger of 160 000 a claim pins, an upper bound rather than an exact size ([ADR 0031](docs/adr/0031-the-workflow-pins-the-size-at-which-a-worker-session-compacts.md)) |
 | `WF_CONTEXT_MAX_AGE` | `900` | seconds after which a recorded context size is too old to answer for this turn, and the checkpoint says hand over |
 | `WF_HANDOFF_SESSION_MS` | `60000` | how long the handover waits for the pane to report a fresh session |
 | `WF_HANDOFF_POLL_SECONDS` | `1` | how often it asks the pane while it waits |

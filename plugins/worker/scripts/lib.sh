@@ -28,6 +28,18 @@ wf_merge_base() {
   local ref; ref=$(wf_base_ref)
   git merge-base "$ref" HEAD 2>/dev/null || printf '%s\n' "$ref"
 }
+# The stages a checkpoint hands over before, and the stages a handoff resumes at: one list, because the two
+# are the same contract read from both ends — the checkpoint accepts the stage, handoff.sh has to accept the
+# word the model then pipes the note with. Both are a stage boundary at which everything the next context
+# needs is in git, in GitHub or in a record of this worktree.
+wf_handoff_stages() { printf 'review ci\n'; }
+# Whether a word is one of a space-separated list. `case " $list " in *" $word "*)` answers yes for several
+# words of the list at once as well, so a quoted "review ci" passed for a stage; this compares word by word.
+wf_in_list() {
+  local item
+  for item in $2; do [ "$item" = "$1" ] && return 0; done
+  return 1
+}
 # The agent session id herdr reports for a pane: the one signal that tells one Claude context in a pane from
 # the next, which is what a handoff confirms itself with (ADR 0029). Empty when herdr knows no agent there.
 wf_agent_session() {

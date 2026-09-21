@@ -1,5 +1,6 @@
 import json
 import re
+import shlex
 import time
 import unittest
 from pathlib import Path
@@ -545,12 +546,12 @@ class CheckpointTests(ShimTest):
         self.record(78231)
         out = self.checkpoint()
         self.assertEqual(out["context_tokens"], "78231")
-        self.assertEqual(out["threshold"], "120000")
+        self.assertEqual(out["threshold"], "100000", "the default, one review round under the compact trigger")
         self.assertEqual(out["handoff"], "no")
         self.assertIn("39 % of it used", out["model_context_window"])
 
     def test_at_and_above_the_threshold_is_a_handoff(self):
-        for tokens in (120000, 180000):
+        for tokens in (100000, 180000):
             self.record(tokens)
             out = self.checkpoint()
             self.assertEqual(out["handoff"], "yes", tokens)
@@ -598,7 +599,198 @@ class CheckpointTests(ShimTest):
         out = self.checkpoint(HERDR_ENV="")
         self.assertEqual(out["context_tokens"], "unavailable")
         self.assertEqual(out["handoff"], "unavailable")
-        self.assertEqual(out["threshold"], "120000")
+        self.assertEqual(out["threshold"], "100000")
+
+
+class CheckpointEntryTests(ShimTest):
+    """The checkpoint a stage skill runs on entering the stage, wherever the context came from, and the one
+    skip the context a handoff started gets there (issue #71, ADR 0032)."""
+
+    def setUp(self):
+        super().setUp()
+        self.git("checkout", "-qb", "feat/12-x")
+        (self.repo / "a.txt").write_text("a\n")
+        self.git("add", ".")
+        self.git("commit", "-qm", "feat: add a")
+        self.state = self.repo / ".git" / "worker"
+        self.state.mkdir(parents=True, exist_ok=True)
+        self.note = self.state / "handoff"
+
+    def context(self, tokens=150000, age=0):
+        stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - age))
+        (self.state / "context").write_text(
+            f"total_input_tokens: {tokens}\ncontext_window_size: 200000\nat: {stamp}\n")
+
+    def handoff_record(self, stage="review", injected=True, session="session-before"):
+        """The record as the SessionStart hook leaves it once it has given the note to a session. The default
+        session is the one the herdr shim reports for a pane that has not been prompted (tests/shims/herdr,
+        `agent get`), so the record names this context and the skip is granted."""
+        head = f"injected: 2026-09-21T12:00:00Z\ninjected_session: {session}\n" if injected else ""
+        self.note.write_text(f"{head}stage: {stage}\ncommit: deadbee\nsession: the-context-that-handed-over\n"
+                               "\n## decisions\n- why\n")
+
+    def checkpoint(self, *args, **env):
+        env.setdefault("HERDR_PANE_ID", "w9:p1")
+        r = self.run_script(WORKER / "checkpoint.sh", *args, **env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return r
+
+    def keys(self, out):
+        """The key lines of an answer. Not every line: a handoff answer ends in a procedure to follow."""
+        return dict(line.split(": ", 1) for line in out.splitlines() if re.match(r"^[a-z_]+: ", line))
+
+    def test_the_context_a_handoff_started_skips_that_stage_once(self):
+        # The context value is per worktree, so the fresh context first reads the size of the one it replaced:
+        # without the skip it would hand over again at once and no round would ever run.
+        self.context(150000)
+        self.handoff_record()
+        first = self.keys(self.checkpoint("review").stdout)
+        self.assertEqual(first["handoff"], "no")
+        self.assertEqual(first["context_tokens"], "150000", "the value is still reported, only not acted on")
+        self.assertIn("started by the handoff", first["reason"])
+        self.assertIn("skip_used: ", self.note.read_text())
+        # One unit of work later the same session measures like any other.
+        self.assertEqual(self.keys(self.checkpoint("review").stdout)["handoff"], "yes")
+
+    def test_the_skip_covers_a_value_that_is_missing_or_stale_too(self):
+        # Those answer `yes` without any measurement, so a skip that only covered the threshold would still
+        # loop in exactly the window right after a handover.
+        for case in ("missing", "stale"):
+            with self.subTest(case=case):
+                (self.state / "context").unlink(missing_ok=True)
+                if case == "stale":
+                    self.context(40000, age=5000)
+                self.handoff_record()
+                self.assertEqual(self.keys(self.checkpoint("review").stdout)["handoff"], "no")
+                self.assertEqual(self.keys(self.checkpoint("review").stdout)["handoff"], "yes")
+
+    def test_a_session_that_only_finds_the_record_never_inherits_the_skip(self):
+        # A session restarted by hand, a `/worker:work` typed after a crash, a forced claim that adopted the
+        # branch: the record names another session, so their first entry into a stage is measured.
+        self.context(150000)
+        self.handoff_record(session="a-session-that-is-gone")
+        out = self.keys(self.checkpoint("review").stdout)
+        self.assertEqual(out["handoff"], "yes")
+        self.assertNotIn("skip_used: ", self.note.read_text(), "and the skip is still there for its own session")
+
+    def test_sessions_that_cannot_be_compared_get_the_skip_rather_than_a_loop(self):
+        # Only a session that is provably another one loses the skip. Where the two ids cannot be compared,
+        # refusing would measure the stale value of the context that is gone, hand over again and never do
+        # any work; granting costs one stage measured late, once, because the skip is spent either way.
+        cases = {
+            # A worker plugin upgraded between the handover and the context it started: the hook that wrote
+            # this record knew no `injected_session:` yet.
+            "record from before the mark": (
+                "injected: 2026-09-21T12:00:00Z\nstage: review\n\n## decisions\n- why\n", {}),
+            # The hook ran but its payload carried no session id.
+            "hook reported no session": (
+                "injected: 2026-09-21T12:00:00Z\ninjected_session: \nstage: review\n\n## decisions\n- why\n", {}),
+            # Herdr has not identified the agent in this pane, so it names no session to compare with.
+            "herdr names no agent": (
+                "injected: 2026-09-21T12:00:00Z\ninjected_session: session-before\nstage: review\n"
+                "\n## decisions\n- why\n", {"SHIM_NO_AGENT_SESSION": "1"}),
+        }
+        for name, (record, env) in cases.items():
+            with self.subTest(case=name):
+                self.context(150000)
+                self.note.write_text(record)
+                first = self.keys(self.checkpoint("review", **env).stdout)
+                self.assertEqual(first["handoff"], "no")
+                self.assertIn("cannot be compared with", first["reason"])
+                self.assertIn("skip_used: ", self.note.read_text())
+                # And it is one skip here as well: the next entrance of the same session measures.
+                self.assertEqual(self.keys(self.checkpoint("review", **env).stdout)["handoff"], "yes")
+
+    def test_a_record_that_cannot_be_marked_grants_the_skip_and_says_so(self):
+        # Failing closed on the mark would re-create the same loop, so it fails open — and the answer carries
+        # the warning too, because a skill injection may show the model stdout alone.
+        self.context(150000)
+        self.handoff_record()
+        # A directory where the temporary file goes, because the write has to fail for whoever runs the
+        # suite: a read-only mode on the state directory stops nobody when the tests run as root, as they
+        # do in a container.
+        blocked = self.note.parent / (self.note.name + ".tmp")
+        blocked.mkdir()
+        self.addCleanup(blocked.rmdir)
+        out = self.checkpoint("review")
+        self.assertEqual(self.keys(out.stdout)["handoff"], "no")
+        self.assertIn("could not be marked as entered", self.keys(out.stdout)["reason"])
+        said = [line for line in out.stderr.splitlines() if line.strip()]
+        self.assertEqual(len(said), 1, f"one warning and no raw shell error about the redirection:\n{out.stderr}")
+        self.assertTrue(said[0].startswith("warning: "), said[0])
+
+    def test_the_skip_belongs_to_the_stage_the_note_was_written_for(self):
+        self.context(150000)
+        self.handoff_record(stage="review")
+        self.assertEqual(self.keys(self.checkpoint("ci").stdout)["handoff"], "yes")
+        self.assertEqual(self.keys(self.checkpoint("review").stdout)["handoff"], "no",
+                         "and the entry it was written for still gets it")
+
+    def test_a_note_still_on_its_way_grants_nothing(self):
+        # No session has been given this note yet, so no context in this pane was started for its stage.
+        self.context(150000)
+        self.handoff_record(injected=False)
+        self.assertEqual(self.keys(self.checkpoint("review").stdout)["handoff"], "yes")
+
+    def test_without_a_stage_the_checkpoint_reports_and_spends_nothing(self):
+        # The maintainer's reading by hand: no guard, no procedure, and the skip is left for the stage.
+        self.context(150000)
+        self.handoff_record()
+        out = self.checkpoint()
+        self.assertEqual(self.keys(out.stdout)["handoff"], "yes")
+        self.assertNotIn("next:", out.stdout)
+        self.assertNotIn("skip_used: ", self.note.read_text())
+        self.assertEqual(self.keys(self.checkpoint("review").stdout)["handoff"], "no")
+
+    def test_a_handoff_answer_carries_the_procedure_it_asks_for(self):
+        # A context that entered the stage skill directly never read the driver's text, so the answer says
+        # what to do, and says it only when there is something to do.
+        self.context(150000)
+        out = self.checkpoint("ci").stdout
+        # The command as printed has to be the command to run: the quote closes before the stage, or a reader
+        # that copies it literally asks the shell for a script whose name ends in a space and a stage.
+        command = re.search(r'into (".*?" \S+) with', out)
+        self.assertTrue(command, f"the procedure names no command to run:\n{out}")
+        script, stage = shlex.split(command.group(1))
+        self.assertTrue(Path(script).is_file(), script)
+        self.assertEqual(stage, "ci")
+        self.assertIn("<<'NOTE'", out)
+        for section in ("decisions", "rejected", "verified", "open"):
+            self.assertIn(section, out, section)
+        self.assertIn("end your turn", out)
+        self.context(10000)
+        self.assertNotIn("next:", self.checkpoint("ci").stdout, "nothing to do, nothing to say")
+
+    def test_an_unknown_stage_is_refused_with_the_usage(self):
+        # "review ci" as one argument is the case a `case " $list " in *" $word "*` match let through, which
+        # would have put `stage: review ci` in the record the hook and facts.sh read.
+        for args in (["implement"], ["review ci"], ["review", "ci"]):
+            with self.subTest(args=args):
+                r = self.run_script(WORKER / "checkpoint.sh", *args, HERDR_PANE_ID="w9:p1")
+                self.assertEqual(r.returncode, 1, r.stdout)
+                self.assertIn("checkpoint.sh [review|ci]", r.stderr)
+
+    def test_outside_a_herdr_pane_the_stage_checkpoint_changes_nothing(self):
+        self.context(150000)
+        self.handoff_record()
+        out = self.checkpoint("review", HERDR_ENV="")
+        self.assertEqual(self.keys(out.stdout)["handoff"], "unavailable")
+        self.assertNotIn("next:", out.stdout)
+        self.assertFalse(self.calls(), "and no pane was asked anything")
+        self.assertNotIn("skip_used: ", self.note.read_text(), "and the skip is left for the stage")
+
+    def test_entering_the_review_and_the_ci_stage_measures_this_context(self):
+        # The measurement is an injection of both stage skills, so it reaches whoever enters the stage,
+        # from the driver or directly, and no model can leave it out.
+        self.context(150000)
+        for skill in ("review", "ci"):
+            with self.subTest(skill=skill):
+                brief = self.skill_brief("worker", skill, WF_BASE_BRANCH="main", HERDR_PANE_ID="w9:p1")
+                out = self.keys(brief)
+                self.assertEqual(out["context_tokens"], "150000")
+                self.assertEqual(out["threshold"], "100000")
+                self.assertEqual(out["handoff"], "yes")
+                self.assertIn(f'handoff.sh" {skill}', brief, "with the stage this entrance would resume at")
 
 
 NOTE = """## decisions
@@ -611,7 +803,7 @@ NOTE = """## decisions
 - the gate passes at this commit
 
 ## open
-- the second checkpoint has not run in anger yet
+- the checkpoint on entering the CI stage has not run in anger yet
 """
 
 
@@ -687,9 +879,14 @@ class HandoffTests(ShimTest):
         self.assertIn("no '## verified' section", r.stderr)
 
     def test_only_the_two_checkpoints_are_stages_to_resume_at(self):
-        r = self.handoff(stage="implement")
-        self.assertEqual(r.returncode, 1, r.stdout)
-        self.assertIn("review or ci", r.stderr)
+        # "review ci" as one argument too: it named both stages at once, and the record it would write is the
+        # one the SessionStart hook and facts.sh read back as the stage to resume at.
+        for stage in ("implement", "review ci"):
+            with self.subTest(stage=stage):
+                r = self.handoff(stage=stage)
+                self.assertEqual(r.returncode, 1, r.stdout)
+                self.assertIn("review or ci", r.stderr)
+                self.assertFalse(self.record.exists(), "and nothing was recorded")
         r = self.run_script(WORKER / "handoff.sh", stdin=NOTE, HERDR_PANE_ID="w9:p1")
         self.assertEqual(r.returncode, 1, r.stdout)
         self.assertIn("usage: handoff.sh <review|ci>", r.stderr)
@@ -848,6 +1045,26 @@ class HandoffTests(ShimTest):
         state.chmod(mode)
         self.assertIn("the note lives in the worktree's git directory", self.hook(),
                       "and the note is still there for the next context")
+
+    def test_the_mark_names_the_session_the_note_reached_and_that_session_skips_its_stage(self):
+        # The hook marks the record with the session it injected the note into, and that session — and no
+        # other — passes its stage's entry checkpoint once without handing over again (ADR 0032).
+        self.assertEqual(self.handoff().returncode, 0)
+        self.hook(session_id="fresh-context")
+        self.assertIn("injected_session: fresh-context\n", self.record.read_text())
+        stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        (self.repo / ".git/worker/context").write_text(
+            f"total_input_tokens: 150000\ncontext_window_size: 200000\nat: {stamp}\n")
+
+        def entry(session):
+            (self.wt_root / ".agent-session").write_text(session)
+            r = self.run_script(WORKER / "checkpoint.sh", "review", HERDR_PANE_ID="w9:p1")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            return dict(line.split(": ", 1) for line in r.stdout.splitlines() if re.match(r"^[a-z_]+: ", line))
+
+        self.assertEqual(entry("another-session")["handoff"], "yes")
+        self.assertEqual(entry("fresh-context")["handoff"], "no")
+        self.assertEqual(entry("fresh-context")["handoff"], "yes", "one skip, then it measures")
 
     def test_a_note_cannot_spoof_a_header_of_the_record(self):
         r = self.handoff(note=NOTE + "\ninjected: 2020-01-01T00:00:00Z\nstage: ci\n")
@@ -1057,6 +1274,29 @@ class PrWaitTests(ShimTest):
         self.assertEqual(r.returncode, 3, r.stdout + r.stderr)
         self.assertIn("status: waiting", r.stdout)
         self.assertIn("expected from: chatgpt-codex-connector", r.stdout)
+
+    def test_the_bot_review_that_arrived_ends_the_wait(self):
+        # Regression: the reviewer's login was read inside jq's index(), where the input is the list of bots
+        # and not the review, so every PR that carried a review at all made the count fail. The stage then
+        # ignored the review it was waiting for and sat out the whole review window.
+        r = self.wait(SHIM_REVIEWS='[{"author":{"login":"chatgpt-codex-connector[bot]"},'
+                                   '"submittedAt":"2026-09-17T11:00:00Z"}]')
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("status: green", r.stdout)
+        self.assertIn("bot_reviews: 1 since last push", r.stdout)
+        self.assertEqual("", r.stderr.strip(), r.stderr)
+
+    def test_a_review_from_anybody_else_does_not_end_the_wait(self):
+        r = self.wait(SHIM_REVIEWS='[{"author":{"login":"maintainer"},"submittedAt":"2026-09-17T11:00:00Z"}]')
+        self.assertEqual(r.returncode, 3, r.stdout + r.stderr)
+        self.assertIn("status: waiting", r.stdout)
+        self.assertIn("bot_reviews: 0 since last push", r.stdout)
+
+    def test_a_bot_review_from_before_the_last_push_does_not_count(self):
+        r = self.wait(SHIM_REVIEWS='[{"author":{"login":"chatgpt-codex-connector"},'
+                                   '"submittedAt":"2026-09-17T09:00:00Z"}]')
+        self.assertEqual(r.returncode, 3, r.stdout + r.stderr)
+        self.assertIn("bot_reviews: 0 since last push", r.stdout)
 
     def test_empty_bot_list_means_green_as_soon_as_checks_pass(self):
         r = self.wait(WF_PR_BOT_REVIEWERS="")

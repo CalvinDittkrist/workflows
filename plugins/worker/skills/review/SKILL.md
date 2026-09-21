@@ -2,8 +2,13 @@
 name: review
 description: Run the independent reviewer panel (code, security, docs, tests, senior) on the branch diff in fresh contexts and fix the findings until the panel passes.
 argument-hint: [reviewers=code,security,docs,tests,senior]
-allowed-tools: Bash(${CLAUDE_PLUGIN_ROOT}/scripts/diff-context.sh), Bash(${CLAUDE_PLUGIN_ROOT}/scripts/facts.sh), Bash(${CLAUDE_PLUGIN_ROOT}/scripts/gate.sh*)
+allowed-tools: Bash(${CLAUDE_PLUGIN_ROOT}/scripts/checkpoint.sh*), Bash(${CLAUDE_PLUGIN_ROOT}/scripts/diff-context.sh), Bash(${CLAUDE_PLUGIN_ROOT}/scripts/facts.sh), Bash(${CLAUDE_PLUGIN_ROOT}/scripts/gate.sh*)
 ---
+Context checkpoint:
+!`${CLAUDE_PLUGIN_ROOT}/scripts/checkpoint.sh review`
+
+The checkpoint above measured this context as you entered the stage, whichever stage you came from. On `handoff: yes` run no round and launch no reviewer here: follow the `next:` procedure it printed and hand the review stage over to a fresh context. On `no` or `unavailable` review as below.
+
 Diff context:
 !`${CLAUDE_PLUGIN_ROOT}/scripts/diff-context.sh`
 !`${CLAUDE_PLUGIN_ROOT}/scripts/facts.sh`
