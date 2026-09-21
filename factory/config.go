@@ -50,8 +50,13 @@ const (
 // same name has to identify the repository on GitHub and in an issue's link.
 var repository = regexp.MustCompile(`^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$`)
 
-// The hosts that mean "every interface"; net.SplitHostPort strips the brackets of an IPv6 address.
-var wildcard = map[string]bool{"0.0.0.0": true, "::": true, "[::]": true}
+// unspecified says whether a host is a spelling of "every interface": 0.0.0.0, ::, ::0, ::ffff:0.0.0.0
+// and the rest of them. A host that is not an IP literal at all is decided after binding, where the
+// address the kernel actually chose is known.
+func unspecified(host string) bool {
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsUnspecified()
+}
 
 // Load reads the configuration file and refuses it unless it is usable. Every error names the fix,
 // because the operator reads it in the host's journal and has no shell session to try things in.
@@ -90,7 +95,7 @@ func Load(path string) (Settings, error) {
 		// The factory has no login of its own, so it must not answer on every interface: reaching it
 		// from elsewhere is the tailnet's job, and a wildcard address would put an unauthenticated
 		// interface on every network the host is on.
-		if host == "" || wildcard[host] {
+		if host == "" || unspecified(host) {
 			return bad("listen %q answers on every interface; bind it to one address, such as %q or the host's tailnet address", c.Listen, defaultListen)
 		}
 		s.Listen = c.Listen

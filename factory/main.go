@@ -51,6 +51,12 @@ func run(config string, fake, paused bool) error {
 		return fmt.Errorf("%w; is another factory running on this host? one host runs one factory", err)
 	}
 	defer listener.Close()
+	// The address the kernel chose is the one that counts: a host that is not an IP literal can still
+	// resolve to every interface, and this interface has no login of its own.
+	if bound, ok := listener.Addr().(*net.TCPAddr); ok && bound.IP.IsUnspecified() {
+		return fmt.Errorf("listen %q answers on every interface (%s); bind it to one address, such as %q, and reach it over the tailnet",
+			settings.Listen, bound, defaultListen)
+	}
 
 	factory, err := New(settings, fake)
 	if err != nil {

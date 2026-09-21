@@ -100,7 +100,9 @@ type apiLine struct {
 }
 
 func TestFakeModeWorksTheCannedQueueOneRunAtATime(t *testing.T) {
-	f := start(t, config{"deadline": "3s", "poll": "100ms"})
+	// The deadline has to be far above what a scripted run costs — a binary built with the race
+	// detector pays about a second on every exit — or a quick run would be read as a timeout.
+	f := start(t, config{"deadline": "15s", "poll": "100ms"})
 
 	var line apiLine
 	f.eventually(t, 60*time.Second, "the whole canned queue to be done", func() bool {
@@ -177,7 +179,7 @@ func TestFakeModeWorksTheCannedQueueOneRunAtATime(t *testing.T) {
 	if silent.ExitCode == nil || *silent.ExitCode != 0 {
 		t.Errorf("run 4 has the exit code %v, want 0: the session itself ended well", silent.ExitCode)
 	}
-	// Its tool result is far longer than an event keeps: the log has to hold the head of it and say so.
+	// Its tool call carries a file far longer than an event keeps: the log holds the head and says so.
 	var withBody apiRun
 	f.get(t, "/api/runs/4", &withBody)
 	truncated := 0
@@ -194,7 +196,7 @@ func TestFakeModeWorksTheCannedQueueOneRunAtATime(t *testing.T) {
 	}
 
 	// timeout: the deadline passed and the whole process group was ended.
-	if timeout.Outcome != "timeout" || !strings.Contains(timeout.Reason, "deadline of 3s") {
+	if timeout.Outcome != "timeout" || !strings.Contains(timeout.Reason, "deadline of 15s") {
 		t.Errorf("run 5 ended %q because %q, want timeout on the deadline", timeout.Outcome, timeout.Reason)
 	}
 	var full apiRun
@@ -265,10 +267,12 @@ func TestTheInterfaceIsReadOnly(t *testing.T) {
 			response.Body.Close()
 		}
 	}
-	response := f.do(t, "GET", "/api/status")
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		t.Errorf("GET /api/status answered %d, want 200", response.StatusCode)
+	for path, want := range map[string]int{"/": http.StatusOK, "/api/runs/1": http.StatusNotFound, "/nothing": http.StatusNotFound} {
+		response := f.do(t, "GET", path)
+		if response.StatusCode != want {
+			t.Errorf("GET %s answered %d, want %d", path, response.StatusCode, want)
+		}
+		response.Body.Close()
 	}
 }
 
@@ -345,6 +349,8 @@ func TestAnInvalidConfigurationIsRefusedWithTheFix(t *testing.T) {
 		{"address without port", `{"data_dir":"data","repositories":["a/b"],"listen":"127.0.0.1"}`, `is not an address; write it as host:port`},
 		{"wildcard address", `{"data_dir":"data","repositories":["a/b"],"listen":"0.0.0.0:7341"}`, `answers on every interface; bind it to one address`},
 		{"wildcard address, IPv6", `{"data_dir":"data","repositories":["a/b"],"listen":"[::]:7341"}`, `answers on every interface`},
+		{"wildcard address, IPv6 written out", `{"data_dir":"data","repositories":["a/b"],"listen":"[0:0:0:0:0:0:0:0]:7341"}`, `answers on every interface`},
+		{"wildcard address, not a literal", `{"data_dir":"data","repositories":["a/b"],"listen":"0:7341"}`, `answers on every interface`},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "factory.json")
@@ -360,6 +366,25 @@ func TestAnInvalidConfigurationIsRefusedWithTheFix(t *testing.T) {
 			}
 		})
 	}
+	t.Run("data directory that is a file", func(t *testing.T) {
+		dir := t.TempDir()
+		blocked := filepath.Join(dir, "runs")
+		if err := os.WriteFile(blocked, []byte("not a directory"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(dir, "factory.json")
+		config := fmt.Sprintf(`{"listen":%q,"data_dir":%q,"repositories":["a/b"]}`, freeAddress(t), blocked)
+		if err := os.WriteFile(path, []byte(config), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		output, err := exec.Command(binary, "-config", path, "-fake").CombinedOutput()
+		if err == nil {
+			t.Fatalf("the factory started with a data directory it cannot write, want a refusal")
+		}
+		if !strings.Contains(string(output), "name a writable data_dir") {
+			t.Errorf("the factory said %q, want the fix for a data directory it cannot use", strings.TrimSpace(string(output)))
+		}
+	})
 	t.Run("without fake mode", func(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "factory.json")
 		if err := os.WriteFile(path, []byte(`{"data_dir":"data","repositories":["a/b"]}`), 0o600); err != nil {

@@ -42,10 +42,12 @@ type Factory struct {
 	wake     chan struct{} // a run ended: the next entry need not wait for the next poll
 	active   sync.WaitGroup
 
-	mu         sync.Mutex
-	queue      []Issue
-	polledAt   time.Time
-	quotaUntil *time.Time // set while the factory waits for the Claude quota to reset
+	mu       sync.Mutex
+	queue    []Issue
+	polledAt time.Time
+	// quotaUntil is served empty until the quota check arrives (ADR 0026); the interface carries the
+	// state from the start so the ticket that fills it changes no reader.
+	quotaUntil *time.Time
 }
 
 // New opens the data directory and takes the runs already in it. Nothing here starts a run: the
@@ -98,21 +100,13 @@ func (f *Factory) dispatch(ctx context.Context) {
 	if f.settings.Paused || ctx.Err() != nil {
 		return
 	}
-	worked := map[string]bool{}
 	for _, r := range f.runs.list() {
 		if r.EndedAt == nil {
 			return
 		}
-		worked[r.key()] = true
 	}
-	f.mu.Lock()
-	queue := f.queue
-	f.mu.Unlock()
-	for _, issue := range queue {
-		if !worked[issue.key()] {
-			f.start(ctx, issue)
-			return
-		}
+	if waiting := f.waiting(); len(waiting) > 0 {
+		f.start(ctx, waiting[0])
 	}
 }
 
@@ -192,11 +186,11 @@ func (f *Factory) execute(parent context.Context, r *Run, issue Issue) {
 	readers.Add(2)
 	go func() {
 		defer readers.Done()
-		scan(stdout, func(line []byte) { f.ingest(r, line) })
+		f.read(r, "the worker's output", stdout, func(line []byte) { f.ingest(r, line) })
 	}()
 	go func() {
 		defer readers.Done()
-		scan(stderr, func(line []byte) {
+		f.read(r, "the worker's error output", stderr, func(line []byte) {
 			f.error(r, Event{Kind: "error", Title: "stderr: " + firstLine(string(line)), Body: string(line)})
 		})
 	}()
@@ -220,8 +214,14 @@ func (f *Factory) execute(parent context.Context, r *Run, issue Issue) {
 	case !reported && errors.Is(ctx.Err(), context.DeadlineExceeded):
 		f.finish(r, outcomeTimeout, fmt.Sprintf("the deadline of %s passed; the worker's process group was ended", f.settings.Deadline), &exitCode)
 	case r.reportOutcome == outcomeReady:
-		f.runs.update(r, func() { r.PullRequest = r.reportDetail })
-		f.finish(r, outcomeReady, "", &exitCode)
+		// The report is written by a model and read by a browser later: only an absolute https URL
+		// reaches the record, so no reader of the interface can be handed another kind of link.
+		pullRequest, reason := r.reportDetail, ""
+		if !strings.HasPrefix(pullRequest, "https://") {
+			pullRequest, reason = "", "the report says ready but names no pull request: "+firstLine(r.reportDetail)
+		}
+		f.runs.update(r, func() { r.PullRequest = pullRequest })
+		f.finish(r, outcomeReady, reason, &exitCode)
 	case r.reportOutcome == outcomeBlocked:
 		f.runs.update(r, func() { r.Reason = r.reportDetail })
 		f.finish(r, outcomeBlocked, "", &exitCode)
@@ -256,13 +256,22 @@ func endGroup(pid int, signal syscall.Signal) error {
 	return nil
 }
 
-// scan reads a stream line by line. One line of the worker's stream carries a whole tool result, so
-// the buffer is generous; a line beyond it ends the scan rather than splitting a JSON object.
-func scan(r io.Reader, line func([]byte)) {
-	scanner := bufio.NewScanner(r)
-	scanner.Buffer(make([]byte, 64*1024), 64*1024*1024)
+// One line of the worker's stream carries a whole tool result, so the reader's buffer is generous; a
+// line beyond it is refused rather than split into halves that are not JSON.
+const maxStreamLine = 64 << 20
+
+// read takes a worker's stream line by line. A stream that cannot be read to its end says so in the
+// run's log — the alternative is a silent reader and a worker that blocks on a pipe nobody empties
+// until the deadline ends it — and what is left of it is drained so the worker can finish.
+func (f *Factory) read(r *Run, what string, stream io.Reader, line func([]byte)) {
+	scanner := bufio.NewScanner(stream)
+	scanner.Buffer(make([]byte, 64*1024), maxStreamLine)
 	for scanner.Scan() {
 		line(scanner.Bytes())
+	}
+	if err := scanner.Err(); err != nil {
+		f.error(r, Event{Kind: "error", Title: what + " could not be read to its end", Body: err.Error()})
+		_, _ = io.Copy(io.Discard, stream)
 	}
 }
 

@@ -84,10 +84,10 @@ type Event struct {
 	Sub   bool      `json:"sub,omitempty"` // written by a subagent of the worker
 }
 
-// A tool result can carry a whole file; the log keeps the head of it and says so. One line of the
-// log is that body as JSON, where escaping can inflate it several times over, plus the rest of the
-// event: the reader's limit is well above the worst case and bounded, so a corrupt line is refused
-// rather than read into memory.
+// A tool call can carry a whole file; the log keeps the head of it and says so. One line of the log
+// is that body as JSON, where escaping can inflate it several times over, plus the rest of the
+// event; the line the reader accepts is far above that worst case, so the limit is not a limit runs
+// reach but a bound that keeps a corrupt line from being read into memory.
 const (
 	maxEventBody = 8000
 	maxEventLine = 1 << 20
@@ -186,8 +186,10 @@ func (s *Store) finish(r *Run, outcome, reason string, exitCode *int) {
 	s.write(r)
 }
 
-// write persists a record. It writes a whole file and renames it, so a record is never half written,
-// whatever interrupts the host. Callers hold the lock.
+// write persists a record. It writes a whole file and renames it, so a reader never meets a half
+// written record and a crash of the factory cannot leave one. The bytes are not forced to the disk:
+// a power cut can still cost the last writes, which is why nothing depends on a record that the run
+// itself did not also report to GitHub. Callers hold the lock.
 //
 // The data directory is the factory's only durable output, and nobody watches the host: a write that
 // fails says so in the journal, with the fix, rather than leaving a service that looks healthy and
@@ -222,12 +224,13 @@ func (s *Store) write(r *Run) {
 }
 
 // event appends to a run's log. The log is append-only: it is opened, written and closed per event,
-// so nothing of a run is lost when the host loses power between two events.
+// so a run keeps everything the factory logged before it stopped, however it stopped.
 func (s *Store) event(r *Run, e Event) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	r.EventCount++
 	e.Seq, e.At = r.EventCount, time.Now()
+	e.Title = firstLine(e.Title) // the title comes from the stream as well, and is one line by contract
 	if len(e.Body) > maxEventBody {
 		e.Body = cut(e.Body, maxEventBody) + "\n[truncated]"
 	}
@@ -273,9 +276,11 @@ func (s *Store) get(id int) (Run, bool) {
 	return Run{}, false
 }
 
-// events reads a run's log from disk, skipping the first after lines, so a reader that polls asks
-// only for what it has not seen. A line that is not an event is skipped: the log is what the factory
-// wrote last, and a half-written last line must not lose the rest.
+// events reads a run's log from disk and serves the events after the sequence number after, so a
+// reader that polls asks only for what it has not seen. The line count is the cheap skip and the
+// sequence number is the exact one: they agree unless an event could not be written, and then the
+// sequence decides. A line that is not an event is skipped: the log is what the factory wrote last,
+// and a half-written last line must not lose the rest.
 func (s *Store) events(id, after int) ([]Event, error) {
 	file, err := os.Open(s.eventsPath(id))
 	if os.IsNotExist(err) {
@@ -295,7 +300,7 @@ func (s *Store) events(id, after int) ([]Event, error) {
 			continue // counted, never parsed: a reader that polls pays for what it asked for
 		}
 		var e Event
-		if json.Unmarshal(scanner.Bytes(), &e) != nil {
+		if json.Unmarshal(scanner.Bytes(), &e) != nil || e.Seq <= after {
 			continue
 		}
 		out = append(out, e)
