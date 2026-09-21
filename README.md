@@ -71,6 +71,7 @@ All knobs are environment variables, set per repository in `.claude/settings.jso
 | `WF_PR_BOT_REVIEWERS` | `chatgpt-codex-connector` | bot logins whose PR review the worker waits for; set to `""` in repositories without a bot reviewer |
 | `WF_PR_REVIEW_WAIT` | `600` | seconds to wait for a bot review after checks pass |
 | `WF_WORKER_PERMISSION_MODE` | `auto` | permission mode for worker sessions |
+| `WF_DOCS_TIMEOUT` | `30` | seconds one documentation request of `claude-docs.sh` may take (`/worker:docs`) |
 | `WF_PLANNER_PERMISSION_MODE` | `auto` | permission mode for planner sessions |
 | `WF_PLANNER_LANGUAGE` | empty | conversation language of planner sessions (claude's `language` setting, e.g. `german`); what the planner writes stays English |
 | `WF_CLAUDE_ARGS` | empty | extra flags for every worker and planner (`--model sonnet`, `--plugin-dir …`) |

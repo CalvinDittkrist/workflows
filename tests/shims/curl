@@ -3,14 +3,16 @@
 # --write-out, the way claude-docs.sh reads it. No network is touched.
 #   SHIM_CURL_FAIL=1          the request fails, as a 404 or an unreachable host does
 #   SHIM_CURL_REDIRECT=<url>  the request answers from that URL instead of the requested one
+#   SHIM_CURL_WRITE_OUT=<s>   what a --write-out format other than %{url_effective} prints (default 200)
 printf 'curl %s\n' "$*" >> "${SHIM_LOG:-/dev/null}"
 { printf 'curl'; for a in "$@"; do printf '\037%s' "${a//$'\n'/$'\036'}"; done; printf '\n'; } >> "${SHIM_ARGV_LOG:-/dev/null}"
 
-out=""; url=""
+out=""; url=""; write_out=""
 while [ $# -gt 0 ]; do
   case $1 in
     --output) out=$2; shift 2 ;;
-    --write-out|--max-redirs|--max-time|--max-filesize|--proto|--proto-redir) shift 2 ;;
+    --write-out) write_out=$2; shift 2 ;;
+    --max-redirs|--max-time|--max-filesize|--proto|--proto-redir) shift 2 ;;
     -*) shift ;;
     *) url=$1; shift ;;
   esac
@@ -21,8 +23,17 @@ if [ "${SHIM_CURL_FAIL:-0}" = 1 ]; then
   exit 22
 fi
 
-case $url in
+# The page that answers is the one the request ended at, as with a real redirect: the body belongs to it.
+answered=${SHIM_CURL_REDIRECT:-$url}
+case $answered in
   *llms.txt) printf '# Claude Code Docs\n- [Subagents](https://code.claude.com/docs/en/sub-agents.md)\n' ;;
-  *) printf '# Page %s\nmodel: sonnet, opus, haiku, inherit\n' "${url##*/}" ;;
+  *) printf '# Page %s\nmodel: sonnet, opus, haiku, inherit\n' "${answered##*/}" ;;
 esac > "${out:-/dev/stdout}"
-printf '%s' "${SHIM_CURL_REDIRECT:-$url}"
+
+# Only the format the script asks for is answered; another one gets its own value, so a script that stops
+# asking for the effective URL fails its tests instead of silently comparing something else to the origin.
+case $write_out in
+  '') ;;
+  '%{url_effective}') printf '%s' "$answered" ;;
+  *) printf '%s' "${SHIM_CURL_WRITE_OUT:-200}" ;;
+esac

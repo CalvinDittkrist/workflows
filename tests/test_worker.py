@@ -190,7 +190,7 @@ class ClaudeDocsTests(ShimTest):
         r = self.docs("sub-agents", SHIM_CURL_REDIRECT=f"{self.ORIGIN}en/subagents.md")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn(f"url: {self.ORIGIN}en/subagents.md", r.stdout)
-        self.assertIn("# Page sub-agents.md", r.stdout)
+        self.assertIn("# Page subagents.md", r.stdout, "the body of the page that answered is printed")
 
     def test_only_https_to_the_pinned_origin_is_ever_requested(self):
         for args in ((), ("sub-agents",), ("hooks",), ("cli-reference",)):
