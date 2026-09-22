@@ -57,13 +57,46 @@ gate_state() {
 running="$(wf_state_dir)/gate.running"
 slice=$(wf_wait_slice)
 
+# When a process started, which tells the process a pid named from one the system handed out again after a
+# reboot or a kill.
+started_at() { ps -p "$1" -o lstart= 2>/dev/null; }
+
+# The worker a call belongs to: the parent of the call's process group. Claude Code runs every Bash call in
+# a process group of its own, led by the shell of the call, so the gate is in no group of the worker's and
+# a signal to the worker's group does not reach it. Empty when the call has no such parent.
+call_owner() {
+  local leader owner
+  leader=$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ')
+  owner=$(ps -o ppid= -p "$leader" 2>/dev/null | tr -d ' ')
+  [ -n "$owner" ] && [ "$owner" != 1 ] && printf '%s' "$owner"
+}
+
+# Signal a process and every process under it.
+end_tree() {
+  local pids
+  pids=$(ps -A -o pid= -o ppid= | awk -v root="$1" '{ parent[$1] = $2 }
+    END { for (p in parent) { q = p; while (q != root && (q in parent) && q > 1) q = parent[q]; if (q == root) print p } }')
+  # shellcheck disable=SC2086  # one pid per word
+  [ -z "$pids" ] || kill -TERM $pids 2>/dev/null || true
+}
+
 # The run itself, in a subshell that outlives the call. Its record carries the id of its run, which is how
-# a waiter tells this run's record from an older one.
+# a waiter tells this run's record from an older one. It watches the worker that started it and ends the gate
+# when that worker is gone, without a record: the factory ends a worker at its deadline or on a stop, and
+# a gate must not run on unattended in a worktree the factory is about to remove.
 detached_run() {
-  local id=$1 commit=$2 dirty=$3 started=$4 begin status
+  local id=$1 commit=$2 dirty=$3 started=$4 owner=$5 owner_start=$6 begin status gate
   begin=$(date +%s)
+  ( cd "$(git rev-parse --show-toplevel)" && exec "${gate_cmd[@]}" ) < /dev/null > "$log.tmp" 2>&1 &
+  gate=$!
+  while kill -0 "$gate" 2>/dev/null; do
+    if [ -n "$owner" ] && [ "$(started_at "$owner")" != "$owner_start" ]; then
+      end_tree "$gate"; rm -f "$log.tmp"; exit 1
+    fi
+    sleep 2
+  done
   set +e
-  ( cd "$(git rev-parse --show-toplevel)" && "${gate_cmd[@]}" ) < /dev/null > "$log.tmp" 2>&1
+  wait "$gate"
   status=$?
   set -e
   mv "$log.tmp" "$log"
@@ -74,10 +107,6 @@ detached_run() {
     tail -n "$tail_lines" "$log"; } > "$record.tmp"
   mv "$record.tmp" "$record"
 }
-
-# When a process started, which tells the process a pid named from one the system handed out again after a
-# reboot or a kill.
-started_at() { ps -p "$1" -o lstart= 2>/dev/null; }
 
 # Whether the run `running` names is still at work: its pid is alive and is the same process.
 run_alive() {
@@ -91,15 +120,15 @@ run_recorded() { [ -f "$record" ] && [ "$(field run)" = "$(wf_record_field "$run
 
 # What a finished run says, read from its record alone, so every call reports it the same way.
 report_record() {
-  local status commit
+  local status commit note
   status=$(field status); commit=$(field commit)
   # A failing gate is read here, in the call that saw it end, instead of being run a second time for its
   # output. A passing one is not: this runs in the worker's own context, and the whole
   # output of a passing gate is 36 KB of "ok" lines nobody reads, in the context the budget is kept in.
-  [ "$status" = 0 ] || cat "$(field log)"
+  [ "$status" = 0 ] || cat "$log"
   note=""; [ "$(field dirty)" = no ] || note=", with a dirty working tree, so no reader counts it for that commit"
   wf_kv gate_recorded "$(gate_outcome "$status") at $(wf_short "$commit")$note"
-  wf_kv gate_log "$(field log) (the full output)"
+  wf_kv gate_log "$log (the full output)"
   exit "$status"
 }
 
@@ -140,15 +169,16 @@ case "${1:-}" in
         wait_for_run
       fi
       run_recorded ||
-        wf_die "a gate is running at $(wf_short "$(wf_record_field "$running" commit)") since $(wf_record_field "$running" started), not at this head; run the worker's gate.sh wait until it ends, then gate.sh run again"
+        wf_die "a gate is running at $(wf_short "$(wf_record_field "$running" commit)") since $(wf_record_field "$running" started) (dirty working tree: $(wf_record_field "$running" dirty)), not at this head and working tree; run the worker's gate.sh wait until it ends, then gate.sh run again"
     fi
     started=$(date -u +%Y-%m-%dT%H:%M:%SZ)
     begin=$(date +%s)
     id="$begin-$$"
     # The subshell around the run exits at once, so the run is no child of the call, and a call that ends
-    # at the ceiling does not take it along. It stays in the worker's process group, on purpose: the
-    # factory ends a worker by signalling that group, and its stop and its deadline end the gate with it.
-    pid=$( ( detached_run "$id" "$commit" "$dirty" "$started" ) < /dev/null > /dev/null 2>&1 & printf '%s' "$!")
+    # at the ceiling does not take it along; the worker that made the call still ends it (detached_run).
+    owner=$(call_owner) || owner=""
+    owner_start=""; [ -z "$owner" ] || owner_start=$(started_at "$owner")
+    pid=$( ( detached_run "$id" "$commit" "$dirty" "$started" "$owner" "$owner_start" ) < /dev/null > /dev/null 2>&1 & printf '%s' "$!")
     printf 'pid: %s\nlstart: %s\nrun: %s\ncommit: %s\ndirty: %s\nstarted: %s\nbegin: %s\n' \
       "$pid" "$(started_at "$pid")" "$id" "$commit" "$dirty" "$started" "$begin" > "$running.tmp"
     mv "$running.tmp" "$running"

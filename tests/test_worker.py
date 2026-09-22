@@ -4,6 +4,7 @@ import re
 import shlex
 import signal
 import subprocess
+import sys
 import time
 import unittest
 from pathlib import Path
@@ -534,15 +535,25 @@ class SlowGateTests(ShimTest):
         self.assertEqual(self.gate("run").returncode, 3)
         self.assertEqual(self.wait_to_the_end().returncode, 0)
 
-    def test_the_workers_process_group_ends_the_gate_with_it(self):
-        # The factory stops a worker, at its deadline or on a stop, by signalling the worker's process group;
-        # the gate stays in that group, so it ends with the worker instead of running on unattended.
-        call = self.start_call(WF_WAIT_SLICE="60")
-        os.killpg(call.pid, signal.SIGKILL)
-        call.communicate()
-        r = self.gate("wait", slice=5)
+    def test_the_gate_ends_with_the_worker_that_started_it(self):
+        # The factory stops a worker, at its deadline or on a stop, by signalling the worker's process group.
+        # Claude Code runs each Bash call in a process group of its own, so the signal never reaches the
+        # gate: the gate ends because the worker is gone, instead of running on unattended.
+        worker = subprocess.Popen(
+            [sys.executable, "-c",
+             "import subprocess, sys; subprocess.Popen(sys.argv[1:], start_new_session=True).wait()",
+             "bash", str(WORKER / "gate.sh"), "run"],
+            cwd=self.repo, start_new_session=True, env=self.env(WF_WAIT_SLICE="60"),
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        deadline = time.time() + 10
+        while not (self.repo / "starts.log").exists() and time.time() < deadline:
+            time.sleep(0.05)
+        os.killpg(worker.pid, signal.SIGKILL)
+        worker.wait()
+        r = self.gate("wait", slice=8)
         self.assertEqual(r.returncode, 1, r.stdout)
         self.assertIn("ended without a record", r.stderr)
+        self.assertEqual(self.starts(), 1)
 
     def test_a_run_after_the_gate_ended_unread_answers_with_its_record(self):
         # A worker that calls `run` again instead of `wait` is answered by the gate that already ran.
