@@ -80,4 +80,5 @@ factory-go:
 	@sc="$$(command -v staticcheck 2>/dev/null || true)"; [ -n "$$sc" ] || sc="$$(go env GOPATH)/bin/staticcheck"; \
 		[ -x "$$sc" ] || { echo 'error: staticcheck not installed; go install honnef.co/go/tools/cmd/staticcheck@2026.2.1' >&2; exit 1; }; \
 		echo "$$sc ./... (in factory)"; cd factory && "$$sc" ./...
-	go -C factory test -race ./... # the service is goroutines over shared run records: the gate says so
+	@# -count=1: the tests start the real binary, whose inputs Go's test cache cannot see, so every gate runs them
+	go -C factory test -race -count=1 ./... # the service is goroutines over shared run records: the gate says so

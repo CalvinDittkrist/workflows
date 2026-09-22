@@ -187,6 +187,8 @@ class FactoryGateTests(unittest.TestCase):
         # Local and CI findings match only while both run the same version.
         ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text()
         self.assertIn(f"go install honnef.co/go/tools/cmd/staticcheck@{named.group(1)}\n", ci)
+        # CI installs it only when its cache misses, so the cached binary has to be keyed by that version too.
+        self.assertEqual(re.findall(r"key: staticcheck-([0-9.]+)-", ci), [named.group(1)])
 
 
 class ShimCallLogTests(ShimTest):
