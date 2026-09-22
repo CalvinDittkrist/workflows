@@ -1116,8 +1116,12 @@ func (f *Factory) finish(r *Run, outcome, reason string, exitCode *int) {
 	if reason != "" {
 		f.runs.event(r, Event{Kind: kind, Title: outcome, Body: reason})
 	}
-	f.runs.finish(r, outcome, reason, exitCode)
+	// Whether the maintainer has to hear of this ending is decided before it is written, so that the
+	// record carries both in one write, and the call itself is made once the ending stands.
+	owed := f.owes(*r, outcome)
+	f.runs.finish(r, outcome, reason, exitCode, owed)
 	log.Printf("run %d (%s#%d) ended: %s", r.ID, r.Repository, r.Issue, outcome)
-	// And the maintainer hears of it, if this ending is one that needs them: nobody watches the host.
-	f.notifyEnding(r)
+	if owed {
+		f.deliver(r)
+	}
 }

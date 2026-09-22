@@ -251,7 +251,9 @@ func OpenStore(dir string) (*Store, error) {
 			// The log reads to its end like that of every other run: its last event says how it ended.
 			reason := "the factory stopped while this run was active"
 			s.event(r, Event{Kind: "error", Title: outcomeInterrupted, Body: reason})
-			s.finish(r, outcomeInterrupted, reason, nil)
+			// The marker of such a run is the factory's, in NotifyOwed: what it owes depends on the
+			// records as a whole and on the logins this host notifies, and the store knows neither.
+			s.finish(r, outcomeInterrupted, reason, nil, false)
 			s.cutOff = append(s.cutOff, r.ID)
 		}
 	}
@@ -357,14 +359,20 @@ func (s *Store) raiseContextPeak(r *Run, tokens int) {
 	s.write(r)
 }
 
-// finish ends a run. The reason survives as the record's reason unless the stream already gave one.
-func (s *Store) finish(r *Run, outcome, reason string, exitCode *int) {
+// finish ends a run. The reason survives as the record's reason unless the stream already gave one,
+// and an ending that owes the maintainer a word is marked as owing it here, in the one write: the
+// marker is what a start after a host that was cut off makes the notification from, and an ending
+// that reached the disk without it would be read as one that owed nothing.
+func (s *Store) finish(r *Run, outcome, reason string, exitCode *int, owed bool) {
 	now := time.Now()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	r.State, r.Outcome, r.EndedAt, r.ExitCode = "ended", outcome, &now, exitCode
 	if r.Reason == "" {
 		r.Reason = reason
+	}
+	if owed {
+		r.Notified = notifyPending
 	}
 	s.write(r)
 }

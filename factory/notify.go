@@ -98,24 +98,37 @@ func (f *Factory) NotifyOwed(ctx context.Context) {
 	}
 }
 
-// notifyEnding tells the maintainer how a run ended, in the moment it ended.
-func (f *Factory) notifyEnding(r *Run) {
-	if !f.notifying() || !f.owe(r) {
-		return
-	}
-	f.deliver(r)
-}
-
 // notifying says whether this factory notifies at all. Fake mode never does: it claims nothing, its
 // queue is canned and there is no issue behind it to comment on. Neither does a factory with no
 // logins configured, which says so once when it starts.
 func (f *Factory) notifying() bool { return !f.fake && len(f.settings.Notify) > 0 }
 
-// owe records on the run that its ending owes a notification, and says whether one is owed. The
-// record is written before the call is made, so an ending is never lost to a host that is cut off
-// while it notifies.
+// owes says whether the ending a run is about to be recorded with owes the maintainer a word. It is
+// asked before that ending is written, because the marker goes to the disk in the same write as the
+// ending: a host cut off between the two would leave an ended run with no marker, which every later
+// start reads as an ending that owed nothing and nobody would ever be told of it.
+//
+// The records are read as they will stand, this ending included, because whether an interruption is
+// one the factory resumes by itself is a question about that very run.
+func (f *Factory) owes(r Run, outcome string) bool {
+	if !f.notifying() || r.Notified != "" {
+		return false
+	}
+	ended := time.Now()
+	r.State, r.Outcome, r.EndedAt = "ended", outcome, &ended
+	runs := f.runs.list()
+	for i := range runs {
+		if runs[i].ID == r.ID {
+			runs[i] = r
+		}
+	}
+	return notifies(r, holdings(runs)[r.key()])
+}
+
+// owe marks an ending that is already on the disk, which is the ending of a run this start found
+// active: its record was written when the store was opened, so the marker is a write of its own.
 func (f *Factory) owe(r *Run) bool {
-	if r.Notified != "" || !notifies(*r, holdings(f.runs.list())[r.key()]) {
+	if !f.owes(*r, r.Outcome) {
 		return false
 	}
 	f.runs.update(r, func() { r.Notified = notifyPending })
