@@ -91,8 +91,8 @@ func (f *Factory) status(w http.ResponseWriter, _ *http.Request) {
 // queue either, and without the error it would be the same sight as one with nothing routed.
 func (f *Factory) repositories(w http.ResponseWriter, _ *http.Request) {
 	queued := map[string]int{}
-	for _, issue := range f.waiting() {
-		queued[issue.Repository]++
+	for _, entry := range f.waiting() {
+		queued[entry.Repository]++
 	}
 	f.mu.Lock()
 	unreadable := f.unreadable
@@ -110,7 +110,8 @@ func (f *Factory) repositories(w http.ResponseWriter, _ *http.Request) {
 }
 
 // line is the one line of work across all connected repositories: what runs now, what waits in which
-// order, and what is done, oldest first.
+// order — the work the factory holds and resumes before the issues nobody has worked yet — and what
+// is done, oldest first.
 func (f *Factory) line(w http.ResponseWriter, _ *http.Request) {
 	now, done := []Run{}, []Run{}
 	for _, run := range f.runs.list() {

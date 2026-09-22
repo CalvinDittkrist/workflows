@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 	"unicode/utf8"
 )
@@ -29,6 +30,19 @@ const (
 	outcomeLost        = "lost"
 )
 
+// What put a run in the line. routed is an issue taken from the queue of routed issues; the other
+// two are work this factory already holds and continues in the worktree of that claim: the one
+// automatic resume after an interruption, and the run a person asked for by taking the assignee off
+// an issue the factory holds ([ADR 0026]). The signals of an issue's runs are what the next resume
+// is decided from, which is why every run records its own.
+//
+// [ADR 0026]: ../docs/adr/0026-the-factory-never-deletes-work-on-its-own.md
+const (
+	signalRouted       = "routed"
+	signalInterruption = "interruption"
+	signalRelease      = "release"
+)
+
 // Run is one factory run: one worker session, its record. The record is the file in the data
 // directory and the body the HTTP interface serves, so a reader on the host and a reader in a
 // browser see the same fields.
@@ -39,8 +53,24 @@ type Run struct {
 	Title      string `json:"title"`
 	// Branch is the branch the claim created on the remote, and Base the branch it was cut from. A
 	// lost run carries the branch too: it is the one another claimer holds the issue by.
-	Branch      string     `json:"branch"`
-	Base        string     `json:"base"`
+	Branch string `json:"branch"`
+	Base   string `json:"base"`
+	// Worktree is where the worker ran: the directory the claim made in this host's clone, and the
+	// one a resumed run of this issue continues in, on the commits that are there. Empty in fake
+	// mode, which claims nothing, and for a claim that never got that far.
+	Worktree string `json:"worktree"`
+	// Holding says this factory owns the issue on the remote: its claim created the branch, assigned
+	// the issue to this host and made the worktree. Only an issue the factory holds is resumed and
+	// only such an issue can be released, so a lost claim and a claim that failed half way are left
+	// alone — including the branch of another claimer, which this factory never works.
+	Holding bool `json:"holding"`
+	// Signal is what queued this run: routed, interruption or release. SignalAt is when that signal
+	// happened — the routing, the interruption, or the moment the assignee came off. It is the
+	// answer this run is: a signal of an issue is acted on once, and a signal no later than the one
+	// its records already carry has been answered already. That is what keeps the factory from
+	// resuming the same release for as long as GitHub reports it, without a clock of its own.
+	Signal      string     `json:"signal"`
+	SignalAt    time.Time  `json:"signalAt"`
 	State       string     `json:"state"` // running or ended
 	Stage       string     `json:"stage"` // the stage the worker is in, read from its skill calls
 	Stages      []string   `json:"stages"`
@@ -55,10 +85,14 @@ type Run struct {
 	CostUSD     float64    `json:"costUsd"`
 	Tokens      Tokens     `json:"tokens"`
 	ContextPeak int        `json:"contextPeak"` // the largest context one message of the worker carried
-	ExitCode    *int       `json:"exitCode"`
-	EventCount  int        `json:"eventCount"`
-	Warnings    []string   `json:"warnings"`
-	Versions    Versions   `json:"versions"`
+	// WorkerGroup is the process group the worker session ran in, which is the process group this
+	// host ends to end the session. It is recorded so that a factory the host killed rather than
+	// stopped can be started again and end the worker that outlived it.
+	WorkerGroup int      `json:"workerGroup"`
+	ExitCode    *int     `json:"exitCode"`
+	EventCount  int      `json:"eventCount"`
+	Warnings    []string `json:"warnings"`
+	Versions    Versions `json:"versions"`
 
 	// What the stream said, kept for the moment the run ends. Not part of the record.
 	reportOutcome string // ready or blocked, as the worker's final report gave it
@@ -109,14 +143,18 @@ const (
 // directory. There is no database. It is the only place that writes there, and it guards the run
 // records the HTTP interface reads.
 type Store struct {
-	dir  string
-	mu   sync.Mutex
-	runs []*Run
+	dir string
+	// cutOff is the runs this start found active in the data directory and recorded as interrupted.
+	// Their worker had no factory left to end it, which is what the run's lock is read for.
+	cutOff []int
+	mu     sync.Mutex
+	runs   []*Run
 }
 
 // OpenStore reads the runs already in the data directory. A run that was active when the factory
-// stopped has no process any more: it is recorded as interrupted, so it neither blocks the next run
-// nor claims to be running.
+// stopped is over whatever became of its worker: it is recorded as interrupted, so it neither blocks
+// the next run nor claims to be running, and it is named in cutOff, because a worker of it may still
+// be running with no factory reading it.
 func OpenStore(dir string) (*Store, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("the data directory %s cannot be created: %w; name a writable data_dir", dir, err)
@@ -158,6 +196,7 @@ func OpenStore(dir string) (*Store, error) {
 			reason := "the factory stopped while this run was active"
 			s.event(r, Event{Kind: "error", Title: outcomeInterrupted, Body: reason})
 			s.finish(r, outcomeInterrupted, reason, nil)
+			s.cutOff = append(s.cutOff, r.ID)
 		}
 	}
 	return s, nil
@@ -169,6 +208,60 @@ func (s *Store) recordPath(id int) string {
 
 func (s *Store) eventsPath(id int) string {
 	return filepath.Join(s.dir, fmt.Sprintf("run-%d.events.jsonl", id))
+}
+
+// The lock of a run says whether its worker is still there. It is taken before the worker starts and
+// handed to it, so it is held by that one process group and by nothing else, and the kernel gives it
+// back when the last process of the group is gone — whatever ended them, and whether or not the
+// factory that started them is still alive to notice ([ADR 0027]).
+//
+// [ADR 0027]: ../docs/adr/0027-the-factorys-isolation-boundary-is-the-host.md
+func (s *Store) lockPath(id int) string {
+	return filepath.Join(s.dir, fmt.Sprintf("run-%d.lock", id))
+}
+
+// lock takes a run's lock and answers with the open file. The caller hands it to the worker and
+// closes its own copy: the lock lives on in the process group that inherited the file, which is what
+// makes it the group's liveness and not this factory's.
+func (s *Store) lock(id int) (*os.File, error) {
+	file, err := os.OpenFile(s.lockPath(id), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		file.Close()
+		return nil, err
+	}
+	return file, nil
+}
+
+// free says that a run's lock can be taken, which is the kernel saying no process of its worker is
+// left. A lock this host cannot open at all is read as free and said so: the data directory is then
+// unwritable, which the record and the log of every run report anyway.
+func (s *Store) free(id int) bool {
+	file, err := os.OpenFile(s.lockPath(id), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		log.Printf("error: the lock of run %d cannot be opened: %v; is %s writable?", id, err, s.dir)
+		return true
+	}
+	defer file.Close()
+	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		return false
+	}
+	_ = syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
+	return true
+}
+
+// freed waits for that to happen, and answers false when it has not happened in time.
+func (s *Store) freed(id int, within time.Duration) bool {
+	for deadline := time.Now().Add(within); ; time.Sleep(50 * time.Millisecond) {
+		if s.free(id) {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+	}
 }
 
 // add starts a run's record. The id continues the ids in the data directory, so a restart never
@@ -220,10 +313,14 @@ func (s *Store) finish(r *Run, outcome, reason string, exitCode *int) {
 	s.write(r)
 }
 
-// write persists a record. It writes a whole file and renames it, so a reader never meets a half
-// written record and a crash of the factory cannot leave one. The bytes are not forced to the disk:
-// a power cut can still cost the last writes, which is why nothing depends on a record that the run
-// itself did not also report to GitHub. Callers hold the lock.
+// write persists a record. It writes a whole file, forces it to the disk and renames it, so a reader
+// never meets a half written record, a crash of the factory cannot leave one, and a host that lost
+// power finds the record as its last write left it. That last part is what the resume rules stand
+// on: what the factory holds and what it has already spent is read from these files and from
+// nothing else, and an issue whose claim stands on GitHub while its record says otherwise would be
+// neither resumed nor released ([ADR 0026]). Callers hold the lock.
+//
+// [ADR 0026]: ../docs/adr/0026-the-factory-never-deletes-work-on-its-own.md
 //
 // The data directory is the factory's only durable output, and nobody watches the host: a write that
 // fails says so in the journal, with the fix, rather than leaving a service that looks healthy and
@@ -248,13 +345,29 @@ func (s *Store) write(r *Run) {
 		failed(err)
 		return
 	}
+	if err := file.Sync(); err != nil {
+		file.Close()
+		failed(err)
+		return
+	}
 	if err := file.Close(); err != nil {
 		failed(err)
 		return
 	}
 	if err := os.Rename(file.Name(), s.recordPath(r.ID)); err != nil {
 		failed(err)
+		return
 	}
+	// And the rename itself, so the record is under its name after a power cut and not only in it.
+	dir, err := os.Open(s.dir)
+	if err != nil {
+		failed(err)
+		return
+	}
+	if err := dir.Sync(); err != nil {
+		failed(err)
+	}
+	dir.Close()
 }
 
 // event appends to a run's log. The log is append-only: it is opened, written and closed per event,
@@ -308,6 +421,19 @@ func (s *Store) get(id int) (Run, bool) {
 		}
 	}
 	return Run{}, false
+}
+
+// find is the run of that id as the store holds it, so a caller can write to its record and its log
+// rather than to a copy of them.
+func (s *Store) find(id int) (*Run, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, r := range s.runs {
+		if r.ID == id {
+			return r, true
+		}
+	}
+	return nil, false
 }
 
 // events reads a run's log from disk and serves the events after the sequence number after, so a
@@ -372,7 +498,7 @@ func (r *Run) stage(name string) {
 	}
 }
 
-func (r *Run) key() string { return fmt.Sprintf("%s#%d", r.Repository, r.Issue) }
+func (r *Run) key() string { return fmt.Sprintf("%s#%d", repositoryKey(r.Repository), r.Issue) }
 
 // cut shortens a string to at most n bytes without splitting a character in half. It steps back over
 // the bytes of one character at most, so a body that is not valid UTF-8 at all still keeps its head.

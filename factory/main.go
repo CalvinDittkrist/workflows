@@ -4,9 +4,13 @@
 //
 // It works the live queue of routed issues: it claims the head of the line by creating the issue's
 // branch on GitHub, assigns the issue to itself, makes a worktree in its clone and starts the worker
-// session there, one at a time. Fake mode works a canned queue with scripted workers instead, which
-// need no tokens, no git and no GitHub, and a paused factory shows the line and claims nothing. What
-// it does is read over its HTTP interface, which never writes anything.
+// session there, one at a time. Work it already holds comes before that: a run a stop interrupted is
+// resumed once by itself, and an issue whose assignee a person removed is taken back and resumed
+// too, both in the worktree of the claim and both read from the run records in the data directory,
+// which is what a host that was cut off knows itself by. Fake mode works a canned queue with
+// scripted workers instead, which need no tokens, no git and no GitHub, and a paused factory shows
+// the line and claims nothing. What it does is read over its HTTP interface, which never writes
+// anything.
 package main
 
 import (

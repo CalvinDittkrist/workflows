@@ -216,7 +216,7 @@ export default function App() {
                 <em>#{issue.number}</em>
                 {issue.title}
               </span>
-              <Facts items={[issue.repository]} />
+              <Facts items={[issue.repository, issue.signal !== 'routed' && issue.signal]} />
             </li>
           ))}
         </ol>

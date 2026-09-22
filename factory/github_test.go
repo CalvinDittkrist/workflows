@@ -914,6 +914,19 @@ func (g *ghShim) made(t *testing.T, request string) int {
 	return count
 }
 
+// asked counts the requests that begin this way, for the calls whose tail is a commit and so differs
+// from run to run.
+func (g *ghShim) asked(t *testing.T, prefix string) int {
+	t.Helper()
+	count := 0
+	for _, call := range g.calls(t) {
+		if strings.HasPrefix(call, prefix) {
+			count++
+		}
+	}
+	return count
+}
+
 // ---- the issues the shim answers with ----
 
 // issueJSON is one issue as GitHub's issue list carries it. The names are GitHub's, because they are
@@ -944,6 +957,27 @@ func labeled(label string, at time.Time) map[string]any {
 
 func unlabeled(label string, at time.Time) map[string]any {
 	return map[string]any{"event": "unlabeled", "created_at": at.Format(time.RFC3339), "label": map[string]any{"name": label}}
+}
+
+// assigned is the entry GitHub writes when somebody puts an assignee on an issue. Every claim makes
+// one, and it is what the removal below is held against.
+func assigned(login string, at time.Time) map[string]any {
+	return map[string]any{"event": "assigned", "created_at": at.Format(time.RFC3339),
+		"assignee": map[string]any{"login": login}}
+}
+
+// unassigned is the entry GitHub writes when somebody takes an assignee off an issue, which for an
+// issue the factory holds is the release signal.
+func unassigned(login string, at time.Time) map[string]any {
+	return map[string]any{"event": "unassigned", "created_at": at.Format(time.RFC3339),
+		"assignee": map[string]any{"login": login}}
+}
+
+// touched is an issue somebody has changed since it was opened. The factory holds what it remembers
+// of an issue's events against its updated_at, so an issue whose timeline changed has to say so.
+func touched(issue issueJSON, at time.Time) issueJSON {
+	issue["updated_at"] = at.Format(time.RFC3339)
+	return issue
 }
 
 // ---- reading what the factory serves ----

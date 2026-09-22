@@ -508,13 +508,29 @@ func TestAClaimAnotherClaimerWonIsRecordedAsLostAndTouchesNothingElse(t *testing
 		}
 	}
 
-	// And it does not try the issue again while the branch is there: the run is that record.
+	if run.Holding {
+		t.Errorf("the lost run says it holds the issue; the branch is the other claimer's and so is the issue")
+	}
+
+	// And it does not try the issue again while the branch is there: the run is that record. The
+	// issue stays routed and unassigned, which is also what a released issue looks like — and it was
+	// unassigned after this run began, so the one thing that keeps this factory away from a claim
+	// that is not its own is that it holds nothing here.
+	gh.timeline(t, "acme/edge-sensors", claimedIssue,
+		labeled("factory", run.StartedAt.Add(-6*time.Hour)), unassigned("somebody", run.StartedAt.Add(time.Minute)))
+	gh.issues(t, "acme/edge-sensors", touched(openIssue(claimedIssue, claimedTitle, run.StartedAt.Add(-72*time.Hour)), run.StartedAt.Add(time.Minute)))
 	asked := "api " + issuesRequest("acme/edge-sensors", "factory")
 	f.eventually(t, 20*time.Second, "several more polls", func() bool { return gh.made(t, asked) >= 8 })
 	var line apiLine
 	f.get(t, "/api/line", &line)
-	if len(line.Done) != 1 || len(line.Now) != 0 {
-		t.Errorf("after %d polls the factory has %d ended and %d running runs, want the one lost run", gh.made(t, asked), len(line.Done), len(line.Now))
+	if len(line.Done) != 1 || len(line.Now) != 0 || len(line.Queue) != 0 {
+		t.Errorf("after %d polls the factory has %d ended and %d running runs and queues %v, want the one lost run and an empty line",
+			gh.made(t, asked), len(line.Done), len(line.Now), keys(line.Queue))
+	}
+	for _, call := range gh.calls(t) {
+		if strings.HasPrefix(call, "issue edit ") {
+			t.Errorf("the factory called `gh %s` for a foreign claim; it must be left alone", call)
+		}
 	}
 }
 

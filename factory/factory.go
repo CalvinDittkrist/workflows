@@ -28,10 +28,41 @@ type Issue struct {
 	Labels     []string  `json:"labels"`
 	RoutedAt   time.Time `json:"routedAt"` // when the routing label was set; the queue's order
 
-	scenario string // fake mode only: which scripted worker works this entry
+	// assignedAt is when an assignee was last put on the issue and unassignedAt when one was last
+	// taken off, read from the same event list as the routing time. A removal that is newer than the
+	// assignment it undid is the release signal for an issue this factory holds, and its time is
+	// where the resumed run stands in the line ([ADR 0026]).
+	//
+	// [ADR 0026]: ../docs/adr/0026-the-factory-never-deletes-work-on-its-own.md
+	assignedAt   time.Time
+	unassignedAt time.Time
+	scenario     string // fake mode only: which scripted worker works this entry
 }
 
-func (i Issue) key() string { return fmt.Sprintf("%s#%d", i.Repository, i.Number) }
+func (i Issue) key() string { return fmt.Sprintf("%s#%d", repositoryKey(i.Repository), i.Number) }
+
+// repositoryKey is a repository name as everything that matches on one spells it. GitHub answers for
+// either spelling, so a configuration rewritten from Acme/Repo to acme/repo names the repository
+// this host already works: the record of a run keeps the spelling of the day it was written, and a
+// factory that told the two apart would drop the work those records hold out of its line and claim
+// their issues anew against the branches it owns itself. The clone lies under this name for the same
+// reason.
+func repositoryKey(name string) string { return strings.ToLower(name) }
+
+// Entry is one place in the line: an issue the factory would claim, or work it already holds and
+// would resume in the worktree of that claim. It is what the interface serves as the queue.
+type Entry struct {
+	Issue
+	// Signal is what put this entry in the line, and SignalAt when that signal happened: the routing
+	// label for a new issue, the interruption or the release for work the factory holds. Both are
+	// the order of the line, work in progress first ([ADR 0025]).
+	//
+	// [ADR 0025]: ../docs/adr/0025-one-queue-one-worker-work-in-progress-first.md
+	Signal   string    `json:"signal"`
+	SignalAt time.Time `json:"signalAt"`
+
+	resume Run // the run this entry continues; only read when the signal is not routed
+}
 
 // Factory is the service: it holds the queue it last derived, the runs it has made, and the one
 // worker it runs at a time.
@@ -90,6 +121,7 @@ func New(settings Settings, fake bool) (*Factory, error) {
 	if fake {
 		f.source = &canned{repositories: settings.Repositories, started: f.started}
 	}
+	f.endSurvivors() // before anything of this start can queue a run of an issue one of them is working
 	return f, nil
 }
 
@@ -156,11 +188,11 @@ func (f *Factory) dispatch(ctx context.Context) {
 			return
 		}
 	}
-	for _, issue := range f.waiting() {
-		if !f.claimable(issue.Repository) {
+	for _, entry := range f.waiting() {
+		if !f.claimable(entry.Repository) {
 			continue // the issue keeps its place in the line; nothing of it is started or recorded
 		}
-		f.start(ctx, issue)
+		f.start(ctx, entry)
 		return
 	}
 }
@@ -175,7 +207,7 @@ func (f *Factory) claimable(repository string) bool {
 		return true
 	}
 	f.mu.Lock()
-	held := f.held[repository]
+	held := f.held[repositoryKey(repository)]
 	f.mu.Unlock()
 	if held {
 		return false
@@ -197,29 +229,75 @@ func (f *Factory) claimable(repository string) bool {
 // [ADR 0026]: ../docs/adr/0026-the-factory-never-deletes-work-on-its-own.md
 func (f *Factory) hold(repository, reason string) {
 	f.mu.Lock()
-	said := f.held[repository]
-	f.held[repository] = true
+	said := f.held[repositoryKey(repository)]
+	f.held[repositoryKey(repository)] = true
 	f.mu.Unlock()
 	if !said {
 		log.Printf("error: %s %s; its issues keep their place in the line and this factory claims none of them until it is started again", repository, reason)
 	}
 }
 
-// waiting is the queue without the issues a run has already taken. It is what the factory would
-// start next and what the interface serves as the queue. Having a run is final here: the release
-// signal, which queues a second run for an issue, arrives with the ticket that resumes runs.
-func (f *Factory) waiting() []Issue {
+// waiting is the line as the factory would work it and as the interface serves it: first the work it
+// already holds and resumes, ordered by the time of the signal that queued it, then the routed
+// issues nobody has worked yet, in the order the maintainer routed them ([ADR 0025]).
+//
+// An issue with a run of its own is out of the routed part for good: only the two resume signals put
+// it back in the line, and only for an issue this factory holds. That is what leaves a foreign claim
+// alone — a routed issue whose branch another claimer created is recorded as lost, holds nothing,
+// and is never read as a release.
+//
+// Only a connected repository is in the line, held work included: a repository the configuration no
+// longer names is one this host is not to work, whatever its records say it once held. Nothing of it
+// is touched or deleted — the branch, the worktree and the assignee stay — and connecting it again
+// puts what it holds back in the line.
+//
+// [ADR 0025]: ../docs/adr/0025-one-queue-one-worker-work-in-progress-first.md
+func (f *Factory) waiting() []Entry {
+	records := f.runs.list()
 	worked := map[string]bool{}
-	for _, run := range f.runs.list() {
+	for _, run := range records {
 		worked[run.key()] = true
 	}
 	f.mu.Lock()
 	queue := f.queue
 	f.mu.Unlock()
-	out := []Issue{}
+	routedNow := map[string]Issue{}
+	for _, issue := range queue {
+		routedNow[issue.key()] = issue
+	}
+
+	out := []Entry{}
+	for key, held := range holdings(records) {
+		connected, ok := f.connected(held.repository())
+		if !ok {
+			continue
+		}
+		issue, routed := routedNow[key]
+		if !routed {
+			// An issue the factory holds is assigned to this host, so the line does not carry it and
+			// its own record is what the entry is made of, under the name the configuration spells the
+			// repository with now rather than the one of the day the record was written. In fake mode
+			// the canned line carries every entry either way, which is how a resumed run there finds
+			// its scripted worker again.
+			issue = held.issue()
+			issue.Repository = connected.Name
+		}
+		switch {
+		case held.released(issue, routed):
+			out = append(out, Entry{Issue: issue, Signal: signalRelease, SignalAt: issue.unassignedAt, resume: held.run})
+		case held.resumes:
+			out = append(out, Entry{Issue: issue, Signal: signalInterruption, SignalAt: held.signalAt(), resume: held.run})
+		}
+	}
+	sort.Slice(out, func(a, b int) bool {
+		if !out[a].SignalAt.Equal(out[b].SignalAt) {
+			return out[a].SignalAt.Before(out[b].SignalAt)
+		}
+		return out[a].key() < out[b].key()
+	})
 	for _, issue := range queue {
 		if !worked[issue.key()] {
-			out = append(out, issue)
+			out = append(out, Entry{Issue: issue, Signal: signalRouted, SignalAt: issue.RoutedAt})
 		}
 	}
 	return out
@@ -228,25 +306,36 @@ func (f *Factory) waiting() []Issue {
 // start records the run and works it in the background, so the loop keeps polling while it runs. A
 // factory that is already stopping records nothing: the run would count as worked without ever
 // having run.
-func (f *Factory) start(ctx context.Context, issue Issue) {
+func (f *Factory) start(ctx context.Context, entry Entry) {
 	if ctx.Err() != nil {
 		return
 	}
 	r := &Run{
-		Repository: issue.Repository,
-		Issue:      issue.Number,
-		Title:      issue.Title,
+		Repository: entry.Repository,
+		Issue:      entry.Number,
+		Title:      entry.Title,
+		Signal:     entry.Signal,
+		SignalAt:   entry.SignalAt,
 		State:      "running",
 		StartedAt:  time.Now(),
 		Stages:     []string{},
 		Warnings:   []string{},
 		Versions:   Versions{Factory: version},
 	}
+	// A resumed run says from its first moment which branch and which worktree it continues, so a
+	// host that loses power before the worker starts is read from this record alone. What it holds
+	// is the claim's for an interruption and not yet its own for a release: the take-back that
+	// answers a release is the first thing the run does, and until it has landed the issue lies
+	// unassigned where the person who released it left it.
+	if entry.Signal != signalRouted {
+		r.Branch, r.Base, r.Worktree = entry.resume.Branch, entry.resume.Base, entry.resume.Worktree
+		r.Holding = entry.Signal != signalRelease
+	}
 	f.runs.add(r)
 	f.active.Add(1)
 	go func() {
 		defer f.active.Done()
-		f.execute(ctx, r, issue)
+		f.execute(ctx, r, entry)
 		select { // the next entry starts now, not at the next poll
 		case f.wake <- struct{}{}:
 		default:
@@ -257,11 +346,11 @@ func (f *Factory) start(ctx context.Context, issue Issue) {
 // execute takes the issue on the remote and runs one worker session from start to end, reading its
 // stream until the process is gone. The deadline covers the claim as well: a factory that is stopped
 // while it claims leaves the issue rather than starting a worker nobody waits for.
-func (f *Factory) execute(parent context.Context, r *Run, issue Issue) {
+func (f *Factory) execute(parent context.Context, r *Run, entry Entry) {
 	ctx, cancel := context.WithTimeout(parent, f.settings.Deadline)
 	defer cancel()
 
-	claim, err := f.take(ctx, r, issue)
+	claim, err := f.take(ctx, r, entry)
 	if err != nil {
 		if errors.Is(err, errLost) {
 			// Another claimer created the branch first. Nothing here was touched: no assignee, no
@@ -273,18 +362,22 @@ func (f *Factory) execute(parent context.Context, r *Run, issue Issue) {
 		if parent.Err() != nil {
 			// The factory was stopped while it claimed, so git and gh were ended under it. That is not
 			// a claim that failed, and the record must not name a failure that never happened.
-			f.finish(r, outcomeInterrupted, "the factory stopped while this run was claiming the issue"+leftBehind(claim), nil)
+			f.finish(r, outcomeInterrupted, "the factory stopped while this run was "+taking(claim)+leftBehind(claim), nil)
 			return
 		}
 		if !claim.created {
 			// Nothing of this issue was touched, so the reason lies with this host or with GitHub and
 			// the issue behind it would meet the same one. The repository is held rather than worked
 			// through; this run stays as the record a person reads.
-			f.hold(issue.Repository, "could not be claimed from: "+err.Error())
+			f.hold(entry.Repository, "could not be claimed from: "+err.Error())
 		}
-		f.finish(r, outcomeFailed, "the issue could not be claimed: "+err.Error()+leftBehind(claim), nil)
+		f.finish(r, outcomeFailed, "the issue could not be "+taken(claim)+": "+err.Error()+leftBehind(claim), nil)
 		return
 	}
+	// What the claim or the resume ended up holding, written down before anything is started on it:
+	// a run that ends between here and the worker is still the record of what this factory holds.
+	f.runs.update(r, func() { r.Worktree, r.Holding = claim.worktree, claim.holding })
+
 	// The plugin the session is about to run is brought up to date and written down, here and not
 	// earlier: the issue is this factory's now, and nothing else of it is running.
 	f.prepare(ctx, r)
@@ -303,7 +396,7 @@ func (f *Factory) execute(parent context.Context, r *Run, issue Issue) {
 	// The session starts in /worker:work, which invokes no skill for its first stage.
 	f.runs.update(r, func() { r.stage("implement") })
 
-	cmd, err := f.worker(ctx, issue, claim)
+	cmd, err := f.worker(ctx, entry.Issue, claim)
 	if err != nil {
 		f.finish(r, outcomeFailed, "no worker could be started: "+err.Error()+leftBehind(claim), nil)
 		return
@@ -330,7 +423,23 @@ func (f *Factory) execute(parent context.Context, r *Run, issue Issue) {
 		return
 	}
 	cmd.Stdout, cmd.Stderr = stdoutWriter, stderrWriter
-	if err := cmd.Start(); err != nil {
+	// The run's lock goes into the worker's process group and nowhere else: the factory opens it,
+	// hands it over and lets go of it, so what holds it from here is that group alone and the kernel
+	// gives it back when the last process of it is gone. A factory the host killed ends nothing, and
+	// this is what the next start reads to find the worker that outlived it (endSurvivors).
+	lock, err := f.runs.lock(r.ID)
+	if err != nil {
+		stdout.Close()
+		stdoutWriter.Close()
+		stderr.Close()
+		stderrWriter.Close()
+		f.finish(r, outcomeFailed, "the factory could not take the lock of this run: "+err.Error()+leftBehind(claim), nil)
+		return
+	}
+	cmd.ExtraFiles = []*os.File{lock}
+	err = cmd.Start()
+	lock.Close() // the worker's group holds it now, and a worker that never started holds nothing
+	if err != nil {
 		stdout.Close()
 		stdoutWriter.Close()
 		stderr.Close()
@@ -340,6 +449,9 @@ func (f *Factory) execute(parent context.Context, r *Run, issue Issue) {
 	}
 	stdoutWriter.Close() // the worker holds the only writing ends now
 	stderrWriter.Close()
+	// The process group of the session, recorded before a line of its output is read: it is what ends
+	// the session, and a factory that is gone cannot say it afterwards.
+	f.runs.update(r, func() { r.WorkerGroup = cmd.Process.Pid })
 	f.runs.event(r, Event{Kind: "factory", Title: "worker started", Body: fmt.Sprint(cmd.Args)})
 
 	var readers sync.WaitGroup
@@ -408,26 +520,51 @@ func (f *Factory) execute(parent context.Context, r *Run, issue Issue) {
 	}
 }
 
-// leftBehind says what a claim that did not finish left on the remote, which is what the operator
-// needs to decide: a claim that never got to create the branch took nothing, and one that did holds
-// the issue by it until somebody removes it — nothing here deletes work ([ADR 0026]).
+// leftBehind says what a run that did not finish left on the remote, which is what the operator
+// needs to decide: a claim that never got to create the branch took nothing, one that did holds the
+// issue by it until somebody removes it, and a resumed run leaves the claim it was under exactly as
+// it found it — nothing here deletes work ([ADR 0026]).
 //
 // [ADR 0026]: ../docs/adr/0026-the-factory-never-deletes-work-on-its-own.md
 func leftBehind(claim claimed) string {
-	if !claim.created {
+	switch {
+	case claim.resumed:
+		return "; the branch " + claim.branch + " and its worktree stay as they are"
+	case !claim.created:
 		return "; nothing was claimed on the remote"
+	default:
+		return "; the branch " + claim.branch + " was created on the remote and is left behind: remove it to work the issue again"
 	}
-	return "; the branch " + claim.branch + " was created on the remote and is left behind: remove it to work the issue again"
 }
 
-// take claims the issue on the remote and records the branch that claim is. Fake mode claims
-// nothing: its queue is canned and there is no remote behind it, so its scripted worker runs where
-// the factory itself does.
-func (f *Factory) take(ctx context.Context, r *Run, issue Issue) (claimed, error) {
-	if f.fake {
-		return claimed{}, nil
+// taking and taken name what a run was doing when it failed: claiming the issue, or resuming work
+// this factory already holds.
+func taking(claim claimed) string {
+	if claim.resumed {
+		return "resuming the issue"
 	}
-	claim, err := f.claim(ctx, r, issue)
+	return "claiming the issue"
+}
+
+func taken(claim claimed) string {
+	if claim.resumed {
+		return "resumed"
+	}
+	return "claimed"
+}
+
+// take prepares the run: it claims the issue on the remote and records the branch that claim is, or,
+// for a resumed run, continues under the claim that already holds it. Fake mode claims nothing: its
+// queue is canned and there is no remote behind it, so its scripted worker runs where the factory
+// itself does, and it says it holds the issue all the same, because its runs stand in for held ones.
+func (f *Factory) take(ctx context.Context, r *Run, entry Entry) (claimed, error) {
+	if entry.Signal != signalRouted {
+		return f.resume(ctx, r, entry)
+	}
+	if f.fake {
+		return claimed{holding: true}, nil
+	}
+	claim, err := f.claim(ctx, r, entry.Issue)
 	// The branch is recorded whether the claim was won or lost: it is what the claim was, and for a
 	// lost one it names the branch that holds the issue.
 	if claim.branch != "" {
