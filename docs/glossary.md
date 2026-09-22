@@ -42,5 +42,7 @@
 | remote claim | Creating the issue's branch through the GitHub API, which exactly one claimer wins ([ADR 0024](adr/0024-a-claim-is-the-creation-of-the-branch-through-the-api.md)). |
 | local claim | What was called "claim" until the factory existed: the orchestrator's claim of an issue into a Herdr worktree on a developer's machine (`/orchestrator:claim`). It refuses an issue the factory owns. |
 | release signal | Removing the assignee from an issue the factory holds, which queues a resumed run. |
+| changes-requested signal | A review that asks for changes on the pull request of an issue the factory holds, by somebody who may write to the repository and submitted after the last run of that issue ended, which queues a follow-up run. |
+| follow-up run | The factory run that answers such a review: the worker session again, in the worktree of the claim, with `/worker:address-reviews` as its prompt. |
 | connected repository | A repository named in the factory's configuration, as `owner/name`. |
 | dashboard | The page the factory serves at `/`, built into the binary from `factory/ui`. It reads the four endpoints and writes nothing ([ADR 0033](adr/0033-the-dashboard-is-built-into-the-factory-binary.md)). |

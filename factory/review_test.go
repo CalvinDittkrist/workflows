@@ -1,0 +1,348 @@
+package main
+
+import (
+	"fmt"
+	"path/filepath"
+	"strconv"
+	"testing"
+	"time"
+)
+
+// The follow-up run, tested the way the rest of the factory is: the real binary, against the gh shim
+// and a local bare repository that stands in for the remote. Requesting changes is a gesture on
+// GitHub, so it is driven through that shim, and what the factory answers with is read from the run
+// records, from how the worker was started and from the line it serves.
+
+// TestAReviewThatAsksForChangesRunsTheWorkerOnItInTheSameWorktree drives the whole signal: a run
+// ends ready and leaves a pull request, somebody with write access asks for changes on it, and the
+// factory runs the worker's address-reviews stage in the worktree of the claim ([ADR 0023]).
+//
+// [ADR 0023]: ../docs/adr/0023-github-is-the-only-control-surface-of-the-factory.md
+func TestAReviewThatAsksForChangesRunsTheWorkerOnItInTheSameWorktree(t *testing.T) {
+	gh := newGhShim(t)
+	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
+	gh.loggedInAs(t, "factory-bot")
+	gh.assigns(t, "acme/edge-sensors", claimedIssue, "factory-bot")
+	gh.workerReports(t, "acme/edge-sensors", claimedIssue)
+	// The pull request that run is going to open, with nobody having reviewed it yet.
+	gh.pullRequestIs(t, "acme/edge-sensors", claimedIssue, "open")
+	gh.reviews(t, "acme/edge-sensors", claimedIssue)
+	gh.mayWrite(t, "acme/edge-sensors", "maintainer", true)
+
+	data := filepath.Join(t.TempDir(), "data")
+	clone := gh.cloneInto(t, data, "acme/edge-sensors")
+	f := gh.work(t, config{"poll": "50ms", "deadline": "90s", "data_dir": data,
+		"repositories": []string{"acme/edge-sensors"}})
+	first := f.ended(t, 1)
+	if first.Outcome != "ready" || first.PullRequest == "" {
+		t.Fatalf("the first run ended as %q (%s) with the pull request %q, want a ready run that opened one; the factory's log:\n%s",
+			first.Outcome, first.Reason, first.PullRequest, f.output(t))
+	}
+	if first.Kind != "first" {
+		t.Errorf("the run that claimed the issue is of the kind %q, want a first run", first.Kind)
+	}
+	// What that run left in the worktree, which is what the follow-up run answers the review on.
+	worktree := filepath.Join(clone, ".claude", "worktrees", "feat-104-retry-the-upload-when-the-broker-drops")
+	writeFile(t, filepath.Join(worktree, "fix.txt"), "the work of the first session\n")
+	gh.git(t, worktree, "add", "fix.txt")
+	gh.git(t, worktree, "commit", "-q", "-m", "fix: the first session's commit")
+	committed := gh.git(t, worktree, "rev-parse", "HEAD")
+
+	// The gesture: a maintainer requests changes on the pull request, after that run ended.
+	requestedAt := after(*first.EndedAt)
+	gh.reviews(t, "acme/edge-sensors", claimedIssue,
+		review(7001, "maintainer", "CHANGES_REQUESTED", requestedAt))
+
+	second := f.ended(t, 2)
+	if second.Signal != signalChangesRequested || second.Issue != claimedIssue {
+		t.Fatalf("run 2 works #%d on the signal %q, want #%d on a review that asks for changes; the factory's log:\n%s",
+			second.Issue, second.Signal, claimedIssue, f.output(t))
+	}
+	if second.Kind != "follow-up" {
+		t.Errorf("the run that answers the review is of the kind %q, want a follow-up run", second.Kind)
+	}
+	if second.Outcome != outcomeReady {
+		t.Errorf("the follow-up run ended as %q (%s), want ready again", second.Outcome, second.Reason)
+	}
+	// The stage it opens in is its prompt, which no Skill call in the stream announces: a follow-up
+	// run stands at the reviews stage from its first moment, where a first run stands at implement.
+	if !equal(first.Stages, []string{"implement"}) || !equal(second.Stages, []string{"reviews"}) {
+		t.Errorf("the two runs went through the stages %v and %v, want [implement] and [reviews]", first.Stages, second.Stages)
+	}
+	if !second.SignalAt.Equal(requestedAt) {
+		t.Errorf("the follow-up run stands for a review submitted at %s, want the one at %s", second.SignalAt, requestedAt)
+	}
+	if second.Branch != claimedBranch || second.Worktree != first.Worktree || !second.Holding {
+		t.Errorf("the follow-up run is %s in %s (holding=%v), want the branch and the worktree of the claim (%s in %s)",
+			second.Branch, second.Worktree, second.Holding, first.Branch, first.Worktree)
+	}
+	// It claims nothing and assigns nothing: the claim that holds the issue stands, and this run is
+	// under it.
+	if made := gh.asked(t, "api --method POST repos/acme/edge-sensors/git/refs"); made != 1 {
+		t.Errorf("the factory created a reference %d times, want once: a follow-up run is under the claim that stands", made)
+	}
+	assigned := fmt.Sprintf("issue edit %d --repo acme/edge-sensors --add-assignee factory-bot", claimedIssue)
+	if made := gh.made(t, assigned); made != 1 {
+		t.Errorf("the factory made `gh %s` %d times, want once: the issue is this host's already", assigned, made)
+	}
+
+	// The session itself: the same worktree, on the commit the work there had reached, and started at
+	// the stage that answers a review rather than at the beginning of the pipeline.
+	workers := gh.workers(t)
+	if len(workers) != 2 {
+		t.Fatalf("the factory started %d workers, want one per run", len(workers))
+	}
+	follower := workers[1]
+	if follower.cwd != resolved(t, worktree) {
+		t.Errorf("the follow-up worker ran in %s, want the worktree of the claim %s", follower.cwd, resolved(t, worktree))
+	}
+	if follower.branch != claimedBranch || follower.head != committed {
+		t.Errorf("the follow-up worker ran on %s at %s, want %s at the commit the worktree holds (%s)",
+			follower.branch, follower.head, claimedBranch, committed)
+	}
+	if !follower.started("-p", "/worker:address-reviews") {
+		t.Errorf("the follow-up worker was started as %v, want the address-reviews skill as its prompt", follower.args)
+	}
+
+	// One review is one run, however many polls read it: the review stands on GitHub unanswered as far
+	// as the shim is concerned, and the factory polls twenty times a second.
+	f.never(t, 3*time.Second, "the factory started a third run, so it answered the one review twice",
+		func() bool { return !f.missing(t, 3) })
+	if read := gh.made(t, "api --paginate "+reviewsRequest("acme/edge-sensors", claimedIssue)); read < 3 {
+		t.Errorf("the reviews were read %d times, want a reading per poll: one run out of many polls is what is being proved", read)
+	}
+	var line apiLine
+	f.get(t, "/api/line", &line)
+	if len(line.Queue) != 0 || len(line.Now) != 0 {
+		t.Errorf("the factory queues %v and runs %d after the review was answered, want an idle line", keys(line.Queue), len(line.Now))
+	}
+}
+
+// What a poll must not read as a review that asks for changes: one from somebody without write
+// access, a plain comment, a dismissed review, and one submitted before the last run of the issue
+// ended. The maintainer's own then fills the line, which is what says the fixture was sound and the
+// silence before it was the rule at work, and merging the pull request empties it again — after
+// which the factory stops reading that pull request at all, because it holds every issue it ever
+// claimed and a call per poll for each of them is a rate limit spent on work that is over.
+//
+// The factory is paused throughout, so what is read is the line alone.
+func TestAReviewQueuesNothingUnlessAWriterAskedForChangesOnTheOpenPullRequest(t *testing.T) {
+	gh := newGhShim(t)
+	gh.remote(t, "acme/edge-sensors")
+	gh.loggedInAs(t, "factory-bot")
+	gh.issues(t, "acme/edge-sensors")
+	data := filepath.Join(t.TempDir(), "data")
+	gh.cloneInto(t, data, "acme/edge-sensors")
+
+	began := time.Now().UTC().Add(-2 * time.Hour)
+	ended := began.Add(30 * time.Minute)
+	held := record(1, claimedIssue, claimedTitle, signalRouted, outcomeReady, true, began, ended)
+	held.PullRequest = fmt.Sprintf("https://github.com/acme/edge-sensors/pull/%d", claimedIssue)
+	records(t, data, held)
+
+	gh.pullRequestIs(t, "acme/edge-sensors", claimedIssue, "open")
+	gh.mayWrite(t, "acme/edge-sensors", "maintainer", true)
+	gh.mayWrite(t, "acme/edge-sensors", "stranger", false)
+	ignored := []map[string]any{
+		// Before the run ended: what it asked for is the session's that was running, not a new run's.
+		review(1, "maintainer", "CHANGES_REQUESTED", ended.Add(-5*time.Minute)),
+		// Anybody may review a pull request of a public repository; a run of the factory is not
+		// something a stranger starts.
+		review(2, "stranger", "CHANGES_REQUESTED", ended.Add(2*time.Minute)),
+		// A plain comment and a review that was dismissed ask for nothing, however new they are.
+		review(3, "maintainer", "COMMENTED", ended.Add(3*time.Minute)),
+		review(4, "maintainer", "DISMISSED", ended.Add(4*time.Minute)),
+	}
+	gh.reviews(t, "acme/edge-sensors", claimedIssue, ignored...)
+
+	f := gh.start(t, config{"poll": "50ms", "deadline": "90s", "data_dir": data,
+		"repositories": []string{"acme/edge-sensors"}})
+	f.queue(t, 0)
+	f.never(t, 3*time.Second, "the factory queued a follow-up run on a review that asks nothing of it",
+		func() bool { return len(f.line(t).Queue) > 0 })
+
+	// The maintainer asks for changes on the same pull request: the line fills with it.
+	requestedAt := ended.Add(10 * time.Minute).Truncate(time.Second) // GitHub times a review to the second
+	gh.reviews(t, "acme/edge-sensors", claimedIssue,
+		append(ignored, review(5, "maintainer", "CHANGES_REQUESTED", requestedAt))...)
+	head := f.queue(t, 1)[0]
+	if head.Number != claimedIssue || head.Signal != signalChangesRequested {
+		t.Fatalf("the line opens with #%d on the signal %q, want #%d on a review that asks for changes",
+			head.Number, head.Signal, claimedIssue)
+	}
+	if !head.SignalAt.Equal(requestedAt) {
+		t.Errorf("the review stands at %s, want the time it was submitted %s", head.SignalAt, requestedAt)
+	}
+
+	// The pull request is merged with the review still on it: what it asked for is nobody's to answer
+	// now, and the line empties.
+	gh.pullRequestIs(t, "acme/edge-sensors", claimedIssue, "closed")
+	f.queue(t, 0)
+	// And that pull request is not read again: the issue is held for as long as the records say so,
+	// and asking GitHub about it once a poll forever is what must not happen.
+	asked := "api " + pullRequestRequest("acme/edge-sensors", claimedIssue) + " --jq .state"
+	read := gh.made(t, asked)
+	polls := "api " + issuesRequest("acme/edge-sensors", "factory")
+	seen := gh.made(t, polls)
+	f.eventually(t, 10*time.Second, "several more polls", func() bool { return gh.made(t, polls) >= seen+10 })
+	if again := gh.made(t, asked); again != read {
+		t.Errorf("the merged pull request was read %d more times over %d polls, want none",
+			again-read, gh.made(t, polls)-seen)
+	}
+}
+
+// Where a follow-up run stands: with the work the factory resumes, before every issue nobody has
+// worked yet, and among that work by the time of its signal.
+func TestAFollowUpRunStandsWithTheResumedWorkBeforeAnyNewIssue(t *testing.T) {
+	const reviewed, next = 112, 121
+	gh := newGhShim(t)
+	gh.remote(t, "acme/edge-sensors")
+	gh.loggedInAs(t, "factory-bot")
+	data := filepath.Join(t.TempDir(), "data")
+	gh.cloneInto(t, data, "acme/edge-sensors")
+
+	opened := time.Now().UTC().Add(-72 * time.Hour)
+	began := time.Now().UTC().Add(-2 * time.Hour)
+	interruptedAt := began.Add(30 * time.Minute)
+	// After the interruption, so it stands behind it in the line, and on the second GitHub times it to.
+	requestedAt := began.Add(50 * time.Minute).Truncate(time.Second)
+
+	// 104 was interrupted and has its one automatic resume; 112 was worked, is held, and its pull
+	// request has just been reviewed; 121 is new and was routed long before either.
+	held := record(2, reviewed, "Replace the CSV parser", signalRouted, outcomeReady, true, began, began.Add(20*time.Minute))
+	held.PullRequest = fmt.Sprintf("https://github.com/acme/edge-sensors/pull/%d", reviewed)
+	records(t, data,
+		record(1, claimedIssue, claimedTitle, signalRouted, outcomeInterrupted, true, began, interruptedAt),
+		held)
+	gh.issues(t, "acme/edge-sensors", openIssue(next, "Document the calibration procedure", opened))
+	gh.timeline(t, "acme/edge-sensors", next, labeled("factory", opened))
+	gh.pullRequestIs(t, "acme/edge-sensors", reviewed, "open")
+	gh.mayWrite(t, "acme/edge-sensors", "maintainer", true)
+	gh.reviews(t, "acme/edge-sensors", reviewed, review(1, "maintainer", "CHANGES_REQUESTED", requestedAt))
+
+	f := gh.start(t, config{"poll": "50ms", "deadline": "90s", "data_dir": data,
+		"repositories": []string{"acme/edge-sensors"}})
+	queue := f.queue(t, 3)
+	want := []string{"acme/edge-sensors#104", "acme/edge-sensors#112", "acme/edge-sensors#121"}
+	if !equal(keys(queue), want) {
+		t.Fatalf("the line is %v, want %v: the interruption, then the review, then the new issue", keys(queue), want)
+	}
+	for position, signal := range []string{signalInterruption, signalChangesRequested, signalRouted} {
+		if queue[position].Signal != signal {
+			t.Errorf("#%d stands in the line on the signal %q, want %q", queue[position].Number, queue[position].Signal, signal)
+		}
+	}
+	if !queue[1].SignalAt.Equal(requestedAt) {
+		t.Errorf("the reviewed #%d stands at %s, want the time the review was submitted %s",
+			reviewed, queue[1].SignalAt, requestedAt)
+	}
+}
+
+// The rule a poll reads a review by, in the shapes it can meet one in. The gesture is driven end to
+// end above; what is read here is what the records of an issue say about a review the last poll
+// found — above all that a review is answered once, because the poll that queued it repeats for as
+// long as the follow-up run takes to be recorded.
+func TestAReviewIsAnsweredOncePerIssueAndOnlyWhileTheIssueIsIdle(t *testing.T) {
+	began := time.Now().UTC().Add(-2 * time.Hour)
+	ended := began.Add(30 * time.Minute)
+	requestedAt := ended.Add(5 * time.Minute) // after the run that opened the pull request
+	run := func(id int, signal, outcome string, holding bool) Run {
+		r := record(id, 104, "Retry the upload", signal, outcome, holding, began, ended)
+		r.PullRequest = "https://github.com/acme/edge-sensors/pull/104"
+		return r
+	}
+	// The follow-up run the review queued, which carries the review it stands for.
+	answered := func(id int, at time.Time) Run {
+		r := run(id, signalChangesRequested, outcomeReady, true)
+		r.SignalAt, r.StartedAt = at, at.Add(time.Second)
+		return r
+	}
+	for _, c := range []struct {
+		name    string
+		runs    []Run
+		at      time.Time // the newest review that asks for changes, as this poll reads it
+		follows bool
+	}{
+		{"a review submitted after the run that opened the pull request", []Run{
+			run(1, signalRouted, outcomeReady, true)}, requestedAt, true},
+		{"the same review while the run it queued has not been recorded", []Run{
+			run(1, signalRouted, outcomeReady, true), answered(2, requestedAt)}, requestedAt, false},
+		{"another review after the one that was answered", []Run{
+			run(1, signalRouted, outcomeReady, true), answered(2, requestedAt)},
+			requestedAt.Add(20 * time.Minute), true},
+		{"a review submitted while the run was going", []Run{
+			run(1, signalRouted, outcomeReady, true)}, ended.Add(-5 * time.Minute), false},
+		{"no review at all", []Run{
+			run(1, signalRouted, outcomeReady, true)}, time.Time{}, false},
+		{"a claim another claimer won", []Run{
+			run(1, signalRouted, outcomeLost, false)}, requestedAt, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			held := holdings(c.runs)["acme/edge-sensors#104"]
+			if follows := held.changesRequested(c.at); follows != c.follows {
+				t.Errorf("the factory reads this as a review to answer: %v, want %v", follows, c.follows)
+			}
+		})
+	}
+
+	// Which pull request is watched, and when. A run that is still going is nothing to queue beside,
+	// and an issue whose runs opened no pull request has none to read a review of.
+	watched := []Run{run(1, signalRouted, outcomeReady, true)}
+	if pull, ok := holdings(watched)["acme/edge-sensors#104"].pull(); !ok || pull != 104 {
+		t.Errorf("the factory watches the pull request %d (%v), want #104, the one the run reported", pull, ok)
+	}
+	none := []Run{record(1, 104, "Retry the upload", signalRouted, outcomeReady, true, began, ended)}
+	if _, ok := holdings(none)["acme/edge-sensors#104"].pull(); ok {
+		t.Error("the factory watches a pull request of an issue whose runs opened none")
+	}
+	active := watched
+	active[0].EndedAt, active[0].State = nil, "running"
+	if held := holdings(active)["acme/edge-sensors#104"]; held.changesRequested(requestedAt) {
+		t.Error("an issue whose run is still going is read as reviewed; the run would be queued beside itself")
+	} else if _, ok := held.pull(); ok {
+		t.Error("the factory reads the pull request of a run that is still writing to it")
+	}
+}
+
+// ---- the gh shim ----
+
+// pullRequestIs is what GitHub says the state of one pull request is: open, closed or merged.
+func (g *ghShim) pullRequestIs(t *testing.T, repository string, pull int, state string) {
+	t.Helper()
+	g.answer(t, "api "+pullRequestRequest(repository, pull)+" --jq .state", state+"\n")
+}
+
+// reviews is the review list of one pull request, as GitHub's review endpoint answers it.
+func (g *ghShim) reviews(t *testing.T, repository string, pull int, reviews ...map[string]any) {
+	t.Helper()
+	if reviews == nil {
+		reviews = []map[string]any{}
+	}
+	g.answer(t, "api --paginate "+reviewsRequest(repository, pull), marshal(t, reviews))
+}
+
+// mayWrite is whether GitHub says one user may push to a repository, which is what makes their
+// review the maintainer's gesture.
+func (g *ghShim) mayWrite(t *testing.T, repository, login string, may bool) {
+	t.Helper()
+	g.answer(t, "api "+permissionRequest(repository, login)+" --jq .user.permissions.push",
+		strconv.FormatBool(may)+"\n")
+}
+
+// review is one review as GitHub's review list carries it. The names are GitHub's, because they are
+// the contract the rule reads.
+func review(id int, login, state string, at time.Time) map[string]any {
+	return map[string]any{"id": id, "user": map[string]any{"login": login}, "state": state,
+		"submitted_at": at.Format(time.RFC3339)}
+}
+
+// after is a moment GitHub could have timed after this one, on the second GitHub counts in.
+func after(at time.Time) time.Time { return at.Add(2 * time.Second).UTC().Truncate(time.Second) }
+
+// line is what the factory serves as its one line of work.
+func (f *factory) line(t *testing.T) apiLine {
+	t.Helper()
+	var line apiLine
+	f.get(t, "/api/line", &line)
+	return line
+}
