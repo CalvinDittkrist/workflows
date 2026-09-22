@@ -6,6 +6,9 @@
   "data_dir": "/var/lib/factory",
   "worker_args": [],
   "paused": true,
+  "notify": [
+    "CalvinDittkrist"
+  ],
   "repositories": [
     "CalvinDittkrist/workflows"
   ]

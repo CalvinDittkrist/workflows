@@ -82,6 +82,7 @@ type apiRun struct {
 	ExitCode   *int     `json:"exitCode"`
 	EventCount int      `json:"eventCount"`
 	Warnings   []string `json:"warnings"`
+	Notify     string   `json:"notify"`
 	Versions   struct {
 		Worker     string `json:"worker"`
 		ClaudeCode string `json:"claudeCode"`
@@ -526,6 +527,14 @@ func TestAnInvalidConfigurationIsRefusedWithTheFix(t *testing.T) {
 		{"worker arguments that replace the output format", `{"data_dir":"data","repositories":["a/b"],"worker_args":["--output-format","text"]}`, `worker_args carries --output-format`},
 		{"repository object with an unknown field", `{"data_dir":"data","repositories":[{"name":"a/b","branch":"dev"}]}`, `a repository is "owner/name" or {"name": "owner/name", "base": "dev"}`},
 		{"no data directory", `{"repositories":["a/b"]}`, `data_dir is missing; name the directory`},
+		// A login reaches gh as an argument and a comment as a mention, so anything that is not one is
+		// refused before a run of this factory tries to notify it.
+		{"login written with the at sign", `{"data_dir":"data","repositories":["a/b"],"notify":["@octocat"]}`, `is not a GitHub login; write it as "octocat"`},
+		{"login that reads as a flag", `{"data_dir":"data","repositories":["a/b"],"notify":["-octocat"]}`, `is not a GitHub login`},
+		{"login with a space in it", `{"data_dir":"data","repositories":["a/b"],"notify":["oct cat"]}`, `is not a GitHub login`},
+		{"login that is a team", `{"data_dir":"data","repositories":["a/b"],"notify":["acme/maintainers"]}`, `is not a GitHub login`},
+		{"empty login", `{"data_dir":"data","repositories":["a/b"],"notify":[""]}`, `is not a GitHub login`},
+		{"login twice in two spellings", `{"data_dir":"data","repositories":["a/b"],"notify":["Octocat","octocat"]}`, `notify names "octocat" twice`},
 		{"unknown field", `{"data_dir":"data","repositories":["a/b"],"listn":"x"}`, `unknown field "listn"; the fields are listen, label`},
 		{"not JSON", `listen = 7341`, `see factory/factory.example.json`},
 		{"deadline in words", `{"data_dir":"data","repositories":["a/b"],"deadline":"90 minutes"}`, `is not a positive duration; write it as "90m"`},

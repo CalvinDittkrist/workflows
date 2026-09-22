@@ -122,6 +122,7 @@ func New(settings Settings, fake bool) (*Factory, error) {
 		f.source = &canned{repositories: settings.Repositories, started: f.started}
 	}
 	f.endSurvivors() // before anything of this start can queue a run of an issue one of them is working
+	sayNobodyIsNotified(settings, fake)
 	return f, nil
 }
 
@@ -758,4 +759,6 @@ func (f *Factory) finish(r *Run, outcome, reason string, exitCode *int) {
 	}
 	f.runs.finish(r, outcome, reason, exitCode)
 	log.Printf("run %d (%s#%d) ended: %s", r.ID, r.Repository, r.Issue, outcome)
+	// And the maintainer hears of it, if this ending is one that needs them: nobody watches the host.
+	f.notify(r)
 }

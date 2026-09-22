@@ -586,6 +586,7 @@ type ghShim struct {
 	answers  string
 	log      string
 	remotes  string
+	bodies   string // the directory the body of every call that reads one from standard input lands in
 	failing  string // the file holding the pattern of requests that fail
 	stalling string // the file holding the pattern of requests that are never answered
 	hanging  string // the file holding how long a clone sleeps instead of cloning
@@ -602,6 +603,7 @@ func newGhShim(t *testing.T) *ghShim {
 		answers:  filepath.Join(dir, "answers"),
 		log:      filepath.Join(dir, "calls.log"),
 		remotes:  filepath.Join(dir, "remotes"),
+		bodies:   filepath.Join(dir, "bodies"),
 		failing:  filepath.Join(dir, "failing"),
 		stalling: filepath.Join(dir, "stalling"),
 		hanging:  filepath.Join(dir, "hanging"),
@@ -617,6 +619,7 @@ func newGhShim(t *testing.T) *ghShim {
 	g.env = append(gitIsolation(),
 		"PATH="+abs(t, "testdata")+string(os.PathListSeparator)+os.Getenv("PATH"),
 		"HOME="+dir, "GH_SHIM_DIR="+g.answers, "GH_SHIM_LOG="+g.log, "GH_SHIM_REMOTES="+g.remotes,
+		"GH_SHIM_BODIES="+g.bodies,
 		"GH_SHIM_FAIL="+g.failing, "GH_SHIM_STALL="+g.stalling, "GH_SHIM_HANG="+g.hanging,
 		"CLAUDE_SHIM_LOG="+g.worker, "CLAUDE_SHIM_PLUGIN_LOG="+g.plugins)
 	return g
@@ -649,10 +652,66 @@ func (g *ghShim) assigns(t *testing.T, repository string, issue int, login strin
 		fmt.Sprintf("https://github.com/%s/issues/%d\n", repository, issue))
 }
 
+// comments is the answer to a comment on one issue, so a comment the factory does not make exactly
+// that way is a call the shim has no answer for. The body is read from standard input, which is
+// where commented reads it back from.
+func (g *ghShim) comments(t *testing.T, repository string, issue int) {
+	t.Helper()
+	g.answer(t, commentCall(repository, issue),
+		fmt.Sprintf("https://github.com/%s/issues/%d#issuecomment-1\n", repository, issue))
+}
+
+// commented is what the factory wrote in its comments on one issue, all of them in the order it
+// made them, and an empty string when it commented nothing.
+func (g *ghShim) commented(t *testing.T, repository string, issue int) string {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(g.bodies, requestName(commentCall(repository, issue))))
+	if os.IsNotExist(err) {
+		return ""
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(raw)
+}
+
+// reviews is the answer to the review request the factory makes on a pull request of a run that
+// ended ready.
+func (g *ghShim) reviews(t *testing.T, url string, logins ...string) {
+	t.Helper()
+	g.answer(t, reviewCall(url, logins...), url+"\n")
+}
+
+// commentCall and reviewCall are the two calls a notification is: a comment on the issue whose body
+// the factory writes to standard input, and a review request on the pull request.
+func commentCall(repository string, issue int) string {
+	return fmt.Sprintf("issue comment %d --repo %s --body-file -", issue, repository)
+}
+
+func reviewCall(url string, logins ...string) string {
+	call := "pr edit " + url
+	for _, login := range logins {
+		call += " --add-reviewer " + login
+	}
+	return call
+}
+
+// requestName is the file a request's answer and its body lie under, as the shim names them.
+func requestName(request string) string {
+	return regexp.MustCompile(`[^A-Za-z0-9]`).ReplaceAllString(request, "-")
+}
+
 // workerReports is the pull request the scripted worker of the claude shim ends its session with.
 func (g *ghShim) workerReports(t *testing.T, repository string, issue int) {
 	t.Helper()
 	g.env = append(g.env, fmt.Sprintf("CLAUDE_SHIM_PR=https://github.com/%s/pull/%d", repository, issue))
+}
+
+// workerBlocks is the report the scripted worker ends its session with instead of a pull request:
+// the blocker's text, which is what the factory's notification carries.
+func (g *ghShim) workerBlocks(t *testing.T, reason string) {
+	t.Helper()
+	g.env = append(g.env, "CLAUDE_SHIM_REPORT=blocked: "+reason)
 }
 
 // installs is what the claude shim answers about this host: the version of the worker plugin its
@@ -744,7 +803,7 @@ func (g *ghShim) openClaims(t *testing.T) {
 // names it.
 func (g *ghShim) answer(t *testing.T, request, body string) {
 	t.Helper()
-	writeFile(t, filepath.Join(g.answers, regexp.MustCompile(`[^A-Za-z0-9]`).ReplaceAllString(request, "-")), body)
+	writeFile(t, filepath.Join(g.answers, requestName(request)), body)
 }
 
 // issues is the issue list of one repository, as GitHub's list endpoint answers it.
@@ -893,7 +952,14 @@ func (g *ghShim) cloneInto(t *testing.T, dataDir, repository string) string {
 func (g *ghShim) calls(t *testing.T) []string {
 	t.Helper()
 	calls := []string{}
-	for _, call := range strings.Split(readFile(t, g.log), "\n") {
+	raw, err := os.ReadFile(g.log)
+	if os.IsNotExist(err) {
+		return calls // the factory has not called gh yet, which is a reading and not a failure
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, call := range strings.Split(string(raw), "\n") {
 		if call != "" {
 			calls = append(calls, call)
 		}

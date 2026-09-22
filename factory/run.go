@@ -93,6 +93,12 @@ type Run struct {
 	EventCount  int      `json:"eventCount"`
 	Warnings    []string `json:"warnings"`
 	Versions    Versions `json:"versions"`
+	// Notify is what this ending owes the maintainer on GitHub: pending while the notification is
+	// still owed and done once the factory has made it. It is written before the call and again
+	// after it, so a host cut off in between makes it on its next start and a host that made it
+	// never makes it twice. A run that owes nobody anything — an outcome that notifies nobody, a
+	// factory with no logins to notify, a record written before this field — carries none of it.
+	Notify string `json:"notify,omitempty"`
 
 	// What the stream said, kept for the moment the run ends. Not part of the record.
 	reportOutcome string // ready or blocked, as the worker's final report gave it
