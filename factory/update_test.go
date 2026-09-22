@@ -216,3 +216,49 @@ func TestAFailedUpdateIsAWarningAndTheRunGoesOnWithWhatIsInstalled(t *testing.T)
 		t.Errorf("the factory asked claude for %q, want the plugin update attempted after the marketplace failed", calls)
 	}
 }
+
+func TestAWorkerLoadedFromAPluginDirectoryRecordsNoVersionOffTheInstall(t *testing.T) {
+	gh := newGhShim(t)
+	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
+	gh.loggedInAs(t, "factory-bot")
+	gh.assigns(t, "acme/edge-sensors", claimedIssue, "factory-bot")
+	gh.workerReports(t, "acme/edge-sensors", claimedIssue)
+	// A host that has the plugin installed and switched on, and still gives its worker a checkout of
+	// its own: a developer's host, and the one configuration the install is not what a session runs.
+	gh.installs(t, "0.9.3", "2.1.278 (Claude Code)")
+
+	data := filepath.Join(t.TempDir(), "data")
+	gh.cloneInto(t, data, "acme/edge-sensors")
+	checkout := filepath.Join(t.TempDir(), "workflows", "plugins", "worker")
+
+	f := gh.work(t, config{"poll": "50ms", "deadline": "90s", "data_dir": data,
+		"repositories": []string{"acme/edge-sensors"}, "worker_args": []string{"--plugin-dir", checkout}})
+	run := f.ended(t, 1)
+
+	if run.Outcome != "ready" {
+		t.Fatalf("the run ended as %q (%s), want ready; the factory's log:\n%s", run.Outcome, run.Reason, f.output(t))
+	}
+	// The session was started with that directory, and a plugin loaded from one takes precedence over
+	// the installed plugin of the same name: 0.9.3 is on this host, but it is not what ran.
+	workers := gh.workers(t)
+	if len(workers) != 1 || !workers[0].started("--plugin-dir", checkout) {
+		t.Fatalf("the factory started %d workers with %q, want the one carrying the plugin directory", len(workers), workers)
+	}
+	if run.Versions.Worker != "" {
+		t.Errorf("the run records the worker plugin %q, want none: the session ran from %s, not from the install", run.Versions.Worker, checkout)
+	}
+	// What the factory can still read it does: Claude Code and its own version are unaffected.
+	if run.Versions.ClaudeCode != "2.1.278" || run.Versions.Factory != versionFileSays(t) {
+		t.Errorf("the run records the versions %+v, want the Claude Code and the factory of this host", run.Versions)
+	}
+	// And the run says why it cannot be traced to a worker version, naming the directory it ran from.
+	if len(run.Warnings) != 1 || !strings.Contains(run.Warnings[0], checkout) {
+		t.Fatalf("the run carries the warnings %q, want one naming %s", run.Warnings, checkout)
+	}
+	// The installed list is not even asked: no row of it is an answer about this run.
+	for _, call := range gh.pluginCalls(t) {
+		if strings.HasPrefix(call, "plugin list") {
+			t.Errorf("the factory asked claude for %q, want no question about what is installed", call)
+		}
+	}
+}

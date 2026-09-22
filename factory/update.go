@@ -26,6 +26,9 @@ import (
 const (
 	marketplace  = "workflows"
 	workerPlugin = "worker@" + marketplace
+	// pluginDirFlag is how a worker command names a plugin directory to load instead, which the
+	// versions of a run have to reckon with.
+	pluginDirFlag = "--plugin-dir"
 )
 
 const (
@@ -128,12 +131,21 @@ type installedPlugin struct {
 // is not what the session runs either — a version recorded off such a row would name a worker the
 // run never had.
 //
-// A host that gives its worker a plugin directory of its own instead (worker_args with
-// --plugin-dir, see the README) runs from that directory, and the update above has already said
-// that it found nothing to update.
+// A host that gives its worker a plugin directory of its own (worker_args with --plugin-dir, see
+// the README) is the one case where the installed row is not the answer: a plugin loaded that way
+// takes precedence over the installed one of the same name for that session, and it is listed by no
+// `claude plugin list` that is not given the same flag ([plugins]). Such a run is made of a
+// checkout, whose version is nothing this factory can read, so it records none and says so — a
+// number off the install would name a worker the session did not load.
 //
 // [ADR 0027]: ../docs/adr/0027-the-factorys-isolation-boundary-is-the-host.md
+// [plugins]: https://code.claude.com/docs/en/plugins.md
 func (f *Factory) workerVersion(ctx context.Context, r *Run) string {
+	if dirs := pluginDirs(f.settings.WorkerArgs); len(dirs) > 0 {
+		f.versionUnread(ctx, r, "this host loads its worker from "+strings.Join(dirs, ", ")+
+			" (worker_args --plugin-dir), which takes precedence over anything installed")
+		return ""
+	}
 	out, reason, err := command(ctx, versionTimeout, "claude", "plugin", "list", "--json")
 	if err != nil {
 		f.versionUnread(ctx, r, "the installed plugins could not be listed: "+reason)
@@ -151,6 +163,24 @@ func (f *Factory) workerVersion(ctx context.Context, r *Run) string {
 	}
 	f.versionUnread(ctx, r, workerPlugin+" is not installed and enabled for the user this factory runs as")
 	return ""
+}
+
+// pluginDirs are the plugin directories the host adds to every worker command. The flag takes one
+// path and is repeated for more ([CLI reference]); the documented form separates flag and value,
+// and the joined one is read as well rather than passed over as an argument of something else.
+//
+// [CLI reference]: https://code.claude.com/docs/en/cli-reference.md
+func pluginDirs(workerArgs []string) []string {
+	var dirs []string
+	for i, arg := range workerArgs {
+		switch {
+		case arg == pluginDirFlag && i+1 < len(workerArgs):
+			dirs = append(dirs, workerArgs[i+1])
+		case strings.HasPrefix(arg, pluginDirFlag+"="):
+			dirs = append(dirs, strings.TrimPrefix(arg, pluginDirFlag+"="))
+		}
+	}
+	return dirs
 }
 
 // hostScope says that an installed plugin belongs to the host rather than to a checkout on it: the

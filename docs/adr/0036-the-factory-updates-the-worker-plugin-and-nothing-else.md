@@ -32,4 +32,4 @@ The marketplace becomes a trust boundary of every host, and this decision accept
 
 Claude Code and the factory move when the operator moves them. That is deliberate friction: the two pieces whose failure takes the whole line down are the two the factory is not allowed to change about itself.
 
-A host that runs the worker from a checkout instead of from an installed plugin — `worker_args` with `--plugin-dir` — has nothing to update and gets a warning per run saying so. That host is a developer's, and the warning is true: the session it ran did not come from the marketplace.
+A host that runs the worker from a checkout instead — `worker_args` with `--plugin-dir` — records no worker version and gets a warning per run naming that directory. A plugin loaded that way takes precedence over an installed one of the same name and is listed by no plugin command the factory can ask, so whatever the install says is not what the session loaded. That host is a developer's, and the warning is true: the run cannot be traced to a released worker.
