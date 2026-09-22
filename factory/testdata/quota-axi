@@ -8,7 +8,8 @@
 #                      all=<percent> [<model>=<percent> ...] reset=+<seconds>
 #                                 a report whose all-models scope and model scopes have that much
 #                                 left, every window of them resetting that many seconds after the
-#                                 call; reset=none names no reset time at all
+#                                 call; reset=none names no reset time at all, and a trailing
+#                                 stale marks the reading as quota-axi's stale cache
 #                      fail       quota-axi's own error, on its error output with exit 1
 #                      garbage    output that is not a report
 #   QUOTA_SHIM_LOG   one line per call: when it came, in seconds since the epoch, and its arguments
@@ -41,12 +42,13 @@ case "$answer" in
     ;;
 esac
 
-all="" reset="" windows="" scopes=""
+all="" reset="" windows="" scopes="" stale=false
 models=()
 for field in $answer; do
   case "$field" in
     all=*) all=${field#all=} ;;
     reset=*) reset=${field#reset=} ;;
+    stale) stale=true ;;
     *=*) models+=("$field") ;;
   esac
 done
@@ -68,5 +70,5 @@ for model in ${models[@]+"${models[@]}"}; do
   scopes="$scopes"',{"scope":"model:'"$name"'","status":"known","effectivePercentRemaining":'"$left"',"boundedBy":["five_hour","model:'"$name"'"],"limitingWindowIds":["model:'"$name"'"]}'
 done
 
-printf '{"generatedAt":"%s","schemaVersion":5,"providers":[{"provider":"claude","plan":"max","windows":[%s],"state":{"status":"fresh","stale":false},"quotaSemantics":{"status":"known","effectiveAvailability":[%s]}}]}\n' \
-  "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$windows" "$scopes"
+printf '{"generatedAt":"%s","schemaVersion":5,"providers":[{"provider":"claude","plan":"max","windows":[%s],"state":{"status":"%s","stale":%s},"quotaSemantics":{"status":"known","effectiveAvailability":[%s]}}]}\n' \
+  "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$windows" "$( [ "$stale" = true ] && echo stale || echo fresh )" "$stale" "$scopes"

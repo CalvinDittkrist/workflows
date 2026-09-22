@@ -92,7 +92,10 @@ type quotaReport struct {
 	SchemaVersion int `json:"schemaVersion"`
 	Providers     []struct {
 		Provider string `json:"provider"`
-		Windows  []struct {
+		State    struct {
+			Stale bool `json:"stale"`
+		} `json:"state"`
+		Windows []struct {
 			ID       string `json:"id"`
 			ResetsAt string `json:"resetsAt"`
 		} `json:"windows"`
@@ -140,6 +143,11 @@ func parseQuota(raw []byte, model string) (quota, error) {
 	for _, provider := range report.Providers {
 		if provider.Provider != "claude" {
 			continue
+		}
+		// A stale reading is quota-axi's cache of an older answer: its percentages and resets may
+		// be long gone, so the factory neither waits on it nor resumes by it.
+		if provider.State.Stale {
+			return quota{}, errors.New("quota-axi's reading of claude is stale, so it does not say how much is left now")
 		}
 		resets := map[string]time.Time{}
 		for _, w := range provider.Windows {
@@ -262,14 +270,20 @@ func (f *Factory) waitForQuota(until time.Time, why string) {
 	}
 }
 
-// waitingForQuota says until when the factory waits for quota, and whether that is still ahead.
+// waitingForQuota says until when the factory waits for quota, and whether it still does. A wait
+// whose reset has passed is over whether or not a check followed it: a line that emptied during the
+// wait asks nothing of quota-axi, and the interface must not show a wait for a moment gone by.
 func (f *Factory) waitingForQuota(now time.Time) (time.Time, bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.quotaUntil == nil {
 		return time.Time{}, false
 	}
-	return *f.quotaUntil, f.quotaUntil.After(now)
+	if !f.quotaUntil.After(now) {
+		f.quotaUntil = nil
+		return time.Time{}, false
+	}
+	return *f.quotaUntil, true
 }
 
 // percent writes a percentage as the interface and the log show it.

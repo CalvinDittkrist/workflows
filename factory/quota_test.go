@@ -189,6 +189,31 @@ func TestTooLittleQuotaWaitsForTheResetAndStartsAfterIt(t *testing.T) {
 	}
 }
 
+// A wait is over at its reset even when nothing checks again: an issue that left the line while the
+// factory waited leaves nothing to check for, and the interface still says the factory runs again
+// rather than showing a wait for a moment that has passed.
+func TestAQuotaWaitEndsAtTheResetWhenTheLineIsEmpty(t *testing.T) {
+	q := newQuotaShim(t, "all=80 opus=5 reset=+3")
+	f, gh := claimsWithQuota(t, q, config{})
+	until := f.waitsForQuota(t)
+	gh.issues(t, "acme/edge-sensors") // the routing label came off while the factory waited
+	var status apiStatus
+	f.eventually(t, 30*time.Second, "the factory to stop waiting for quota after the reset", func() bool {
+		status = apiStatus{}
+		f.get(t, "/api/status", &status)
+		return status.State == "running" && status.QuotaUntil == nil
+	})
+	if time.Now().Before(until) {
+		t.Errorf("the factory stopped waiting before the reset at %s", until)
+	}
+	if !f.missing(t, 1) {
+		t.Errorf("a run started for an issue that left the line; the factory's log:\n%s", f.output(t))
+	}
+	if calls := q.calls(t); len(calls) != 1 {
+		t.Errorf("the factory asked quota-axi %d times, want once: an empty line has nothing to check for", len(calls))
+	}
+}
+
 // A check that cannot answer is no reason to stop: the run starts, and it says it started without
 // knowing how much was left ([ADR 0028]).
 //
@@ -201,6 +226,8 @@ func TestARunStartsWithAWarningWhenTheQuotaCheckFails(t *testing.T) {
 		{"the tool prints something that is not its report", "garbage", "", "not its JSON report"},
 		{"the tool is not installed", "all=80 opus=80 reset=+3600", "/nonexistent/quota-axi", "/nonexistent/quota-axi"},
 		{"the scope that is short names no reset", "all=80 opus=5 reset=none", "", "names no reset time"},
+		// A stale reading is no reading: a short scope in quota-axi's old cache holds nothing back.
+		{"the reading is stale", "all=80 opus=5 reset=+3600 stale", "", "stale"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			q := newQuotaShim(t, c.plan)
