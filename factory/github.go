@@ -167,7 +167,7 @@ func (g *gitHub) queue(ctx context.Context) poll {
 			result.unreadable[repository] = said(err)
 			continue
 		}
-		read[repository] = true
+		read[repositoryKey(repository)] = true
 		for _, issue := range issues {
 			seen[issue.key()] = true
 		}
@@ -453,7 +453,7 @@ func connect(ctx context.Context, settings Settings) {
 // whose file system tells the two apart the next start would clone it again beside the first and
 // leave the old clone behind.
 func clonePath(dataDir, repository string) string {
-	return filepath.Join(dataDir, "repos", filepath.FromSlash(strings.ToLower(repository)))
+	return filepath.Join(dataDir, "repos", filepath.FromSlash(repositoryKey(repository)))
 }
 
 // ghError is a gh call that failed: the whole call, which is what the journal needs, and what gh

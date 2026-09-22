@@ -419,7 +419,7 @@ func (r *Run) stage(name string) {
 	}
 }
 
-func (r *Run) key() string { return fmt.Sprintf("%s#%d", r.Repository, r.Issue) }
+func (r *Run) key() string { return fmt.Sprintf("%s#%d", repositoryKey(r.Repository), r.Issue) }
 
 // cut shortens a string to at most n bytes without splitting a character in half. It steps back over
 // the bytes of one character at most, so a body that is not valid UTF-8 at all still keeps its head.

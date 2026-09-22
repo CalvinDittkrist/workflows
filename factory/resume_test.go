@@ -211,6 +211,41 @@ func TestAReleaseThatWasCutOffBeforeTheTakeBackIsStillAnswered(t *testing.T) {
 	}
 }
 
+// GitHub answers for either spelling of a repository, so the factory reads one name whatever case it
+// is written in. A configuration rewritten from acme/edge-sensors to Acme/Edge-Sensors names the
+// repository whose work this host already holds: the records keep the spelling of the day they were
+// written, and a factory that told the two apart would drop that work out of its line and claim its
+// issues anew against the branches it owns itself.
+func TestHeldWorkStaysInTheLineWhenTheConfigurationRespellsTheRepository(t *testing.T) {
+	const respelled, next = "Acme/Edge-Sensors", 121
+	gh := newGhShim(t)
+	gh.remote(t, respelled)
+	gh.loggedInAs(t, "factory-bot")
+	data := filepath.Join(t.TempDir(), "data")
+	gh.cloneInto(t, data, respelled)
+
+	began := time.Now().UTC().Add(-2 * time.Hour)
+	interruptedAt := began.Add(30 * time.Minute)
+	// The interrupted run of #104 was written when the configuration spelled the repository the other
+	// way; it holds the issue and has its one automatic resume.
+	records(t, data,
+		record(1, claimedIssue, claimedTitle, signalRouted, outcomeInterrupted, true, began, interruptedAt))
+	// #104 is assigned to this host, so GitHub's line carries only the issue nobody has worked yet.
+	gh.issues(t, respelled, openIssue(next, "Document the calibration procedure", began.Add(-72*time.Hour)))
+	gh.timeline(t, respelled, next, labeled("factory", began.Add(-6*time.Hour)))
+
+	f := gh.start(t, config{"poll": "50ms", "deadline": "90s", "data_dir": data,
+		"repositories": []string{respelled}})
+	queue := f.queue(t, 2)
+	want := []string{fmt.Sprintf("%s#%d", respelled, claimedIssue), fmt.Sprintf("%s#%d", respelled, next)}
+	if !equal(keys(queue), want) {
+		t.Fatalf("the line is %v, want %v: the work the records hold, then the new issue", keys(queue), want)
+	}
+	if queue[0].Signal != "interruption" {
+		t.Errorf("#%d stands in the line on the signal %q, want an interruption to resume", claimedIssue, queue[0].Signal)
+	}
+}
+
 // A resumed run needs the worktree its claim made, and #58 is where a missing one is put back. Until
 // then such a resume fails, and this is what that failure must cost: the issue's one automatic
 // resume, and nothing else. The repository keeps its place — the next issue in the line is claimed

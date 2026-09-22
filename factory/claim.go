@@ -180,7 +180,7 @@ const worktreesEntry = ".claude/worktrees/"
 // connected is the configured repository of that name.
 func (f *Factory) connected(name string) (Connected, bool) {
 	for _, c := range f.settings.Repositories {
-		if c.Name == name {
+		if repositoryKey(c.Name) == repositoryKey(name) {
 			return c, true
 		}
 	}

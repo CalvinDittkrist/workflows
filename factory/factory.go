@@ -39,7 +39,15 @@ type Issue struct {
 	scenario     string // fake mode only: which scripted worker works this entry
 }
 
-func (i Issue) key() string { return fmt.Sprintf("%s#%d", i.Repository, i.Number) }
+func (i Issue) key() string { return fmt.Sprintf("%s#%d", repositoryKey(i.Repository), i.Number) }
+
+// repositoryKey is a repository name as everything that matches on one spells it. GitHub answers for
+// either spelling, so a configuration rewritten from Acme/Repo to acme/repo names the repository
+// this host already works: the record of a run keeps the spelling of the day it was written, and a
+// factory that told the two apart would drop the work those records hold out of its line and claim
+// their issues anew against the branches it owns itself. The clone lies under this name for the same
+// reason.
+func repositoryKey(name string) string { return strings.ToLower(name) }
 
 // Entry is one place in the line: an issue the factory would claim, or work it already holds and
 // would resume in the worktree of that claim. It is what the interface serves as the queue.
@@ -198,7 +206,7 @@ func (f *Factory) claimable(repository string) bool {
 		return true
 	}
 	f.mu.Lock()
-	held := f.held[repository]
+	held := f.held[repositoryKey(repository)]
 	f.mu.Unlock()
 	if held {
 		return false
@@ -220,8 +228,8 @@ func (f *Factory) claimable(repository string) bool {
 // [ADR 0026]: ../docs/adr/0026-the-factory-never-deletes-work-on-its-own.md
 func (f *Factory) hold(repository, reason string) {
 	f.mu.Lock()
-	said := f.held[repository]
-	f.held[repository] = true
+	said := f.held[repositoryKey(repository)]
+	f.held[repositoryKey(repository)] = true
 	f.mu.Unlock()
 	if !said {
 		log.Printf("error: %s %s; its issues keep their place in the line and this factory claims none of them until it is started again", repository, reason)
@@ -259,15 +267,19 @@ func (f *Factory) waiting() []Entry {
 
 	out := []Entry{}
 	for key, held := range holdings(records) {
-		if _, ok := f.connected(held.repository()); !ok {
+		connected, ok := f.connected(held.repository())
+		if !ok {
 			continue
 		}
 		issue, routed := routedNow[key]
 		if !routed {
 			// An issue the factory holds is assigned to this host, so the line does not carry it and
-			// its own record is what the entry is made of. In fake mode the canned line carries every
-			// entry either way, which is how a resumed run there finds its scripted worker again.
+			// its own record is what the entry is made of, under the name the configuration spells the
+			// repository with now rather than the one of the day the record was written. In fake mode
+			// the canned line carries every entry either way, which is how a resumed run there finds
+			// its scripted worker again.
 			issue = held.issue()
+			issue.Repository = connected.Name
 		}
 		switch {
 		case held.released(issue, routed):
