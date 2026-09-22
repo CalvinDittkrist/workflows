@@ -444,6 +444,30 @@ class SlowGateTests(ShimTest):
     def starts(self):
         return (self.repo / "starts.log").read_text().count("started")
 
+    def kill_tree(self, pid):
+        """End a process and every descendant it has now, children first, the way a kill of a call walks it."""
+        children = subprocess.run(["pgrep", "-P", str(pid)], capture_output=True, text=True).stdout.split()
+        for child in children:
+            self.kill_tree(int(child))
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+
+    def start_call(self, **env):
+        """`gate.sh run` as a call of its own, in a session of its own, like a worker's tool call; it returns
+        once the gate has started."""
+        call = subprocess.Popen(["bash", str(WORKER / "gate.sh"), "run"], cwd=self.repo, start_new_session=True,
+                                env=self.env(**env), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        deadline = time.time() + 10
+        while not (self.repo / "starts.log").exists() and time.time() < deadline:
+            time.sleep(0.05)
+        return call
+
+    def running_pid(self):
+        running = Path(self.git("rev-parse", "--path-format=absolute", "--git-dir").strip()) / "worker/gate.running"
+        return int(re.search(r"^pid: (\d+)$", running.read_text(), re.M).group(1))
+
     def test_a_gate_longer_than_one_call_is_waited_for_and_leaves_the_same_record(self):
         r = self.gate("run")
         self.assertEqual(r.returncode, 3, r.stdout + r.stderr)
@@ -462,13 +486,9 @@ class SlowGateTests(ShimTest):
         self.assertEqual(self.starts(), 1)
 
     def test_the_gate_survives_the_call_that_started_it_being_killed(self):
-        # What the Bash tool does at its ceiling: the call and its process group end, mid-gate.
-        call = subprocess.Popen(["bash", str(WORKER / "gate.sh"), "run"], cwd=self.repo, start_new_session=True,
-                                env=self.env(WF_WAIT_SLICE="60"), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        deadline = time.time() + 10
-        while not (self.repo / "starts.log").exists() and time.time() < deadline:
-            time.sleep(0.05)
-        os.killpg(call.pid, signal.SIGKILL)
+        # A call that ends at the Bash tool's ceiling, killed with every process under it, mid-gate.
+        call = self.start_call(WF_WAIT_SLICE="60")
+        self.kill_tree(call.pid)
         call.communicate()
         r = self.wait_to_the_end()
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
@@ -505,9 +525,7 @@ class SlowGateTests(ShimTest):
 
     def test_a_gate_whose_process_is_gone_without_a_record_is_reported_so(self):
         self.assertEqual(self.gate("run").returncode, 3)
-        running = Path(self.git("rev-parse", "--path-format=absolute", "--git-dir").strip()) / "worker/gate.running"
-        pid = int(re.search(r"^pid: (\d+)$", running.read_text(), re.M).group(1))
-        os.killpg(pid, signal.SIGKILL)  # the run and its make, as a power cut or an operator would end them
+        self.kill_tree(self.running_pid())  # the run and its make, as a power cut or an operator would end them
         r = self.gate("wait")
         self.assertEqual(r.returncode, 1, r.stdout)
         self.assertIn(f"the gate started at {self.head} ended without a record", r.stderr)
@@ -515,6 +533,28 @@ class SlowGateTests(ShimTest):
         # And the way on: a new run starts, it is not refused as one in flight.
         self.assertEqual(self.gate("run").returncode, 3)
         self.assertEqual(self.wait_to_the_end().returncode, 0)
+
+    def test_the_workers_process_group_ends_the_gate_with_it(self):
+        # The factory stops a worker, at its deadline or on a stop, by signalling the worker's process group;
+        # the gate stays in that group, so it ends with the worker instead of running on unattended.
+        call = self.start_call(WF_WAIT_SLICE="60")
+        os.killpg(call.pid, signal.SIGKILL)
+        call.communicate()
+        r = self.gate("wait", slice=5)
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("ended without a record", r.stderr)
+
+    def test_a_run_after_the_gate_ended_unread_answers_with_its_record(self):
+        # A worker that calls `run` again instead of `wait` is answered by the gate that already ran.
+        self.assertEqual(self.gate("run").returncode, 3)
+        record = Path(self.git("rev-parse", "--path-format=absolute", "--git-dir").strip()) / "worker/gate"
+        deadline = time.time() + 30
+        while not record.exists() and time.time() < deadline:
+            time.sleep(0.1)
+        r = self.gate("run")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn(f"gate_recorded: pass (exit 0) at {self.head}", r.stdout)
+        self.assertEqual(self.starts(), 1)
 
     def test_wait_with_nothing_in_flight_answers_with_the_record_or_says_there_is_none(self):
         r = self.gate("wait")

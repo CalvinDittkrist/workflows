@@ -55,13 +55,12 @@ gate_state() {
 # call sees it end reports the record the detached run wrote, exactly as a run in the call would have.
 # `running` names the run in flight, so a second `run` joins it instead of starting another make beside it.
 running="$(wf_state_dir)/gate.running"
-slice="${WF_WAIT_SLICE:-540}"  # seconds one call waits, the same slice pr-wait.sh keeps under the ceiling
+slice=$(wf_wait_slice)
 
-# The run itself, in a subshell that outlives the call. It ignores the hangup of a closing terminal, and
-# its record carries the id of its run, which is how a waiter tells this run's record from an older one.
+# The run itself, in a subshell that outlives the call. Its record carries the id of its run, which is how
+# a waiter tells this run's record from an older one.
 detached_run() {
   local id=$1 commit=$2 dirty=$3 started=$4 begin status
-  trap '' HUP
   begin=$(date +%s)
   set +e
   ( cd "$(git rev-parse --show-toplevel)" && "${gate_cmd[@]}" ) < /dev/null > "$log.tmp" 2>&1
@@ -76,12 +75,15 @@ detached_run() {
   mv "$record.tmp" "$record"
 }
 
-# Whether the run `running` names is still at work: its process is alive and is this script, which a pid
-# the system handed to something else after a reboot or a kill is not.
+# When a process started, which tells the process a pid named from one the system handed out again after a
+# reboot or a kill.
+started_at() { ps -p "$1" -o lstart= 2>/dev/null; }
+
+# Whether the run `running` names is still at work: its pid is alive and is the same process.
 run_alive() {
   local pid
   pid=$(wf_record_field "$running" pid)
-  [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && ps -p "$pid" -o command= 2>/dev/null | grep -q 'gate\.sh'
+  [ -n "$pid" ] && [ -n "$(started_at "$pid")" ] && [ "$(started_at "$pid")" = "$(wf_record_field "$running" lstart)" ]
 }
 
 # The record `running` waits for has been written: the record names the same run.
@@ -130,20 +132,25 @@ case "${1:-}" in
     commit=$(git rev-parse HEAD 2>/dev/null) || wf_die "this branch has no commit to record a gate run at"
     dirty=no; [ -z "$(git status --porcelain)" ] || dirty=yes
     mkdir -p "$(dirname "$record")"
-    if [ -f "$running" ] && ! run_recorded && run_alive; then
+    if [ -f "$running" ] && { run_recorded || run_alive; }; then
       # One gate at a time in a worktree: a second make beside the first would race it for the same files.
-      # The run in flight answers this call when it is the one this call would start.
-      [ "$(wf_record_field "$running" commit)" = "$commit" ] && [ "$(wf_record_field "$running" dirty)" = "$dirty" ] ||
+      # The run in flight, or the one that ended with nobody to read it, answers this call when it is the
+      # one this call would start.
+      if [ "$(wf_record_field "$running" commit)" = "$commit" ] && [ "$(wf_record_field "$running" dirty)" = "$dirty" ]; then
+        wait_for_run
+      fi
+      run_recorded ||
         wf_die "a gate is running at $(wf_short "$(wf_record_field "$running" commit)") since $(wf_record_field "$running" started), not at this head; run the worker's gate.sh wait until it ends, then gate.sh run again"
-      wait_for_run
     fi
     started=$(date -u +%Y-%m-%dT%H:%M:%SZ)
     begin=$(date +%s)
     id="$begin-$$"
-    # Twice detached: `set -m` gives the run a process group of its own, so a signal to the call's group
-    # misses it, and the subshell around it exits at once, so the run is no child of the call either.
-    pid=$(set -m; ( detached_run "$id" "$commit" "$dirty" "$started" ) < /dev/null > /dev/null 2>&1 & printf '%s' "$!")
-    printf 'pid: %s\nrun: %s\ncommit: %s\ndirty: %s\nstarted: %s\nbegin: %s\n' "$pid" "$id" "$commit" "$dirty" "$started" "$begin" > "$running.tmp"
+    # The subshell around the run exits at once, so the run is no child of the call, and a call that ends
+    # at the ceiling does not take it along. It stays in the worker's process group, on purpose: the
+    # factory ends a worker by signalling that group, and its stop and its deadline end the gate with it.
+    pid=$( ( detached_run "$id" "$commit" "$dirty" "$started" ) < /dev/null > /dev/null 2>&1 & printf '%s' "$!")
+    printf 'pid: %s\nlstart: %s\nrun: %s\ncommit: %s\ndirty: %s\nstarted: %s\nbegin: %s\n' \
+      "$pid" "$(started_at "$pid")" "$id" "$commit" "$dirty" "$started" "$begin" > "$running.tmp"
     mv "$running.tmp" "$running"
     wait_for_run
     ;;
