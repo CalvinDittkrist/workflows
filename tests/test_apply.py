@@ -117,7 +117,10 @@ class ApplyCase(ShimTest):
         return self.step(CLEANUP, "open")
 
 
-class ApplyTests(ApplyCase):
+class MessyRepositoryCase(ApplyCase):
+    """A repository with agent configuration of its own, pushed and audited. The classes below it are its
+    tests, one per step of the apply phase, so the runner spreads them over its processes."""
+
     def setUp(self):
         super().setUp()
         self.github()
@@ -129,6 +132,8 @@ class ApplyTests(ApplyCase):
         self.head = self.git("rev-parse", "HEAD").strip()
         self.audit(REPLIES, "agent-config=approve", "tests-ci=approve", "security=approve", "workspace=approve", "files=reject")
 
+
+class BackupTests(MessyRepositoryCase):
     def test_backup_tags_the_head_protects_the_tag_and_catalogues_each_removed_skill(self):
         before = self.git("status", "--porcelain", "--ignored")
         r = self.step(BACKUP)
@@ -201,6 +206,39 @@ class ApplyTests(ApplyCase):
         self.assertFalse((self.repo / WT).exists())
         self.assertEqual(self.git("branch", "--list", "chore/standardize"), "")
 
+    def test_the_backup_succeeds_without_rulesets_and_names_the_manual_step(self):
+        (self.ws / "plan-free").touch()
+        r = self.step(BACKUP)
+        self.assertIn("manual: protect the tag pre-standard: rulesets cannot be read", r.stdout)
+        self.assertEqual(self.origin_git("rev-parse", "refs/tags/pre-standard").strip(), self.head)
+        self.assertIn("catalogue: #1 opened, 4 skills\n", r.stdout)
+
+    def test_a_local_tag_on_the_default_branch_is_pushed_where_it_is(self):
+        self.git("tag", "pre-standard", "HEAD")
+        self.git("commit", "-q", "--allow-empty", "-m", "later")
+        self.git("push", "-q", "origin", "main")
+        r = self.step(BACKUP)
+        self.assertIn(f"tag: pre-standard pushed at {self.head[:7]} (kept at the local tag)\n", r.stdout)
+        self.assertEqual(self.origin_git("rev-parse", "refs/tags/pre-standard").strip(), self.head)
+
+    def test_a_local_tag_off_the_default_branch_is_refused(self):
+        self.git("commit", "-q", "--allow-empty", "-m", "unpushed")
+        self.git("tag", "pre-standard")
+        r = self.step(BACKUP, ok=False)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("error: the local tag pre-standard is not on main", r.stderr)
+        self.assertEqual(self.origin_git("tag"), "")
+
+    def test_a_catalogue_edited_by_hand_is_brought_back(self):
+        self.step(BACKUP)
+        self.put("issues.json", [dict(i, body="edited") for i in self.get("issues.json")])
+        r = self.step(BACKUP)
+        self.assertIn("catalogue: #1 updated, 4 skills\n", r.stdout)
+        self.assertIn("| deploy |", self.get("issues.json")[0]["body"])
+        self.assertEqual(len(self.get("issues.json")), 1)
+
+
+class CleanupTests(MessyRepositoryCase):
     def test_the_cleanup_branch_carries_approved_deletions_and_baseline_files_in_one_pull_request(self):
         before = self.git("status", "--porcelain")
         self.step(BACKUP)
@@ -301,6 +339,94 @@ class ApplyTests(ApplyCase):
             r = self.step(script, *args, ok=False)
             self.assertNotIn("approve.sh", r.stderr, script)
 
+    def test_a_prepare_that_stopped_halfway_resumes_in_the_same_worktree(self):
+        self.step(BACKUP)
+        self.step(CLEANUP, "prepare")
+        (self.repo / WT / "AGENTS.md").write_text("# r\nmine\n")
+        r = self.step(CLEANUP, "prepare")
+        self.assertIn(f"worktree: {self.repo / WT} (resumed)\n", r.stdout)
+        self.assertIn("gone: .cursor\n", r.stdout)
+        self.assertIn("kept: AGENTS.md\n", r.stdout)
+        self.assertEqual((self.repo / WT / "AGENTS.md").read_text(), "# r\nmine\n")
+
+    def test_a_target_changed_since_the_tag_or_untracked_is_not_deleted(self):
+        self.origin_git("tag", "pre-standard", self.head)
+        self.write(".cursor/rules/new.mdc", "newer\n")
+        self.write(".claude/skills/deploy/run.sh", "#!/bin/sh\necho deploy v2\n")
+        self.git("add", ".")
+        self.git("commit", "-qm", "newer rule")
+        self.git("push", "-q", "origin", "main")
+        self.write("GEMINI.md", "untracked\n")
+        per_skill = REPLIES.replace(
+            "finding: agent-config | .claude/skills | delete | three skills, deploy written for this repository | high\n",
+            "finding: agent-config | .claude/skills/deploy | delete | written for this repository | high\n"
+            "finding: agent-config | .claude/skills/review | delete | copied from upstream | high\n")
+        self.run_script(REPORT, stdin=per_skill + "finding: agent-config | GEMINI.md | delete | Gemini instructions | high\n")
+        self.run_script(APPROVE, "agent-config=approve", "tests-ci=approve", "security=approve", "workspace=approve",
+                        "files=reject")
+        self.step(BACKUP)
+        r = self.step(CLEANUP, "prepare")
+        self.assertIn("skipped: .cursor changed since the tag pre-standard was set, so the tag cannot restore it", r.stdout)
+        catalogue = self.get("issues.json")[0]["body"]
+        self.assertNotIn("| deploy |", catalogue)
+        self.assertIn("| review |", catalogue)
+        self.assertIn("local: GEMINI.md is not tracked", r.stdout)
+        self.assertIn("skipped: .claude/skills/deploy changed since the tag", r.stdout)
+        self.assertIn("deleted: .claude/skills/review\n", r.stdout)
+        self.assertTrue((self.repo / WT / ".cursor/rules/new.mdc").exists())
+        self.assertTrue((self.repo / "GEMINI.md").exists())
+
+    def test_the_description_follows_the_branch_and_ignores_later_commits_on_main(self):
+        self.through_open()
+        self.write("src/app.py", "print('later')\n")  # someone else's change lands on main meanwhile
+        self.git("commit", "-qam", "later")
+        self.git("push", "-q", "origin", "main")
+        self.write("docs/runbook.md", "# Runbook\n", root=self.repo / WT)
+        r = self.step(CLEANUP, "open")
+        self.assertIn("pr: https://github.com/o/r/pull/2 updated\n", r.stdout)
+        pr, = self.get("pulls.json")
+        added = pr["body"].split("## Added and changed\n")[1].split("\n\n")[0].splitlines()
+        self.assertEqual(added, ["- changed `.claude/settings.json`", "- added `.github/PULL_REQUEST_TEMPLATE.md`",
+                                 "- added `.github/dependabot.yml`", "- added `.github/workflows/check.yml`",
+                                 "- added `AGENTS.md`", "- changed `CLAUDE.md`", "- added `Makefile`",
+                                 "- added `docs/adr/README.md`", "- added `docs/adr/template.md`",
+                                 "- added `docs/architecture.md`", "- added `docs/glossary.md`", "- added `docs/runbook.md`"])
+        self.assertIn("- `.cursor`: Cursor rules that repeat CLAUDE.md.", pr["body"])
+        self.assertEqual(self.step(CLEANUP, "open").stdout.splitlines()[0], "pr: https://github.com/o/r/pull/2 unchanged")
+
+    def test_a_failing_commit_hook_stops_open_and_a_second_open_continues(self):
+        self.step(BACKUP)
+        self.fill_in(self.step(CLEANUP, "prepare").stdout)
+        hook = self.repo / ".git/hooks/pre-commit"
+        hook.write_text("#!/bin/sh\necho 'lint: trailing space in AGENTS.md' >&2\nexit 1\n")
+        hook.chmod(0o755)
+        r = self.step(CLEANUP, "open", ok=False)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("error: cannot commit in", r.stderr)
+        self.assertIn("lint: trailing space in AGENTS.md", r.stderr.splitlines()[-1])
+        self.assertIn("fix what the repository's commit hooks report there", r.stderr)
+        self.assertFalse((self.ws / "pulls.json").exists())
+        self.assertEqual(self.origin_git("branch", "--list", "chore/standardize"), "")
+        hook.unlink()
+        self.assertIn("pr: https://github.com/o/r/pull/2 opened\n", self.step(CLEANUP, "open").stdout)
+
+    def test_an_unreachable_origin_is_named_as_such(self):
+        self.step(BACKUP)
+        self.git("remote", "set-url", "origin", str(self.base / "missing.git"))
+        r = self.step(CLEANUP, "prepare", ok=False)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("error: cannot reach origin: ", r.stderr)
+
+    def test_a_merged_branch_left_on_origin_is_not_reused(self):
+        self.through_open()
+        self.merge()
+        self.git("worktree", "remove", "--force", str(self.repo / WT))
+        r = self.step(CLEANUP, "prepare", ok=False)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("error: chore/standardize on origin belongs to a merged pull request; run finalize.sh", r.stderr)
+
+
+class IssuesTests(MessyRepositoryCase):
     def test_issue_findings_become_agent_ready_issues_once(self):
         r = self.step(ISSUES)
         self.assertEqual(r.stdout, "opened: #1 Standard (tests-ci): src\nopened: #2 Standard (security): src/app.py\n"
@@ -319,6 +445,8 @@ class ApplyTests(ApplyCase):
         self.assertEqual(self.step(ISSUES).stdout, "issues: none approved\n")
         self.assertFalse((self.ws / "issues.json").exists())
 
+
+class WorkspaceTests(MessyRepositoryCase):
     def test_the_workspace_waits_for_the_merge(self):
         self.through_open()
         self.reset_calls()
@@ -397,6 +525,36 @@ class ApplyTests(ApplyCase):
         self.assertEqual(self.get("repo.json"), repo)
         self.assertEqual(self.get("issues.json")[0]["comments"], [], "no snapshot: nothing was applied")
 
+    def test_a_workspace_that_refuses_leaves_no_snapshot_and_a_rerun_finishes(self):
+        self.through_open()
+        self.merge()
+        (self.ws / "check-runs").write_text("0")
+        r = self.step(FINALIZE, ok=False)
+        self.assertIn("workspace: failed", r.stdout)
+        self.assertNotIn("snapshot:", r.stdout)
+        self.assertEqual(self.get("issues.json")[0]["comments"], [])
+        self.assertEqual(list((self.repo / ".git/standardize").glob("workspace-snapshot*")), [])
+        self.assertTrue(r.stdout.endswith("result: fail\n"), r.stdout)
+        (self.ws / "check-runs").write_text("1")
+        r = self.step(FINALIZE)
+        self.assertIn("snapshot: posted to #1\n", r.stdout)
+        self.assertTrue(r.stdout.endswith("result: pass\n"), r.stdout)
+
+    def test_a_workspace_that_fails_halfway_keeps_its_snapshot_on_the_catalogue(self):
+        self.through_open()
+        self.merge()
+        r = self.step(FINALIZE, ok=False, SHIM_WS_FAIL="api --method POST repos/o/r/labels")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("workspace: failed; fix the error above and run finalize.sh again\n", r.stdout)
+        self.assertIn("snapshot: posted to #1\n", r.stdout)
+        comment, = self.get("issues.json")[0]["comments"]
+        self.assertIn('"allow_rebase_merge": true', comment)
+        self.assertTrue(r.stdout.endswith("result: fail\n"), r.stdout)
+
+
+class WorkspaceDeviationTests(MessyRepositoryCase):
+    """The line finalize.sh prints when what the workspace applied differs from what the audit recorded."""
+
     def workspace_deviation(self, stdout):
         lines = [l for l in stdout.splitlines() if l.startswith("workspace: the applied difference")]
         self.assertLessEqual(len(lines), 1, stdout)
@@ -455,6 +613,10 @@ class ApplyTests(ApplyCase):
         self.assertEqual(self.workspace_deviation(r.stdout), "")
         self.assertFalse(self.get("repo.json")["allow_rebase_merge"])
 
+
+class FinalizeTests(MessyRepositoryCase):
+    """What finalize.sh makes of the cleanup pull request and its branch, and a whole second run."""
+
     def test_a_second_run_changes_nothing(self):
         self.through_open()
         self.step(ISSUES)
@@ -478,108 +640,6 @@ class ApplyTests(ApplyCase):
         self.assertEqual([c for c in self.calls() if "--method" in c or c.startswith("claude plugin install")], [])
         self.assertEqual((self.get("issues.json"), self.get("pulls.json")), (issues, pulls))
         self.assertEqual(self.origin_git("rev-parse", "refs/tags/pre-standard").strip(), self.head)
-
-    def test_a_prepare_that_stopped_halfway_resumes_in_the_same_worktree(self):
-        self.step(BACKUP)
-        self.step(CLEANUP, "prepare")
-        (self.repo / WT / "AGENTS.md").write_text("# r\nmine\n")
-        r = self.step(CLEANUP, "prepare")
-        self.assertIn(f"worktree: {self.repo / WT} (resumed)\n", r.stdout)
-        self.assertIn("gone: .cursor\n", r.stdout)
-        self.assertIn("kept: AGENTS.md\n", r.stdout)
-        self.assertEqual((self.repo / WT / "AGENTS.md").read_text(), "# r\nmine\n")
-
-    def test_the_backup_succeeds_without_rulesets_and_names_the_manual_step(self):
-        (self.ws / "plan-free").touch()
-        r = self.step(BACKUP)
-        self.assertIn("manual: protect the tag pre-standard: rulesets cannot be read", r.stdout)
-        self.assertEqual(self.origin_git("rev-parse", "refs/tags/pre-standard").strip(), self.head)
-        self.assertIn("catalogue: #1 opened, 4 skills\n", r.stdout)
-
-    def test_a_local_tag_on_the_default_branch_is_pushed_where_it_is(self):
-        self.git("tag", "pre-standard", "HEAD")
-        self.git("commit", "-q", "--allow-empty", "-m", "later")
-        self.git("push", "-q", "origin", "main")
-        r = self.step(BACKUP)
-        self.assertIn(f"tag: pre-standard pushed at {self.head[:7]} (kept at the local tag)\n", r.stdout)
-        self.assertEqual(self.origin_git("rev-parse", "refs/tags/pre-standard").strip(), self.head)
-
-    def test_a_local_tag_off_the_default_branch_is_refused(self):
-        self.git("commit", "-q", "--allow-empty", "-m", "unpushed")
-        self.git("tag", "pre-standard")
-        r = self.step(BACKUP, ok=False)
-        self.assertEqual(r.returncode, 1)
-        self.assertIn("error: the local tag pre-standard is not on main", r.stderr)
-        self.assertEqual(self.origin_git("tag"), "")
-
-    def test_a_catalogue_edited_by_hand_is_brought_back(self):
-        self.step(BACKUP)
-        self.put("issues.json", [dict(i, body="edited") for i in self.get("issues.json")])
-        r = self.step(BACKUP)
-        self.assertIn("catalogue: #1 updated, 4 skills\n", r.stdout)
-        self.assertIn("| deploy |", self.get("issues.json")[0]["body"])
-        self.assertEqual(len(self.get("issues.json")), 1)
-
-    def test_a_target_changed_since_the_tag_or_untracked_is_not_deleted(self):
-        self.origin_git("tag", "pre-standard", self.head)
-        self.write(".cursor/rules/new.mdc", "newer\n")
-        self.write(".claude/skills/deploy/run.sh", "#!/bin/sh\necho deploy v2\n")
-        self.git("add", ".")
-        self.git("commit", "-qm", "newer rule")
-        self.git("push", "-q", "origin", "main")
-        self.write("GEMINI.md", "untracked\n")
-        per_skill = REPLIES.replace(
-            "finding: agent-config | .claude/skills | delete | three skills, deploy written for this repository | high\n",
-            "finding: agent-config | .claude/skills/deploy | delete | written for this repository | high\n"
-            "finding: agent-config | .claude/skills/review | delete | copied from upstream | high\n")
-        self.run_script(REPORT, stdin=per_skill + "finding: agent-config | GEMINI.md | delete | Gemini instructions | high\n")
-        self.run_script(APPROVE, "agent-config=approve", "tests-ci=approve", "security=approve", "workspace=approve",
-                        "files=reject")
-        self.step(BACKUP)
-        r = self.step(CLEANUP, "prepare")
-        self.assertIn("skipped: .cursor changed since the tag pre-standard was set, so the tag cannot restore it", r.stdout)
-        catalogue = self.get("issues.json")[0]["body"]
-        self.assertNotIn("| deploy |", catalogue)
-        self.assertIn("| review |", catalogue)
-        self.assertIn("local: GEMINI.md is not tracked", r.stdout)
-        self.assertIn("skipped: .claude/skills/deploy changed since the tag", r.stdout)
-        self.assertIn("deleted: .claude/skills/review\n", r.stdout)
-        self.assertTrue((self.repo / WT / ".cursor/rules/new.mdc").exists())
-        self.assertTrue((self.repo / "GEMINI.md").exists())
-
-    def test_the_description_follows_the_branch_and_ignores_later_commits_on_main(self):
-        self.through_open()
-        self.write("src/app.py", "print('later')\n")  # someone else's change lands on main meanwhile
-        self.git("commit", "-qam", "later")
-        self.git("push", "-q", "origin", "main")
-        self.write("docs/runbook.md", "# Runbook\n", root=self.repo / WT)
-        r = self.step(CLEANUP, "open")
-        self.assertIn("pr: https://github.com/o/r/pull/2 updated\n", r.stdout)
-        pr, = self.get("pulls.json")
-        added = pr["body"].split("## Added and changed\n")[1].split("\n\n")[0].splitlines()
-        self.assertEqual(added, ["- changed `.claude/settings.json`", "- added `.github/PULL_REQUEST_TEMPLATE.md`",
-                                 "- added `.github/dependabot.yml`", "- added `.github/workflows/check.yml`",
-                                 "- added `AGENTS.md`", "- changed `CLAUDE.md`", "- added `Makefile`",
-                                 "- added `docs/adr/README.md`", "- added `docs/adr/template.md`",
-                                 "- added `docs/architecture.md`", "- added `docs/glossary.md`", "- added `docs/runbook.md`"])
-        self.assertIn("- `.cursor`: Cursor rules that repeat CLAUDE.md.", pr["body"])
-        self.assertEqual(self.step(CLEANUP, "open").stdout.splitlines()[0], "pr: https://github.com/o/r/pull/2 unchanged")
-
-    def test_a_failing_commit_hook_stops_open_and_a_second_open_continues(self):
-        self.step(BACKUP)
-        self.fill_in(self.step(CLEANUP, "prepare").stdout)
-        hook = self.repo / ".git/hooks/pre-commit"
-        hook.write_text("#!/bin/sh\necho 'lint: trailing space in AGENTS.md' >&2\nexit 1\n")
-        hook.chmod(0o755)
-        r = self.step(CLEANUP, "open", ok=False)
-        self.assertEqual(r.returncode, 1)
-        self.assertIn("error: cannot commit in", r.stderr)
-        self.assertIn("lint: trailing space in AGENTS.md", r.stderr.splitlines()[-1])
-        self.assertIn("fix what the repository's commit hooks report there", r.stderr)
-        self.assertFalse((self.ws / "pulls.json").exists())
-        self.assertEqual(self.origin_git("branch", "--list", "chore/standardize"), "")
-        hook.unlink()
-        self.assertIn("pr: https://github.com/o/r/pull/2 opened\n", self.step(CLEANUP, "open").stdout)
 
     def test_a_commit_no_pull_request_carries_is_never_thrown_away(self):
         self.through_open()
@@ -624,28 +684,6 @@ class ApplyTests(ApplyCase):
         self.assertIn("branch: chore/standardize kept on origin, it has commits the merged pull request does not\n", r.stdout)
         self.assertEqual(self.origin_git("rev-parse", "refs/heads/chore/standardize").strip(), late)
 
-    def test_an_unreachable_origin_is_named_as_such(self):
-        self.step(BACKUP)
-        self.git("remote", "set-url", "origin", str(self.base / "missing.git"))
-        r = self.step(CLEANUP, "prepare", ok=False)
-        self.assertEqual(r.returncode, 1)
-        self.assertIn("error: cannot reach origin: ", r.stderr)
-
-    def test_a_workspace_that_refuses_leaves_no_snapshot_and_a_rerun_finishes(self):
-        self.through_open()
-        self.merge()
-        (self.ws / "check-runs").write_text("0")
-        r = self.step(FINALIZE, ok=False)
-        self.assertIn("workspace: failed", r.stdout)
-        self.assertNotIn("snapshot:", r.stdout)
-        self.assertEqual(self.get("issues.json")[0]["comments"], [])
-        self.assertEqual(list((self.repo / ".git/standardize").glob("workspace-snapshot*")), [])
-        self.assertTrue(r.stdout.endswith("result: fail\n"), r.stdout)
-        (self.ws / "check-runs").write_text("1")
-        r = self.step(FINALIZE)
-        self.assertIn("snapshot: posted to #1\n", r.stdout)
-        self.assertTrue(r.stdout.endswith("result: pass\n"), r.stdout)
-
     def test_a_pull_request_closed_without_a_merge_is_refused(self):
         self.through_open()
         self.put("pulls.json", [dict(p, state="closed") for p in self.get("pulls.json")])
@@ -659,25 +697,6 @@ class ApplyTests(ApplyCase):
         r = self.step(FINALIZE, ok=False)
         self.assertEqual(r.returncode, 1)
         self.assertIn("has uncommitted changes that no pull request carries; run cleanup.sh open", r.stderr)
-
-    def test_a_merged_branch_left_on_origin_is_not_reused(self):
-        self.through_open()
-        self.merge()
-        self.git("worktree", "remove", "--force", str(self.repo / WT))
-        r = self.step(CLEANUP, "prepare", ok=False)
-        self.assertEqual(r.returncode, 1)
-        self.assertIn("error: chore/standardize on origin belongs to a merged pull request; run finalize.sh", r.stderr)
-
-    def test_a_workspace_that_fails_halfway_keeps_its_snapshot_on_the_catalogue(self):
-        self.through_open()
-        self.merge()
-        r = self.step(FINALIZE, ok=False, SHIM_WS_FAIL="api --method POST repos/o/r/labels")
-        self.assertEqual(r.returncode, 1)
-        self.assertIn("workspace: failed; fix the error above and run finalize.sh again\n", r.stdout)
-        self.assertIn("snapshot: posted to #1\n", r.stdout)
-        comment, = self.get("issues.json")[0]["comments"]
-        self.assertIn('"allow_rebase_merge": true', comment)
-        self.assertTrue(r.stdout.endswith("result: fail\n"), r.stdout)
 
 
 
