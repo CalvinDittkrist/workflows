@@ -2,6 +2,7 @@
 # Create the repository baseline and bring .claude/settings.json to the template. Never overwrites a file;
 # prints created/kept/updated per file.
 # Usage: scaffold.sh [--skip <category>]... [--name <repo>] [--default <branch>] [<repo-root>]
+#        scaffold.sh --paths   (prints `<category>\t<path>` for every file it may write, and writes nothing)
 # --name and --default default to the directory name and the branch origin/HEAD names (else the current one);
 # the apply phase passes both, because it scaffolds a worktree.
 # --skip leaves the files of a category alone: agent-config (AGENTS.md, CLAUDE.md, .claude/settings.json),
@@ -11,7 +12,7 @@
 # are merged in (existing env values win, permission lists are joined).
 set -euo pipefail
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
-skip=" " root="" repo="" default=""
+skip=" " root="" repo="" default="" paths=""
 # shellcheck source=lib.sh
 . "$(dirname "$0")/lib.sh"
 while [ $# -gt 0 ]; do
@@ -19,6 +20,7 @@ while [ $# -gt 0 ]; do
     --skip) [ $# -ge 2 ] || die "--skip needs a category"
       case " $WF_CATEGORIES " in *" $2 "*) ;; *) die "unknown category $2; use one of $WF_CATEGORIES" ;; esac
       skip="$skip$2 "; shift ;;
+    --paths) paths=1 ;;
     --name|--default) [ $# -ge 2 ] || die "$1 needs a value"; if [ "$1" = --name ]; then repo=$2; else default=$2; fi; shift ;;
     -*) die "unknown argument $1; usage: scaffold.sh [--skip <category>]... [--name <repo>] [--default <branch>] [<repo-root>]" ;;
     *) root=$1 ;;
@@ -36,6 +38,7 @@ esc() { printf '%s' "$1" | sed 's/[\\&|]/\\&/g'; }
 skipped() { case "$skip" in *" $1 "*) return 0 ;; esac; return 1; }
 put() { # put <category> <template> <target> [<name make or GitHub also reads instead>...]
   local t="$root/$3" alt
+  [ -z "$paths" ] || { printf '%s\t%s\n' "$1" "$3"; return; }
   skipped "$1" && return
   for alt in "$3" "${@:4}"; do # exact case, so macOS reports the name that is really there
     if has "$(dirname "$root/$alt")" "${alt##*/}"; then printf 'kept: %s\n' "$alt"; return; fi
@@ -57,6 +60,7 @@ put docs glossary.md docs/glossary.md
 put docs PULL_REQUEST_TEMPLATE.md .github/PULL_REQUEST_TEMPLATE.md .github/pull_request_template.md
 put workspace dependabot.yml .github/dependabot.yml .github/dependabot.yaml
 # The CI job named check, unless a workflow already has one.
+[ -z "$paths" ] || { put tests-ci check.yml .github/workflows/check.yml; printf 'agent-config\t.claude/settings.json\n'; exit 0; }
 if ! skipped tests-ci; then
   gate=$(ci_check_workflow "$root")
   if [ -n "$gate" ]; then printf 'kept: %s (has the job check)\n' "$gate"; else put tests-ci check.yml .github/workflows/check.yml; fi

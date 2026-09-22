@@ -349,6 +349,47 @@ class CleanupTests(MessyRepositoryCase):
         self.assertIn("kept: AGENTS.md\n", r.stdout)
         self.assertEqual((self.repo / WT / "AGENTS.md").read_text(), "# r\nmine\n")
 
+    def test_a_category_rejected_after_a_prepare_is_taken_back_off_the_branch(self):
+        """docs is unanswered and scaffolded by the first prepare; the rejection that follows takes it back off."""
+        self.step(BACKUP)
+        self.step(CLEANUP, "prepare")
+        wt = self.repo / WT
+        docs = ("docs/architecture.md", "docs/adr/README.md", "docs/adr/template.md", "docs/glossary.md",
+                ".github/PULL_REQUEST_TEMPLATE.md")
+        self.assertTrue(all((wt / f).exists() for f in docs))
+        self.assertEqual(self.run_script(APPROVE, "docs=reject").returncode, 0)
+        out = self.step(CLEANUP, "prepare").stdout
+        for f in docs:
+            self.assertFalse((wt / f).exists(), f)
+            self.assertIn(f"restored: {f} (rejected)\n", out)
+        self.assertEqual(self.git("diff", "--cached", "--name-only", "origin/main", "--", *docs, cwd=wt), "")
+        self.assertTrue((wt / "AGENTS.md").exists(), "agent-config is still approved")
+
+    def test_agent_config_rejected_after_a_prepare_leaves_the_settings_as_they_were(self):
+        self.step(BACKUP)
+        self.fill_in(self.step(CLEANUP, "prepare").stdout)
+        wt = self.repo / WT
+        self.assertNotEqual((wt / ".claude/settings.json").read_text(), FILES[".claude/settings.json"])
+        self.assertEqual(self.run_script(APPROVE, "agent-config=reject").returncode, 0)
+        out = self.step(CLEANUP, "prepare").stdout
+        self.assertEqual((wt / ".claude/settings.json").read_text(), FILES[".claude/settings.json"])
+        self.assertFalse((wt / "AGENTS.md").exists())
+        for path in ("CLAUDE.md", ".claude/skills/deploy/run.sh", ".cursor/rules/style.mdc", "skills-lock.json"):
+            self.assertEqual((wt / path).read_text(), FILES[path], path)
+        self.assertIn("restored: .claude/skills (rejected)\n", out)
+        self.assertIn("untouched: files, agent-config (rejected)\n", out)
+        self.assertTrue((wt / "docs/architecture.md").exists(), "docs is still scaffolded")
+
+    def test_a_deletion_rejected_after_a_prepare_is_undone(self):
+        self.assertEqual(self.run_script(APPROVE, "files=approve").returncode, 0)
+        self.step(BACKUP)
+        self.assertIn("deleted: NOTES.md\n", self.step(CLEANUP, "prepare").stdout)
+        self.assertEqual(self.run_script(APPROVE, "files=reject").returncode, 0)
+        out = self.step(CLEANUP, "prepare").stdout
+        self.assertIn("restored: NOTES.md (rejected)\n", out)
+        self.assertEqual((self.repo / WT / "NOTES.md").read_text(), FILES["NOTES.md"])
+        self.assertEqual(self.git("status", "--porcelain", "--", "NOTES.md", cwd=self.repo / WT), "")
+
     def test_a_target_changed_since_the_tag_or_untracked_is_not_deleted(self):
         self.origin_git("tag", "pre-standard", self.head)
         self.write(".cursor/rules/new.mdc", "newer\n")
