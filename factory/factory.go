@@ -237,8 +237,8 @@ func (f *Factory) refreshQueue(ctx context.Context) poll {
 	return read
 }
 
-// heldPolls is how many polls apart an idle holding is asked about. Reading one costs a request for
-// the issue and another for its pull request, and an issue whose run is over stays held until a
+// heldPolls is how many poll intervals apart an idle holding is asked about. Reading one costs a
+// request for the issue and another for its pull request, and an issue whose run is over stays held until a
 // person is done with that pull request — days of polling, for every pull request this host has
 // waiting at once. Asking about all of them every minute would spend the host's whole hour of
 // requests on issues nobody has touched, and the token that runs out is the one the workers use.
@@ -257,9 +257,9 @@ const heldPolls = 10
 // It is a reading and a step of the poll in one: what it answers with it also marks as asked, which
 // is what the cadence below counts. One poll calls it once.
 //
-// An issue is left out of the reading while it is not due: an idle holding is asked about every
-// heldPolls-th poll and not on each one, and the wait starts over whenever the issue is in another
-// state than it was last asked in — the run that held it ended, a pull request came of it — so the
+// An issue is left out of the reading while it is not due: an idle holding is asked about once
+// every heldPolls poll intervals, not on each poll, and the wait starts over whenever the issue is
+// in another state than it was last asked in — the run that held it ended, a pull request came of it — so the
 // factory hears at once about work that has just changed hands and keeps its questions rare about
 // work that lies as it did. A reading that failed counts as asked: GitHub said nothing either way,
 // and asking a rate limit again every minute is what ran into it.

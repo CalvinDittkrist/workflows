@@ -581,9 +581,9 @@ func TestARoutingAnsweredByARunIsNotTakenUpAgain(t *testing.T) {
 }
 
 // The issues this factory holds are asked about one by one, and one whose run is over is only
-// waiting to be cleaned up: it is asked about every heldPolls-th poll and not on each one, or a host
-// with a dozen pull requests standing in review would spend its whole hour of requests on issues
-// nobody has touched. What that costs is the few minutes such an issue may wait, and the decision
+// waiting to be cleaned up: it is asked about once every heldPolls poll intervals, not on each poll,
+// or a host with a dozen pull requests standing in review would spend its whole hour of requests on
+// issues nobody has touched. What that costs is the few minutes such an issue may wait, and the decision
 // made on it is still heard and acted on.
 func TestAnIdleHeldIssueIsAskedAboutFarMoreRarelyThanThePoll(t *testing.T) {
 	t.Parallel()
