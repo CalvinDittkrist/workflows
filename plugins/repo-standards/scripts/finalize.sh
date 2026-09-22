@@ -4,7 +4,7 @@
 # Usage: finalize.sh
 # Refuses while the pull request from chore/standardize is open or was closed without a merge, because the
 # rulesets require the job check that the pull request brings. workspace.sh --apply runs only when the
-# workspace category was approved; it applies the whole difference, recomputed now, so one line names where
+# workspace category had findings and was approved; it applies the whole difference, recomputed now, so one line names where
 # that differs from the audit. Its snapshot is posted as a comment on the catalogue issue. The check
 # (check.sh) runs on the head of the default branch on origin. Exit 1 when the check or the workspace fails.
 set -euo pipefail
@@ -80,10 +80,16 @@ esac
 if [ "$state" = merged ]; then printf 'pr: %s merged\n' "$(printf '%s' "$pr" | jq -r .url)"
 else printf 'pr: none (the default branch needed no cleanup)\n'; fi
 
-# The workspace, only when approved. The snapshot goes to the catalogue issue before anything else can fail.
+# The workspace, only when the category was approved and the audit found a difference to apply. Approving a
+# workspace category without findings answers for the baseline file the category scaffolds, not for the GitHub
+# settings, so the apply phase stays what it was before the question was added (ADR 0035). The snapshot goes to
+# the catalogue issue before anything else can fail.
 status=0
-case " $(categories "$answers" approve) " in
-  *" workspace "*)
+apply_workspace=no
+case " $(categories "$answers" approve) " in *" workspace "*) apply_workspace=yes ;; esac
+has_findings workspace || apply_workspace=no
+case "$apply_workspace" in
+  yes)
     snap=$(mktemp "$dir/workspace-snapshot.XXXXXX")
     rc=0; out=$(bash "$here/workspace.sh" --apply --snapshot "$snap" 2>&1) || rc=$?
     printf '%s\n' "$out" | sed 's/^/workspace: /'

@@ -301,6 +301,14 @@ whether a finding above lists it or not
 every other project plugin disabled, the template permissions and env merged
   become issues: none
 
+docs: no findings
+  approving docs creates every baseline file of the category that is missing
+  rejecting docs leaves it alone: the apply phase creates none of them
+
+tests-ci: no findings
+  approving tests-ci creates every baseline file of the category that is missing
+  rejecting tests-ci leaves it alone: the apply phase creates none of them
+
 workspace: 1 finding (configure 1)
   deletes: nothing
   the run performs, one by one: nothing
@@ -317,9 +325,6 @@ security: 1 finding (issue 1)
   the run performs, one by one: nothing
   become issues:
     issue api/db.py:12: SQL built by string concatenation (medium)
-
-also: docs, tests-ci have no findings, so the report does not ask about them; \
-the apply phase still creates their missing baseline files, because only a rejected category is left alone
 
 next: ask for approval per category, then record the answers with approve.sh <category>=approve|reject ...
 """)
@@ -343,25 +348,31 @@ next: ask for approval per category, then record the answers with approve.sh <ca
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("    create SECURITY.md: a public repository without a policy (high)\n", r.stdout)
         self.assertNotIn("decides these", r.stdout)
-        self.assertNotIn("approving", r.stdout)
+        for c in ("files", "security"):
+            self.assertNotIn(f"approving {c}", r.stdout)
+            self.assertNotIn(f"rejecting {c}", r.stdout)
 
-    def test_the_scaffolded_categories_without_findings_are_named(self):
-        """They cannot be answered, and only a rejected category is left alone, so the apply phase scaffolds them."""
+    def test_a_scaffolded_category_without_findings_is_asked_about_like_any_other(self):
+        """The apply phase creates its missing baseline files, so rejecting it is the only way to keep it out."""
         r = self.report("finding: files | NOTES.md | delete | agent resume notes | medium\n")
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("\nalso: agent-config, docs, tests-ci, workspace have no findings, so the report does not ask about them; "
-                      "the apply phase still creates their missing baseline files and brings .claude/settings.json to the template, "
-                      "because only a rejected category is left alone\n", r.stdout)
-        r = self.report("finding: files | NOTES.md | delete | agent resume notes | medium\n"
-                        "finding: agent-config | AGENTS.md | create | missing | high\n"
-                        "finding: tests-ci | Makefile | create | missing | high\n"
-                        "finding: workspace | repo has_wiki | configure | true -> false | high\n")
-        self.assertIn("\nalso: docs has no findings, so the report does not ask about it; "
-                      "the apply phase still creates its missing baseline files, because only a rejected category is left alone\n",
-                      r.stdout)
+        self.assertIn("\nagent-config: no findings\n"
+                      "  approving agent-config creates every baseline file of the category that is missing\n"
+                      "  approving agent-config also brings .claude/settings.json to the template: the workflow plugins enabled, "
+                      "every other project plugin disabled, the template permissions and env merged\n"
+                      "  rejecting agent-config leaves it alone: the apply phase creates none of them and leaves "
+                      ".claude/settings.json as it is\n", r.stdout)
+        for c in ("docs", "tests-ci", "workspace"):
+            self.assertIn(f"\n{c}: no findings\n"
+                          f"  approving {c} creates every baseline file of the category that is missing\n"
+                          f"  rejecting {c} leaves it alone: the apply phase creates none of them\n", r.stdout)
+        self.assertNotIn("also:", r.stdout)
+        self.assertNotIn("regardless", r.stdout)
+        self.assertEqual(self.approve().stdout,
+                         "approved: none\nrejected: none\npending: files, agent-config, docs, tests-ci, workspace\n")
         full = self.report(AUDIT + "finding: docs | README.md | create | missing | high\n"
                            "finding: tests-ci | Makefile | create | missing | high\n")
-        self.assertEqual(full.stdout.count("\nalso:"), 0, "every scaffolded category has findings, so there is nothing to add")
+        self.assertNotIn(": no findings\n", full.stdout, "every scaffolded category has findings here")
 
     def test_a_report_of_create_findings_deletes_nothing_and_opens_no_issues(self):
         audit = "\n".join(f"finding: {c} | {t} | create | missing | high" for c, t in (
@@ -379,13 +390,17 @@ next: ask for approval per category, then record the answers with approve.sh <ca
             self.assertIn(f"  approving {c} also creates every baseline file of the category that is missing, "
                           "whether a finding above lists it or not\n", r.stdout)
 
-    def test_no_findings_means_nothing_to_approve(self):
+    def test_an_audit_without_findings_still_asks_about_the_scaffolded_categories(self):
+        """The apply phase runs on such a report too, and it scaffolds, so the maintainer is asked."""
         r = self.report("no findings\nno findings\n")
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertEqual(r.stdout, "findings: 0; the repository matches the standard, nothing to approve\n")
-        r = self.approve("docs=approve")
-        self.assertEqual(r.returncode, 1)
-        self.assertIn("error: the last report has no findings", r.stderr)
+        self.assertTrue(r.stdout.startswith("findings: 0; the repository matches the standard\n"), r.stdout)
+        self.assertIn("\ndocs: no findings\n", r.stdout)
+        for c in ("files", "security"):
+            self.assertNotIn(f"\n{c}:", r.stdout, "a category that is never scaffolded has nothing to answer")
+        r = self.approve("docs=reject")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stdout, "approved: none\nrejected: docs\npending: agent-config, tests-ci, workspace\n")
 
     def test_a_malformed_finding_fails_the_report_and_keeps_the_stored_one(self):
         self.assertEqual(self.report(AUDIT).returncode, 0)
@@ -436,19 +451,24 @@ next: ask for approval per category, then record the answers with approve.sh <ca
     def test_approval_is_recorded_per_category_and_the_last_answer_wins(self):
         self.assertEqual(self.report(AUDIT).returncode, 0)
         r = self.approve()
-        self.assertEqual(r.stdout, "approved: none\nrejected: none\npending: files, agent-config, workspace, security\n")
+        self.assertEqual(r.stdout,
+                         "approved: none\nrejected: none\npending: files, agent-config, docs, tests-ci, workspace, security\n")
         r = self.approve("agent-config=approve", "security=reject")
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertEqual(r.stdout, "approved: agent-config\nrejected: security\npending: files, workspace\n")
-        r = self.approve("security=approve", "files=reject", "workspace=approve")
-        self.assertEqual(r.stdout, "approved: agent-config, workspace, security\nrejected: files\npending: none\n")
+        self.assertEqual(r.stdout, "approved: agent-config\nrejected: security\npending: files, docs, tests-ci, workspace\n")
+        r = self.approve("security=approve", "files=reject", "workspace=approve", "docs=reject", "tests-ci=approve")
+        self.assertEqual(r.stdout,
+                         "approved: agent-config, tests-ci, workspace, security\nrejected: files, docs\npending: none\n")
         self.assertEqual(sorted(self.state("approvals").splitlines()),
-                         ["agent-config\tapprove", "files\treject", "security\tapprove", "workspace\tapprove"])
+                         ["agent-config\tapprove", "docs\treject", "files\treject", "security\tapprove",
+                          "tests-ci\tapprove", "workspace\tapprove"])
         self.assertEqual(self.git("status", "--porcelain", "--ignored"), "", "approve.sh changed the working tree")
 
     def test_a_bad_answer_records_nothing(self):
         self.assertEqual(self.report(AUDIT).returncode, 0)
-        for args, message in ((("files=approve", "docs=approve"), "docs has no findings in the last report"),
+        for args, message in ((("files=approve", "doc=approve"),
+                               "doc is not in the last report and is not scaffolded, so there is nothing to answer "
+                               "for it; the report asks about: files agent-config docs tests-ci workspace security"),
                               (("files=approve", "security=maybe"), "security=maybe: the answer is approve or reject"),
                               (("files",), "files: use <category>=approve or <category>=reject")):
             r = self.approve(*args)
@@ -460,7 +480,7 @@ next: ask for approval per category, then record the answers with approve.sh <ca
         self.assertEqual(self.report(AUDIT).returncode, 0)
         self.assertEqual(self.approve("files=approve").returncode, 0)
         self.assertEqual(self.report(AUDIT).returncode, 0)
-        self.assertIn("pending: files, agent-config, workspace, security\n", self.approve().stdout)
+        self.assertIn("pending: files, agent-config, docs, tests-ci, workspace, security\n", self.approve().stdout)
 
     def test_approve_needs_a_report_first(self):
         r = self.approve("files=approve")

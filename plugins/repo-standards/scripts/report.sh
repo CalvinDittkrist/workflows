@@ -9,6 +9,8 @@
 # Per category the report keeps the findings the run works through one by one (delete, replace, create, and
 # issue apart) away from the `configure` ones, which only describe what workspace.sh decides for itself, and
 # it says what approving the category triggers beyond its lines; approval stays per category (ADR 0016).
+# A category scaffold.sh has templates for is asked about even without findings, because approving it creates
+# its missing baseline files and rejecting it is what keeps the apply phase out of it (ADR 0035).
 # The findings go to <git dir>/standardize/findings; earlier approvals and the record of what the apply phase
 # already applied are cleared, because they answered another report. Nothing in the working tree or on GitHub changes.
 set -euo pipefail
@@ -49,11 +51,6 @@ printf '%s\n' "$parsed" | awk 'NF' > "$dir/findings"
 # A new report answers for a new run: the approvals and the settings the last run worked on go.
 rm -f "$dir/approvals" "$dir/workspace-handled"
 
-total=$(awk 'END { print NR }' "$dir/findings")
-if [ "$total" = 0 ]; then
-  printf 'findings: 0; the repository matches the standard, nothing to approve\n'
-  exit 0
-fi
 CATS="$WF_CATEGORIES" SCAFFOLDED="$WF_SCAFFOLD_CATEGORIES" awk -F'\t' '
   BEGIN { nc = split(ENVIRON["CATS"], order, " ")
           ns = split(ENVIRON["SCAFFOLDED"], s, " "); for (i = 1; i <= ns; i++) S[s[i]] = 1 }
@@ -70,10 +67,22 @@ CATS="$WF_CATEGORIES" SCAFFOLDED="$WF_SCAFFOLD_CATEGORIES" awk -F'\t' '
       del[$1] = del[$1] (del[$1] == "" ? "" : ", ") $2 (o == "" ? "" : " (also " o ")") } }
   END {
     cats = 0; for (i = 1; i <= nc; i++) if (order[i] in n) cats++
-    printf "findings: %d in %d categor%s; %d for the run, %d as issues\n", total, cats, (cats == 1 ? "y" : "ies"), runs, issues
+    if (total == 0) print "findings: 0; the repository matches the standard"
+    else printf "findings: %d in %d categor%s; %d for the run, %d as issues\n", total, cats, (cats == 1 ? "y" : "ies"), runs, issues
     split("delete replace create configure issue", acts, " ")
     for (i = 1; i <= nc; i++) {
-      c = order[i]; if (!(c in n)) continue
+      c = order[i]
+      # A scaffolded category without findings is asked about too: the apply phase creates its missing baseline
+      # files, and rejecting it is the only way to keep the apply phase out of it (ADR 0035).
+      if (!(c in n)) {
+        if (!(c in S)) continue
+        printf "\n%s: no findings\n", c
+        printf "  approving %s creates every baseline file of the category that is missing\n", c
+        if (c == "agent-config") print "  approving agent-config also brings .claude/settings.json to the template: the workflow plugins enabled, every other project plugin disabled, the template permissions and env merged"
+        printf "  rejecting %s leaves it alone: the apply phase creates none of them%s\n", c,
+               (c == "agent-config") ? " and leaves .claude/settings.json as it is" : ""
+        continue
+      }
       counts = ""; for (j = 1; j <= 5; j++) if ((c, acts[j]) in act) counts = counts (counts == "" ? "" : ", ") acts[j] " " act[c, acts[j]]
       printf "\n%s: %d finding%s (%s)\n", c, n[c], (n[c] == 1 ? "" : "s"), counts
       printf "  deletes: %s\n", (c in del) ? del[c] : "nothing"
@@ -88,12 +97,5 @@ CATS="$WF_CATEGORIES" SCAFFOLDED="$WF_SCAFFOLD_CATEGORIES" awk -F'\t' '
       if (c == "agent-config") print "  approving agent-config also brings .claude/settings.json to the template: the workflow plugins enabled, every other project plugin disabled, the template permissions and env merged"
       if (c in iss) printf "  become issues:\n%s", iss[c]; else print "  become issues: none"
     }
-    # A category is left alone only when it is rejected, and a category without findings cannot be answered at
-    # all, so the apply phase scaffolds it. The report names it; what the apply phase applies is unchanged.
-    miss = ""; mn = 0
-    for (i = 1; i <= nc; i++) { c = order[i]; if ((c in S) && !(c in n)) { miss = miss (mn++ ? ", " : "") c; if (c == "agent-config") mac = 1 } }
-    if (miss != "") printf "\nalso: %s %s no findings, so the report does not ask about %s; the apply phase still creates %s missing baseline files%s, because only a rejected category is left alone\n",
-                           miss, (mn == 1 ? "has" : "have"), (mn == 1 ? "it" : "them"), (mn == 1 ? "its" : "their"),
-                           mac ? " and brings .claude/settings.json to the template" : ""
   }' "$dir/findings" "$dir/findings"
 printf '\nnext: ask for approval per category, then record the answers with approve.sh <category>=approve|reject ...\n'

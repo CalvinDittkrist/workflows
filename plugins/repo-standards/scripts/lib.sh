@@ -21,6 +21,20 @@ state_dir() {
   d=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || { printf 'error: not inside a git repository; run git init first\n' >&2; return 1; }
   printf '%s/standardize' "$d"
 }
+# scaffolded <category>: scaffold.sh has templates for it.
+scaffolded() { case " $WF_SCAFFOLD_CATEGORIES " in *" $1 "*) return 0 ;; esac; return 1; }
+# has_findings <category>: the last report has a finding for it.
+has_findings() { cut -f1 "$(state_dir)/findings" 2>/dev/null | grep -qxF -- "$1"; }
+# answerable: the categories the report asks about and approve.sh answers, in report order: every category with
+# a finding, plus every scaffolded one, because the apply phase creates its missing baseline files whether a
+# finding lists them or not (ADR 0035). One source for the report and the answer, so the two cannot drift.
+answerable() {
+  local c out=""
+  for c in $WF_CATEGORIES; do
+    if has_findings "$c" || scaffolded "$c"; then out="$out${out:+ }$c"; fi
+  done
+  printf '%s' "$out"
+}
 
 # workspace_settings: reads workspace.sh output on stdin and prints the setting of each `diff:` line, one per
 # line: everything before the last `: `, which is the rule the workspace auditor follows when it writes the
@@ -85,16 +99,20 @@ label_json() {
     jq -cn --arg n "$name" --arg c "$color" --arg d "$desc" '{name: $n, color: $c, description: $d}'; }
 }
 
-# decisions: the recorded answer per category of the last report, `<category>\t<approve|reject>`. Fails while
-# the audit has not run or a category is still pending, so nothing is applied that was not answered.
+# decisions: the recorded answer per answerable category of the last report, `<category>\t<approve|reject>`.
+# Fails while the audit has not run or a category with findings is still pending, so no finding is applied that
+# was not answered. A scaffolded category without findings is left out while it is unanswered: the apply phase
+# then scaffolds it as it always has, and only a rejection takes it out (ADR 0035).
 decisions() {
-  local dir cats c v out=""
+  local dir c v out=""
   dir=$(state_dir) || return 1
   [ -f "$dir/findings" ] || { printf 'error: no findings recorded; run /repo-standards:standardize first\n' >&2; return 1; }
-  cats=$(cut -f1 "$dir/findings" | awk '!seen[$0]++')
-  for c in $cats; do
+  for c in $(answerable); do
     v=$(awk -F'\t' -v c="$c" '$1 == c { v = $2 } END { print v }' "$dir/approvals" 2>/dev/null)
-    [ -n "$v" ] || { printf 'error: %s is still pending; record it with approve.sh %s=approve|reject\n' "$c" "$c" >&2; return 1; }
+    if [ -z "$v" ]; then
+      has_findings "$c" || continue
+      printf 'error: %s is still pending; record it with approve.sh %s=approve|reject\n' "$c" "$c" >&2; return 1
+    fi
     out="$out$c"$'\t'"$v"$'\n'
   done
   printf '%s' "$out"

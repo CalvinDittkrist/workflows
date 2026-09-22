@@ -190,7 +190,7 @@ class ApplyTests(ApplyCase):
         for script, args in ((BACKUP, ()), (CLEANUP, ("prepare",)), (ISSUES, ()), (FINALIZE, ())):
             r = self.step(script, *args, ok=False)
             self.assertEqual(r.returncode, 1, script)
-            self.assertIn("error: agent-config is still pending; record it with approve.sh agent-config=approve|reject", r.stderr)
+            self.assertIn("error: files is still pending; record it with approve.sh files=approve|reject", r.stderr)
         self.assertEqual(self.origin_git("tag"), "")
         self.assertFalse((self.ws / "issues.json").exists())
 
@@ -256,6 +256,43 @@ class ApplyTests(ApplyCase):
         self.assertEqual(self.git("rev-parse", "HEAD").strip(), self.head)
         self.assertEqual(self.git("status", "--porcelain"), before)
 
+    def test_a_rejected_scaffolded_category_without_findings_is_left_alone(self):
+        """docs has no finding in this audit; rejecting it is what keeps the apply phase out of its files."""
+        self.run_script(APPROVE, "docs=reject")
+        self.step(BACKUP)
+        out = self.step(CLEANUP, "prepare").stdout
+        self.assertIn("untouched: files, docs (rejected)\n", out)
+        wt = self.repo / WT
+        for f in ("docs/architecture.md", "docs/adr/README.md", "docs/adr/template.md", "docs/glossary.md",
+                  ".github/PULL_REQUEST_TEMPLATE.md"):
+            self.assertFalse((wt / f).exists(), f)
+            self.assertNotIn(f"created: {f}", out)
+        self.assertTrue((wt / "AGENTS.md").exists(), "agent-config was approved")
+
+    def test_a_rejected_agent_config_without_findings_leaves_the_settings_byte_for_byte(self):
+        before = (self.repo / ".claude/settings.json").read_bytes()
+        self.audit("finding: files | NOTES.md | delete | agent handover notes | medium\n",
+                   "files=approve", "agent-config=reject")
+        self.reset_calls()
+        self.step(BACKUP)
+        out = self.step(CLEANUP, "prepare").stdout
+        wt = self.repo / WT
+        self.assertEqual((wt / ".claude/settings.json").read_bytes(), before)
+        self.assertNotIn(".claude/settings.json", out)
+        self.assertEqual([c for c in self.calls() if c.startswith("claude plugin")], [])
+        self.assertFalse((wt / "AGENTS.md").exists())
+        self.assertIn("untouched: agent-config (rejected)\n", out)
+        self.assertIn("created: docs/architecture.md\n", out, "the other categories are scaffolded as before")
+
+    def test_a_scaffolded_category_without_findings_that_was_not_answered_is_scaffolded(self):
+        """The question is new, the default is not: an unanswered category is scaffolded as it always was."""
+        self.assertNotIn("docs", self.run_script(APPROVE).stdout.split("pending:")[0])
+        self.step(BACKUP)
+        out = self.step(CLEANUP, "prepare").stdout
+        for f in ("docs/architecture.md", "docs/adr/README.md", "docs/glossary.md", ".github/PULL_REQUEST_TEMPLATE.md"):
+            self.assertIn(f"created: {f}\n", out)
+        self.assertIn("untouched: files (rejected)\n", out)
+
     def test_issue_findings_become_agent_ready_issues_once(self):
         r = self.step(ISSUES)
         self.assertEqual(r.stdout, "opened: #1 Standard (tests-ci): src\nopened: #2 Standard (security): src/app.py\n"
@@ -312,7 +349,7 @@ class ApplyTests(ApplyCase):
         self.assertEqual(r.returncode, 1)
         self.assertIn("check: fail: .claude/skills/deploy: agent configuration the standard does not define; remove it\n", r.stdout)
         self.assertIn("check: fail: AGENTS.md missing; it is the instruction source, move the project instructions there\n", r.stdout)
-        self.assertIn("untouched: agent-config, files (rejected in the audit)\n", r.stdout)
+        self.assertIn("untouched: files, agent-config (rejected in the audit)\n", r.stdout)
         self.assertTrue(r.stdout.endswith("result: fail\n"), r.stdout)
 
     def test_a_rejected_workspace_is_left_alone(self):
@@ -324,6 +361,20 @@ class ApplyTests(ApplyCase):
         self.assertIn("workspace: rejected, left untouched\n", r.stdout)
         self.assertEqual(self.get("repo.json"), repo)
         self.assertEqual(self.get("issues.json")[0]["comments"], [])
+
+    def test_an_approved_workspace_without_findings_configures_nothing(self):
+        """Approving it answers for the baseline file it scaffolds, not for GitHub settings no audit found."""
+        self.audit(REPLIES.replace("finding: workspace | repo allow_rebase_merge | configure | rebase merges are allowed | high\n", ""),
+                   "agent-config=approve", "tests-ci=approve", "security=approve", "workspace=approve", "files=reject")
+        self.through_open()
+        self.merge()
+        repo = self.get("repo.json")
+        r = self.step(FINALIZE)
+        self.assertIn("workspace: no approved findings, left untouched\n", r.stdout)
+        self.assertEqual(self.get("repo.json"), repo)
+        self.assertEqual(self.get("issues.json")[0]["comments"], [])
+        self.assertIn(".github/dependabot.yml", self.origin_git("ls-tree", "-r", "--name-only", "main"),
+                      "the category was approved, so its baseline file is scaffolded")
 
     def workspace_deviation(self, stdout):
         lines = [l for l in stdout.splitlines() if l.startswith("workspace: the applied difference")]

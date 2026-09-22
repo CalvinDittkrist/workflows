@@ -8,14 +8,15 @@ set -euo pipefail
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 dir=$(state_dir)
 [ -f "$dir/findings" ] || die "no findings recorded; run the audit and report.sh first"
-cats=$(cut -f1 "$dir/findings" | awk '!seen[$0]++')
-[ -n "$cats" ] || die "the last report has no findings, so there is nothing to approve"
+# The categories the report asked about: those with findings and the scaffolded ones, which the apply phase
+# creates baseline files for whether a finding lists them or not (ADR 0035).
+cats=$(answerable)
 
 # Validate every argument before recording any, so a typo records nothing.
 for a in "$@"; do
   c=${a%%=*}; v=${a#*=}
   [ "$c" != "$a" ] || die "$a: use <category>=approve or <category>=reject"
-  printf '%s\n' "$cats" | grep -qxF -- "$c" || die "$c has no findings in the last report; categories with findings: $(printf '%s' "$cats" | tr '\n' ' ')"
+  case " $cats " in *" $c "*) ;; *) die "$c is not in the last report and is not scaffolded, so there is nothing to answer for it; the report asks about: $cats" ;; esac
   case "$v" in approve|reject) ;; *) die "$a: the answer is approve or reject" ;; esac
 done
 touch "$dir/approvals"
@@ -26,8 +27,7 @@ for a in "$@"; do
 done
 
 approved="" rejected="" pending=""
-for c in $WF_CATEGORIES; do
-  printf '%s\n' "$cats" | grep -qxF -- "$c" || continue
+for c in $cats; do
   case "$(awk -F'\t' -v c="$c" '$1 == c { v = $2 } END { print v }' "$dir/approvals")" in
     approve) approved="$approved $c" ;;
     reject) rejected="$rejected $c" ;;
