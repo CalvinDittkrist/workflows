@@ -1209,6 +1209,65 @@ class RepairRecordTests(ShimTest):
         self.record.parent.mkdir(parents=True, exist_ok=True)
         self.record.write_text(f"pr: {pr}\nrounds: {rounds}\nat: 2026-09-21T12:00:00Z\n\n")
 
+    def test_a_round_somebody_asked_for_by_hand_starts_the_count_again(self):
+        """The limit bounds the pipeline's own repair loop. A maintainer who read the pull request and
+        requested changes has given it a new mandate, and the rounds its checks once needed must not
+        refuse that: the driver that starts a session for a review says so with WF_REVIEW_MANDATE."""
+        for _ in range(3):
+            self.take_round()
+        self.assertNotEqual(self.repair("round").returncode, 0, "the limit is reached")
+        r = self.repair("reset", WF_REVIEW_MANDATE="2026-09-22T10:00:00Z")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        out = self.keys(r.stdout)
+        self.assertEqual(out["repair_pr"], "#7")
+        self.assertEqual(out["repair_rounds_taken"], "0")
+        self.assertTrue(out["repair_reset"].startswith("yes"), out["repair_reset"])
+        self.assertEqual(self.take_round()["repair_rounds_taken"], "1", "and the next round is the first again")
+
+    def test_one_review_starts_the_count_again_once_however_often_it_is_named(self):
+        """The mandate is one review, not one round of the session that answers it: that session drives
+        the CI stage itself, which invokes the skill again on the next review comments, and a reset per
+        round would leave the loop of a follow-up run with no bound at all. A later review is another
+        mandate and starts the count again."""
+        first, second = "2026-09-22T10:00:00Z", "2026-09-22T16:30:00Z"
+        for _ in range(2):
+            self.take_round()
+        self.assertTrue(self.keys(self.repair("reset", WF_REVIEW_MANDATE=first).stdout)["repair_reset"].startswith("yes"))
+        for _ in range(3):
+            self.take_round()
+        again = self.keys(self.repair("reset", WF_REVIEW_MANDATE=first).stdout)
+        self.assertEqual(again["repair_rounds_taken"], "3", "the rounds of that one review stand")
+        self.assertTrue(again["repair_reset"].startswith("no"), again["repair_reset"])
+        self.assertNotEqual(self.repair("round").returncode, 0, "and the limit refuses the fourth round of it")
+        later = self.keys(self.repair("reset", WF_REVIEW_MANDATE=second).stdout)
+        self.assertEqual(later["repair_rounds_taken"], "0", "the next review is a mandate of its own")
+        self.assertTrue(later["repair_reset"].startswith("yes"), later["repair_reset"])
+
+    def test_a_mandate_that_is_no_name_for_a_review_is_refused(self):
+        """It goes into the record as a header line, so it is one word of the shape the factory writes."""
+        r = self.repair("reset", WF_REVIEW_MANDATE="2026-09-22T10:00:00Z\nrounds: 0")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("WF_REVIEW_MANDATE", r.stderr)
+
+    def test_a_reset_without_that_word_from_the_driver_keeps_the_count(self):
+        """The one bound on an unattended repair loop is this count, so a session that reads itself as
+        asked for may not start it again: without WF_REVIEW_MANDATE the reset keeps the count and says
+        so, which leaves the limit where it was and is no error to report."""
+        for _ in range(2):
+            self.take_round()
+        r = self.repair("reset")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        out = self.keys(r.stdout)
+        self.assertEqual(out["repair_rounds_taken"], "2", "the rounds already taken stand")
+        self.assertTrue(out["repair_reset"].startswith("no"), out["repair_reset"])
+        self.assertEqual(self.take_round()["repair_rounds_taken"], "3")
+        self.assertNotEqual(self.repair("round").returncode, 0, "and the limit still refuses the fourth")
+
+    def test_a_reset_without_a_pull_request_is_refused(self):
+        r = self.repair("reset", SHIM_PR_FOR_BRANCH="")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("no open pull request", r.stderr)
+
     def test_the_rounds_are_counted_up_to_the_limit_and_then_refused(self):
         for expected in (1, 2, 3):
             r = self.repair("round")
@@ -1880,10 +1939,171 @@ class PrWaitTests(ShimTest):
         self.assertIn("status: waiting", r.stdout)
         self.assertIn("merge_state: UNKNOWN (mergeable: UNKNOWN)", r.stdout)
 
+    def test_a_review_that_asks_for_changes_in_its_body_alone_is_not_green(self):
+        """A review whose whole objection is in its body leaves no thread behind, so counting threads
+        reported it as green: the stage never opened the listing that shows such a summary, the worker
+        reported itself ready, and the objection stood unanswered (issue #56)."""
+        r = self.wait(SHIM_REVIEWS=json.dumps([
+            {"author": {"login": "maintainer"}, "state": "CHANGES_REQUESTED",
+             "body": "rework the retry loop", "submittedAt": "2026-09-17T11:00:00Z"},
+            {"author": {"login": "chatgpt-codex-connector"}, "state": "COMMENTED",
+             "body": "", "submittedAt": "2026-09-17T11:05:00Z"}]))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("status: review-comments", r.stdout)
+        self.assertIn("changes_requested: 1", r.stdout)
+        self.assertIn("unresolved_threads: 0", r.stdout)
+
+    def test_an_objection_its_author_approved_away_is_green_again(self):
+        r = self.wait(SHIM_REVIEWS=json.dumps([
+            {"author": {"login": "maintainer"}, "state": "CHANGES_REQUESTED",
+             "body": "rework the retry loop", "submittedAt": "2026-09-17T11:00:00Z"},
+            {"author": {"login": "maintainer"}, "state": "APPROVED",
+             "body": "better, thanks", "submittedAt": "2026-09-17T12:00:00Z"},
+            {"author": {"login": "chatgpt-codex-connector"}, "state": "COMMENTED",
+             "body": "", "submittedAt": "2026-09-17T12:05:00Z"}]))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("status: green", r.stdout)
+        self.assertIn("changes_requested: 0", r.stdout)
+
+    def test_a_request_for_changes_with_nothing_written_in_it_does_not_loop_the_stage(self):
+        """The listing shows a review with an empty body nothing, so ending the wait on one would send
+        the stage to a listing with nothing in it, again and again."""
+        r = self.wait(SHIM_REVIEWS=json.dumps([
+            {"author": {"login": "chatgpt-codex-connector"}, "state": "CHANGES_REQUESTED",
+             "body": "   ", "submittedAt": "2026-09-17T11:00:00Z"}]))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("status: green", r.stdout)
+        self.assertIn("changes_requested: 0", r.stdout)
+
     def test_zero_review_wait_does_not_block_on_the_bot(self):
         r = self.wait(WF_PR_REVIEW_WAIT="0")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertIn("status: green", r.stdout)
+
+
+class ReviewListingTests(ShimTest):
+    """What the address-reviews stage is shown, which is everything the reviewers are still asking for:
+    the summaries of the reviews that ask for changes and the unresolved threads (issue #56). A review
+    that states its whole objection in its body and on no line of the diff has no thread, so a listing
+    of threads alone would show an unattended session nothing to do."""
+
+    def setUp(self):
+        super().setUp()
+        self.git("checkout", "-qb", "feat/12-x")
+        self.fixture = self.base / "threads.json"
+        self.earlier = self.base / "threads-earlier.json"
+
+    def answer(self, reviews=(), threads=(), earlier=None):
+        """What GitHub says about the pull request: the newest page of reviews with the threads, and the
+        page before it when the test gives one, which is what a pull request with more than a hundred
+        reviews that state something makes the script ask for."""
+        self.fixture.write_text(json.dumps({"data": {"repository": {"pullRequest": {
+            "reviews": {"pageInfo": {"hasPreviousPage": earlier is not None, "startCursor": "page-2"},
+                        "nodes": list(reviews)},
+            "reviewThreads": {"nodes": list(threads)}}}}}))
+        self.earlier.write_text(json.dumps({"data": {"repository": {"pullRequest": {
+            "reviews": {"pageInfo": {"hasPreviousPage": False, "startCursor": None},
+                        "nodes": list(earlier or [])}}}}}))
+
+    def listing(self, *args, **env):
+        r = self.run_script(WORKER / "pr-threads.sh", *args, SHIM_THREADS_FIXTURE=str(self.fixture),
+                            SHIM_THREADS_EARLIER_FIXTURE=str(self.earlier), **env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return r.stdout
+
+    @staticmethod
+    def review(login, state, body, at):
+        return {"author": {"login": login}, "state": state, "body": body, "submittedAt": at}
+
+    @staticmethod
+    def thread(id, resolved=False, body="this needs a test"):
+        return {"id": id, "isResolved": resolved, "isOutdated": False, "path": "a.py", "line": 3,
+                "comments": {"nodes": [{"author": {"login": "maintainer"}, "body": body,
+                                        "createdAt": "2026-09-22T10:00:00Z"}]}}
+
+    def test_a_review_that_asks_for_changes_in_its_body_alone_is_listed(self):
+        self.answer(reviews=[self.review("maintainer", "CHANGES_REQUESTED", "rework the retry loop", "2026-09-22T10:00:00Z")])
+        out = self.listing()
+        self.assertIn("changes_requested: 1", out)
+        self.assertIn("unresolved_threads: 0", out)
+        self.assertIn("## review by @maintainer (2026-09-22T10:00:00Z)", out)
+        self.assertIn("rework the retry loop", out, "the objection itself, not only that there is one")
+
+    def test_an_objection_its_own_author_approved_away_is_not_listed(self):
+        """What one reviewer says is their latest review that states anything: GitHub leaves the older
+        entry in the list with the state it was submitted with."""
+        self.answer(reviews=[
+            self.review("maintainer", "CHANGES_REQUESTED", "rework the retry loop", "2026-09-22T10:00:00Z"),
+            self.review("maintainer", "APPROVED", "better, thanks", "2026-09-22T11:00:00Z"),
+            self.review("maintainer", "COMMENTED", "one more thought", "2026-09-22T12:00:00Z"),
+            self.review("other", "CHANGES_REQUESTED", "the name is wrong", "2026-09-22T09:00:00Z"),
+        ])
+        out = self.listing()
+        self.assertIn("changes_requested: 1", out)
+        self.assertNotIn("rework the retry loop", out, "an objection its author withdrew is not one that stands")
+        self.assertIn("the name is wrong", out, "and another reviewer's still is")
+
+    def test_a_resolved_thread_and_a_review_with_nothing_written_in_it_are_left_out(self):
+        self.answer(reviews=[self.review("maintainer", "CHANGES_REQUESTED", "  \n ", "2026-09-22T10:00:00Z"),
+                             self.review("bot", "DISMISSED", "never mind", "2026-09-22T10:00:00Z")],
+                    threads=[self.thread("T1", resolved=True), self.thread("T2", body="this needs a test")])
+        out = self.listing()
+        self.assertIn("changes_requested: 0", out)
+        self.assertIn("unresolved_threads: 1", out)
+        self.assertIn("## thread T2", out)
+        self.assertNotIn("T1", out)
+        self.assertNotIn("never mind", out)
+
+    def test_an_objection_older_than_the_newest_page_of_reviews_is_listed_too(self):
+        """The factory reads the whole review list and queues a follow-up run for the latest review of
+        every author; a listing that stopped at the newest page would show that session nothing to do,
+        and the review would be recorded as answered by a run that never saw it."""
+        self.answer(
+            reviews=[self.review("later", "APPROVED", "looks good", "2026-09-22T12:00:00Z")],
+            earlier=[self.review("maintainer", "CHANGES_REQUESTED", "rework the retry loop", "2026-09-22T09:00:00Z")])
+        out = self.listing()
+        self.assertIn("changes_requested: 1", out)
+        self.assertIn("rework the retry loop", out)
+
+    def test_a_reviewer_whose_word_spans_two_pages_is_read_by_their_latest_one(self):
+        """The pages are folded as one list, oldest review first, so the rule is the same across them."""
+        self.answer(
+            reviews=[self.review("maintainer", "APPROVED", "better, thanks", "2026-09-22T12:00:00Z")],
+            earlier=[self.review("maintainer", "CHANGES_REQUESTED", "rework the retry loop", "2026-09-22T09:00:00Z")])
+        out = self.listing()
+        self.assertIn("changes_requested: 0", out)
+        self.assertNotIn("rework the retry loop", out)
+
+
+class ReviewAnswerTests(ShimTest):
+    """A review summary has no thread to resolve, so what was done about it is said in one comment on the
+    pull request (issue #56)."""
+
+    def setUp(self):
+        super().setUp()
+        self.git("checkout", "-qb", "feat/12-x")
+
+    def answer(self, *args, **env):
+        return self.run_script(WORKER / "pr-answer.sh", *args, **env)
+
+    def test_the_answer_is_one_comment_on_the_pull_request_of_the_branch(self):
+        r = self.answer("--body", "fixed the retry loop; declined the rename, see the thread")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn(["gh", "pr", "comment", "7", "--body",
+                       "fixed the retry loop; declined the rename, see the thread"], self.argv_calls())
+
+    def test_the_pull_request_may_be_named(self):
+        r = self.answer("#9", "--body", "done")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn(["gh", "pr", "comment", "9", "--body", "done"], self.argv_calls())
+
+    def test_an_answer_without_a_body_or_without_a_pull_request_is_refused(self):
+        r = self.answer()
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("--body", r.stderr)
+        r = self.answer("--body", "done", SHIM_PR_FOR_BRANCH="")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("no open PR", r.stderr)
 
 
 if __name__ == "__main__":

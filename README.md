@@ -82,6 +82,7 @@ All knobs are environment variables, set per repository in `.claude/settings.jso
 | `WF_CLAUDE_ARGS` | empty | extra flags for every worker and planner (`--model sonnet`, `--plugin-dir …`) |
 | `WF_PLANNER_CLAUDE_ARGS`, `WF_WORKER_CLAUDE_ARGS` | empty | extra flags for planner or worker sessions only |
 | `WF_MODE`, `WF_ISSUE` | set by `/claim` | per-session mode (`manual`/`yolo`) and issue |
+| `WF_REVIEW_MANDATE` | set by the factory's follow-up run | names the review the session was started to answer (the time it was submitted), which is what `repair.sh reset` starts the pull request's repair count again on, once per review; unset on every other session |
 | `WF_PLAN`, `WF_PLAN_ISSUE` | set by `/plan` | per-session plan slug and, when planning an issue, its number |
 | `WF_PROJECT_TEMPLATE` | empty | `<owner>/<number>` of the project the standardisation run copies into a repository without one (`workspace.sh --apply`, not the orchestrator) |
 

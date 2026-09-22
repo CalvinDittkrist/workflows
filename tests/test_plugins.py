@@ -280,9 +280,10 @@ class WorkerKnobTests(ShimTest):
     gains and the claim does not cannot be set per session, and one the claim gains alone is undocumented."""
 
     README = ROOT / "README.md"
-    # The three variables of the table a worker reads that a claim does not take: it sets the session's mode
-    # and issue itself, and the base branch is what --base is for.
-    CLAIM_OWNED = ("WF_MODE", "WF_ISSUE", "WF_BASE_BRANCH")
+    # The four variables of the table a worker reads that a claim does not take: it sets the session's mode
+    # and issue itself, the base branch is what --base is for, and the review mandate is the word of the
+    # driver that starts a session to answer a review — a claim starts a session at the work stage.
+    CLAIM_OWNED = ("WF_MODE", "WF_ISSUE", "WF_BASE_BRANCH", "WF_REVIEW_MANDATE")
     maxDiff = None
 
     def accepted_names(self):
