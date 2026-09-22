@@ -76,15 +76,21 @@ type Factory struct {
 	wake     chan struct{} // a run ended: the next entry need not wait for the next poll
 	active   sync.WaitGroup
 
-	mu         sync.Mutex
-	queue      []Issue
+	mu    sync.Mutex
+	queue []Issue
+	// requested is what the last poll found on the pull requests this factory holds open: the newest
+	// review that asks for changes, by issue. Like the queue it is a reading of GitHub and never a
+	// state of the factory; what has been answered is read from the run records ([ADR 0025]).
+	//
+	// [ADR 0025]: ../docs/adr/0025-one-queue-one-worker-work-in-progress-first.md
+	requested  map[string]time.Time
 	unreadable map[string]string
 	polledAt   time.Time
 	connecting bool
 	user       string          // the login this host's gh is logged in as, read once and kept
 	held       map[string]bool // repositories this factory claims nothing from, so the log says it once
-	// quotaUntil is served empty until the quota check arrives (ADR 0028); the interface carries the
-	// state from the start so the ticket that fills it changes no reader.
+	// quotaUntil is the reset the factory waits for when the quota check found too little left, and
+	// empty while it does not wait (quota.go).
 	quotaUntil *time.Time
 }
 
@@ -92,6 +98,10 @@ type Factory struct {
 // answers with what it could read and reports what it could not, so nothing of it is ever stored.
 type source interface {
 	queue(ctx context.Context) poll
+	// changesRequested is the newest review that asks for changes on one pull request this factory
+	// opened, submitted by somebody who may write to the repository, and the zero time when there is
+	// none, when the pull request is no longer open and when GitHub could not be read.
+	changesRequested(ctx context.Context, repository string, pull int) time.Time
 }
 
 // poll is one reading of the line: the routed issues the source could read, and the repositories it
@@ -117,7 +127,7 @@ func New(settings Settings, fake bool) (*Factory, error) {
 	}
 	f := &Factory{settings: settings, fake: fake, runs: runs, started: time.Now(), self: self,
 		wake: make(chan struct{}, 1), held: map[string]bool{}}
-	f.source = &gitHub{repositories: settings.Repositories, label: settings.Label}
+	f.source = newGitHub(settings.Repositories, settings.Label)
 	if fake {
 		f.source = &canned{repositories: settings.Repositories, started: f.started}
 	}
@@ -148,11 +158,18 @@ func (f *Factory) Connect(ctx context.Context) {
 func (f *Factory) Work(ctx context.Context) {
 	for ctx.Err() == nil {
 		f.refreshQueue(ctx)
+		f.refreshRequested(ctx)
 		f.dispatch(ctx)
+		// A factory that waits for quota checks again once the reset has passed, not at the first poll
+		// after it.
+		next := f.settings.Poll
+		if until, ahead := f.waitingForQuota(time.Now()); ahead && time.Until(until) < next {
+			next = time.Until(until)
+		}
 		select {
 		case <-ctx.Done():
 		case <-f.wake:
-		case <-time.After(f.settings.Poll):
+		case <-time.After(next):
 		}
 	}
 	f.active.Wait()
@@ -178,7 +195,9 @@ func (f *Factory) refreshQueue(ctx context.Context) {
 }
 
 // dispatch starts the head of the queue. One worker at a time: while a run is active, nothing else
-// starts, and while the factory is paused nothing starts at all.
+// starts, while the factory is paused nothing starts at all, and while it waits for the quota to
+// reset nothing starts either. The quota is checked when there is a run to start and not otherwise:
+// an idle line asks nothing of the provider.
 func (f *Factory) dispatch(ctx context.Context) {
 	if f.settings.Paused || ctx.Err() != nil {
 		return
@@ -188,11 +207,18 @@ func (f *Factory) dispatch(ctx context.Context) {
 			return
 		}
 	}
+	if _, waiting := f.waitingForQuota(time.Now()); waiting {
+		return
+	}
 	for _, entry := range f.waiting() {
 		if !f.claimable(entry.Repository) {
 			continue // the issue keeps its place in the line; nothing of it is started or recorded
 		}
-		f.start(ctx, entry)
+		allowed, warning := f.quotaAllows(ctx)
+		if !allowed {
+			return // the entry keeps its place; the check runs again after the reset
+		}
+		f.start(ctx, entry, warning)
 		return
 	}
 }
@@ -238,13 +264,13 @@ func (f *Factory) hold(repository, reason string) {
 }
 
 // waiting is the line as the factory would work it and as the interface serves it: first the work it
-// already holds and resumes, ordered by the time of the signal that queued it, then the routed
-// issues nobody has worked yet, in the order the maintainer routed them ([ADR 0025]).
+// already holds — resumed and follow-up runs — ordered by the time of the signal that queued it, then
+// the routed issues nobody has worked yet, in the order the maintainer routed them ([ADR 0025]).
 //
-// An issue with a run of its own is out of the routed part for good: only the two resume signals put
-// it back in the line, and only for an issue this factory holds. That is what leaves a foreign claim
-// alone — a routed issue whose branch another claimer created is recorded as lost, holds nothing,
-// and is never read as a release.
+// An issue with a run of its own is out of the routed part for good: only the signals of held work
+// put it back in the line, and only for an issue this factory holds. That is what leaves a foreign
+// claim alone — a routed issue whose branch another claimer created is recorded as lost, holds
+// nothing, and is never read as a release or as a pull request to watch.
 //
 // Only a connected repository is in the line, held work included: a repository the configuration no
 // longer names is one this host is not to work, whatever its records say it once held. Nothing of it
@@ -259,7 +285,7 @@ func (f *Factory) waiting() []Entry {
 		worked[run.key()] = true
 	}
 	f.mu.Lock()
-	queue := f.queue
+	queue, requested := f.queue, f.requested
 	f.mu.Unlock()
 	routedNow := map[string]Issue{}
 	for _, issue := range queue {
@@ -285,8 +311,10 @@ func (f *Factory) waiting() []Entry {
 		switch {
 		case held.released(issue, routed):
 			out = append(out, Entry{Issue: issue, Signal: signalRelease, SignalAt: issue.unassignedAt, resume: held.run})
-		case held.resumes:
-			out = append(out, Entry{Issue: issue, Signal: signalInterruption, SignalAt: held.signalAt(), resume: held.run})
+		case held.resumes != "":
+			out = append(out, Entry{Issue: issue, Signal: held.resumes, SignalAt: held.signalAt(), resume: held.run})
+		case held.changesRequested(requested[key]):
+			out = append(out, Entry{Issue: issue, Signal: signalChangesRequested, SignalAt: requested[key], resume: held.run})
 		}
 	}
 	sort.Slice(out, func(a, b int) bool {
@@ -305,8 +333,8 @@ func (f *Factory) waiting() []Entry {
 
 // start records the run and works it in the background, so the loop keeps polling while it runs. A
 // factory that is already stopping records nothing: the run would count as worked without ever
-// having run.
-func (f *Factory) start(ctx context.Context, entry Entry) {
+// having run. A warning is what the run starts with, such as a quota check that could not answer.
+func (f *Factory) start(ctx context.Context, entry Entry, warning string) {
 	if ctx.Err() != nil {
 		return
 	}
@@ -316,22 +344,26 @@ func (f *Factory) start(ctx context.Context, entry Entry) {
 		Title:      entry.Title,
 		Signal:     entry.Signal,
 		SignalAt:   entry.SignalAt,
+		Kind:       kindOf(entry.Signal),
 		State:      "running",
 		StartedAt:  time.Now(),
 		Stages:     []string{},
 		Warnings:   []string{},
 		Versions:   Versions{Factory: version},
 	}
-	// A resumed run says from its first moment which branch and which worktree it continues, so a
-	// host that loses power before the worker starts is read from this record alone. What it holds
-	// is the claim's for an interruption and not yet its own for a release: the take-back that
-	// answers a release is the first thing the run does, and until it has landed the issue lies
-	// unassigned where the person who released it left it.
+	// A run that continues held work says from its first moment which branch and which worktree it
+	// continues, so a host that loses power before the worker starts is read from this record alone.
+	// What it holds is the claim's for an interruption and for a review, and not yet its own for a
+	// release: the take-back that answers a release is the first thing that run does, and until it
+	// has landed the issue lies unassigned where the person who released it left it.
 	if entry.Signal != signalRouted {
 		r.Branch, r.Base, r.Worktree = entry.resume.Branch, entry.resume.Base, entry.resume.Worktree
 		r.Holding = entry.Signal != signalRelease
 	}
 	f.runs.add(r)
+	if warning != "" {
+		f.warn(r, "quota not checked", warning)
+	}
 	f.active.Add(1)
 	go func() {
 		defer f.active.Done()
@@ -394,11 +426,12 @@ func (f *Factory) execute(parent context.Context, r *Run, entry Entry) {
 	f.runs.update(r, func() {
 		// What the claim or the resume ended up holding, before a worker is started on it.
 		r.Worktree, r.Holding = claim.worktree, claim.holding
-		// The session starts in /worker:work, which invokes no skill for its first stage.
-		r.stage("implement")
+		// The session opens in the skill it is given as its prompt, and that prompt is a slash command
+		// and no Skill call, so nothing in the worker's stream announces it.
+		r.stage(firstStage(entry.Signal))
 	})
 
-	cmd, err := f.worker(ctx, entry.Issue, claim)
+	cmd, err := f.worker(ctx, entry, claim)
 	if err != nil {
 		f.finish(r, outcomeFailed, "no worker could be started: "+err.Error()+leftBehind(claim), nil)
 		return
@@ -516,10 +549,36 @@ func (f *Factory) execute(parent context.Context, r *Run, entry Entry) {
 		if cause == "" {
 			cause = r.resultSummary
 		}
-		f.finish(r, outcomeFailed, strings.TrimSpace(fmt.Sprintf("the session ended in an error (exit %d): %s", exitCode, cause)), &exitCode)
+		f.endInError(parent, r, strings.TrimSpace(fmt.Sprintf("the session ended in an error (exit %d): %s", exitCode, cause)), &exitCode)
 	default:
-		f.finish(r, outcomeFailed, "the session ended without a report; a worker ends by reporting ready: or blocked:", &exitCode)
+		f.endInError(parent, r, "the session ended without a report; a worker ends by reporting ready: or blocked:", &exitCode)
 	}
+}
+
+// endInError ends a run whose session ended in an error. When the quota the worker spends is used up
+// by then, the error is the quota's and not the issue's: the outcome is quota, everything the run
+// holds stays as it is, and the factory resumes the issue by itself after the reset, without spending
+// the one automatic resume an interruption has ([ADR 0026]) — once in a row, so a quota resume that
+// runs out again leaves the issue to a person. Otherwise, and when the check cannot answer, the run
+// has failed.
+//
+// [ADR 0026]: ../docs/adr/0026-the-factory-never-deletes-work-on-its-own.md
+func (f *Factory) endInError(ctx context.Context, r *Run, reason string, exitCode *int) {
+	exhausted, scope, until, err := f.quotaExhausted(ctx)
+	if err != nil {
+		f.warn(r, "quota not checked after the error",
+			"the quota could not be checked after the session's error, so the run is failed rather than resumed after a reset: "+err.Error())
+	}
+	if !exhausted {
+		f.finish(r, outcomeFailed, reason, exitCode)
+		return
+	}
+	next := "the factory resumes the issue after the reset"
+	if r.Signal == signalQuota {
+		next = "the issue waits for a person, because this run was already the resume after a reset and ran out again; removing the assignee hands it back"
+	}
+	f.finish(r, outcomeQuota, fmt.Sprintf("%s; the Claude quota of the scope %s is exhausted until %s, so the branch, the worktree and the assignee stay and %s",
+		reason, scope, until.Format(time.RFC3339), next), exitCode)
 }
 
 // leftBehind says what a run that did not finish left on the remote, which is what the operator
@@ -582,12 +641,13 @@ func (f *Factory) take(ctx context.Context, r *Run, entry Entry) (claimed, error
 // them.
 //
 // [ADR 0022]: ../docs/adr/0022-the-factory-is-a-second-driver-over-the-worker-pipeline.md
-func (f *Factory) worker(ctx context.Context, issue Issue, claim claimed) (*exec.Cmd, error) {
+func (f *Factory) worker(ctx context.Context, entry Entry, claim claimed) (*exec.Cmd, error) {
+	issue := entry.Issue
 	if f.fake {
 		args := []string{"scripted-worker", issue.scenario, issue.Repository, strconv.Itoa(issue.Number)}
 		return exec.CommandContext(ctx, f.self, append(args, f.settings.WorkerArgs...)...), nil
 	}
-	variables := workerVariables(issue, claim)
+	variables := workerVariables(entry, claim)
 	settings, err := workerSettings(variables)
 	if err != nil {
 		return nil, err
@@ -604,15 +664,36 @@ func (f *Factory) worker(ctx context.Context, issue Issue, claim claimed) (*exec
 		"--settings", settings,
 	}
 	args = append(args, f.settings.WorkerArgs...)
-	args = append(args, "-p", workSkill)
+	args = append(args, "-p", prompt(entry.Signal))
 	cmd := exec.CommandContext(ctx, "claude", args...)
 	cmd.Dir = claim.worktree
 	cmd.Env = workerEnv(os.Environ(), variables)
 	return cmd, nil
 }
 
-// workSkill is the prompt a worker session starts with, the same one a local claim gives it.
-const workSkill = "/worker:work"
+// The prompt a worker session starts with. workSkill is the one a local claim gives it and the one
+// every run of an issue starts with — a first run as well as a resumed one, which derives where the
+// work stands from git and GitHub as any worker does. reviewSkill is the follow-up run's: the
+// maintainer has read the pull request and asked for changes, so the session starts at the stage
+// that reads the review threads, and that stage ends by running the CI stage again ([ADR 0022]).
+//
+// [ADR 0022]: ../docs/adr/0022-the-factory-is-a-second-driver-over-the-worker-pipeline.md
+const (
+	workSkill   = "/worker:work"
+	reviewSkill = "/worker:address-reviews"
+)
+
+func prompt(signal string) string {
+	if signal == signalChangesRequested {
+		return reviewSkill
+	}
+	return workSkill
+}
+
+// firstStage is that prompt read as a stage, which is the stage the run opens in.
+func firstStage(signal string) string {
+	return stages[strings.TrimPrefix(prompt(signal), "/")]
+}
 
 // workerSettings is the session-scoped configuration a worker is started with, as JSON for
 // --settings. It is the settings object of the local claim (plugins/orchestrator/scripts/claim.sh)
@@ -650,14 +731,28 @@ func workerSettings(env map[string]string) (string, error) {
 
 // workerVariables is the env block of those settings: what this one session is, and nothing a host
 // may disagree with.
-func workerVariables(issue Issue, claim claimed) map[string]string {
-	return map[string]string{
+//
+// WF_REVIEW_MANDATE is that for a follow-up run: the driver's word that this session was started to
+// answer a review, which is what the worker's repair.sh takes for the count of repair rounds to
+// start again. The pipeline's own repair loop is bounded by that count, so the session may not read
+// its own prompt for the answer, and every other run carries the variable not at all.
+//
+// It names the review it stands for, the time that review was submitted, which is what this run is
+// queued for and dispatched once for. One review is one new mandate on the pull request: the repair
+// record keeps the mandate its count was started for, so the session that answers the review has the
+// rounds of that review and the rounds its own CI stage then drives cannot hand it more.
+func workerVariables(entry Entry, claim claimed) map[string]string {
+	variables := map[string]string{
 		"WF_MODE":                              "manual",
-		"WF_ISSUE":                             strconv.Itoa(issue.Number),
+		"WF_ISSUE":                             strconv.Itoa(entry.Issue.Number),
 		"WF_BASE_BRANCH":                       claim.base,
 		"CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1",
 		"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE":      compactPercentage,
 	}
+	if entry.Signal == signalChangesRequested {
+		variables["WF_REVIEW_MANDATE"] = entry.SignalAt.UTC().Format(time.RFC3339)
+	}
+	return variables
 }
 
 // The compact pin of the workflow, the two numbers the local claim sets and this one restates

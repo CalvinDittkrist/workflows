@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -30,6 +31,13 @@ type Config struct {
 	// [ADR 0023]: ../docs/adr/0023-github-is-the-only-control-surface-of-the-factory.md
 	Notify       []string    `json:"notify"`
 	Repositories []Connected `json:"repositories"`
+	// QuotaAxi is the path of the quota-axi installed on the host, and QuotaMinimum the percentage of
+	// the Claude quota below which no run starts. Without the path the check is off ([ADR 0028]); the
+	// minimum is a pointer because 0 is a setting of its own, a check that never waits.
+	//
+	// [ADR 0028]: ../docs/adr/0028-the-quota-check-is-a-courtesy-not-a-guard.md
+	QuotaAxi     string `json:"quota_axi"`
+	QuotaMinimum *int   `json:"quota_minimum"`
 }
 
 // Connected is one repository the factory works: its name on GitHub and, optionally, the branch a
@@ -78,15 +86,21 @@ type Settings struct {
 	Paused       bool
 	Notify       []string
 	Repositories []Connected
+	QuotaAxi     string // empty: the quota check is off
+	QuotaMinimum int
+	// WorkerModel is the model the worker runs on, the one whose quota scope the check reads: the
+	// worker agent's own unless worker_args names another with --model.
+	WorkerModel string
 }
 
 const (
-	defaultListen   = "127.0.0.1:7341"
-	defaultLabel    = "factory"
-	defaultDeadline = 120 * time.Minute
-	defaultPoll     = 60 * time.Second
+	defaultListen       = "127.0.0.1:7341"
+	defaultLabel        = "factory"
+	defaultDeadline     = 120 * time.Minute
+	defaultPoll         = 60 * time.Second
+	defaultQuotaMinimum = 12
 
-	configFields = "listen, label, deadline, poll, data_dir, worker_args, paused, notify, repositories"
+	configFields = "listen, label, deadline, poll, data_dir, worker_args, paused, notify, repositories, quota_axi, quota_minimum"
 )
 
 // A repository is named as owner/name; the factory never takes a URL or a local path, because the
@@ -148,6 +162,20 @@ func factoryOwns(arg string) string {
 	return ""
 }
 
+// modelOf is the model a worker started with these arguments runs on: the last --model among them, as
+// either spelling of the flag, and the worker agent's own model when they name none.
+func modelOf(args []string) string {
+	model := workerModel
+	for i, arg := range args {
+		if value, ok := strings.CutPrefix(arg, "--model="); ok {
+			model = value
+		} else if arg == "--model" && i+1 < len(args) {
+			model = args[i+1]
+		}
+	}
+	return model
+}
+
 // unspecified says whether a host is a spelling of "every interface": 0.0.0.0, ::, ::0, ::ffff:0.0.0.0
 // and the rest of them. A host that is not an IP literal at all is decided after binding, where the
 // address the kernel actually chose is known.
@@ -185,6 +213,8 @@ func Load(path string) (Settings, error) {
 		Paused:       c.Paused == nil || *c.Paused,
 		Notify:       []string{},
 		Repositories: []Connected{},
+		QuotaMinimum: defaultQuotaMinimum,
+		WorkerModel:  modelOf(c.WorkerArgs),
 	}
 	if c.Listen != "" {
 		host, port, err := net.SplitHostPort(c.Listen)
@@ -238,6 +268,21 @@ func Load(path string) (Settings, error) {
 		}
 		named[strings.ToLower(who)] = true
 		s.Notify = append(s.Notify, who)
+	}
+	if c.QuotaAxi != "" {
+		// A path and never a name: a name would be looked up on PATH, and the check is the binary the
+		// operator installed and pinned, not whatever answers to quota-axi on this host today. Nothing
+		// is fetched from npm, which is why npx is no way to name it either.
+		if !filepath.IsAbs(c.QuotaAxi) {
+			return bad("quota_axi %q is not an absolute path; name the quota-axi installed on this host, such as \"/usr/local/bin/quota-axi\", or leave it out to switch the quota check off", c.QuotaAxi)
+		}
+		s.QuotaAxi = c.QuotaAxi
+	}
+	if c.QuotaMinimum != nil {
+		if *c.QuotaMinimum < 0 || *c.QuotaMinimum > 100 {
+			return bad("quota_minimum %d is not a percentage; write it as a number from 0 to 100, such as %d", *c.QuotaMinimum, defaultQuotaMinimum)
+		}
+		s.QuotaMinimum = *c.QuotaMinimum
 	}
 	if strings.TrimSpace(c.DataDir) == "" {
 		return bad("data_dir is missing; name the directory the runs are written to, such as \"/var/lib/factory\"")

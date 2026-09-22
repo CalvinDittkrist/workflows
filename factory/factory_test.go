@@ -62,6 +62,8 @@ type apiRun struct {
 	Worktree    string     `json:"worktree"`
 	Holding     bool       `json:"holding"`
 	Signal      string     `json:"signal"`
+	SignalAt    time.Time  `json:"signalAt"`
+	Kind        string     `json:"kind"`
 	State       string     `json:"state"`
 	Stage       string     `json:"stage"`
 	Stages      []string   `json:"stages"`
@@ -526,6 +528,11 @@ func TestAnInvalidConfigurationIsRefusedWithTheFix(t *testing.T) {
 		{"worker arguments that replace the permission mode", `{"data_dir":"data","repositories":["a/b"],"worker_args":["--permission-mode","plan"]}`, `worker_args carries --permission-mode`},
 		{"worker arguments that replace the output format", `{"data_dir":"data","repositories":["a/b"],"worker_args":["--output-format","text"]}`, `worker_args carries --output-format`},
 		{"repository object with an unknown field", `{"data_dir":"data","repositories":[{"name":"a/b","branch":"dev"}]}`, `a repository is "owner/name" or {"name": "owner/name", "base": "dev"}`},
+		// The quota check runs the binary the operator installed, never a name PATH or npx resolves.
+		{"quota tool by name", `{"data_dir":"data","repositories":["a/b"],"quota_axi":"quota-axi"}`, `quota_axi "quota-axi" is not an absolute path`},
+		{"quota tool through npx", `{"data_dir":"data","repositories":["a/b"],"quota_axi":"npx -y quota-axi"}`, `is not an absolute path`},
+		{"quota minimum above everything", `{"data_dir":"data","repositories":["a/b"],"quota_minimum":120}`, `quota_minimum 120 is not a percentage; write it as a number from 0 to 100`},
+		{"quota minimum below nothing", `{"data_dir":"data","repositories":["a/b"],"quota_minimum":-1}`, `is not a percentage`},
 		{"no data directory", `{"repositories":["a/b"]}`, `data_dir is missing; name the directory`},
 		// A login reaches gh as an argument and a comment as a mention, so anything that is not one is
 		// refused before a run of this factory tries to notify it.

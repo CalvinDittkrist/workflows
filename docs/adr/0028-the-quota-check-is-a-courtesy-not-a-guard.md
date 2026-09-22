@@ -2,6 +2,7 @@
 
 Date: 2026-09-21
 Status: accepted
+Amended by: [0037](0037-the-quota-check-waits-below-12-percent-of-the-workers-scope.md) (the default minimum is 12, the worker's scope is read from its model name, and a run that ran out of quota is told apart by a check after its error)
 
 ## Context
 The factory host and the maintainer's machine work on the same Claude subscription. An unattended run that starts at 80 % of the window can leave the maintainer without quota for their own work at lunchtime, and the maintainer is the one who cannot wait.

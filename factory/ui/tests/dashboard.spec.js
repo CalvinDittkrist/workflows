@@ -154,8 +154,8 @@ test('the log of a running worker grows as it is written, and repeats nothing', 
 })
 
 test('the factory says when it waits for quota and until when', async ({ page }) => {
-  // The factory serves this state from the ticket that adds the quota check on; the dashboard reads
-  // it from the interface it already promises, so the answer is the one under test here.
+  // A fake factory has no quota tool to wait for, so the state is put into the answer here; the
+  // factory's Go tests drive the real one (quota_test.go).
   await page.route('**/api/status', async (route) => {
     const answer = await route.fetch()
     const status = await answer.json()

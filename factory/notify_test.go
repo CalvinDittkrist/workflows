@@ -26,7 +26,7 @@ func TestARunThatEndsReadyAsksTheMaintainersForAReviewOfItsPullRequest(t *testin
 	gh.assigns(t, "acme/edge-sensors", claimedIssue, "factory-bot")
 	gh.workerReports(t, "acme/edge-sensors", claimedIssue)
 	pullRequest := fmt.Sprintf("https://github.com/acme/edge-sensors/pull/%d", claimedIssue)
-	gh.reviews(t, pullRequest, maintainers...)
+	gh.reviewRequests(t, pullRequest, maintainers...)
 
 	data := filepath.Join(t.TempDir(), "data")
 	gh.cloneInto(t, data, "acme/edge-sensors")
@@ -70,7 +70,7 @@ func TestAReviewRequestOneLoginIsRefusedStillReachesTheOthers(t *testing.T) {
 	gh.assigns(t, "acme/edge-sensors", claimedIssue, "factory-bot")
 	gh.workerReports(t, "acme/edge-sensors", claimedIssue)
 	pullRequest := fmt.Sprintf("https://github.com/acme/edge-sensors/pull/%d", claimedIssue)
-	gh.reviews(t, pullRequest, maintainers...)
+	gh.reviewRequests(t, pullRequest, maintainers...)
 	gh.fail(t, "pr edit * --add-reviewer ada") // the one login GitHub will not take
 
 	data := filepath.Join(t.TempDir(), "data")
@@ -101,7 +101,7 @@ func TestAReviewRequestThatStallsStillReachesTheLoginsBehindIt(t *testing.T) {
 	gh.assigns(t, "acme/edge-sensors", claimedIssue, "factory-bot")
 	gh.workerReports(t, "acme/edge-sensors", claimedIssue)
 	pullRequest := fmt.Sprintf("https://github.com/acme/edge-sensors/pull/%d", claimedIssue)
-	gh.reviews(t, pullRequest, maintainers...)
+	gh.reviewRequests(t, pullRequest, maintainers...)
 	gh.stall(t, "pr edit * --add-reviewer ada") // the first login's call is taken and never answered
 
 	data := filepath.Join(t.TempDir(), "data")

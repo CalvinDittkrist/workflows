@@ -51,17 +51,18 @@ const maxNotifyReason = 2000
 // ready and the three endings that wait for a person do. lost does not: another claimer owns the
 // issue and this factory touched nothing. Neither does an interruption the factory answers itself —
 // the one automatic resume — because nothing waits on the maintainer there; a second interruption
-// has spent that resume and waits, exactly as a failure does ([ADR 0026]). The outcomes still to
-// come, cancelled and quota, notify nobody: a cancelled run is the maintainer's own gesture and a
-// run the quota stopped is queued again by itself.
+// has spent that resume and waits, exactly as a failure does ([ADR 0026]). quota does not either: a
+// run the quota stopped keeps everything it holds and is queued again after the reset ([ADR 0037]).
+// Neither does cancelled, the outcome still to come, which is the maintainer's own gesture.
 //
 // [ADR 0026]: ../docs/adr/0026-the-factory-never-deletes-work-on-its-own.md
+// [ADR 0037]: ../docs/adr/0037-the-quota-check-waits-below-12-percent-of-the-workers-scope.md
 func notifies(r Run, held holding) bool {
 	switch r.Outcome {
 	case outcomeReady, outcomeBlocked, outcomeFailed, outcomeTimeout:
 		return true
 	case outcomeInterrupted:
-		return !held.resumes
+		return held.resumes == ""
 	default:
 		return false
 	}

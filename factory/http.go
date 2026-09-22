@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"time"
 )
 
 // The HTTP interface is read-only. The factory is steered on GitHub — routed by a label, released by
@@ -63,8 +64,12 @@ func (f *Factory) index(w http.ResponseWriter, _ *http.Request) {
 
 // status is what the factory is doing: running, paused, or waiting for the Claude quota to reset.
 func (f *Factory) status(w http.ResponseWriter, _ *http.Request) {
+	var quotaUntil *time.Time
+	if until, waiting := f.waitingForQuota(time.Now()); waiting {
+		quotaUntil = &until
+	}
 	f.mu.Lock()
-	quotaUntil, polledAt, connecting := f.quotaUntil, f.polledAt, f.connecting
+	polledAt, connecting := f.polledAt, f.connecting
 	f.mu.Unlock()
 	state := "running"
 	switch {

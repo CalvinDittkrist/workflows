@@ -11,9 +11,11 @@ import (
 
 // Resuming work the factory already holds. Nothing here deletes anything and nothing here retries by
 // itself more than once: the factory resumes an interruption exactly once per issue, and after that
-// the issue waits for a person, whose gesture is taking the assignee off it ([ADR 0026]).
+// the issue waits for a person, whose gesture is taking the assignee off it ([ADR 0026]). The resume
+// after a quota reset is counted apart, once in a row, because running out of quota once says
+// nothing about the issue (quota.go).
 //
-// Both signals are read from the run records in the data directory rather than from memory, so a
+// Every signal is read from the run records in the data directory rather than from memory, so a
 // factory that was stopped, rebooted or cut off from power knows on its next start what it holds and
 // what it has already spent.
 //
@@ -63,14 +65,26 @@ const workerGrace = 10 * time.Second
 // holds the issue on the remote, which is the branch and the worktree a resumed run continues in,
 // the latest run of the issue whatever it was, and whether the one automatic resume is unspent.
 type holding struct {
-	run     Run  // the latest run that holds the issue; only read when holds is true
-	holds   bool // this factory owns the issue on the remote
-	last    Run  // the latest run of the issue
-	idle    bool // that run has ended, so another one of this issue may be queued
-	resumes bool // it was interrupted and the one automatic resume is still there to be spent
+	run   Run  // the latest run that holds the issue; only read when holds is true
+	holds bool // this factory owns the issue on the remote
+	last  Run  // the latest run of the issue
+	idle  bool // that run has ended, so another one of this issue may be queued
+	// resumes is the signal the factory resumes the issue on by itself, or empty: interruption when
+	// that run was interrupted and the one automatic resume is still there to be spent, quota when it
+	// ran out of quota, which is resumed whatever that budget says, unless that run was itself the
+	// resume after a reset.
+	resumes string
 	// answered is the newest release this issue's runs have already acted on, as GitHub timed the
 	// removal that queued them. A release no newer than this is done with.
 	answered time.Time
+	// pullRequest is the newest pull request a run of this issue reported, which is the one the
+	// factory watches for a review that asks for changes, and addressed the newest such review a run
+	// of this issue already stands for, as GitHub timed its submission. A review no newer than that
+	// is answered ([ADR 0023]).
+	//
+	// [ADR 0023]: ../docs/adr/0023-github-is-the-only-control-surface-of-the-factory.md
+	pullRequest string
+	addressed   time.Time
 }
 
 // holdings reads the run records, oldest first, into one entry per issue.
@@ -79,7 +93,10 @@ type holding struct {
 // back by a release: a person who hands a held issue back to the factory has decided, and what
 // follows that decision may be interrupted and resumed once again, exactly as the first claim may.
 // Nothing else gives it back, so a factory that loses power twice over one issue stops after the
-// second time and waits.
+// second time and waits. A quota resume neither spends it nor gives it back: its cause passes by
+// itself and has nothing to do with the issue. It is one in a row all the same: a resumed run that
+// runs out of quota again is an issue that uses up a whole window by itself, and the next one after
+// it is the maintainer's to decide on, so that issue waits for a person too.
 func holdings(runs []Run) map[string]holding {
 	out := map[string]holding{}
 	budget := map[string]int{}
@@ -103,10 +120,24 @@ func holdings(runs []Run) map[string]holding {
 		if at := releaseAt(run); at.After(h.answered) {
 			h.answered = at
 		}
+		// And so do the pull request the issue's runs opened and the review they have answered: a run
+		// that reported none says nothing about either.
+		if run.PullRequest != "" {
+			h.pullRequest = run.PullRequest
+		}
+		if run.Signal == signalChangesRequested && run.SignalAt.After(h.addressed) {
+			h.addressed = run.SignalAt
+		}
 		out[key] = h
 	}
 	for key, h := range out {
-		h.resumes = h.holds && h.idle && h.last.Outcome == outcomeInterrupted && budget[key] > 0
+		switch {
+		case !h.holds || !h.idle:
+		case h.last.Outcome == outcomeQuota && h.last.Signal != signalQuota:
+			h.resumes = signalQuota
+		case h.last.Outcome == outcomeInterrupted && budget[key] > 0:
+			h.resumes = signalInterruption
+		}
 		out[key] = h
 	}
 	return out
@@ -145,9 +176,10 @@ func (h holding) issue() Issue {
 	return Issue{Repository: h.run.Repository, Number: h.run.Issue, Title: h.run.Title, Labels: []string{}}
 }
 
-// resume prepares a run of work this factory already holds: the worktree the claim made is where the
-// worker continues, on the commits that are there. Nothing is fetched and no branch is created — the
-// claim that decided the issue stands, and this run is under it.
+// resume prepares a run of work this factory already holds — a resumed run and a follow-up run
+// alike: the worktree the claim made is where the worker continues, on the commits that are there.
+// Nothing is fetched and no branch is created — the claim that decided the issue stands, and this
+// run is under it.
 //
 // A release is the one signal with something to do on the remote. The person who released the issue
 // took the assignee off, which is what made it match the routing rule again; the factory puts itself
@@ -156,8 +188,8 @@ func (h holding) issue() Issue {
 func (f *Factory) resume(ctx context.Context, r *Run, e Entry) (claimed, error) {
 	held := claimed{branch: e.resume.Branch, base: e.resume.Base, worktree: e.resume.Worktree,
 		created: true, resumed: true,
-		// An interruption resume holds what the claim under it holds: the issue is assigned to this
-		// host and nothing about that has changed. A release resume holds nothing until the take-back
+		// A run after an interruption or a review holds what the claim under it holds: the issue is
+		// assigned to this host and nothing about that has changed. A release holds nothing until the take-back
 		// below has put the assignee back on, so a stop in between leaves a record that says the
 		// release is still unanswered and the next start answers it.
 		holding: e.Signal != signalRelease}
@@ -188,8 +220,10 @@ func (f *Factory) resume(ctx context.Context, r *Run, e Entry) (claimed, error) 
 // resuming says why a resumed run was queued, for the line of its log that says the run continues
 // work rather than claiming it.
 var resuming = map[string]string{
-	signalInterruption: "the one automatic resume after an interruption",
-	signalRelease:      "a person released the issue by removing the assignee",
+	signalInterruption:     "the one automatic resume after an interruption",
+	signalQuota:            "the resume after the reset of the quota the run before ran out of",
+	signalRelease:          "a person released the issue by removing the assignee",
+	signalChangesRequested: "a review asked for changes on the pull request",
 }
 
 // released says that a person handed this held issue back to the factory. The issue is in the line
@@ -219,7 +253,7 @@ func (h holding) released(issue Issue, routed bool) bool {
 	return issue.unassignedAt.After(issue.assignedAt)
 }
 
-// signalAt is when the interruption this resume answers happened.
+// signalAt is when the interruption or the quota run this resume answers ended.
 func (h holding) signalAt() time.Time {
 	if h.last.EndedAt == nil {
 		return h.last.StartedAt

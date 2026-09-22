@@ -675,9 +675,9 @@ func (g *ghShim) commented(t *testing.T, repository string, issue int) string {
 	return string(raw)
 }
 
-// reviews is the answer to the review requests the factory makes on a pull request of a run that
-// ended ready: one per login, as the factory asks them.
-func (g *ghShim) reviews(t *testing.T, url string, logins ...string) {
+// reviewRequests is the answer to the review requests the factory makes on a pull request of a run
+// that ended ready: one per login, as the factory asks them.
+func (g *ghShim) reviewRequests(t *testing.T, url string, logins ...string) {
 	t.Helper()
 	for _, login := range logins {
 		g.answer(t, reviewCall(url, login), url+"\n")
