@@ -357,6 +357,9 @@ function Run({ id, now }) {
       <Facts
         items={[
           run.repository,
+          // A first run is the ordinary one and says nothing; a run that continues held work says
+          // what brought it back — that it was resumed, or that a review asked for changes.
+          run.kind && run.kind !== 'first' && `${run.kind} run`,
           run.model,
           <Tick key="t">{duration(run.startedAt, run.endedAt ?? now)}</Tick>,
           run.turns ? `${run.turns} turns` : '',

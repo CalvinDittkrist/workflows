@@ -63,6 +63,8 @@ type apiRun struct {
 	Holding     bool       `json:"holding"`
 	LetGoAt     *time.Time `json:"letGoAt"`
 	Signal      string     `json:"signal"`
+	SignalAt    time.Time  `json:"signalAt"`
+	Kind        string     `json:"kind"`
 	State       string     `json:"state"`
 	Stage       string     `json:"stage"`
 	Stages      []string   `json:"stages"`

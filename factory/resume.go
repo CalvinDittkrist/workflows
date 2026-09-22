@@ -73,15 +73,23 @@ type holding struct {
 	// the record of that run is what a routing of the issue after that moment takes it back by.
 	let   Run
 	letGo bool
-	// pullRequest is the pull request the claim this factory holds has opened, the latest run of it
-	// that named one. An issue let go without one loses the assignee this factory put on it; an
-	// issue with one keeps it, because from then on the work is with a person and the assignee says
-	// who did it. It goes with the claim: what became of it was decided about the runs that opened
-	// it, and a run that takes the issue back afterwards is a claim of its own with nothing to show.
-	pullRequest string
 	// answered is the newest release this issue's runs have already acted on, as GitHub timed the
 	// removal that queued them. A release no newer than this is done with.
 	answered time.Time
+	// pullRequest is the pull request the claim this factory holds has opened, the latest run of it
+	// that named one: the one the factory watches for a review that asks for changes, and the one
+	// whose own end — merged or closed — lets the issue go. An issue let go without one loses the
+	// assignee this factory put on it; an issue with one keeps it, because from then on the work is
+	// with a person and the assignee says who did it. It goes with the claim: what became of it was
+	// decided about the runs that opened it, and a run that takes the issue back afterwards is a
+	// claim of its own with nothing to show.
+	//
+	// addressed is the newest review asking for changes that a run of this issue already stands for,
+	// as GitHub timed its submission. A review no newer than that is answered ([ADR 0023]).
+	//
+	// [ADR 0023]: ../docs/adr/0023-github-is-the-only-control-surface-of-the-factory.md
+	pullRequest string
+	addressed   time.Time
 }
 
 // holdings reads the run records, oldest first, into one entry per issue.
@@ -98,6 +106,9 @@ func holdings(runs []Run) map[string]holding {
 		key := run.key()
 		h := out[key]
 		h.last, h.idle = run, run.EndedAt != nil
+		// The pull request of the issue moves forward with the runs that report one — a run that
+		// reported none says nothing about it — and is cleared below with the claim it was opened
+		// under, which is why it is read here and not after that.
 		if run.PullRequest != "" {
 			h.pullRequest = run.PullRequest
 		}
@@ -120,6 +131,10 @@ func holdings(runs []Run) map[string]holding {
 		// Answered stands for the releases this issue is done with, so it only ever moves forward.
 		if at := releaseAt(run); at.After(h.answered) {
 			h.answered = at
+		}
+		// And so does the review the issue's runs have answered.
+		if run.Signal == signalChangesRequested && run.SignalAt.After(h.addressed) {
+			h.addressed = run.SignalAt
 		}
 		out[key] = h
 	}
@@ -153,9 +168,10 @@ func (h holding) issue() Issue {
 	return Issue{Repository: h.run.Repository, Number: h.run.Issue, Title: h.run.Title, Labels: []string{}}
 }
 
-// resume prepares a run of work this factory already holds: the worktree the claim made is where the
-// worker continues, on the commits that are there. Nothing is fetched and no branch is created — the
-// claim that decided the issue stands, and this run is under it.
+// resume prepares a run of work this factory already holds — a resumed run and a follow-up run
+// alike: the worktree the claim made is where the worker continues, on the commits that are there.
+// Nothing is fetched and no branch is created — the claim that decided the issue stands, and this
+// run is under it.
 //
 // A release is the one signal with something to do on the remote. The person who released the issue
 // took the assignee off, which is what made it match the routing rule again; the factory puts itself
@@ -164,8 +180,8 @@ func (h holding) issue() Issue {
 func (f *Factory) resume(ctx context.Context, r *Run, e Entry) (claimed, error) {
 	held := claimed{branch: e.resume.Branch, base: e.resume.Base, worktree: e.resume.Worktree,
 		created: true, resumed: true,
-		// An interruption resume holds what the claim under it holds: the issue is assigned to this
-		// host and nothing about that has changed. A release resume holds nothing until the take-back
+		// A run after an interruption or a review holds what the claim under it holds: the issue is
+		// assigned to this host and nothing about that has changed. A release holds nothing until the take-back
 		// below has put the assignee back on, so a stop in between leaves a record that says the
 		// release is still unanswered and the next start answers it.
 		holding: e.Signal != signalRelease}
@@ -213,8 +229,9 @@ func (f *Factory) resume(ctx context.Context, r *Run, e Entry) (claimed, error) 
 // resuming says why a resumed run was queued, for the line of its log that says the run continues
 // work rather than claiming it.
 var resuming = map[string]string{
-	signalInterruption: "the one automatic resume after an interruption",
-	signalRelease:      "a person released the issue by removing the assignee",
+	signalInterruption:     "the one automatic resume after an interruption",
+	signalRelease:          "a person released the issue by removing the assignee",
+	signalChangesRequested: "a review asked for changes on the pull request",
 }
 
 // released says that a person handed this held issue back to the factory. The issue is in the line

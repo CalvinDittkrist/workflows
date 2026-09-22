@@ -155,11 +155,25 @@ type gitHub struct {
 	// every minute would spend a whole hourly budget on standing still. It is memory and no file: the
 	// line itself is still derived from GitHub on every poll ([ADR 0025]).
 	times map[string]reading
-	// unreadable is the repositories the last poll could not read, with what gh said, and warned the
-	// issues whose event list could not be read. Both are reported when they start failing and not
-	// once a minute for a week: the factory polls every minute and a host runs it for weeks.
-	unreadable map[string]string
-	warned     map[string]bool
+	// unreadable is the repositories the last poll could not read, with what gh said, and
+	// issueWarnings the issues whose event list could not be read. Both are reported when they start
+	// failing and not once a minute for a week: the factory polls every minute and a host runs it for
+	// weeks.
+	unreadable    map[string]string
+	issueWarnings map[string]bool
+	// pullWarnings is the same for the pull requests the factory watches for a review (review.go). It
+	// is a map of its own because the two are forgotten at different times: settle drops what is known
+	// of an issue the routed line no longer holds, and the issue behind a watched pull request is one
+	// this factory holds, which is to say one the line never holds.
+	pullWarnings map[string]bool
+	// writers is whether the author of a review may write to the repository, asked once per review
+	// (review.go): a review is submitted once, and the access its author had then is what the
+	// follow-up run it queues stands on.
+	writers map[int64]bool
+	// finished is the pull requests that were merged or closed, which are not read again: what a
+	// review asked of them is nobody's to answer any more, and a factory that kept asking would spend
+	// a call per poll on every issue it has ever held.
+	finished map[string]bool
 	// refused is what an issue carries that the factory reads and will not act on, with the thing it
 	// was about: a pull request a record names that is not of the branch this factory holds. It is
 	// no failed reading — the issue answered — and it is said once and again when what it is about
@@ -256,14 +270,14 @@ func (g *gitHub) readHeld(ctx context.Context, held []Held, letGo map[string]str
 			switch {
 			case ctx.Err() != nil: // the factory is stopping
 			case errors.Is(context.Cause(pass), errHeldReadCut):
-				g.warn(key, "error: the issues this factory holds could not all be read within %s; it stopped at %s and the next poll asks again", heldReadTimeout, key)
+				g.warn(g.issueWarnings, key, "error: the issues this factory holds could not all be read within %s; it stopped at %s and the next poll asks again", heldReadTimeout, key)
 				return
 			default:
-				g.warn(key, "error: %s is held by this factory and could not be read: %v; it stays as it is until GitHub answers", key, err)
+				g.warn(g.issueWarnings, key, "error: %s is held by this factory and could not be read: %v; it stays as it is until GitHub answers", key, err)
 			}
 			continue
 		}
-		g.readable(key) // it answered, so the next failure is reported anew
+		g.readable(g.issueWarnings, key) // it answered, so the next failure is reported anew
 		if decision != "" {
 			letGo[key] = decision
 		}
@@ -373,9 +387,9 @@ func (g *gitHub) settle(unreadable map[string]string, read, seen map[string]bool
 			delete(g.times, key)
 		}
 	}
-	for key := range g.warned {
+	for key := range g.issueWarnings {
 		if read[repositoryOf(key)] && !seen[key] {
-			delete(g.warned, key)
+			delete(g.issueWarnings, key)
 		}
 	}
 	for key := range g.refused {
@@ -385,20 +399,36 @@ func (g *gitHub) settle(unreadable map[string]string, read, seen map[string]bool
 	}
 }
 
+// newGitHub is the one way a gitHub is built. Every map it keeps is made here rather than where it
+// is first written: they are written under the mutex from several readings at once, and a lazy one
+// would be a nil map to write into for whichever reading got there first.
+func newGitHub(repositories []Connected, label string) *gitHub {
+	return &gitHub{
+		repositories:  repositories,
+		label:         label,
+		times:         map[string]reading{},
+		unreadable:    map[string]string{},
+		issueWarnings: map[string]bool{},
+		pullWarnings:  map[string]bool{},
+		writers:       map[int64]bool{},
+		finished:      map[string]bool{},
+		refused:       map[string]string{},
+	}
+}
+
 // repositoryOf is the repository an issue key names (owner/name#number).
 func repositoryOf(key string) string {
 	repository, _, _ := strings.Cut(key, "#")
 	return repository
 }
 
-// warn reports what could not be read of one issue, once, until it can be read again.
-func (g *gitHub) warn(key, format string, a ...any) {
+// warn reports what could not be read, once per key, until it can be read again. Which of the
+// factory's readings the key belongs to is the map the caller hands in, because they are forgotten
+// at different times.
+func (g *gitHub) warn(warned map[string]bool, key, format string, a ...any) {
 	g.mu.Lock()
-	if g.warned == nil {
-		g.warned = map[string]bool{}
-	}
-	first := !g.warned[key]
-	g.warned[key] = true
+	first := !warned[key]
+	warned[key] = true
 	g.mu.Unlock()
 	if first {
 		log.Printf(format, a...)
@@ -411,9 +441,6 @@ func (g *gitHub) warn(key, format string, a ...any) {
 // factory polls every minute for weeks.
 func (g *gitHub) refuse(key, about, format string, a ...any) {
 	g.mu.Lock()
-	if g.refused == nil {
-		g.refused = map[string]string{}
-	}
 	first := g.refused[key] != about
 	g.refused[key] = about
 	g.mu.Unlock()
@@ -422,11 +449,11 @@ func (g *gitHub) refuse(key, about, format string, a ...any) {
 	}
 }
 
-// readable says that an issue could be read again, so the next failure is reported anew.
-func (g *gitHub) readable(key string) {
+// readable says that what one key names could be read again, so the next failure is reported anew.
+func (g *gitHub) readable(warned map[string]bool, key string) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	delete(g.warned, key)
+	delete(warned, key)
 }
 
 // remembered answers the reading made earlier for an issue nothing has touched since.
@@ -449,9 +476,6 @@ func (g *gitHub) remember(key string, updated time.Time, read signals) {
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if g.times == nil {
-		g.times = map[string]reading{}
-	}
 	g.times[key] = reading{updated: updated, read: read}
 }
 
@@ -540,7 +564,7 @@ func (g *gitHub) readSignals(ctx context.Context, key, repository string, issue 
 	raw, err := gh(ctx, "api", "--paginate", eventsRequest(repository, issue.Number))
 	if err != nil {
 		if ctx.Err() == nil {
-			g.warn(key, "error: the events of %s could not be read: %v; it stands in the line by the time it was opened", key, err)
+			g.warn(g.issueWarnings, key, "error: the events of %s could not be read: %v; it stands in the line by the time it was opened", key, err)
 		}
 		return read, false
 	}
@@ -552,7 +576,7 @@ func (g *gitHub) readSignals(ctx context.Context, key, repository string, issue 
 			if errors.Is(err, io.EOF) {
 				break
 			}
-			g.warn(key, "error: the events of %s are no event list: %v; it stands in the line by the time it was opened", key, err)
+			g.warn(g.issueWarnings, key, "error: the events of %s are no event list: %v; it stands in the line by the time it was opened", key, err)
 			return read, false
 		}
 		for _, event := range page {
@@ -578,7 +602,7 @@ func (g *gitHub) readSignals(ctx context.Context, key, repository string, issue 
 		}
 	}
 	// The list was read, whatever it held: an issue this poll could read is no issue to warn about.
-	g.readable(key)
+	g.readable(g.issueWarnings, key)
 	return read, found
 }
 

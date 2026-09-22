@@ -56,6 +56,10 @@ func (c *canned) queue(context.Context, []Held) poll {
 	return poll{issues: cannedQueue(c.repositories, c.started)}
 }
 
+// changesRequested answers that nobody asked for changes. Fake mode opens no pull request — its
+// scripted workers only say they did — so there is none to read a review of.
+func (c *canned) changesRequested(context.Context, string, int) time.Time { return time.Time{} }
+
 // cannedQueue spreads the canned entries over the connected repositories, so the one line visibly
 // mixes them, as a real queue across repositories does.
 func cannedQueue(repositories []Connected, now time.Time) []Issue {
