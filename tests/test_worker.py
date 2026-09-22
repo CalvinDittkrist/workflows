@@ -1991,15 +1991,23 @@ class ReviewListingTests(ShimTest):
         super().setUp()
         self.git("checkout", "-qb", "feat/12-x")
         self.fixture = self.base / "threads.json"
+        self.earlier = self.base / "threads-earlier.json"
 
-    def answer(self, reviews=(), threads=()):
-        """What GitHub says about the pull request, as the one GraphQL answer the script asks for."""
+    def answer(self, reviews=(), threads=(), earlier=None):
+        """What GitHub says about the pull request: the newest page of reviews with the threads, and the
+        page before it when the test gives one, which is what a pull request with more than a hundred
+        reviews that state something makes the script ask for."""
         self.fixture.write_text(json.dumps({"data": {"repository": {"pullRequest": {
-            "reviews": {"nodes": list(reviews)},
+            "reviews": {"pageInfo": {"hasPreviousPage": earlier is not None, "startCursor": "page-2"},
+                        "nodes": list(reviews)},
             "reviewThreads": {"nodes": list(threads)}}}}}))
+        self.earlier.write_text(json.dumps({"data": {"repository": {"pullRequest": {
+            "reviews": {"pageInfo": {"hasPreviousPage": False, "startCursor": None},
+                        "nodes": list(earlier or [])}}}}}))
 
     def listing(self, *args, **env):
-        r = self.run_script(WORKER / "pr-threads.sh", *args, SHIM_THREADS_FIXTURE=str(self.fixture), **env)
+        r = self.run_script(WORKER / "pr-threads.sh", *args, SHIM_THREADS_FIXTURE=str(self.fixture),
+                            SHIM_THREADS_EARLIER_FIXTURE=str(self.earlier), **env)
         self.assertEqual(r.returncode, 0, r.stderr)
         return r.stdout
 
@@ -2045,6 +2053,26 @@ class ReviewListingTests(ShimTest):
         self.assertIn("## thread T2", out)
         self.assertNotIn("T1", out)
         self.assertNotIn("never mind", out)
+
+    def test_an_objection_older_than_the_newest_page_of_reviews_is_listed_too(self):
+        """The factory reads the whole review list and queues a follow-up run for the latest review of
+        every author; a listing that stopped at the newest page would show that session nothing to do,
+        and the review would be recorded as answered by a run that never saw it."""
+        self.answer(
+            reviews=[self.review("later", "APPROVED", "looks good", "2026-09-22T12:00:00Z")],
+            earlier=[self.review("maintainer", "CHANGES_REQUESTED", "rework the retry loop", "2026-09-22T09:00:00Z")])
+        out = self.listing()
+        self.assertIn("changes_requested: 1", out)
+        self.assertIn("rework the retry loop", out)
+
+    def test_a_reviewer_whose_word_spans_two_pages_is_read_by_their_latest_one(self):
+        """The pages are folded as one list, oldest review first, so the rule is the same across them."""
+        self.answer(
+            reviews=[self.review("maintainer", "APPROVED", "better, thanks", "2026-09-22T12:00:00Z")],
+            earlier=[self.review("maintainer", "CHANGES_REQUESTED", "rework the retry loop", "2026-09-22T09:00:00Z")])
+        out = self.listing()
+        self.assertIn("changes_requested: 0", out)
+        self.assertNotIn("rework the retry loop", out)
 
 
 class ReviewAnswerTests(ShimTest):
