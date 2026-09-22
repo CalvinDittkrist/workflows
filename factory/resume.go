@@ -26,8 +26,8 @@ type holding struct {
 	last    Run  // the latest run of the issue
 	idle    bool // that run has ended, so another one of this issue may be queued
 	resumes bool // it was interrupted and the one automatic resume is still there to be spent
-	// answered is the newest release this issue's runs have already acted on, or the start of its
-	// latest run when there was none. A release no newer than this is done with.
+	// answered is the newest release this issue's runs have already acted on, as GitHub timed the
+	// removal that queued them. A release no newer than this is done with.
 	answered time.Time
 }
 
@@ -57,12 +57,9 @@ func holdings(runs []Run) map[string]holding {
 		case signalInterruption:
 			budget[key]--
 		}
-		// Answered stands for what this issue is done with, so it only ever moves forward: the
-		// release a run was queued on, and the start of every run.
-		for _, at := range []time.Time{run.StartedAt, releaseAt(run)} {
-			if at.After(h.answered) {
-				h.answered = at
-			}
+		// Answered stands for the releases this issue is done with, so it only ever moves forward.
+		if at := releaseAt(run); at.After(h.answered) {
+			h.answered = at
 		}
 		out[key] = h
 	}
@@ -134,18 +131,29 @@ var resuming = map[string]string{
 
 // released says that a person handed this held issue back to the factory. The issue is in the line
 // GitHub answers with, which for an issue the factory assigned to itself can only mean the assignee
-// was taken off, and that removal is newer than everything the issue's runs have answered — the
-// release a resumed run already stands for, and the start of the latest run, which is what keeps an
-// assignee somebody removed before the factory ever claimed the issue from counting as a release.
+// was taken off, and that removal is newer than both the release a resumed run already stands for
+// and the assignment this factory made, which is what keeps an assignee somebody removed before the
+// claim from counting as a release.
 //
-// A release the factory has answered is compared with the release its run was queued on: two
-// readings of the same event on GitHub's own clock, so a poll that still shows the issue unassigned,
-// because the assignment of the resumed run has not landed yet, queues nothing twice however far
-// this host's clock and GitHub's are apart. The start of the latest run is this host's clock, and
-// only guards the gesture that came before any run of the issue, where minutes of drift are nothing
-// against the hours such a removal lies back.
+// Both comparisons are two readings on GitHub's own clock: the removal against the release a run was
+// queued on, so a poll that still shows the issue unassigned — the assignment of the resumed run has
+// not landed yet — queues nothing twice, and the removal against the assignment it undid. Nothing
+// here is held against this host's clock, which may be minutes from GitHub's in either direction:
+// a host running ahead would else answer a genuine release with silence for as long as the drift
+// lasts, and there is nobody watching who would notice.
+//
+// Only when GitHub's event list names no assignment at all is the start of the latest run the guard
+// instead. There is no reading to compare with then, and the gesture that case stands for — an
+// assignee removed before this factory ever claimed the issue — lies hours behind the run rather
+// than minutes.
 func (h holding) released(issue Issue, routed bool) bool {
-	return routed && h.holds && h.idle && issue.unassignedAt.After(h.answered)
+	if !routed || !h.holds || !h.idle || !issue.unassignedAt.After(h.answered) {
+		return false
+	}
+	if issue.assignedAt.IsZero() {
+		return issue.unassignedAt.After(h.last.StartedAt)
+	}
+	return issue.unassignedAt.After(issue.assignedAt)
 }
 
 // signalAt is when the interruption this resume answers happened.

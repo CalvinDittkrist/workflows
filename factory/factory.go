@@ -28,11 +28,13 @@ type Issue struct {
 	Labels     []string  `json:"labels"`
 	RoutedAt   time.Time `json:"routedAt"` // when the routing label was set; the queue's order
 
-	// unassignedAt is when the assignee was last taken off the issue, read from the same event list
-	// as the routing time. For an issue this factory holds that gesture is the release signal, and
-	// its time is where the resumed run stands in the line ([ADR 0026]).
+	// assignedAt is when an assignee was last put on the issue and unassignedAt when one was last
+	// taken off, read from the same event list as the routing time. A removal that is newer than the
+	// assignment it undid is the release signal for an issue this factory holds, and its time is
+	// where the resumed run stands in the line ([ADR 0026]).
 	//
 	// [ADR 0026]: ../docs/adr/0026-the-factory-never-deletes-work-on-its-own.md
+	assignedAt   time.Time
 	unassignedAt time.Time
 	scenario     string // fake mode only: which scripted worker works this entry
 }

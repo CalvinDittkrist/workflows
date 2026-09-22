@@ -80,9 +80,10 @@ func (i ghIssue) labelNames() []string {
 }
 
 // ghEvent is one entry of an issue's event list (the events endpoint of an issue, not the timeline
-// endpoint beside it). The queue reads two kinds of entry: labeled, because when the routing label
-// was set is the order of the line, and unassigned, because taking the assignee off an issue the
-// factory holds is the release signal ([ADR 0026]).
+// endpoint beside it). The queue reads three kinds of entry: labeled, because when the routing label
+// was set is the order of the line, and assigned and unassigned, because taking the assignee off an
+// issue the factory holds is the release signal and the assignment it undid is what that removal is
+// held against ([ADR 0026]).
 //
 // [ADR 0026]: ../docs/adr/0026-the-factory-never-deletes-work-on-its-own.md
 type ghEvent struct {
@@ -140,10 +141,13 @@ type reading struct {
 }
 
 // signals is what one issue's event list says the factory acts on: when the routing label was last
-// set, which is where a new issue stands in the line, and when the assignee was last removed, which
-// for an issue this factory holds is the release signal and where its resumed run stands.
+// set, which is where a new issue stands in the line, and when an assignee was last put on and last
+// taken off. A removal that is newer than the assignment it undid is the release signal for an issue
+// this factory holds, and where its resumed run stands. Both assignment times are GitHub's own, so
+// the release is decided without this host's clock in it.
 type signals struct {
 	routedAt     time.Time
+	assignedAt   time.Time
 	unassignedAt time.Time
 }
 
@@ -283,6 +287,7 @@ func (g *gitHub) routedIssues(ctx context.Context, repository string) ([]Issue, 
 			Title:        issue.Title,
 			Labels:       issue.labelNames(),
 			RoutedAt:     read.routedAt,
+			assignedAt:   read.assignedAt,
 			unassignedAt: read.unassignedAt,
 		})
 	}
@@ -333,9 +338,9 @@ func (g *gitHub) signalsOf(ctx context.Context, repository string, issue ghIssue
 	return read
 }
 
-// readSignals reads the issue's event list and says whether the routing label was in it. The removal
-// of an assignee is read in the same pass: an issue that is released has been touched, so its event
-// list is read again anyway, and a call of its own for it would double what a poll costs.
+// readSignals reads the issue's event list and says whether the routing label was in it. The
+// assignments are read in the same pass: an issue that is released has been touched, so its event
+// list is read again anyway, and a call of its own for them would double what a poll costs.
 func (g *gitHub) readSignals(ctx context.Context, key, repository string, issue ghIssue) (signals, bool) {
 	read := signals{routedAt: issue.CreatedAt}
 	found := false
@@ -367,6 +372,10 @@ func (g *gitHub) readSignals(ctx context.Context, key, repository string, issue 
 				found = true
 				if event.CreatedAt.After(read.routedAt) {
 					read.routedAt = event.CreatedAt
+				}
+			case event.Event == "assigned":
+				if event.CreatedAt.After(read.assignedAt) {
+					read.assignedAt = event.CreatedAt
 				}
 			case event.Event == "unassigned":
 				if event.CreatedAt.After(read.unassignedAt) {

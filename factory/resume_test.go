@@ -52,7 +52,8 @@ func TestAReleasedIssueIsAssignedAgainAndResumedInTheSameWorktree(t *testing.T) 
 	// old one would be remembered without the release in it.
 	released := first.EndedAt.Add(time.Second)
 	gh.timeline(t, "acme/edge-sensors", claimedIssue,
-		labeled("factory", first.StartedAt.Add(-6*time.Hour)), unassigned("factory-bot", released))
+		labeled("factory", first.StartedAt.Add(-6*time.Hour)),
+		assigned("factory-bot", first.StartedAt), unassigned("factory-bot", released))
 	gh.issues(t, "acme/edge-sensors",
 		touched(openIssue(claimedIssue, claimedTitle, first.StartedAt.Add(-72*time.Hour)), released))
 
@@ -140,7 +141,8 @@ func TestTheLineResumesWhatTheFactoryHoldsBeforeItClaimsAnythingNew(t *testing.T
 		touched(openIssue(112, "Replace the CSV parser", opened), releasedAt),
 		touched(openIssue(115, "Serve the preview", opened), foreignAt),
 		openIssue(121, "Document the calibration procedure", opened))
-	gh.timeline(t, "acme/edge-sensors", 112, labeled("factory", opened), unassigned("factory-bot", releasedAt))
+	gh.timeline(t, "acme/edge-sensors", 112, labeled("factory", opened),
+		assigned("factory-bot", began), unassigned("factory-bot", releasedAt))
 	gh.timeline(t, "acme/edge-sensors", 115, labeled("factory", opened), unassigned("somebody", foreignAt))
 	gh.timeline(t, "acme/edge-sensors", 121, labeled("factory", opened.Add(time.Hour)))
 
@@ -316,35 +318,59 @@ func TestAReleaseIsTheRemovedAssigneeOfAHeldIssueAndIsAnsweredOnce(t *testing.T)
 		r.StartedAt = at.Add(-5 * time.Minute)
 		return r
 	}
+	// The claim of the issue on a host whose clock runs half an hour ahead of GitHub's: it holds the
+	// issue and is long over by the time GitHub says the assignee came off.
+	ahead := func(id int) Run {
+		return record(id, 104, "Retry the upload", signalRouted, outcomeReady, true,
+			removed.Add(30*time.Minute), removed.Add(40*time.Minute))
+	}
+	// claimed is when this factory put itself on the issue, as GitHub timed it: every claim makes
+	// that assignment, so every poll of a held issue reads one. never is an event list that names no
+	// assignment at all.
+	claimed, never := began, time.Time{}
 	for _, c := range []struct {
-		name     string
-		runs     []Run
+		name string
+		runs []Run
+		// assigned is when an assignee was last put on the issue and at when one was last taken off,
+		// both as GitHub's event list gives them.
+		assigned time.Time
 		at       time.Time // when the assignee came off, as this poll reads it
 		routed   bool      // the issue is in the line GitHub answers with: open, routed, unassigned
 		released bool
 	}{
 		{"the assignee of a held issue was removed", []Run{
-			run(1, signalRouted, outcomeReady, true)}, removed, true, true},
+			run(1, signalRouted, outcomeReady, true)}, claimed, removed, true, true},
 		{"the same removal while the run it queued has not been recorded", []Run{
-			run(1, signalRouted, outcomeReady, true), answered(2, removed)}, removed, true, false},
+			run(1, signalRouted, outcomeReady, true), answered(2, removed)}, claimed, removed, true, false},
 		// And the same removal answered by a run of a host whose clock lags GitHub's. What decides is
 		// the release the run was queued on, which is GitHub's own reading of the removal, so the
 		// drift between the two clocks cannot queue the release a second time.
 		{"the same removal answered by a run that started earlier on this host's clock", []Run{
-			run(1, signalRouted, outcomeReady, true), behind(2, removed)}, removed, true, false},
+			run(1, signalRouted, outcomeReady, true), behind(2, removed)}, claimed, removed, true, false},
+		// The other direction of the same drift: a host running ahead of GitHub, whose run of the
+		// issue is over before GitHub's clock reaches the removal. The removal is held against the
+		// assignment it undid, which GitHub timed as well, so the release is read for what it is.
+		{"a removal this host's clock puts before the run that holds the issue", []Run{
+			ahead(1)}, claimed, removed, true, true},
 		{"another removal after the release that was answered", []Run{
 			run(1, signalRouted, outcomeReady, true), answered(2, removed)},
-			removed.Add(20 * time.Minute), true, true},
+			claimed, removed.Add(20 * time.Minute), true, true},
 		{"an assignee somebody removed before the factory claimed the issue", []Run{
-			run(1, signalRouted, outcomeReady, true)}, began.Add(-time.Hour), true, false},
+			run(1, signalRouted, outcomeReady, true)}, claimed, began.Add(-time.Hour), true, false},
+		// The same gesture on an event list that has lost the assignment, or has not caught up with
+		// it: there is no reading of GitHub's to hold the removal against, and the run that holds the
+		// issue is what says the removal is older than the claim.
+		{"the same removal while GitHub names no assignment at all", []Run{
+			run(1, signalRouted, outcomeReady, true)}, never, began.Add(-time.Hour), true, false},
 		{"an issue that is not in the routed line, so nobody unassigned it", []Run{
-			run(1, signalRouted, outcomeReady, true)}, removed, false, false},
+			run(1, signalRouted, outcomeReady, true)}, claimed, removed, false, false},
 		{"a routed issue whose branch another claimer created", []Run{
-			run(1, signalRouted, outcomeLost, false)}, removed, true, false},
+			run(1, signalRouted, outcomeLost, false)}, claimed, removed, true, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			held := holdings(c.runs)["acme/edge-sensors#104"]
-			issue := Issue{Repository: "acme/edge-sensors", Number: 104, unassignedAt: c.at}
+			issue := Issue{Repository: "acme/edge-sensors", Number: 104,
+				assignedAt: c.assigned, unassignedAt: c.at}
 			if released := held.released(issue, c.routed); released != c.released {
 				t.Errorf("the factory reads this as a release: %v, want %v", released, c.released)
 			}

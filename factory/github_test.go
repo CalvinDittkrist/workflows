@@ -908,6 +908,13 @@ func unlabeled(label string, at time.Time) map[string]any {
 	return map[string]any{"event": "unlabeled", "created_at": at.Format(time.RFC3339), "label": map[string]any{"name": label}}
 }
 
+// assigned is the entry GitHub writes when somebody puts an assignee on an issue. Every claim makes
+// one, and it is what the removal below is held against.
+func assigned(login string, at time.Time) map[string]any {
+	return map[string]any{"event": "assigned", "created_at": at.Format(time.RFC3339),
+		"assignee": map[string]any{"login": login}}
+}
+
 // unassigned is the entry GitHub writes when somebody takes an assignee off an issue, which for an
 // issue the factory holds is the release signal.
 func unassigned(login string, at time.Time) map[string]any {
