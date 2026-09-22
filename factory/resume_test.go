@@ -357,8 +357,9 @@ func TestTheAutomaticResumeIsOnePerIssueAndOnlyAReleaseGivesItBack(t *testing.T)
 			run(1, signalRouted, outcomeLost, false)}, never},
 		{"a claim that was interrupted before it held anything", []Run{
 			run(1, signalRouted, outcomeInterrupted, false)}, never},
-		// A run that ran out of quota is resumed after the reset however often it happens, and that
-		// resume is no interruption's: the one automatic resume is still there afterwards ([ADR 0026]).
+		// A run that ran out of quota is resumed after the reset, and that resume is no interruption's:
+		// the one automatic resume is still there afterwards ([ADR 0026]). It is one in a row, so an
+		// issue whose every session uses up a window waits for a person after the second.
 		{"a run that ran out of quota", []Run{
 			run(1, signalRouted, outcomeQuota, true)}, signalQuota},
 		{"a run that ran out of quota after the automatic resume was spent", []Run{
@@ -366,7 +367,11 @@ func TestTheAutomaticResumeIsOnePerIssueAndOnlyAReleaseGivesItBack(t *testing.T)
 			run(2, signalInterruption, outcomeQuota, true)}, signalQuota},
 		{"a quota resume that ran out of quota again", []Run{
 			run(1, signalRouted, outcomeQuota, true),
-			run(2, signalQuota, outcomeQuota, true)}, signalQuota},
+			run(2, signalQuota, outcomeQuota, true)}, never},
+		{"a run that ran out of quota after a quota resume ended otherwise", []Run{
+			run(1, signalRouted, outcomeQuota, true),
+			run(2, signalQuota, outcomeFailed, true),
+			run(3, signalRelease, outcomeQuota, true)}, signalQuota},
 		{"the first interruption after a quota resume", []Run{
 			run(1, signalRouted, outcomeQuota, true),
 			run(2, signalQuota, outcomeInterrupted, true)}, signalInterruption},

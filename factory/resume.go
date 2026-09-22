@@ -11,8 +11,8 @@ import (
 
 // Resuming work the factory already holds. Nothing here deletes anything and nothing here retries by
 // itself more than once: the factory resumes an interruption exactly once per issue, and after that
-// the issue waits for a person, whose gesture is taking the assignee off it ([ADR 0026]). The one
-// resume that is not counted is the one after a quota reset, because running out of quota says
+// the issue waits for a person, whose gesture is taking the assignee off it ([ADR 0026]). The resume
+// after a quota reset is counted apart, once in a row, because running out of quota once says
 // nothing about the issue (quota.go).
 //
 // Every signal is read from the run records in the data directory rather than from memory, so a
@@ -71,7 +71,8 @@ type holding struct {
 	idle  bool // that run has ended, so another one of this issue may be queued
 	// resumes is the signal the factory resumes the issue on by itself, or empty: interruption when
 	// that run was interrupted and the one automatic resume is still there to be spent, quota when it
-	// ran out of quota, which is resumed whatever that budget says.
+	// ran out of quota, which is resumed whatever that budget says, unless that run was itself the
+	// resume after a reset.
 	resumes string
 	// answered is the newest release this issue's runs have already acted on, as GitHub timed the
 	// removal that queued them. A release no newer than this is done with.
@@ -85,7 +86,9 @@ type holding struct {
 // follows that decision may be interrupted and resumed once again, exactly as the first claim may.
 // Nothing else gives it back, so a factory that loses power twice over one issue stops after the
 // second time and waits. A quota resume neither spends it nor gives it back: its cause passes by
-// itself and has nothing to do with the issue.
+// itself and has nothing to do with the issue. It is one in a row all the same: a resumed run that
+// runs out of quota again is an issue that uses up a whole window by itself, and the next one after
+// it is the maintainer's to decide on, so that issue waits for a person too.
 func holdings(runs []Run) map[string]holding {
 	out := map[string]holding{}
 	budget := map[string]int{}
@@ -114,7 +117,7 @@ func holdings(runs []Run) map[string]holding {
 	for key, h := range out {
 		switch {
 		case !h.holds || !h.idle:
-		case h.last.Outcome == outcomeQuota:
+		case h.last.Outcome == outcomeQuota && h.last.Signal != signalQuota:
 			h.resumes = signalQuota
 		case h.last.Outcome == outcomeInterrupted && budget[key] > 0:
 			h.resumes = signalInterruption

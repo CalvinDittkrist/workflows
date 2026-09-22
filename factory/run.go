@@ -18,10 +18,10 @@ import (
 
 // The outcomes of the vocabulary. A run in fake mode reaches ready, blocked, failed, timeout and
 // interrupted; lost is the race another claimer won ([ADR 0024]), quota a session that ended in an
-// error on a used-up quota ([ADR 0028]), and cancelled arrives with the ticket that adds it.
+// error on a used-up quota ([ADR 0037]), and cancelled arrives with the ticket that adds it.
 //
 // [ADR 0024]: ../docs/adr/0024-a-claim-is-the-creation-of-the-branch-through-the-api.md
-// [ADR 0028]: ../docs/adr/0028-the-quota-check-is-a-courtesy-not-a-guard.md
+// [ADR 0037]: ../docs/adr/0037-the-quota-check-waits-below-12-percent-of-the-workers-scope.md
 const (
 	outcomeReady       = "ready"
 	outcomeBlocked     = "blocked"
@@ -68,7 +68,7 @@ type Run struct {
 	// only such an issue can be released, so a lost claim and a claim that failed half way are left
 	// alone — including the branch of another claimer, which this factory never works.
 	Holding bool `json:"holding"`
-	// Signal is what queued this run: routed, interruption or release. SignalAt is when that signal
+	// Signal is what queued this run: routed, interruption, quota or release. SignalAt is when that signal
 	// happened — the routing, the interruption, or the moment the assignee came off. It is the
 	// answer this run is: a signal of an issue is acted on once, and a signal no later than the one
 	// its records already carry has been answered already. That is what keeps the factory from

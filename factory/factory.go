@@ -543,8 +543,9 @@ func (f *Factory) execute(parent context.Context, r *Run, entry Entry) {
 // endInError ends a run whose session ended in an error. When the quota the worker spends is used up
 // by then, the error is the quota's and not the issue's: the outcome is quota, everything the run
 // holds stays as it is, and the factory resumes the issue by itself after the reset, without spending
-// the one automatic resume an interruption has ([ADR 0026]). Otherwise, and when the check cannot
-// answer, the run has failed.
+// the one automatic resume an interruption has ([ADR 0026]) — once in a row, so a quota resume that
+// runs out again leaves the issue to a person. Otherwise, and when the check cannot answer, the run
+// has failed.
 //
 // [ADR 0026]: ../docs/adr/0026-the-factory-never-deletes-work-on-its-own.md
 func (f *Factory) endInError(ctx context.Context, r *Run, reason string, exitCode *int) {
@@ -557,8 +558,12 @@ func (f *Factory) endInError(ctx context.Context, r *Run, reason string, exitCod
 		f.finish(r, outcomeFailed, reason, exitCode)
 		return
 	}
-	f.finish(r, outcomeQuota, fmt.Sprintf("%s; the Claude quota of the scope %s is exhausted until %s, so the branch, the worktree and the assignee stay and the factory resumes the issue after the reset",
-		reason, scope, until.Format(time.RFC3339)), exitCode)
+	next := "the factory resumes the issue after the reset"
+	if r.Signal == signalQuota {
+		next = "the issue waits for a person, because this run was already the resume after a reset and ran out again; removing the assignee hands it back"
+	}
+	f.finish(r, outcomeQuota, fmt.Sprintf("%s; the Claude quota of the scope %s is exhausted until %s, so the branch, the worktree and the assignee stay and %s",
+		reason, scope, until.Format(time.RFC3339), next), exitCode)
 }
 
 // leftBehind says what a run that did not finish left on the remote, which is what the operator
