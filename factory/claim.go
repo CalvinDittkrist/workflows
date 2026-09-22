@@ -51,16 +51,25 @@ func (f *Factory) claim(ctx context.Context, r *Run, issue Issue) (claimed, erro
 		return claimed{}, fmt.Errorf("%s is not a connected repository", issue.Repository)
 	}
 	clone := clonePath(f.settings.DataDir, connected.Name)
-	base := baseBranch(ctx, connected, clone)
 
-	// The base is fetched before its head is read, so the branch is cut from what the remote has now
-	// and the worktree starts from the same commit the remote branch names.
-	if _, err := git(ctx, clone, "fetch", "--quiet", "origin", "+refs/heads/"+base+":refs/remotes/origin/"+base); err != nil {
-		return claimed{}, fmt.Errorf("the base branch %s of %s could not be fetched: %w; does the branch exist and can this host reach the repository?", base, connected.Name, err)
+	// The remote is fetched before anything is read of it, so the rule below reads what the
+	// repository says now and the branch is cut from what the base holds now: a clone is written once
+	// and never checked out again, and its working tree is the day this host cloned it.
+	if _, err := git(ctx, clone, "fetch", "--quiet", "--prune", "origin"); err != nil {
+		return claimed{}, fmt.Errorf("%s could not be fetched into %s: %w; can this host reach the repository?", connected.Name, clone, err)
 	}
+	base := baseBranch(ctx, connected, clone)
 	head, err := git(ctx, clone, "rev-parse", "refs/remotes/origin/"+base)
 	if err != nil {
-		return claimed{}, fmt.Errorf("the head of %s in %s could not be read: %w", base, clone, err)
+		return claimed{}, fmt.Errorf("the head of the base branch %s of %s could not be read: %w; is that branch on the remote?", base, connected.Name, err)
+	}
+
+	// The user this host is logged in as is read before the branch is created: it is a host fact that
+	// says nothing about the race, and asking for it first keeps a host that cannot answer it from
+	// leaving a branch behind for nothing.
+	login, err := f.login(ctx)
+	if err != nil {
+		return claimed{}, err
 	}
 
 	branch := branchName(issue)
@@ -72,13 +81,9 @@ func (f *Factory) claim(ctx context.Context, r *Run, issue Issue) (claimed, erro
 	// loses the issue to it. Nothing rolls it back — work is never deleted ([ADR 0026]) — so a failure
 	// below says the branch is left behind and the operator decides.
 	//
-	// [ADR 0026]: ../docs/adr/0026-what-waits-waits-for-a-person.md
+	// [ADR 0026]: ../docs/adr/0026-the-factory-never-deletes-work-on-its-own.md
 	won := claimed{branch: branch, base: base, created: true}
 
-	login, err := f.login(ctx)
-	if err != nil {
-		return won, err
-	}
 	if _, err := gh(ctx, "issue", "edit", strconv.Itoa(issue.Number), "--repo", connected.Name, "--add-assignee", login); err != nil {
 		return won, fmt.Errorf("issue #%d of %s could not be assigned to %s: %w", issue.Number, connected.Name, login, err)
 	}
@@ -93,7 +98,7 @@ func (f *Factory) claim(ctx context.Context, r *Run, issue Issue) (claimed, erro
 	worktree := filepath.Join(clone, ".claude", "worktrees", strings.ReplaceAll(branch, "/", "-"))
 	excludeWorktrees(clone)
 	if _, err := git(ctx, clone, "worktree", "add", "--quiet", "-b", branch, worktree, head); err != nil {
-		return won, fmt.Errorf("the worktree for %s could not be created in %s: %w", branch, clone, err)
+		return won, fmt.Errorf("the worktree for %s could not be created in %s: %w; a run before this one may have left a branch or a worktree of that name in this clone, which nothing here removes", branch, clone, err)
 	}
 	f.runs.event(r, Event{Kind: "factory", Title: "claimed " + branch, Body: "worktree " + worktree})
 	won.worktree = worktree
@@ -202,23 +207,32 @@ func createRef(ctx context.Context, repository, branch, sha string) error {
 var exists = regexp.MustCompile(`(?i)reference already exists`)
 
 // baseBranch is the branch a run of this repository is cut from. It is the workflow's rule restated
-// in Go (wf_base_branch in plugins/orchestrator/scripts/lib.sh): the explicit setting first, then
-// the head the remote points at, then the repository's default branch on GitHub, and main when
-// nothing answers at all. A drift test binds the two ([ADR 0022]).
+// in Go (wf_base_branch in plugins/orchestrator/scripts/lib.sh): the explicit setting first, then the
+// head the remote points at, then the repository's default branch on GitHub, and main when nothing
+// answers at all. A drift test binds the two ([ADR 0022]).
 //
 // The explicit setting is WF_BASE_BRANCH, which a local session is given by the repository's own
-// settings file; the factory reads the same file out of the clone, and the configuration of this
-// host may say a base of its own above it, for a repository whose settings name none. The remote's
-// head is read from the clone, where the shell reads it from the checkout.
+// settings file; the factory reads that same file out of the repository's default branch, and the
+// configuration of this host says a base of its own above it. The remote's head is read from the
+// clone, where the shell reads it from the checkout.
 //
 // [ADR 0022]: ../docs/adr/0022-the-factory-is-a-second-driver-over-the-worker-pipeline.md
 func baseBranch(ctx context.Context, connected Connected, clone string) string {
 	if connected.Base != "" {
 		return connected.Base
 	}
-	if declared := declaredBase(clone); declared != "" {
+	// The branch the repository is worked from when it declares nothing is also the branch its
+	// declaration is read from: it is the checkout a local session of this repository would have.
+	def := defaultBranch(ctx, connected, clone)
+	if declared := declaredBase(ctx, clone, def); declared != "" {
 		return declared
 	}
+	return def
+}
+
+// defaultBranch is the branch the remote points at, as the clone knows it after a fetch, then the
+// default branch GitHub names, then main: the steps of the rule below the explicit setting.
+func defaultBranch(ctx context.Context, connected Connected, clone string) string {
 	if head, err := git(ctx, clone, "symbolic-ref", "-q", "--short", "refs/remotes/origin/HEAD"); err == nil && head != "" {
 		return strings.TrimPrefix(head, "origin/")
 	}
@@ -236,17 +250,21 @@ func baseBranch(ctx context.Context, connected Connected, clone string) string {
 // a second one — and reading it here is what keeps the branch the factory cuts and the base the
 // worker reviews and opens its pull request against the same branch.
 //
+// It is read out of the fetched reference and not out of the clone's working tree: that tree is
+// written once, when this host cloned the repository, and a repository that moves its line of work
+// afterwards would otherwise be branched off the base it named years ago.
+//
 // The file belongs to the repository, so its value is held to the rule a configured base is held to
 // before it reaches a ref or a command line; anything else is read as if the repository said nothing.
-func declaredBase(clone string) string {
-	raw, err := os.ReadFile(filepath.Join(clone, ".claude", "settings.json"))
+func declaredBase(ctx context.Context, clone, branch string) string {
+	raw, err := git(ctx, clone, "show", "refs/remotes/origin/"+branch+":.claude/settings.json")
 	if err != nil {
 		return ""
 	}
 	var settings struct {
 		Env map[string]string `json:"env"`
 	}
-	if err := json.Unmarshal(raw, &settings); err != nil {
+	if err := json.Unmarshal([]byte(raw), &settings); err != nil {
 		return ""
 	}
 	declared := settings.Env["WF_BASE_BRANCH"]

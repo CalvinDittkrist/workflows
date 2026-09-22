@@ -411,15 +411,24 @@ func TestPausedAgainstGitHubShowsTheLineAndClaimsNothing(t *testing.T) {
 // no flag the other way round, so a paused configuration stays paused whatever the command line says.
 func TestTheCommandLinePausesAFactoryWhoseConfigurationSaysOtherwise(t *testing.T) {
 	gh := newGhShim(t)
-	gh.remote(t, "acme/edge-sensors")
-	gh.issues(t, "acme/edge-sensors")
+	gh.routed(t, "acme/edge-sensors", 104, "Retry the upload")
 
-	f := launch(t, config{"poll": "50ms", "paused": false, "repositories": []string{"acme/edge-sensors"}}, gh.env, "-paused")
-	f.queue(t, 0)
+	data := filepath.Join(t.TempDir(), "data")
+	gh.cloneInto(t, data, "acme/edge-sensors")
+	f := launch(t, config{"poll": "50ms", "paused": false, "data_dir": data,
+		"repositories": []string{"acme/edge-sensors"}}, gh.env, "-paused")
+	// The issue is in the line and everything a claim needs is there; only the brake is in the way.
+	f.queue(t, 1)
 	var status map[string]any
 	f.get(t, "/api/status", &status)
 	if status["state"] != "paused" {
 		t.Errorf("the factory says it is %q with -paused on a configuration that is not, want paused", status["state"])
+	}
+	if head := gh.head(t, "acme/edge-sensors", "feat/104-retry-the-upload"); head != "" {
+		t.Errorf("the brake says paused and the factory claimed the head of its line anyway: %s is on the remote", "feat/104-retry-the-upload")
+	}
+	if records, _ := filepath.Glob(filepath.Join(f.data, "run-*.json")); len(records) != 0 {
+		t.Errorf("paused on the command line, the factory made %d runs of a line it should not touch", len(records))
 	}
 }
 

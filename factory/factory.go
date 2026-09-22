@@ -10,6 +10,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -49,7 +50,8 @@ type Factory struct {
 	unreadable map[string]string
 	polledAt   time.Time
 	connecting bool
-	user       string // the login this host's gh is logged in as, read once and kept
+	user       string          // the login this host's gh is logged in as, read once and kept
+	unclonable map[string]bool // repositories without a clone, so the log says it once and not per poll
 	// quotaUntil is served empty until the quota check arrives (ADR 0028); the interface carries the
 	// state from the start so the ticket that fills it changes no reader.
 	quotaUntil *time.Time
@@ -82,7 +84,8 @@ func New(settings Settings, fake bool) (*Factory, error) {
 	if err != nil {
 		return nil, fmt.Errorf("the factory cannot find its own binary: %w", err)
 	}
-	f := &Factory{settings: settings, fake: fake, runs: runs, started: time.Now(), self: self, wake: make(chan struct{}, 1)}
+	f := &Factory{settings: settings, fake: fake, runs: runs, started: time.Now(), self: self,
+		wake: make(chan struct{}, 1), unclonable: map[string]bool{}}
 	f.source = &gitHub{repositories: settings.Repositories, label: settings.Label}
 	if fake {
 		f.source = &canned{repositories: settings.Repositories, started: f.started}
@@ -153,9 +156,35 @@ func (f *Factory) dispatch(ctx context.Context) {
 			return
 		}
 	}
-	if waiting := f.waiting(); len(waiting) > 0 {
-		f.start(ctx, waiting[0])
+	for _, issue := range f.waiting() {
+		if !f.claimable(issue.Repository) {
+			continue // the issue keeps its place in the line; nothing of it is started or recorded
+		}
+		f.start(ctx, issue)
+		return
 	}
+}
+
+// claimable says whether a run of this repository could claim anything at all. A repository whose
+// clone is missing — the host could not reach it when the factory connected, and connecting is done
+// once per start — has no worktree to give a worker, so every run of it would fail before it touched
+// the remote. A run is what takes an issue out of the line for good, so such an issue is left in the
+// line instead of being spent on a claim that cannot work, and the operator reads why in the log.
+func (f *Factory) claimable(repository string) bool {
+	if f.fake { // fake mode claims nothing and clones nothing: its worker runs where the factory does
+		return true
+	}
+	if _, err := os.Stat(filepath.Join(clonePath(f.settings.DataDir, repository), ".git")); err == nil {
+		return true
+	}
+	f.mu.Lock()
+	said := f.unclonable[repository]
+	f.unclonable[repository] = true
+	f.mu.Unlock()
+	if !said {
+		log.Printf("error: %s has no clone on this host, so its issues are left in the line; see the error of the clone above, then start the factory again", repository)
+	}
+	return false
 }
 
 // waiting is the queue without the issues a run has already taken. It is what the factory would
@@ -344,7 +373,7 @@ func (f *Factory) execute(parent context.Context, r *Run, issue Issue) {
 // needs to decide: a claim that never got to create the branch took nothing, and one that did holds
 // the issue by it until somebody removes it — nothing here deletes work ([ADR 0026]).
 //
-// [ADR 0026]: ../docs/adr/0026-what-waits-waits-for-a-person.md
+// [ADR 0026]: ../docs/adr/0026-the-factory-never-deletes-work-on-its-own.md
 func leftBehind(claim claimed) string {
 	if !claim.created {
 		return "; nothing was claimed on the remote"
@@ -426,7 +455,7 @@ const workSkill = "/worker:work"
 // planner's nor the orchestrator's skills, which keeps them out of an unattended context that must
 // never merge what it built ([ADR 0023]).
 //
-// [ADR 0023]: ../docs/adr/0023-github-is-the-factorys-only-control-surface.md
+// [ADR 0023]: ../docs/adr/0023-github-is-the-only-control-surface-of-the-factory.md
 // [ADR 0031]: ../docs/adr/0031-the-workflow-pins-the-size-at-which-a-worker-session-compacts.md
 // [ADR 0034]: ../docs/adr/0034-the-compact-trigger-is-raised-through-the-window.md
 func workerSettings(env map[string]string) (string, error) {

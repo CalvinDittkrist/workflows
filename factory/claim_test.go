@@ -176,11 +176,53 @@ func TestAClaimOfARepositoryWithItsOwnBaseCutsAndWorksFromThatBase(t *testing.T)
 	}
 }
 
+// A repository moves its line of work after this host cloned it: it declares another base in its own
+// settings, the file a local session is given WF_BASE_BRANCH by. The claim reads what the repository
+// says now — the clone's working tree is the day it was written and is never checked out again — so
+// the branch is cut from the base the repository names today and the worker is told that base.
+func TestAClaimReadsTheBaseTheRepositoryDeclaresNowAndNotTheOneItsCloneWasWrittenWith(t *testing.T) {
+	gh := newGhShim(t)
+	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
+	gh.loggedInAs(t, "factory-bot")
+	gh.assigns(t, "acme/edge-sensors", claimedIssue, "factory-bot")
+	gh.workerReports(t, "acme/edge-sensors", claimedIssue)
+
+	data := filepath.Join(t.TempDir(), "data")
+	clone := gh.cloneInto(t, data, "acme/edge-sensors")
+	// What this host cloned: a repository that branched off main, and the settings file to prove it.
+	writeSettings(t, clone, `{"env":{"WF_BASE_BRANCH":"main"}}`+"\n")
+	// What the repository is today: a line of its own, and its settings say so on the remote.
+	gh.branchAt(t, "acme/edge-sensors", "dev", gh.head(t, "acme/edge-sensors", "main"))
+	declaresBase(t, gh, clone, "acme/edge-sensors", "main", "dev")
+	dev := gh.commitOn(t, "acme/edge-sensors", "dev")
+
+	f := gh.work(t, config{"poll": "50ms", "deadline": "90s", "data_dir": data,
+		"repositories": []string{"acme/edge-sensors"}})
+	run := f.ended(t, 1)
+
+	if run.Outcome != "ready" {
+		t.Fatalf("the run ended as %q (%s), want ready; the factory's log:\n%s", run.Outcome, run.Reason, f.output(t))
+	}
+	if run.Base != "dev" {
+		t.Errorf("the run records the base %q, want dev, the base the repository declares on the remote now", run.Base)
+	}
+	if head := gh.head(t, "acme/edge-sensors", claimedBranch); head != dev {
+		t.Errorf("%s of the remote is at %q, want the head of dev (%s): the clone's old working tree still says main", claimedBranch, head, dev)
+	}
+	workers := gh.workers(t)
+	if len(workers) != 1 {
+		t.Fatalf("the factory started %d workers, want one", len(workers))
+	}
+	if base := workers[0].settings(t).Env["WF_BASE_BRANCH"]; base != "dev" {
+		t.Errorf("the worker's settings carry WF_BASE_BRANCH=%q, want dev: it would review against %[1]s a branch cut from dev", base)
+	}
+}
+
 // A claim that fails after the branch was created is the one failure that leaves something on the
 // remote. The run says so, because nothing rolls a claim back ([ADR 0026]) and the operator is the
 // one who decides.
 //
-// [ADR 0026]: ../docs/adr/0026-what-waits-waits-for-a-person.md
+// [ADR 0026]: ../docs/adr/0026-the-factory-never-deletes-work-on-its-own.md
 func TestAClaimThatFailsAfterTheBranchWasCreatedSaysWhatItLeftBehind(t *testing.T) {
 	gh := newGhShim(t)
 	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
@@ -212,6 +254,112 @@ func TestAClaimThatFailsAfterTheBranchWasCreatedSaysWhatItLeftBehind(t *testing.
 	}
 }
 
+// A claim that fails before it created anything took nothing: the run says so, so that an operator
+// reading it knows there is no branch to remove, and the failure is never read as a lost race — an
+// issue nobody claimed would otherwise be given away by a factory that could not reach GitHub.
+func TestAClaimThatFailsBeforeTheBranchExistsSaysNothingWasClaimed(t *testing.T) {
+	for _, c := range []struct {
+		name     string
+		failing  string
+		loggedIn bool
+	}{
+		{name: "the user this host is logged in as cannot be read", failing: "api user*"},
+		{name: "the branch cannot be created", failing: "api --method POST repos/acme/edge-sensors/git/refs*", loggedIn: true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			gh := newGhShim(t)
+			gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
+			if c.loggedIn {
+				gh.loggedInAs(t, "factory-bot")
+			}
+			gh.fail(t, c.failing)
+
+			data := filepath.Join(t.TempDir(), "data")
+			clone := gh.cloneInto(t, data, "acme/edge-sensors")
+			f := gh.work(t, config{"poll": "50ms", "deadline": "90s", "data_dir": data,
+				"repositories": []string{"acme/edge-sensors"}})
+			run := f.ended(t, 1)
+
+			if run.Outcome != "failed" {
+				t.Fatalf("the run ended as %q (%s), want failed; the factory's log:\n%s", run.Outcome, run.Reason, f.output(t))
+			}
+			if !strings.Contains(run.Reason, "nothing was claimed") {
+				t.Errorf("the run says %q, want that nothing was claimed on the remote: there is no branch for an operator to remove", run.Reason)
+			}
+			if head := gh.head(t, "acme/edge-sensors", claimedBranch); head != "" {
+				t.Errorf("the run says it claimed nothing and %s is on the remote at %s", claimedBranch, head)
+			}
+			if len(gh.workers(t)) != 0 {
+				t.Errorf("a claim that failed started a worker: %v", gh.workers(t))
+			}
+			if _, err := os.Stat(filepath.Join(clone, ".claude", "worktrees")); !os.IsNotExist(err) {
+				t.Errorf("a claim that failed made a worktree in %s: %v", clone, err)
+			}
+		})
+	}
+}
+
+// An issue whose repository has no clone on this host cannot be worked at all: the worktree a worker
+// runs in is made in that clone. A run is what takes an issue out of the line for good, so the issue
+// keeps its place instead — a host that could not reach one repository when it started would
+// otherwise spend that repository's whole line on runs that never touched GitHub.
+func TestAnIssueOfARepositoryWithoutACloneKeepsItsPlaceInTheLine(t *testing.T) {
+	gh := newGhShim(t)
+	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
+	gh.fail(t, "repo clone*") // the host cannot reach the repository when the factory connects
+
+	data := filepath.Join(t.TempDir(), "data")
+	f := gh.work(t, config{"poll": "50ms", "deadline": "90s", "data_dir": data,
+		"repositories": []string{"acme/edge-sensors"}})
+	f.queue(t, 1)
+
+	// Several more polls: the issue is offered every one of them and taken by none.
+	asked := "api " + issuesRequest("acme/edge-sensors", "factory")
+	f.eventually(t, 20*time.Second, "several more polls", func() bool { return gh.made(t, asked) >= 8 })
+	var line apiLine
+	f.get(t, "/api/line", &line)
+	if len(line.Queue) != 1 || len(line.Now) != 0 || len(line.Done) != 0 {
+		t.Errorf("after %d polls the line holds %d waiting, %d running and %d ended runs, want the issue still waiting",
+			gh.made(t, asked), len(line.Queue), len(line.Now), len(line.Done))
+	}
+	if records, _ := filepath.Glob(filepath.Join(f.data, "run-*.json")); len(records) != 0 {
+		t.Errorf("the factory wrote %d run records for an issue it cannot claim, which would take it out of the line for good", len(records))
+	}
+	if head := gh.head(t, "acme/edge-sensors", claimedBranch); head != "" {
+		t.Errorf("the factory created %s on the remote without a clone to work it in", claimedBranch)
+	}
+	if !strings.Contains(f.output(t), "has no clone on this host") {
+		t.Errorf("the factory says nothing about the repository it has no clone of; its log:\n%s", f.output(t))
+	}
+}
+
+// A worker that ends in an error is a failed run, and what it said is the cause the record carries:
+// the claim itself was won, so the branch stays on the remote and the operator reads why the session
+// ended where it did.
+func TestAWorkerThatEndsInAnErrorFailsTheRunWithWhatItSaid(t *testing.T) {
+	gh := newGhShim(t)
+	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
+	gh.loggedInAs(t, "factory-bot")
+	gh.assigns(t, "acme/edge-sensors", claimedIssue, "factory-bot")
+
+	data := filepath.Join(t.TempDir(), "data")
+	gh.cloneInto(t, data, "acme/edge-sensors")
+	said := "error: --agent 'worker' not found"
+	f := launch(t, config{"poll": "50ms", "deadline": "90s", "data_dir": data,
+		"repositories": []string{"acme/edge-sensors"}}, append(gh.env, "CLAUDE_SHIM_FAIL="+said))
+	run := f.ended(t, 1)
+
+	if run.Outcome != "failed" {
+		t.Fatalf("the run ended as %q (%s), want failed; the factory's log:\n%s", run.Outcome, run.Reason, f.output(t))
+	}
+	if !strings.Contains(run.Reason, said) {
+		t.Errorf("the run says %q, want the worker's own error (%q) in it", run.Reason, said)
+	}
+	if head := gh.head(t, "acme/edge-sensors", claimedBranch); head == "" {
+		t.Errorf("%s is not on the remote; the claim was won before the worker failed and nothing rolls it back", claimedBranch)
+	}
+}
+
 // The claim decides who works an issue, and a claimer that meets the branch on the remote has lost.
 // It touches nothing else and does not come back to the issue while the branch is there ([ADR 0024]).
 //
@@ -219,6 +367,7 @@ func TestAClaimThatFailsAfterTheBranchWasCreatedSaysWhatItLeftBehind(t *testing.
 func TestAClaimAnotherClaimerWonIsRecordedAsLostAndTouchesNothingElse(t *testing.T) {
 	gh := newGhShim(t)
 	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
+	gh.loggedInAs(t, "factory-bot")
 
 	data := filepath.Join(t.TempDir(), "data")
 	clone := gh.cloneInto(t, data, "acme/edge-sensors")
@@ -245,8 +394,11 @@ func TestAClaimAnotherClaimerWonIsRecordedAsLostAndTouchesNothingElse(t *testing
 	if _, err := os.Stat(filepath.Join(clone, ".claude", "worktrees")); !os.IsNotExist(err) {
 		t.Errorf("a claimer that lost made a worktree in %s: %v", clone, err)
 	}
+	// The creation of the reference is the only thing it tried, and GitHub refused it. Nothing of the
+	// issue itself was touched: reading which user this host is is a read of the host, not of GitHub's
+	// copy of the issue.
 	for _, call := range gh.calls(t) {
-		if strings.HasPrefix(call, "issue edit ") || strings.HasPrefix(call, "api user") {
+		if strings.HasPrefix(call, "issue edit ") {
 			t.Errorf("a claimer that lost called `gh %s`; the issue is the winner's and nothing else was touched", call)
 		}
 	}
@@ -450,7 +602,7 @@ func TestTheBaseBranchRuleAgreesWithTheOrchestratorsShell(t *testing.T) {
 			configured := c.explicit
 			if c.declared { // the repository says it in its own settings instead
 				configured = ""
-				declaresBase(t, clone, c.explicit)
+				declaresBase(t, gh, clone, "acme/edge-sensors", c.originHead, c.explicit)
 			}
 			if c.originHead != "" {
 				gh.git(t, clone, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/"+c.originHead)
@@ -487,17 +639,17 @@ func TestTheConfiguredBaseWinsOverWhatARepositoryDeclaresAndAnUnusableDeclaratio
 	gh.git(t, clone, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
 	inProcess(t, gh)
 
-	declaresBase(t, clone, "trunk")
+	declaresBase(t, gh, clone, "acme/edge-sensors", "main", "trunk")
 	if got := baseBranch(context.Background(), Connected{Name: "acme/edge-sensors", Base: "dev"}, clone); got != "dev" {
 		t.Errorf("the factory branches off %q, want dev: this host connected the repository under that base", got)
 	}
 	for _, unusable := range []string{"-dev", "../../etc", "", "refs/heads/dev "} {
-		declaresBase(t, clone, unusable)
+		declaresBase(t, gh, clone, "acme/edge-sensors", "main", unusable)
 		if got := baseBranch(context.Background(), Connected{Name: "acme/edge-sensors"}, clone); got != "main" {
 			t.Errorf("a repository that declares %q is branched off %q, want main, the head of the remote: the declaration is no branch name", unusable, got)
 		}
 	}
-	writeSettings(t, clone, "{ this is not JSON\n")
+	declares(t, gh, clone, "acme/edge-sensors", "main", "{ this is not JSON\n")
 	if got := baseBranch(context.Background(), Connected{Name: "acme/edge-sensors"}, clone); got != "main" {
 		t.Errorf("a repository whose settings are not JSON is branched off %q, want main, the head of the remote", got)
 	}
@@ -538,12 +690,27 @@ func shellBranchName(t *testing.T, issue Issue) string {
 		nil, orchestratorLib(t), strconv.Itoa(issue.Number), strings.Join(issue.Labels, ","), issue.Title))
 }
 
-// declaresBase writes the base a repository declares for itself into its checkout: WF_BASE_BRANCH in
-// the env block of the .claude/settings.json the repository carries, which is where a local session
-// is given the variable wf_base_branch reads.
-func declaresBase(t *testing.T, clone, base string) {
+// declaresBase puts the base a repository declares for itself on the branch of the shim's GitHub that
+// carries it: WF_BASE_BRANCH in the env block of the .claude/settings.json the repository holds,
+// which is where a local session is given the variable wf_base_branch reads.
+func declaresBase(t *testing.T, gh *ghShim, clone, repository, branch, base string) {
 	t.Helper()
-	writeSettings(t, clone, fmt.Sprintf(`{"env":{"WF_BASE_BRANCH":%q}}`+"\n", base))
+	declares(t, gh, clone, repository, branch, fmt.Sprintf(`{"env":{"WF_BASE_BRANCH":%q}}`+"\n", base))
+}
+
+// declares commits a settings file on a branch of the shim's GitHub, whatever it holds, and fetches
+// it into the clone as a claim does. The file has to live in the repository and not in the clone's
+// working tree: that tree is written once, the day this host cloned, and a claim never checks it out.
+func declares(t *testing.T, gh *ghShim, clone, repository, branch, body string) {
+	t.Helper()
+	work := t.TempDir()
+	checkout := filepath.Join(work, "checkout")
+	gh.git(t, work, "clone", "-q", gh.remotePath(repository), checkout)
+	writeSettings(t, checkout, body)
+	gh.git(t, checkout, "add", "--force", ".claude/settings.json")
+	gh.git(t, checkout, "commit", "-q", "-m", "declare what this repository branches off")
+	gh.git(t, checkout, "push", "-q", "origin", "HEAD:refs/heads/"+branch)
+	gh.git(t, clone, "fetch", "-q", "--prune", "origin")
 }
 
 // writeSettings puts a settings file into a checkout, whatever it holds.
