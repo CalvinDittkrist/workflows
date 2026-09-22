@@ -1804,20 +1804,23 @@ class PrWaitTests(ShimTest):
                                    '"submittedAt":"2026-09-17T11:00:00Z"}]')
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertIn("status: green", r.stdout)
-        self.assertIn("bot_reviews: 1 since last push", r.stdout)
+        self.assertIn("bot_reviews: 1 on the pull request", r.stdout)
         self.assertEqual("", r.stderr.strip(), r.stderr)
 
     def test_a_review_from_anybody_else_does_not_end_the_wait(self):
         r = self.wait(SHIM_REVIEWS='[{"author":{"login":"maintainer"},"submittedAt":"2026-09-17T11:00:00Z"}]')
         self.assertEqual(r.returncode, 3, r.stdout + r.stderr)
         self.assertIn("status: waiting", r.stdout)
-        self.assertIn("bot_reviews: 0 since last push", r.stdout)
+        self.assertIn("bot_reviews: 0 on the pull request", r.stdout)
 
-    def test_a_bot_review_from_before_the_last_push_does_not_count(self):
+    def test_a_bot_review_from_before_the_last_push_ends_the_wait_too(self):
+        # A bot review on an older commit still ends the wait: the bot reviews a pull request once, so a
+        # repair push after its review must not spend the review window again on a second one.
         r = self.wait(SHIM_REVIEWS='[{"author":{"login":"chatgpt-codex-connector"},'
                                    '"submittedAt":"2026-09-17T09:00:00Z"}]')
-        self.assertEqual(r.returncode, 3, r.stdout + r.stderr)
-        self.assertIn("bot_reviews: 0 since last push", r.stdout)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("status: green", r.stdout)
+        self.assertIn("bot_reviews: 1 on the pull request", r.stdout)
 
     def test_empty_bot_list_means_green_as_soon_as_checks_pass(self):
         r = self.wait(WF_PR_BOT_REVIEWERS="")

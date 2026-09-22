@@ -70,7 +70,7 @@ All knobs are environment variables, set per repository in `.claude/settings.jso
 | `WF_REVIEW_ROUNDS` | `3` | max fix-and-re-review rounds, counted over the rounds the review recorded, so the limit holds across a hand-over |
 | `WF_CI_REPAIR_ROUNDS` | `3` | max repair rounds per pull request in the CI stage (a fix for failed checks, a round of `/worker:address-reviews`); counted in the worktree, so the limit holds across a handover |
 | `WF_PR_BOT_REVIEWERS` | `chatgpt-codex-connector` | bot logins whose PR review the worker waits for; set to `""` in repositories without a bot reviewer |
-| `WF_PR_REVIEW_WAIT` | `600` | seconds to wait for a bot review after checks pass |
+| `WF_PR_REVIEW_WAIT` | `600` | seconds to wait for the bot's review after checks pass; a bot reviews a pull request once, so a review it left on an earlier commit ends the wait and a repair push does not wait again |
 | `WF_HANDOFF_TOKENS` | `100000` | context size at which a worker hands the stage it is entering to a fresh context; leave room for one review round under the compact trigger of 250 000 a claim pins, an upper bound rather than an exact size ([ADR 0031](docs/adr/0031-the-workflow-pins-the-size-at-which-a-worker-session-compacts.md), [ADR 0034](docs/adr/0034-the-compact-trigger-is-raised-through-the-window.md)) |
 | `WF_CONTEXT_MAX_AGE` | `900` | seconds after which a recorded context size is too old to answer for this turn, and the checkpoint says hand over |
 | `WF_HANDOFF_SESSION_MS` | `60000` | how long the handover waits for the pane to report a fresh session |

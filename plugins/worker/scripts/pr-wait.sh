@@ -22,9 +22,12 @@ snapshot() {
   checks_total=$(printf '%s' "$view" | jq -r '.statusCheckRollup | length')
   checks_fail=$(printf '%s' "$view" | jq -r '[.statusCheckRollup[] | (.conclusion // .state // "") | select(. == "FAILURE" or . == "ERROR" or . == "CANCELLED" or . == "TIMED_OUT" or . == "ACTION_REQUIRED" or . == "STARTUP_FAILURE")] | length')
   checks_pending=$(printf '%s' "$view" | jq -r '[.statusCheckRollup[] | select(((.status // "COMPLETED") != "COMPLETED") or ((.state // "") == "PENDING" or (.state // "") == "EXPECTED"))] | length')
-  # The login is bound to $l before the list is searched: inside `index(...)` the input is the list, so a
-  # `.author` there reads the list and not the review, and jq fails as soon as a PR has any review at all.
-  bot_reviews=$(printf '%s' "$view" | jq -r --arg bots ",$bots," --arg h "$head_at" '[.reviews[] | select(.submittedAt > $h) | ((.author.login // "") | sub("\\[bot\\]$";"")) as $l | select(($bots | index("," + $l + ",")) != null)] | length')
+  # Every review a listed bot left on the pull request, on whichever commit. A bot reviews a pull request
+  # once and not again on every push, so a review on an older commit ends the wait too: a repair push must
+  # not spend the review window a second time on a review that is not coming. The login is bound to $l
+  # before the list is searched: inside `index(...)` the input is the list, so a `.author` there reads the
+  # list and not the review, and jq fails as soon as a PR has any review at all.
+  bot_reviews=$(printf '%s' "$view" | jq -r --arg bots ",$bots," '[.reviews[] | ((.author.login // "") | sub("\\[bot\\]$";"")) as $l | select(($bots | index("," + $l + ",")) != null)] | length')
   unresolved=$(gh api graphql -f query='query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){reviewThreads(first:100){nodes{isResolved}}}}}' -F o="$owner" -F r="$repo" -F n="$pr" -q '[.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved|not)] | length' 2>/dev/null || echo 0)
   merge_state=$(printf '%s' "$view" | jq -r .mergeStateStatus)
   is_draft=$(printf '%s' "$view" | jq -r .isDraft)
@@ -37,7 +40,7 @@ report() {
   wf_kv pr "#$pr $(printf '%s' "$view" | jq -r .url)"
   wf_kv status "$1"
   wf_kv checks "total=$checks_total pass=$((checks_total-checks_fail-checks_pending)) fail=$checks_fail pending=$checks_pending"
-  wf_kv bot_reviews "$bot_reviews since last push (expected from: $bots)"
+  wf_kv bot_reviews "$bot_reviews on the pull request (expected from: $bots)"
   wf_kv unresolved_threads "$unresolved"
   wf_kv merge_state "$merge_state"
   # A draft is the pull request stage's verdict that the panel did not pass (ADR 0018). Nothing in the
