@@ -40,3 +40,4 @@ One file per decision, numbered, never edited after acceptance (supersede instea
 | [0034](0034-the-compact-trigger-is-raised-through-the-window.md) | The compact trigger is 200 000, and the window is what raises it | accepted |
 | [0035](0035-every-category-the-apply-phase-scaffolds-is-answerable.md) | Every category the apply phase scaffolds is answerable | accepted |
 | [0036](0036-the-factory-updates-the-worker-plugin-and-nothing-else.md) | The factory updates the worker plugin and nothing else | accepted |
+| [0037](0037-the-quota-check-waits-below-12-percent-of-the-workers-scope.md) | The quota check waits below 12 % of the worker's scope | accepted |
