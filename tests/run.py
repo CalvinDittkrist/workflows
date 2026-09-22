@@ -11,7 +11,8 @@ process at a time. Without a NAME every test*.py under DIR (default: this direct
 The output is what `unittest -v` prints: the lines of one class together, printed when that class ends,
 then the tracebacks of every failure and error, the `Ran N tests` line and OK or FAILED. What a test
 prints is held back and shown with its failure (unittest's --buffer), and what a class prints stays with
-its lines, so classes that run at the same time do not interleave. The exit status is 1 when a test failed or errored, 0 otherwise.
+its lines, so classes that run at the same time do not interleave. The exit status is 1 when a test failed,
+errored or unexpectedly succeeded, 0 otherwise.
 
 Standard library only: the tests stay ordinary unittest classes, and plain discovery still runs them.
 """
@@ -79,6 +80,8 @@ def run_class(ids):
     # What the class prints outside a test, and what unittest's buffer repeats of a failed test, stays
     # with the class's lines instead of reaching the terminal in between another class's. The result is
     # made after the switch, because it takes the stdout it gives back after a test when it is made.
+    # _WritelnDecorator is private, but it is the stream TextTestResult expects and TextTestRunner builds;
+    # running the class through TextTestRunner instead would print a summary per class.
     saved = sys.stdout, sys.stderr
     sys.stdout = sys.stderr = stream
     try:
@@ -102,9 +105,10 @@ def run_class(ids):
 
 
 def crashed(name, ids, exc):
-    """What a class whose process died reports: every test of it as not run, and one error that says why."""
+    """What a class whose process died reports: none of its tests as run, and one error that says why."""
     err = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
-    return {"lines": f"{name} ... ERROR (its process ended before the class did)\n", "run": 0,
+    lost = f"{len(ids)} test{'' if len(ids) == 1 else 's'} not run"
+    return {"lines": f"{name} ... ERROR (its process ended before the class did, {lost})\n", "run": 0,
             "problems": [("ERROR", name, err)], "skipped": 0, "expected_failures": 0, "unexpected_successes": 0}
 
 
