@@ -112,7 +112,7 @@ func routed(issue ghIssue, routingLabel string) bool {
 //
 // [ADR 0025]: ../docs/adr/0025-one-queue-one-worker-work-in-progress-first.md
 type gitHub struct {
-	repositories []string
+	repositories []Connected
 	label        string
 
 	mu sync.Mutex
@@ -141,7 +141,8 @@ type routing struct {
 func (g *gitHub) queue(ctx context.Context) poll {
 	result := poll{issues: []Issue{}, unreadable: map[string]string{}}
 	read, seen := map[string]bool{}, map[string]bool{}
-	for _, repository := range g.repositories {
+	for _, connected := range g.repositories {
+		repository := connected.Name
 		issues, err := g.routedIssues(ctx, repository)
 		if err != nil {
 			if ctx.Err() != nil {
@@ -363,7 +364,8 @@ func eventsRequest(repository string, issue int) string {
 // from GitHub and needs no clone, so one repository the host cannot reach must not keep the factory
 // from the rest of its work.
 func connect(ctx context.Context, settings Settings) {
-	for _, repository := range settings.Repositories {
+	for _, connected := range settings.Repositories {
+		repository := connected.Name
 		dir := clonePath(settings.DataDir, repository)
 		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
 			continue

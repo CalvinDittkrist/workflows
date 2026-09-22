@@ -56,6 +56,8 @@ type apiRun struct {
 	Repository  string     `json:"repository"`
 	Issue       int        `json:"issue"`
 	Title       string     `json:"title"`
+	Branch      string     `json:"branch"`
+	Base        string     `json:"base"`
 	State       string     `json:"state"`
 	Stage       string     `json:"stage"`
 	Stages      []string   `json:"stages"`
@@ -470,6 +472,9 @@ func TestAnInvalidConfigurationIsRefusedWithTheFix(t *testing.T) {
 		{"repository of dots", `{"data_dir":"data","repositories":["../.."]}`, `is not owner/name`},
 		{"repository whose name is dots", `{"data_dir":"data","repositories":["acme/.."]}`, `is not owner/name`},
 		{"repository that reads as a flag", `{"data_dir":"data","repositories":["-acme/repo"]}`, `is not owner/name`}, // it would name a directory outside the data directory
+		{"base branch that reads as a flag", `{"data_dir":"data","repositories":[{"name":"a/b","base":"-dev"}]}`, `is not a branch name; write it as "dev"`},
+		{"base branch that walks out of refs", `{"data_dir":"data","repositories":[{"name":"a/b","base":"../../x"}]}`, `is not a branch name`},
+		{"repository object with an unknown field", `{"data_dir":"data","repositories":[{"name":"a/b","branch":"dev"}]}`, `a repository is "owner/name" or {"name": "owner/name", "base": "dev"}`},
 		{"no data directory", `{"repositories":["a/b"]}`, `data_dir is missing; name the directory`},
 		{"unknown field", `{"data_dir":"data","repositories":["a/b"],"listn":"x"}`, `unknown field "listn"; the fields are listen, label`},
 		{"not JSON", `listen = 7341`, `see factory/factory.example.json`},
@@ -518,8 +523,6 @@ func TestAnInvalidConfigurationIsRefusedWithTheFix(t *testing.T) {
 			t.Errorf("the factory said %q, want the fix for a data directory it cannot use", strings.TrimSpace(string(output)))
 		}
 	})
-	// Without fake mode the factory reads real GitHub, which so far it may only do paused:
-	// TestAgainstRealGitHubTheFactoryRefusesToRunUnpaused.
 	t.Run("missing file", func(t *testing.T) {
 		output, _ := exec.Command(binary, "-config", filepath.Join(t.TempDir(), "gone.json"), "-fake").CombinedOutput()
 		if !strings.Contains(string(output), "copy factory/factory.example.json") {
@@ -752,6 +755,29 @@ func (f *factory) stop(t *testing.T, signal syscall.Signal) {
 	case <-time.After(30 * time.Second):
 		t.Fatalf("the factory did not exit on %v; its log:\n%s", signal, f.output(t))
 	}
+}
+
+// ended waits until the run of that id exists and has ended, and answers with it as the interface
+// serves it.
+func (f *factory) ended(t *testing.T, id int) apiRun {
+	t.Helper()
+	var run apiRun
+	f.eventually(t, 90*time.Second, fmt.Sprintf("run %d to end", id), func() bool {
+		run = apiRun{}
+		response, err := http.Get(fmt.Sprintf("http://%s/api/runs/%d", f.address, id))
+		if err != nil {
+			return false
+		}
+		defer response.Body.Close()
+		if response.StatusCode != http.StatusOK {
+			return false
+		}
+		if json.NewDecoder(response.Body).Decode(&run) != nil {
+			return false
+		}
+		return run.State == "ended"
+	})
+	return run
 }
 
 // waitForTheHangingWorker waits until the last canned entry, whose scripted worker hangs, is the

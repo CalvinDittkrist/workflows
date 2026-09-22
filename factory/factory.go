@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -48,6 +49,7 @@ type Factory struct {
 	unreadable map[string]string
 	polledAt   time.Time
 	connecting bool
+	user       string // the login this host's gh is logged in as, read once and kept
 	// quotaUntil is served empty until the quota check arrives (ADR 0028); the interface carries the
 	// state from the start so the ticket that fills it changes no reader.
 	quotaUntil *time.Time
@@ -192,7 +194,6 @@ func (f *Factory) start(ctx context.Context, issue Issue) {
 		Stages:     []string{},
 		Warnings:   []string{},
 	}
-	r.stage("implement") // the session starts in /worker:work, which invokes no skill for its first stage
 	f.runs.add(r)
 	f.active.Add(1)
 	go func() {
@@ -205,12 +206,29 @@ func (f *Factory) start(ctx context.Context, issue Issue) {
 	}()
 }
 
-// execute runs one worker session from start to end and reads its stream until the process is gone.
+// execute takes the issue on the remote and runs one worker session from start to end, reading its
+// stream until the process is gone. The deadline covers the claim as well: a factory that is stopped
+// while it claims leaves the issue rather than starting a worker nobody waits for.
 func (f *Factory) execute(parent context.Context, r *Run, issue Issue) {
 	ctx, cancel := context.WithTimeout(parent, f.settings.Deadline)
 	defer cancel()
 
-	cmd, err := f.worker(ctx, issue)
+	claim, err := f.take(ctx, r, issue)
+	if err != nil {
+		if errors.Is(err, errLost) {
+			// Another claimer created the branch first. Nothing here was touched: no assignee, no
+			// worktree, no worker ([ADR 0024]). The run is the record that this factory will not try
+			// the issue again.
+			f.finish(r, outcomeLost, "another claimer holds "+claim.branch+" on the remote; this run touched nothing else", nil)
+			return
+		}
+		f.finish(r, outcomeFailed, "the issue could not be claimed: "+err.Error(), nil)
+		return
+	}
+	// The session starts in /worker:work, which invokes no skill for its first stage.
+	f.runs.update(r, func() { r.stage("implement") })
+
+	cmd, err := f.worker(ctx, issue, claim)
 	if err != nil {
 		f.finish(r, outcomeFailed, "no worker could be started: "+err.Error(), nil)
 		return
@@ -316,15 +334,89 @@ func (f *Factory) execute(parent context.Context, r *Run, issue Issue) {
 	}
 }
 
-// worker is the command of one run. In fake mode it is this binary again, printing the stream of a
-// scripted worker: no tokens, no git, no GitHub. The configured worker arguments go to the worker
-// command whichever it is; the scripted worker ignores them.
-func (f *Factory) worker(ctx context.Context, issue Issue) (*exec.Cmd, error) {
-	if !f.fake {
-		return nil, errors.New("only fake mode starts workers so far")
+// take claims the issue on the remote and records the branch that claim is. Fake mode claims
+// nothing: its queue is canned and there is no remote behind it, so its scripted worker runs where
+// the factory itself does.
+func (f *Factory) take(ctx context.Context, r *Run, issue Issue) (claimed, error) {
+	if f.fake {
+		return claimed{}, nil
 	}
-	args := []string{"scripted-worker", issue.scenario, issue.Repository, strconv.Itoa(issue.Number)}
-	return exec.CommandContext(ctx, f.self, append(args, f.settings.WorkerArgs...)...), nil
+	claim, err := f.claim(ctx, r, issue)
+	// The branch is recorded whether the claim was won or lost: it is what the claim was, and for a
+	// lost one it names the branch that holds the issue.
+	if claim.branch != "" {
+		f.runs.update(r, func() { r.Branch, r.Base = claim.branch, claim.base })
+	}
+	return claim, err
+}
+
+// worker is the command of one run: the session a local claim starts, in print mode with the stream
+// of events on its output, run in the worktree the claim made ([ADR 0022]). In fake mode it is this
+// binary again, printing the stream of a scripted worker: no tokens, no git, no GitHub. The
+// configured worker arguments go to the worker command whichever it is; the scripted worker ignores
+// them.
+//
+// [ADR 0022]: ../docs/adr/0022-the-factory-is-a-second-driver-over-the-worker-pipeline.md
+func (f *Factory) worker(ctx context.Context, issue Issue, claim claimed) (*exec.Cmd, error) {
+	if f.fake {
+		args := []string{"scripted-worker", issue.scenario, issue.Repository, strconv.Itoa(issue.Number)}
+		return exec.CommandContext(ctx, f.self, append(args, f.settings.WorkerArgs...)...), nil
+	}
+	settings, err := workerSettings(issue)
+	if err != nil {
+		return nil, err
+	}
+	// The mode is manual: the factory never merges what it built. A finished run waits for the
+	// maintainer on GitHub, which is the only surface the factory is steered from ([ADR 0023]).
+	// Foreground subagents are the same setting a local claim makes ([ADR 0017]), and the auto
+	// permission mode is what being unattended costs: no prompt has anybody to ask ([ADR 0027]).
+	args := []string{
+		"--agent", "worker",
+		"--output-format", "stream-json", "--verbose",
+		"--permission-mode", "auto",
+		"--strict-mcp-config",
+		"--settings", settings,
+	}
+	args = append(args, f.settings.WorkerArgs...)
+	args = append(args, "-p", workSkill)
+	cmd := exec.CommandContext(ctx, "claude", args...)
+	cmd.Dir = claim.worktree
+	cmd.Env = workerEnv(os.Environ())
+	return cmd, nil
+}
+
+// workSkill is the prompt a worker session starts with, the same one a local claim gives it.
+const workSkill = "/worker:work"
+
+// workerSettings is the session-scoped configuration a worker is started with, as JSON for
+// --settings. It is the env block of the local claim without what only a Herdr pane can carry.
+func workerSettings(issue Issue) (string, error) {
+	settings, err := json.Marshal(map[string]any{"env": map[string]string{
+		"WF_MODE":                              "manual",
+		"WF_ISSUE":                             strconv.Itoa(issue.Number),
+		"CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1",
+	}})
+	if err != nil {
+		return "", fmt.Errorf("the worker's settings could not be written: %w", err)
+	}
+	return string(settings), nil
+}
+
+// workerEnv is the environment a worker runs in: the factory's own, with every Herdr variable
+// removed. The factory may be started from a maintainer's terminal, and a worker that inherits
+// HERDR_ENV would act in that person's session instead of ending blocked ([ADR 0027]).
+//
+// [ADR 0027]: ../docs/adr/0027-the-factorys-isolation-boundary-is-the-host.md
+func workerEnv(env []string) []string {
+	out := make([]string, 0, len(env))
+	for _, entry := range env {
+		name, _, _ := strings.Cut(entry, "=")
+		if strings.HasPrefix(name, "HERDR_") {
+			continue
+		}
+		out = append(out, entry)
+	}
+	return out
 }
 
 // endGroup sends a signal to the whole process group of a worker. A group that is already gone is

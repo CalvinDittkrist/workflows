@@ -11,6 +11,13 @@
 #   GH_SHIM_HANG     a file holding a number of seconds; `gh repo clone` then sleeps that long in a
 #                    child of its own instead of cloning, as a clone of a large repository does, and
 #                    writes that child's pid beside the file
+#   GH_SHIM_GATE     a file path that holds the claim: a ref creation writes "<path>.<pid>" and waits
+#                    for "<path>.open" before it touches the repository, so a test can have two
+#                    claimers inside the one act that decides the race
+#
+# The creation of a reference is not canned but done on the local repository the clone came from,
+# with git's own ref lock, because that is the act GitHub refuses the second caller of and the whole
+# claim rests on it being atomic.
 #
 # A request without an answer fails, so a call the factory makes and the test did not plan for is
 # seen rather than answered with nothing.
@@ -39,6 +46,43 @@ if [ "${1:-}" = repo ] && [ "${2:-}" = clone ]; then
   source="${GH_SHIM_REMOTES:-/nowhere}/${repository%%/*}-${repository#*/}"
   [ -d "$source" ] || { echo "gh: Could not resolve to a Repository with the name '$repository'." >&2; exit 1; }
   exec git clone --quiet "$source" "$target"
+fi
+
+# The claim: POST repos/<owner>/<name>/git/refs -f ref=refs/heads/<branch> -f sha=<commit>. It is
+# `git update-ref <ref> <sha> ""`, which creates a reference and fails when it exists already —
+# git's ref lock decides the race here as GitHub's 422 decides it there.
+path="${4:-}"
+if [ "${1:-}" = api ] && [ "${2:-}" = --method ] && [ "${3:-}" = POST ] && [ "$path" != "${path#repos/}" ] && [ "$path" != "${path%/git/refs}" ]; then
+  repository=${path#repos/}; repository=${repository%/git/refs}
+  remote="${GH_SHIM_REMOTES:-/nowhere}/${repository%%/*}-${repository#*/}"
+  ref=""; sha=""
+  shift 4
+  while [ $# -gt 0 ]; do
+    case "${1:-}" in
+      -f|--raw-field|-F|--field)
+        case "${2:-}" in
+          ref=*) ref=${2#ref=} ;;
+          sha=*) sha=${2#sha=} ;;
+        esac
+        shift ;;
+    esac
+    shift
+  done
+  gate="${GH_SHIM_GATE:-}"
+  if [ -n "$gate" ]; then
+    : > "$gate.$$"
+    while [ ! -f "$gate.open" ]; do sleep 0.02; done
+  fi
+  if git -C "$remote" update-ref "$ref" "$sha" "" 2>/dev/null; then
+    printf '{"ref":"%s","object":{"sha":"%s"}}\n' "$ref" "$sha"
+    exit 0
+  fi
+  if git -C "$remote" rev-parse --verify --quiet "$ref" >/dev/null; then
+    echo "gh: Reference already exists (HTTP 422)" >&2
+    exit 1
+  fi
+  echo "gh: $ref of $repository could not be created (HTTP 422)" >&2
+  exit 1
 fi
 
 answer="${GH_SHIM_DIR:-/nowhere}/$(printf '%s' "$request" | tr -c 'A-Za-z0-9' '-')"

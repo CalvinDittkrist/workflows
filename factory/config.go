@@ -14,14 +14,48 @@ import (
 // Config is the configuration file, the whole of it. The factory is configured by this file alone:
 // nothing is read from the environment and nothing is written back.
 type Config struct {
-	Listen       string   `json:"listen"`
-	Label        string   `json:"label"`
-	Deadline     string   `json:"deadline"`
-	Poll         string   `json:"poll"`
-	DataDir      string   `json:"data_dir"`
-	WorkerArgs   []string `json:"worker_args"`
-	Paused       bool     `json:"paused"`
-	Repositories []string `json:"repositories"`
+	Listen       string      `json:"listen"`
+	Label        string      `json:"label"`
+	Deadline     string      `json:"deadline"`
+	Poll         string      `json:"poll"`
+	DataDir      string      `json:"data_dir"`
+	WorkerArgs   []string    `json:"worker_args"`
+	Paused       bool        `json:"paused"`
+	Repositories []Connected `json:"repositories"`
+}
+
+// Connected is one repository the factory works: its name on GitHub and, optionally, the branch a
+// run of it branches off. The base is the explicit setting of the base branch rule, and it belongs
+// to the repository rather than to the factory, because a host connects repositories that do not
+// agree on one — one on main, the next on dev ([ADR 0022]).
+//
+// [ADR 0022]: ../docs/adr/0022-the-factory-is-a-second-driver-over-the-worker-pipeline.md
+type Connected struct {
+	Name string `json:"name"`
+	Base string `json:"base"`
+}
+
+// UnmarshalJSON takes a connected repository as the name alone or as an object with its settings, so
+// the common case stays one line in the file and a repository that needs a base branch says so.
+func (c *Connected) UnmarshalJSON(raw []byte) error {
+	if len(raw) > 0 && raw[0] == '"' {
+		var name string
+		if err := json.Unmarshal(raw, &name); err != nil {
+			return err
+		}
+		*c = Connected{Name: name}
+		return nil
+	}
+	// A type of its own, without this method, so the object form is decoded and not read again by it.
+	type settings Connected
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	var read settings
+	if err := decoder.Decode(&read); err != nil {
+		return fmt.Errorf(`%w; a repository is "owner/name" or {"name": "owner/name", "base": "dev"}`, err)
+	}
+	*c = Connected(read)
+	return nil
 }
 
 // Settings is what the factory runs on: the configuration file, validated, with its durations parsed
@@ -34,7 +68,7 @@ type Settings struct {
 	DataDir      string
 	WorkerArgs   []string
 	Paused       bool
-	Repositories []string
+	Repositories []Connected
 }
 
 const (
@@ -49,6 +83,10 @@ const (
 // A repository is named as owner/name; the factory never takes a URL or a local path, because the
 // same name has to identify the repository on GitHub and in an issue's link.
 var repository = regexp.MustCompile(`^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$`)
+
+// A base branch is a branch name, and it reaches git as a ref and gh as an argument: no spelling
+// that opens with a hyphen, walks out of refs/heads with .. or ends a ref name.
+var branch = regexp.MustCompile(`^[A-Za-z0-9._/-]+$`)
 
 // unspecified says whether a host is a spelling of "every interface": 0.0.0.0, ::, ::0, ::ffff:0.0.0.0
 // and the rest of them. A host that is not an IP literal at all is decided after binding, where the
@@ -85,7 +123,7 @@ func Load(path string) (Settings, error) {
 		Poll:         defaultPoll,
 		WorkerArgs:   c.WorkerArgs,
 		Paused:       c.Paused,
-		Repositories: []string{},
+		Repositories: []Connected{},
 	}
 	if c.Listen != "" {
 		host, port, err := net.SplitHostPort(c.Listen)
@@ -133,17 +171,23 @@ func Load(path string) (Settings, error) {
 		// owner or a name of nothing but dots would step out of that directory, and the name is given
 		// to gh as an argument, where one that opens with a hyphen would be read as a flag. GitHub
 		// has neither.
-		owner, name, _ := strings.Cut(r, "/")
-		if !repository.MatchString(r) || strings.Trim(owner, ".") == "" || strings.Trim(name, ".") == "" ||
+		owner, name, _ := strings.Cut(r.Name, "/")
+		if !repository.MatchString(r.Name) || strings.Trim(owner, ".") == "" || strings.Trim(name, ".") == "" ||
 			strings.HasPrefix(owner, "-") || strings.HasPrefix(name, "-") {
-			return bad("repository %q is not owner/name; write it as \"CalvinDittkrist/workflows\"", r)
+			return bad("repository %q is not owner/name; write it as \"CalvinDittkrist/workflows\"", r.Name)
+		}
+		// The base branch is given to git as a ref and to gh as an argument, so a name that opens
+		// with a hyphen or walks out of refs/heads is refused here rather than in a command line.
+		if r.Base != "" && (!branch.MatchString(r.Base) || strings.HasPrefix(r.Base, "-") ||
+			strings.Contains(r.Base, "..") || strings.HasPrefix(r.Base, "/") || strings.HasSuffix(r.Base, "/")) {
+			return bad("the base branch %q of %s is not a branch name; write it as \"dev\", or leave it out to follow the repository's default branch", r.Base, r.Name)
 		}
 		// GitHub reads owner and name without regard to case, and so does the filesystem of many a
 		// host: two spellings of one repository would be one clone and two places in the line.
-		if seen[strings.ToLower(r)] {
-			return bad("repository %q is named twice; remove the duplicate", r)
+		if seen[strings.ToLower(r.Name)] {
+			return bad("repository %q is named twice; remove the duplicate", r.Name)
 		}
-		seen[strings.ToLower(r)] = true
+		seen[strings.ToLower(r.Name)] = true
 		s.Repositories = append(s.Repositories, r)
 	}
 	return s, nil

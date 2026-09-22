@@ -46,7 +46,7 @@ var cannedIssues = []cannedIssue{
 // canned is the queue of fake mode: the same entries on every poll, so a run of the factory can be
 // watched from start to end without tokens, git or GitHub.
 type canned struct {
-	repositories []string
+	repositories []Connected
 	started      time.Time
 }
 
@@ -56,11 +56,11 @@ func (c *canned) queue(context.Context) poll {
 
 // cannedQueue spreads the canned entries over the connected repositories, so the one line visibly
 // mixes them, as a real queue across repositories does.
-func cannedQueue(repositories []string, now time.Time) []Issue {
+func cannedQueue(repositories []Connected, now time.Time) []Issue {
 	queue := make([]Issue, 0, len(cannedIssues))
 	for _, c := range cannedIssues {
 		queue = append(queue, Issue{
-			Repository: repositories[c.repo%len(repositories)],
+			Repository: repositories[c.repo%len(repositories)].Name,
 			Number:     c.number,
 			Title:      c.title,
 			Labels:     c.labels,
