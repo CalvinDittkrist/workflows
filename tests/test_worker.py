@@ -1939,6 +1939,42 @@ class PrWaitTests(ShimTest):
         self.assertIn("status: waiting", r.stdout)
         self.assertIn("merge_state: UNKNOWN (mergeable: UNKNOWN)", r.stdout)
 
+    def test_a_review_that_asks_for_changes_in_its_body_alone_is_not_green(self):
+        """A review whose whole objection is in its body leaves no thread behind, so counting threads
+        reported it as green: the stage never opened the listing that shows such a summary, the worker
+        reported itself ready, and the objection stood unanswered (issue #56)."""
+        r = self.wait(SHIM_REVIEWS=json.dumps([
+            {"author": {"login": "maintainer"}, "state": "CHANGES_REQUESTED",
+             "body": "rework the retry loop", "submittedAt": "2026-09-17T11:00:00Z"},
+            {"author": {"login": "chatgpt-codex-connector"}, "state": "COMMENTED",
+             "body": "", "submittedAt": "2026-09-17T11:05:00Z"}]))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("status: review-comments", r.stdout)
+        self.assertIn("changes_requested: 1", r.stdout)
+        self.assertIn("unresolved_threads: 0", r.stdout)
+
+    def test_an_objection_its_author_approved_away_is_green_again(self):
+        r = self.wait(SHIM_REVIEWS=json.dumps([
+            {"author": {"login": "maintainer"}, "state": "CHANGES_REQUESTED",
+             "body": "rework the retry loop", "submittedAt": "2026-09-17T11:00:00Z"},
+            {"author": {"login": "maintainer"}, "state": "APPROVED",
+             "body": "better, thanks", "submittedAt": "2026-09-17T12:00:00Z"},
+            {"author": {"login": "chatgpt-codex-connector"}, "state": "COMMENTED",
+             "body": "", "submittedAt": "2026-09-17T12:05:00Z"}]))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("status: green", r.stdout)
+        self.assertIn("changes_requested: 0", r.stdout)
+
+    def test_a_request_for_changes_with_nothing_written_in_it_does_not_loop_the_stage(self):
+        """The listing shows a review with an empty body nothing, so ending the wait on one would send
+        the stage to a listing with nothing in it, again and again."""
+        r = self.wait(SHIM_REVIEWS=json.dumps([
+            {"author": {"login": "chatgpt-codex-connector"}, "state": "CHANGES_REQUESTED",
+             "body": "   ", "submittedAt": "2026-09-17T11:00:00Z"}]))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("status: green", r.stdout)
+        self.assertIn("changes_requested: 0", r.stdout)
+
     def test_zero_review_wait_does_not_block_on_the_bot(self):
         r = self.wait(WF_PR_REVIEW_WAIT="0")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
