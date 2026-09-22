@@ -77,6 +77,8 @@ function run(binary, dir, name, on, flags) {
       deadline: '10m', // the hanging run has to still be running when the last test reads the page
       poll: '200ms',
       data_dir: join(dir, name),
+      // A configuration that does not name it is paused, and one of the two factories here works.
+      paused: false,
       repositories: ['acme/edge-sensors', 'acme/backtest'],
     }),
   )

@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -406,18 +407,28 @@ func TestPausedAgainstGitHubShowsTheLineAndClaimsNothing(t *testing.T) {
 	}
 }
 
-func TestAgainstRealGitHubTheFactoryRefusesToRunUnpaused(t *testing.T) {
+// -paused is the operator's brake: it pauses a factory whose configuration says otherwise. There is
+// no flag the other way round, so a paused configuration stays paused whatever the command line says.
+func TestTheCommandLinePausesAFactoryWhoseConfigurationSaysOtherwise(t *testing.T) {
 	gh := newGhShim(t)
-	path := writeConfig(t, config{"listen": freeAddress(t), "data_dir": filepath.Join(t.TempDir(), "data"),
-		"repositories": []string{"acme/edge-sensors"}})
-	started := exec.Command(binary, "-config", path)
-	started.Env = gh.env
-	output, err := started.CombinedOutput()
-	if err == nil {
-		t.Fatalf("the factory started unpaused against real GitHub; it cannot work an issue yet")
+	gh.routed(t, "acme/edge-sensors", 104, "Retry the upload")
+
+	data := filepath.Join(t.TempDir(), "data")
+	gh.cloneInto(t, data, "acme/edge-sensors")
+	f := launch(t, config{"poll": "50ms", "paused": false, "data_dir": data,
+		"repositories": []string{"acme/edge-sensors"}}, gh.env, "-paused")
+	// The issue is in the line and everything a claim needs is there; only the brake is in the way.
+	f.queue(t, 1)
+	var status map[string]any
+	f.get(t, "/api/status", &status)
+	if status["state"] != "paused" {
+		t.Errorf("the factory says it is %q with -paused on a configuration that is not, want paused", status["state"])
 	}
-	if !strings.HasPrefix(string(output), "error: ") || !strings.Contains(string(output), "-paused") {
-		t.Errorf("it said %q, want an error line naming the fix", strings.TrimSpace(string(output)))
+	if head := gh.head(t, "acme/edge-sensors", "feat/104-retry-the-upload"); head != "" {
+		t.Errorf("the brake says paused and the factory claimed the head of its line anyway: %s is on the remote", "feat/104-retry-the-upload")
+	}
+	if records, _ := filepath.Glob(filepath.Join(f.data, "run-*.json")); len(records) != 0 {
+		t.Errorf("paused on the command line, the factory made %d runs of a line it should not touch", len(records))
 	}
 }
 
@@ -572,23 +583,29 @@ func boardFrontierOf(t *testing.T, issues []issueJSON) ([]int, string) {
 // ghShim is the gh the factory finds on PATH: canned answers, a log of every call and the local
 // repositories a clone comes from (factory/testdata/gh).
 type ghShim struct {
-	answers string
-	log     string
-	remotes string
-	failing string // the file holding the pattern of requests that fail
-	hanging string // the file holding how long a clone sleeps instead of cloning
-	env     []string
+	answers  string
+	log      string
+	remotes  string
+	failing  string // the file holding the pattern of requests that fail
+	stalling string // the file holding the pattern of requests that are never answered
+	hanging  string // the file holding how long a clone sleeps instead of cloning
+	gate     string // the file that holds a ref creation until the test lets it through
+	worker   string // the log of the claude shim: how every worker was started
+	env      []string
 }
 
 func newGhShim(t *testing.T) *ghShim {
 	t.Helper()
 	dir := t.TempDir()
 	g := &ghShim{
-		answers: filepath.Join(dir, "answers"),
-		log:     filepath.Join(dir, "calls.log"),
-		remotes: filepath.Join(dir, "remotes"),
-		failing: filepath.Join(dir, "failing"),
-		hanging: filepath.Join(dir, "hanging"),
+		answers:  filepath.Join(dir, "answers"),
+		log:      filepath.Join(dir, "calls.log"),
+		remotes:  filepath.Join(dir, "remotes"),
+		failing:  filepath.Join(dir, "failing"),
+		stalling: filepath.Join(dir, "stalling"),
+		hanging:  filepath.Join(dir, "hanging"),
+		gate:     filepath.Join(dir, "gate"),
+		worker:   filepath.Join(dir, "workers.log"),
 	}
 	for _, d := range []string{g.answers, g.remotes} {
 		if err := os.MkdirAll(d, 0o700); err != nil {
@@ -598,14 +615,66 @@ func newGhShim(t *testing.T) *ghShim {
 	g.env = append(gitIsolation(),
 		"PATH="+abs(t, "testdata")+string(os.PathListSeparator)+os.Getenv("PATH"),
 		"HOME="+dir, "GH_SHIM_DIR="+g.answers, "GH_SHIM_LOG="+g.log, "GH_SHIM_REMOTES="+g.remotes,
-		"GH_SHIM_FAIL="+g.failing, "GH_SHIM_HANG="+g.hanging)
+		"GH_SHIM_FAIL="+g.failing, "GH_SHIM_STALL="+g.stalling, "GH_SHIM_HANG="+g.hanging,
+		"CLAUDE_SHIM_LOG="+g.worker)
 	return g
 }
 
-// start runs the real binary against this shim: against real GitHub, which so far means paused.
+// start runs the real binary against this shim, paused: it reads the line and claims nothing.
 func (g *ghShim) start(t *testing.T, c config) *factory {
 	t.Helper()
 	return launch(t, c, g.env, "-paused")
+}
+
+// work runs the real binary against this shim as a host runs it: unpaused, claiming the head of its
+// line and starting the worker of the claude shim on it.
+func (g *ghShim) work(t *testing.T, c config) *factory {
+	t.Helper()
+	return launch(t, c, g.env)
+}
+
+// loggedInAs is the user this host's gh answers as, which a claim assigns its issue to.
+func (g *ghShim) loggedInAs(t *testing.T, login string) {
+	t.Helper()
+	g.answer(t, "api user --jq .login", login+"\n")
+}
+
+// assigns is the answer to the assignment one claim makes, so an assignment the factory does not
+// make exactly that way is a call the shim has no answer for.
+func (g *ghShim) assigns(t *testing.T, repository string, issue int, login string) {
+	t.Helper()
+	g.answer(t, fmt.Sprintf("issue edit %d --repo %s --add-assignee %s", issue, repository, login),
+		fmt.Sprintf("https://github.com/%s/issues/%d\n", repository, issue))
+}
+
+// workerReports is the pull request the scripted worker of the claude shim ends its session with.
+func (g *ghShim) workerReports(t *testing.T, repository string, issue int) {
+	t.Helper()
+	g.env = append(g.env, fmt.Sprintf("CLAUDE_SHIM_PR=https://github.com/%s/pull/%d", repository, issue))
+}
+
+// holdClaims makes every ref creation wait inside the shim until openClaims lets it through, so two
+// claimers can be brought into the one act that decides which of them owns the issue.
+func (g *ghShim) holdClaims(t *testing.T) {
+	t.Helper()
+	g.env = append(g.env, "GH_SHIM_GATE="+g.gate)
+}
+
+// claimersWaiting is how many claimers are inside the ref creation the gate holds. Each of them
+// leaves a file named after its process, which the file that opens the gate is not.
+func (g *ghShim) claimersWaiting(t *testing.T) int {
+	t.Helper()
+	waiting, err := filepath.Glob(g.gate + ".[0-9]*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return len(waiting)
+}
+
+// openClaims lets the held ref creations through, all of them at once.
+func (g *ghShim) openClaims(t *testing.T) {
+	t.Helper()
+	writeFile(t, g.gate+".open", "")
 }
 
 // answer is what the shim says to one request. The file is named after the request, as the shim
@@ -641,6 +710,14 @@ func (g *ghShim) fail(t *testing.T, pattern string) {
 	writeFile(t, g.failing, pattern)
 }
 
+// stall makes every request that matches the shell pattern wait instead of answering, as a GitHub
+// that takes a call and says nothing does. It leaves the factory standing inside one act of a claim,
+// which is where a test reads what that claim had written down by then.
+func (g *ghShim) stall(t *testing.T, pattern string) {
+	t.Helper()
+	writeFile(t, g.stalling, pattern)
+}
+
 // hang makes `gh repo clone` sleep in a child of its own instead of cloning, as a clone of a large
 // repository does, and answers with the file that child's pid is written to.
 func (g *ghShim) hang(t *testing.T, how time.Duration) string {
@@ -649,21 +726,105 @@ func (g *ghShim) hang(t *testing.T, how time.Duration) string {
 	return g.hanging + ".pid"
 }
 
-// remote is a repository on the shim's GitHub: what `gh repo clone owner/name` clones from.
+// remote is a repository on the shim's GitHub: what `gh repo clone owner/name` clones from and what
+// a claim creates its branch in. It is bare, as the remote of the workflow is: a claim writes a
+// reference into it and a worker pushes to it, and neither may meet a checked-out branch.
 func (g *ghShim) remote(t *testing.T, repository string) {
 	t.Helper()
 	dir := filepath.Join(g.remotes, strings.ReplaceAll(repository, "/", "-"))
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	// A host whose file system does not tell two spellings of one name apart has the repository
+	// already, which is what GitHub answers for either spelling too.
+	if _, err := os.Stat(dir); err == nil {
+		return
+	}
+	work := dir + ".work"
+	if err := os.MkdirAll(work, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	writeFile(t, filepath.Join(dir, "README.md"), "# "+repository+"\n")
+	writeFile(t, filepath.Join(work, "README.md"), "# "+repository+"\n")
 	for _, args := range [][]string{{"init", "-q", "-b", "main"}, {"add", "."}, {"commit", "-q", "-m", "init"}} {
-		git := exec.Command("git", append([]string{"-c", "user.email=t@example.com", "-c", "user.name=t"}, args...)...)
-		git.Dir, git.Env = dir, gitIsolation()
-		if out, err := git.CombinedOutput(); err != nil {
-			t.Fatalf("the remote repository %s could not be made: %v: %s", repository, err, out)
-		}
+		g.git(t, work, args...)
 	}
+	g.git(t, work, "clone", "-q", "--bare", work, dir)
+	if err := os.RemoveAll(work); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// git runs one git command for the test's own bookkeeping, isolated from the host's configuration.
+func (g *ghShim) git(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	git := exec.Command("git", append([]string{"-c", "user.email=t@example.com", "-c", "user.name=t"}, args...)...)
+	git.Dir, git.Env = dir, gitIsolation()
+	var said bytes.Buffer
+	git.Stderr = &said
+	out, err := git.Output()
+	if err != nil {
+		t.Fatalf("git %s in %s: %v: %s", strings.Join(args, " "), dir, err, said.String())
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// remotePath is where the shim's GitHub keeps one repository.
+func (g *ghShim) remotePath(repository string) string {
+	return filepath.Join(g.remotes, strings.ReplaceAll(repository, "/", "-"))
+}
+
+// head is the commit a branch of the shim's GitHub points at, and an empty string when there is no
+// such branch — which is what a claim that nobody won looks like from outside.
+func (g *ghShim) head(t *testing.T, repository, branch string) string {
+	t.Helper()
+	out, err := exec.Command("git", "-C", g.remotePath(repository), "rev-parse", "--verify", "--quiet", "refs/heads/"+branch).Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// branchAt makes a branch of the shim's GitHub point at another one, as a second line of work on the
+// remote does.
+func (g *ghShim) branchAt(t *testing.T, repository, branch, at string) {
+	t.Helper()
+	g.git(t, g.remotePath(repository), "update-ref", "refs/heads/"+branch, at)
+}
+
+// defaultBranchIs points the head of a repository on the shim's GitHub at one of its branches, as a
+// repository that moves its line of work does.
+func (g *ghShim) defaultBranchIs(t *testing.T, repository, branch string) {
+	t.Helper()
+	g.git(t, g.remotePath(repository), "symbolic-ref", "HEAD", "refs/heads/"+branch)
+}
+
+// dropBranch removes a branch from the shim's GitHub, which is what a clone made before it still
+// remembers until it prunes.
+func (g *ghShim) dropBranch(t *testing.T, repository, branch string) {
+	t.Helper()
+	g.git(t, g.remotePath(repository), "update-ref", "-d", "refs/heads/"+branch)
+}
+
+// commitOn puts one more commit on a branch of the shim's GitHub, which is what a clone made before
+// it has yet to see.
+func (g *ghShim) commitOn(t *testing.T, repository, branch string) string {
+	t.Helper()
+	dir := g.remotePath(repository)
+	tree := g.git(t, dir, "rev-parse", "refs/heads/"+branch+"^{tree}")
+	parent := g.git(t, dir, "rev-parse", "refs/heads/"+branch)
+	commit := g.git(t, dir, "commit-tree", tree, "-p", parent, "-m", "work on "+branch)
+	g.git(t, dir, "update-ref", "refs/heads/"+branch, commit)
+	return commit
+}
+
+// cloneInto makes the clone of a repository in a data directory before the factory starts, so a test
+// can let the remote move on afterwards: a factory that finds its clone does not clone again, and
+// what it works from then depends on its own fetch.
+func (g *ghShim) cloneInto(t *testing.T, dataDir, repository string) string {
+	t.Helper()
+	dir := clonePath(dataDir, repository)
+	if err := os.MkdirAll(filepath.Dir(dir), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	g.git(t, filepath.Dir(dir), "clone", "-q", g.remotePath(repository), dir)
+	return dir
 }
 
 func (g *ghShim) calls(t *testing.T) []string {

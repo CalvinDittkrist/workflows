@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# Test shim for claude, used by the factory's Go tests: it records how the worker was started and
+# prints the stream of a session that ends in a pull request, so the real binary starts a real
+# command in a real worktree and no tokens are spent.
+#
+#   CLAUDE_SHIM_LOG    one record per call: the directory it ran in, the branch and commit that
+#                      directory is on, the process and its group, every argument, and every
+#                      environment variable name (values are not written: only whether a name is
+#                      there is ever asked)
+#   CLAUDE_SHIM_PR     the pull request the session reports, by default the one of o/r that the
+#                      issue in the branch name gives; the factory reads it out of the report
+#   CLAUDE_SHIM_FAIL   when set, the session ends with this on its error output and exit 1
+#
+# The report is the one thing the pipeline owes the factory: a final report that says ready: with
+# the pull request (ADR 0022).
+set -u
+
+log="${CLAUDE_SHIM_LOG:-/dev/null}"
+{
+  echo "call"
+  printf 'cwd %s\n' "$(pwd -P)"
+  printf 'branch %s\n' "$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo none)"
+  printf 'head %s\n' "$(git rev-parse HEAD 2>/dev/null || echo none)"
+  printf 'pid %s\n' "$$"
+  printf 'pgid %s\n' "$(ps -o pgid= -p $$ | tr -d ' ')"
+  for argument in "$@"; do printf 'arg %s\n' "$argument"; done
+  env | while IFS= read -r entry; do printf 'env %s\n' "${entry%%=*}"; done
+} >> "$log"
+
+if [ -n "${CLAUDE_SHIM_FAIL:-}" ]; then
+  echo "$CLAUDE_SHIM_FAIL" >&2
+  exit 1
+fi
+
+issue=$(git rev-parse --abbrev-ref HEAD 2>/dev/null | sed -n 's#^[a-z][a-z]*/\([0-9][0-9]*\)-.*#\1#p')
+
+printf '%s\n' '{"type":"system","subtype":"init","model":"claude-opus-5","permissionMode":"auto","session_id":"5f2d8c11-0b9e-4a3f-9d21-7c6e4b0a1f33"}'
+printf '{"type":"result","subtype":"success","is_error":false,"terminal_reason":"completed","num_turns":12,"total_cost_usd":1.5,"result":"**ready: %s**\\n\\nPanel: five PASS.","usage":{"input_tokens":900,"cache_creation_input_tokens":1200,"cache_read_input_tokens":40000,"output_tokens":3000}}\n' \
+  "${CLAUDE_SHIM_PR:-https://github.com/o/r/pull/${issue:-0}}"

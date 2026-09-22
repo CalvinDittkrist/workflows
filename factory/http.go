@@ -98,7 +98,8 @@ func (f *Factory) repositories(w http.ResponseWriter, _ *http.Request) {
 	unreadable := f.unreadable
 	f.mu.Unlock()
 	out := make([]map[string]any, 0, len(f.settings.Repositories))
-	for _, repository := range f.settings.Repositories {
+	for _, connected := range f.settings.Repositories {
+		repository := connected.Name
 		row := map[string]any{"repository": repository, "queued": queued[repository]}
 		if said := unreadable[repository]; said != "" {
 			row["error"] = said

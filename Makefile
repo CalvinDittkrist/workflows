@@ -1,5 +1,5 @@
 # The gate: `make check` runs everything CI gates on, locally and in the CI job named `check`.
-SCRIPTS := $(wildcard plugins/*/scripts/*.sh scripts/*.sh) $(wildcard tests/shims/*) factory/testdata/gh
+SCRIPTS := $(wildcard plugins/*/scripts/*.sh scripts/*.sh) $(wildcard tests/shims/*) factory/testdata/gh factory/testdata/claude
 
 .PHONY: check lint validate standard test ui factory factory-go browser
 check: lint validate standard test ui factory browser

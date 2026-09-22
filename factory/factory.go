@@ -3,12 +3,14 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -48,6 +50,8 @@ type Factory struct {
 	unreadable map[string]string
 	polledAt   time.Time
 	connecting bool
+	user       string          // the login this host's gh is logged in as, read once and kept
+	held       map[string]bool // repositories this factory claims nothing from, so the log says it once
 	// quotaUntil is served empty until the quota check arrives (ADR 0028); the interface carries the
 	// state from the start so the ticket that fills it changes no reader.
 	quotaUntil *time.Time
@@ -80,7 +84,8 @@ func New(settings Settings, fake bool) (*Factory, error) {
 	if err != nil {
 		return nil, fmt.Errorf("the factory cannot find its own binary: %w", err)
 	}
-	f := &Factory{settings: settings, fake: fake, runs: runs, started: time.Now(), self: self, wake: make(chan struct{}, 1)}
+	f := &Factory{settings: settings, fake: fake, runs: runs, started: time.Now(), self: self,
+		wake: make(chan struct{}, 1), held: map[string]bool{}}
 	f.source = &gitHub{repositories: settings.Repositories, label: settings.Label}
 	if fake {
 		f.source = &canned{repositories: settings.Repositories, started: f.started}
@@ -151,8 +156,52 @@ func (f *Factory) dispatch(ctx context.Context) {
 			return
 		}
 	}
-	if waiting := f.waiting(); len(waiting) > 0 {
-		f.start(ctx, waiting[0])
+	for _, issue := range f.waiting() {
+		if !f.claimable(issue.Repository) {
+			continue // the issue keeps its place in the line; nothing of it is started or recorded
+		}
+		f.start(ctx, issue)
+		return
+	}
+}
+
+// claimable says whether a run of this repository could claim anything at all. A repository whose
+// clone is missing — the host could not reach it when the factory connected, and connecting is done
+// once per start — has no worktree to give a worker, so every run of it would fail before it touched
+// the remote. A run is what takes an issue out of the line for good, so such an issue is left in the
+// line instead of being spent on a claim that cannot work, and the operator reads why in the log.
+func (f *Factory) claimable(repository string) bool {
+	if f.fake { // fake mode claims nothing and clones nothing: its worker runs where the factory does
+		return true
+	}
+	f.mu.Lock()
+	held := f.held[repository]
+	f.mu.Unlock()
+	if held {
+		return false
+	}
+	if _, err := os.Stat(filepath.Join(clonePath(f.settings.DataDir, repository), ".git")); err == nil {
+		return true
+	}
+	f.hold(repository, "has no clone on this host; see the error of the clone above")
+	return false
+}
+
+// hold takes a repository out of the claiming line for as long as this factory lives, and says why
+// once. It is the answer to a failure that is the host's or GitHub's and not the issue's: the next
+// issue of that repository would fail the same way, and because the next run starts the moment one
+// ends, a line of twenty issues would be spent on it in seconds. The factory cannot tell a blip from
+// a host that is simply broken and never retries by itself ([ADR 0026]), so what is held waits for
+// the person who starts the factory again.
+//
+// [ADR 0026]: ../docs/adr/0026-the-factory-never-deletes-work-on-its-own.md
+func (f *Factory) hold(repository, reason string) {
+	f.mu.Lock()
+	said := f.held[repository]
+	f.held[repository] = true
+	f.mu.Unlock()
+	if !said {
+		log.Printf("error: %s %s; its issues keep their place in the line and this factory claims none of them until it is started again", repository, reason)
 	}
 }
 
@@ -192,7 +241,6 @@ func (f *Factory) start(ctx context.Context, issue Issue) {
 		Stages:     []string{},
 		Warnings:   []string{},
 	}
-	r.stage("implement") // the session starts in /worker:work, which invokes no skill for its first stage
 	f.runs.add(r)
 	f.active.Add(1)
 	go func() {
@@ -205,14 +253,43 @@ func (f *Factory) start(ctx context.Context, issue Issue) {
 	}()
 }
 
-// execute runs one worker session from start to end and reads its stream until the process is gone.
+// execute takes the issue on the remote and runs one worker session from start to end, reading its
+// stream until the process is gone. The deadline covers the claim as well: a factory that is stopped
+// while it claims leaves the issue rather than starting a worker nobody waits for.
 func (f *Factory) execute(parent context.Context, r *Run, issue Issue) {
 	ctx, cancel := context.WithTimeout(parent, f.settings.Deadline)
 	defer cancel()
 
-	cmd, err := f.worker(ctx, issue)
+	claim, err := f.take(ctx, r, issue)
 	if err != nil {
-		f.finish(r, outcomeFailed, "no worker could be started: "+err.Error(), nil)
+		if errors.Is(err, errLost) {
+			// Another claimer created the branch first. Nothing here was touched: no assignee, no
+			// worktree, no worker ([ADR 0024]). The run is the record that this factory will not try
+			// the issue again.
+			f.finish(r, outcomeLost, "another claimer holds "+claim.branch+" on the remote; this run touched nothing else", nil)
+			return
+		}
+		if parent.Err() != nil {
+			// The factory was stopped while it claimed, so git and gh were ended under it. That is not
+			// a claim that failed, and the record must not name a failure that never happened.
+			f.finish(r, outcomeInterrupted, "the factory stopped while this run was claiming the issue"+leftBehind(claim), nil)
+			return
+		}
+		if !claim.created {
+			// Nothing of this issue was touched, so the reason lies with this host or with GitHub and
+			// the issue behind it would meet the same one. The repository is held rather than worked
+			// through; this run stays as the record a person reads.
+			f.hold(issue.Repository, "could not be claimed from: "+err.Error())
+		}
+		f.finish(r, outcomeFailed, "the issue could not be claimed: "+err.Error()+leftBehind(claim), nil)
+		return
+	}
+	// The session starts in /worker:work, which invokes no skill for its first stage.
+	f.runs.update(r, func() { r.stage("implement") })
+
+	cmd, err := f.worker(ctx, issue, claim)
+	if err != nil {
+		f.finish(r, outcomeFailed, "no worker could be started: "+err.Error()+leftBehind(claim), nil)
 		return
 	}
 	// The worker starts subprocesses of its own; the deadline and the stop have to reach all of them,
@@ -226,14 +303,14 @@ func (f *Factory) execute(parent context.Context, r *Run, issue Issue) {
 	// left the group is not, which is why the reading below has an end of its own.
 	stdout, stdoutWriter, err := os.Pipe()
 	if err != nil {
-		f.finish(r, outcomeFailed, "the factory could not open a pipe for the worker: "+err.Error(), nil)
+		f.finish(r, outcomeFailed, "the factory could not open a pipe for the worker: "+err.Error()+leftBehind(claim), nil)
 		return
 	}
 	stderr, stderrWriter, err := os.Pipe()
 	if err != nil {
 		stdout.Close()
 		stdoutWriter.Close()
-		f.finish(r, outcomeFailed, "the factory could not open a pipe for the worker: "+err.Error(), nil)
+		f.finish(r, outcomeFailed, "the factory could not open a pipe for the worker: "+err.Error()+leftBehind(claim), nil)
 		return
 	}
 	cmd.Stdout, cmd.Stderr = stdoutWriter, stderrWriter
@@ -242,7 +319,7 @@ func (f *Factory) execute(parent context.Context, r *Run, issue Issue) {
 		stdoutWriter.Close()
 		stderr.Close()
 		stderrWriter.Close()
-		f.finish(r, outcomeFailed, "the worker could not be started: "+err.Error(), nil)
+		f.finish(r, outcomeFailed, "the worker could not be started: "+err.Error()+leftBehind(claim), nil)
 		return
 	}
 	stdoutWriter.Close() // the worker holds the only writing ends now
@@ -316,15 +393,151 @@ func (f *Factory) execute(parent context.Context, r *Run, issue Issue) {
 	}
 }
 
-// worker is the command of one run. In fake mode it is this binary again, printing the stream of a
-// scripted worker: no tokens, no git, no GitHub. The configured worker arguments go to the worker
-// command whichever it is; the scripted worker ignores them.
-func (f *Factory) worker(ctx context.Context, issue Issue) (*exec.Cmd, error) {
-	if !f.fake {
-		return nil, errors.New("only fake mode starts workers so far")
+// leftBehind says what a claim that did not finish left on the remote, which is what the operator
+// needs to decide: a claim that never got to create the branch took nothing, and one that did holds
+// the issue by it until somebody removes it — nothing here deletes work ([ADR 0026]).
+//
+// [ADR 0026]: ../docs/adr/0026-the-factory-never-deletes-work-on-its-own.md
+func leftBehind(claim claimed) string {
+	if !claim.created {
+		return "; nothing was claimed on the remote"
 	}
-	args := []string{"scripted-worker", issue.scenario, issue.Repository, strconv.Itoa(issue.Number)}
-	return exec.CommandContext(ctx, f.self, append(args, f.settings.WorkerArgs...)...), nil
+	return "; the branch " + claim.branch + " was created on the remote and is left behind: remove it to work the issue again"
+}
+
+// take claims the issue on the remote and records the branch that claim is. Fake mode claims
+// nothing: its queue is canned and there is no remote behind it, so its scripted worker runs where
+// the factory itself does.
+func (f *Factory) take(ctx context.Context, r *Run, issue Issue) (claimed, error) {
+	if f.fake {
+		return claimed{}, nil
+	}
+	claim, err := f.claim(ctx, r, issue)
+	// The branch is recorded whether the claim was won or lost: it is what the claim was, and for a
+	// lost one it names the branch that holds the issue.
+	if claim.branch != "" {
+		f.runs.update(r, func() { r.Branch, r.Base = claim.branch, claim.base })
+	}
+	return claim, err
+}
+
+// worker is the command of one run: the session a local claim starts, in print mode with the stream
+// of events on its output, run in the worktree the claim made ([ADR 0022]). In fake mode it is this
+// binary again, printing the stream of a scripted worker: no tokens, no git, no GitHub. The
+// configured worker arguments go to the worker command whichever it is; the scripted worker ignores
+// them.
+//
+// [ADR 0022]: ../docs/adr/0022-the-factory-is-a-second-driver-over-the-worker-pipeline.md
+func (f *Factory) worker(ctx context.Context, issue Issue, claim claimed) (*exec.Cmd, error) {
+	if f.fake {
+		args := []string{"scripted-worker", issue.scenario, issue.Repository, strconv.Itoa(issue.Number)}
+		return exec.CommandContext(ctx, f.self, append(args, f.settings.WorkerArgs...)...), nil
+	}
+	variables := workerVariables(issue, claim)
+	settings, err := workerSettings(variables)
+	if err != nil {
+		return nil, err
+	}
+	// The mode is manual: the factory never merges what it built. A finished run waits for the
+	// maintainer on GitHub, which is the only surface the factory is steered from ([ADR 0023]).
+	// Foreground subagents are the same setting a local claim makes ([ADR 0017]), and the auto
+	// permission mode is what being unattended costs: no prompt has anybody to ask ([ADR 0027]).
+	args := []string{
+		"--agent", "worker",
+		"--output-format", "stream-json", "--verbose",
+		"--permission-mode", "auto",
+		"--strict-mcp-config",
+		"--settings", settings,
+	}
+	args = append(args, f.settings.WorkerArgs...)
+	args = append(args, "-p", workSkill)
+	cmd := exec.CommandContext(ctx, "claude", args...)
+	cmd.Dir = claim.worktree
+	cmd.Env = workerEnv(os.Environ(), variables)
+	return cmd, nil
+}
+
+// workSkill is the prompt a worker session starts with, the same one a local claim gives it.
+const workSkill = "/worker:work"
+
+// workerSettings is the session-scoped configuration a worker is started with, as JSON for
+// --settings. It is the settings object of the local claim (plugins/orchestrator/scripts/claim.sh)
+// without the one part only a Herdr pane can carry, its status line: nothing renders a status line in
+// print mode, and there is no pane for a checkpoint to hand the stage over to.
+//
+// That is why the compact pin matters more here than anywhere: a factory session has no hand-over at
+// all, so compaction is its only safety net, and it must fire where the workflow says rather than at
+// a default Claude Code does not document ([ADR 0031], [ADR 0034]). The window and the percentage are
+// the claim's numbers, and a drift test binds them to it.
+//
+// WF_BASE_BRANCH is the base the claim actually cut the branch from. The pipeline inside the worktree
+// asks wf_base_branch for it — the review range, the hand-over note, the pull request's --base — and
+// without it a clone whose origin/HEAD names another branch would review and open against a base the
+// branch was never cut from.
+//
+// The plugins the local claim switches off are switched off here too: a worker carries neither the
+// planner's nor the orchestrator's skills, which keeps them out of an unattended context that must
+// never merge what it built ([ADR 0023]).
+//
+// [ADR 0023]: ../docs/adr/0023-github-is-the-only-control-surface-of-the-factory.md
+// [ADR 0031]: ../docs/adr/0031-the-workflow-pins-the-size-at-which-a-worker-session-compacts.md
+// [ADR 0034]: ../docs/adr/0034-the-compact-trigger-is-raised-through-the-window.md
+func workerSettings(env map[string]string) (string, error) {
+	settings, err := json.Marshal(map[string]any{
+		"env":               env,
+		"enabledPlugins":    map[string]bool{"planner@workflows": false, "orchestrator@workflows": false},
+		"autoCompactWindow": compactWindow,
+	})
+	if err != nil {
+		return "", fmt.Errorf("the worker's settings could not be written: %w", err)
+	}
+	return string(settings), nil
+}
+
+// workerVariables is the env block of those settings: what this one session is, and nothing a host
+// may disagree with.
+func workerVariables(issue Issue, claim claimed) map[string]string {
+	return map[string]string{
+		"WF_MODE":                              "manual",
+		"WF_ISSUE":                             strconv.Itoa(issue.Number),
+		"WF_BASE_BRANCH":                       claim.base,
+		"CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1",
+		"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE":      compactPercentage,
+	}
+}
+
+// The compact pin of the workflow, the two numbers the local claim sets and this one restates
+// ([ADR 0031], [ADR 0034]). Their product is the compact trigger, 200 000 tokens.
+//
+// [ADR 0031]: ../docs/adr/0031-the-workflow-pins-the-size-at-which-a-worker-session-compacts.md
+// [ADR 0034]: ../docs/adr/0034-the-compact-trigger-is-raised-through-the-window.md
+const (
+	compactWindow     = 250000
+	compactPercentage = "80"
+)
+
+// workerEnv is the environment a worker runs in: the factory's own, with two kinds of variable taken
+// out of it. Every Herdr variable, because the factory may be started from a maintainer's terminal
+// and a worker that inherits
+// HERDR_ENV would act in that person's session instead of ending blocked ([ADR 0027]). And every
+// variable of the workflow, WF_*, because the session's settings say what this run is: which of the
+// two Claude Code prefers for a name both carry is not documented, and a WF_MODE=yolo left in a
+// maintainer's shell must not be the answer.
+//
+// [ADR 0027]: ../docs/adr/0027-the-factorys-isolation-boundary-is-the-host.md
+func workerEnv(env []string, settings map[string]string) []string {
+	out := make([]string, 0, len(env))
+	for _, entry := range env {
+		name, _, _ := strings.Cut(entry, "=")
+		if strings.HasPrefix(name, "HERDR_") || strings.HasPrefix(name, "WF_") {
+			continue
+		}
+		if _, said := settings[name]; said {
+			continue
+		}
+		out = append(out, entry)
+	}
+	return out
 }
 
 // endGroup sends a signal to the whole process group of a worker. A group that is already gone is

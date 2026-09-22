@@ -2,10 +2,11 @@
 // own. It is a second driver over the same worker pipeline a local claim starts, and it shares
 // nothing with a developer's machine but GitHub.
 //
-// So far it works its line only in fake mode, with a canned queue and scripted workers that need no
-// tokens, no git and no GitHub. Against real GitHub it runs paused: it clones the connected
-// repositories, shows the live queue of routed issues and claims nothing. What it does is read over
-// its HTTP interface, which never writes anything.
+// It works the live queue of routed issues: it claims the head of the line by creating the issue's
+// branch on GitHub, assigns the issue to itself, makes a worktree in its clone and starts the worker
+// session there, one at a time. Fake mode works a canned queue with scripted workers instead, which
+// need no tokens, no git and no GitHub, and a paused factory shows the line and claims nothing. What
+// it does is read over its HTTP interface, which never writes anything.
 package main
 
 import (
@@ -42,12 +43,9 @@ func run(config string, fake, paused bool) error {
 	if err != nil {
 		return err
 	}
+	// The command line can pause a factory and never unpause one: -paused is the operator's brake on
+	// a host whose configuration says otherwise, not a second place the setting lives.
 	settings.Paused = settings.Paused || paused
-	// Against real GitHub the factory only reads so far. Claiming an issue and starting a worker
-	// arrives with its own ticket, and until then an unpaused start would promise work it cannot do.
-	if !fake && !settings.Paused {
-		return fmt.Errorf("a factory against real GitHub runs paused so far; start it with -paused or set \"paused\": true in %s (claiming routed issues arrives with the ticket that starts real workers)", config)
-	}
 
 	// On SIGTERM the factory ends the worker it is running before it exits: no worker process is left
 	// behind on the host, and the run is recorded as interrupted. The clone of a connected repository
@@ -71,6 +69,16 @@ func run(config string, fake, paused bool) error {
 		return fmt.Errorf("listen %q answers on every interface (%s); bind it to one address, such as %q, and reach it over the tailnet",
 			settings.Listen, bound, defaultListen)
 	}
+
+	// The address is only half of it: a second factory on this host may be configured to answer on
+	// another one, and what the two of them would then share is the data directory. It is taken
+	// before a run record, a clone or a worktree is touched, and the kernel gives it back when this
+	// process is gone.
+	release, err := lockDataDir(settings.DataDir)
+	if err != nil {
+		return err
+	}
+	defer release()
 
 	factory, err := New(settings, fake)
 	if err != nil {

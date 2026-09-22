@@ -16,23 +16,31 @@ import (
 )
 
 // The outcomes of the vocabulary. A run in fake mode reaches ready, blocked, failed, timeout and
-// interrupted; lost, cancelled and quota need GitHub and arrive with the tickets that add it.
+// interrupted; lost is the race another claimer won ([ADR 0024]), and cancelled and quota arrive
+// with the tickets that add them.
+//
+// [ADR 0024]: ../docs/adr/0024-a-claim-is-the-creation-of-the-branch-through-the-api.md
 const (
 	outcomeReady       = "ready"
 	outcomeBlocked     = "blocked"
 	outcomeFailed      = "failed"
 	outcomeTimeout     = "timeout"
 	outcomeInterrupted = "interrupted"
+	outcomeLost        = "lost"
 )
 
 // Run is one factory run: one worker session, its record. The record is the file in the data
 // directory and the body the HTTP interface serves, so a reader on the host and a reader in a
 // browser see the same fields.
 type Run struct {
-	ID          int        `json:"id"`
-	Repository  string     `json:"repository"`
-	Issue       int        `json:"issue"`
-	Title       string     `json:"title"`
+	ID         int    `json:"id"`
+	Repository string `json:"repository"`
+	Issue      int    `json:"issue"`
+	Title      string `json:"title"`
+	// Branch is the branch the claim created on the remote, and Base the branch it was cut from. A
+	// lost run carries the branch too: it is the one another claimer holds the issue by.
+	Branch      string     `json:"branch"`
+	Base        string     `json:"base"`
 	State       string     `json:"state"` // running or ended
 	Stage       string     `json:"stage"` // the stage the worker is in, read from its skill calls
 	Stages      []string   `json:"stages"`
