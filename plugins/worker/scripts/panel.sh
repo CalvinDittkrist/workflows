@@ -103,16 +103,22 @@ refuse_line_breaks() {
   wf_die "a line of the $what block carries a carriage return or another line separator, which the record cannot hold: it would read as a line of its own in the brief of the next stage, where a line is a key. Write each line as one line of plain text and record the $what again with $call"
 }
 
-# Both records describe one commit: the one the fixes are in and the gate has passed on. One written over a
-# dirty tree or an ungated commit would state a verdict for work no reviewer read — and for the summary that
-# is the word `panel.sh verdict` answers, which the yolo finish stage merges on. $1 names the record and $2
-# the call that writes it, so each refusal still names the call its caller has to make again.
-gated_head() {
-  local what=$1 call=$2 dirty gate
+# Both records describe one commit, the one the fixes are in: one written over a dirty tree would state a
+# verdict for work no reviewer read. The summary describes a commit the gate has passed on as well, because
+# its verdict is the word `panel.sh verdict` answers, which the yolo finish stage merges on; a round is not
+# gated, because the next round reads its fixes and the gate runs once before the summary, not once per
+# round (ADR 0019). A round is refused only a gate that ran on this very head and failed. $1 names the
+# record and $2 the call that writes it, so each refusal still names the call its caller has to make again.
+clean_tree() {
+  local what=$1 call=$2 dirty
   dirty=$(wf_dirty_tree)
   [ -z "$dirty" ] || wf_die "the working tree has uncommitted changes, so this $what would be recorded at a commit that does not carry them:
 $dirty
-Commit what belongs to the change, run the worker's gate.sh run on that commit, then record the $what again with $call."
+Commit what belongs to the change, then record the $what again with $call."
+}
+gated_head() {
+  local what=$1 call=$2 gate
+  clean_tree "$what" "$call"
   gate=$("$here/gate.sh" verdict)
   [ "$gate" = pass ] || wf_die "the gate answers '$gate' for this head, not 'pass'; a $what is recorded for a commit the gate has passed on, so run the worker's gate.sh run, fix what it reports, commit, and record the $what again with $call"
 }
@@ -243,9 +249,10 @@ case "${1:-}" in
     ;;
   round)
     block=$(cat)
-    # A round is recorded for the commit its fixes are in and the gate ran on: that commit is what the next
-    # context continues from, and what tells a record of this review from one of an older one.
-    gated_head round "panel.sh round"
+    # A round is recorded for the commit its fixes are in: that commit is what the next context continues
+    # from, and what tells a record of this review from one of an older one.
+    clean_tree round "panel.sh round"
+    [ "$("$here/gate.sh" verdict)" != fail ] || wf_die "the gate ran on this head and failed; a round is recorded for a commit the reviewers can read as working, so fix what the gate reports, commit, run the worker's gate.sh run, and record the round again with panel.sh round"
 
     refuse_line_breaks "$block" round "panel.sh round"
     stray=$(printf '%s\n' "$block" | grep -vE '^[[:space:]]*(panel|fixed|disputed):' | grep -v '^[[:space:]]*$' | head -1 || true)

@@ -56,7 +56,7 @@ report() {
   # it too. A merge and not a rebase: the branch is pushed, and the worker never rewrites pushed history.
   if [ "$1" = conflicts ]; then
     base=$(wf_base_branch)
-    printf 'help: the branch conflicts with %s, so no pull_request workflow ran. Count a repair round, then git fetch origin %s && git merge origin/%s, resolve the conflicts, commit the merge, run the gate, push, and run /worker:ci again. Never rebase or force-push.\n' "$base" "$base" "$base"
+    printf 'help: the branch conflicts with %s, so no pull_request workflow ran. Count a repair round, then git fetch origin %s && git merge origin/%s, resolve the conflicts, commit the merge, push, and run /worker:ci again. Never rebase or force-push.\n' "$base" "$base" "$base"
   fi
 }
 

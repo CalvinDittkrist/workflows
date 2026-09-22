@@ -282,20 +282,32 @@ class GateRecordTests(ShimTest):
         self.assertEqual(len(brief), 1, brief)
         self.assertTrue(brief[0].startswith("gate_result: none recorded for this head"), brief)
 
-    def test_a_record_from_an_older_commit_is_no_result_for_this_head(self):
+    def test_a_pass_at_an_earlier_commit_is_briefed_with_the_commits_since(self):
+        # The rounds after the first read the fixes of the round before, and the gate runs once before the
+        # summary, not after every round: their brief says where the gate passed and how far the head is.
         self.run_gate()
+        recorded = self.head()
+        self.commit_file("a.txt"); self.commit_file("b.txt")
+        brief = self.brief()
+        self.assertIn(f"gate_result: pass (exit 0) at {recorded}, 2 commit(s) since", brief)
+        self.assertIn("  Ran 3 tests", brief)
+        # The one word answers for this head alone: the summary and the finish stage gate on it.
+        self.assertEqual(self.run_script(WORKER / "gate.sh", "verdict").stdout, "none\n")
+        # And the way on: the gate runs again, and the brief answers for the new head.
+        self.run_gate()
+        brief = self.brief()
+        self.assertIn(f"gate_result: pass (exit 0) at {self.head()}", brief)
+        self.assertNotIn("commit(s) since", brief)
+
+    def test_a_failure_at_an_earlier_commit_is_no_result_for_this_head(self):
+        self.set_gate(FAILING_GATE)
+        self.assertNotEqual(self.run_gate().returncode, 0)
         recorded = self.head()
         self.commit_file("a.txt")
         brief = self.brief()
         self.assertEqual(len(brief.splitlines()), 1, brief)
         self.assertTrue(brief.startswith("gate_result: none for this head"), brief)
         self.assertIn(recorded, brief)  # it names the commit the stale record belongs to
-        self.assertNotIn("Ran 3 tests", brief)
-        # And the way back: the review stage runs the gate again, and the brief answers for the new head.
-        self.run_gate()
-        brief = self.brief()
-        self.assertIn(f"gate_result: pass (exit 0) at {self.head()}", brief)
-        self.assertIn("  Ran 3 tests", brief)
 
     def test_a_record_taken_on_a_dirty_working_tree_is_marked_and_counts_as_none(self):
         (self.repo / "scratch.txt").write_text("uncommitted\n")
@@ -501,27 +513,31 @@ class ReviewRoundTests(PanelRecordCalls, ShimTest):
         self.assertLess(out.index("review_round_recorded:"), out.index("context_tokens:"))
         self.assertIn("review_rounds_recorded: 2", self.rounds(), "the round is recorded before the hand-over")
 
-    def test_a_round_without_a_clean_tree_or_a_passing_gate_for_this_head_is_refused(self):
+    def test_a_round_needs_a_clean_tree_and_no_gate_on_its_head_but_refuses_one_that_failed_there(self):
         (self.repo / "scratch.txt").write_text("not committed")
         r = self.round(gate=False)
         self.assertEqual(r.returncode, 1, r.stdout)
         self.assertIn("scratch.txt", r.stderr)
         self.assertIn("record the round again", r.stderr)
         (self.repo / "scratch.txt").unlink()
-        # A gate that has not run on this head says nothing about the commit the round would be recorded at.
-        self.passing_gate()
-        self.commit("later.txt")
-        r = self.round(gate=False)
-        self.assertEqual(r.returncode, 1, r.stdout)
-        self.assertIn("the gate answers 'none' for this head", r.stderr)
-        self.assertIn("gate.sh run", r.stderr)
+        # A gate that ran on this head and failed is refused: the reviewers would read code that does not work.
         (self.repo / "Makefile").write_text(FAILING_GATE)
         self.git("add", "."); self.git("commit", "-qm", "chore: failing gate")
         self.assertNotEqual(self.run_script(WORKER / "gate.sh", "run").returncode, 0)
         r = self.round(gate=False)
         self.assertEqual(r.returncode, 1, r.stdout)
-        self.assertIn("the gate answers 'fail' for this head", r.stderr)
-        self.assertIn("review_rounds_recorded: none", self.rounds(), "and none of the three recorded a round")
+        self.assertIn("the gate ran on this head and failed", r.stderr)
+        self.assertIn("gate.sh run", r.stderr)
+        self.assertIn("review_rounds_recorded: none", self.rounds(), "and neither recorded a round")
+        # A gate that has not run on this head is no refusal: the gate runs once per review, before the
+        # summary, and the next round reads the fixes this round is recorded at.
+        (self.repo / "Makefile").write_text(PASSING_GATE)
+        self.git("add", "."); self.git("commit", "-qm", "chore: passing gate")
+        self.passing_gate()
+        self.commit("later.txt")
+        r = self.round(gate=False)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("review_rounds_recorded: 1", self.rounds())
 
     def test_records_count_while_their_commit_is_in_the_history_of_this_head(self):
         self.round()

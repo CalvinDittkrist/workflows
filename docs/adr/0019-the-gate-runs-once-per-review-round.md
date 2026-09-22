@@ -1,7 +1,7 @@
-# 0019. The gate runs once per review round, and its result is a fact in the brief
+# 0019. The gate runs once per review, and its result is a fact in the brief
 
 Date: 2026-09-21
-Status: accepted
+Status: accepted; amended 2026-09-22 (once per review, not per round; CI gates the repair pushes)
 Amends: [0004](0004-reviewers-as-fresh-read-only-subagents.md) (reviewers stay fresh, read-only contexts; only their most expensive command becomes a briefing fact)
 
 ## Context
@@ -17,16 +17,18 @@ Every reviewer prompt allowed "the gate `make check` or single tests and linters
 The gate of this repository takes about 190 s, so a round could never be shorter than one gate plus the reading. Five of them run in parallel in one worktree compete for the same CPU, and they share the working tree: tests that touch a common path or a common GitHub shim log can disturb each other, which surfaces later as flakiness nobody can reproduce. The gate result is also the same fact for all of them — the worker has to have a passing gate before it invokes the review at all, so the panel was paying five times for an answer it already had.
 
 ## Decision
-The gate runs once per review round, in the worker's main context, through `gate.sh run`, which runs `make check` ([ADR 0008](0008-make-check-is-the-single-gate.md)), records the result in this worktree's git directory ([ADR 0018](0018-worker-stages-hand-facts-over-through-the-worktree-git-dir.md)): the commit, whether the working tree was dirty, the exit status, the start time, the duration and the tail of the output, with the full output in a file beside it. The worker never types the gate command by hand, so the record cannot drift from the run.
+The gate runs once per review, in the worker's main context, through `gate.sh run`, which runs `make check` ([ADR 0008](0008-make-check-is-the-single-gate.md)), records the result in this worktree's git directory ([ADR 0018](0018-worker-stages-hand-facts-over-through-the-worktree-git-dir.md)): the commit, whether the working tree was dirty, the exit status, the start time, the duration and the tail of the output, with the full output in a file beside it. The worker never types the gate command by hand, so the record cannot drift from the run.
 
 The output of a passing run stays in that file: it is 36 KB of "ok" lines in this repository, and the run happens in the worker's own context, whose budget is the reason for the change. A failing run prints the whole output in the same call, so it is read rather than run again.
 
-`gate.sh print` is that record as a brief. It answers for the current head or not at all: a record from an older commit, and one taken on a dirty working tree, both read as "none for this head" rather than as an older value. The review stage runs the gate after committing the round's fixes, launches no reviewer when it failed, and copies the block verbatim into every reviewer's brief; the pull request stage's brief carries it beside the panel summary.
+`gate.sh print` is that record as a brief. The one word `gate.sh verdict` answers for the current head or not at all: a record from an older commit, and one taken on a dirty working tree, both read as "none" rather than as an older value; the brief states a pass at an earlier commit of the branch as such, with the commits since. The review stage launches no reviewer without a pass and copies the block verbatim into every reviewer's brief; the pull request stage's brief carries it beside the panel summary.
+
+Amended 2026-09-22: the gate runs once per review, not once per round. A gate of nine minutes after every round's fixes made a run of three rounds wait forty minutes on it, for facts the reviewers do not need: they read the fixes of the round before, and the block tells them the gate passed at an earlier commit and how many commits lie since. So the work stage's record is briefed to round 1, `panel.sh round` asks for a clean tree and refuses only a gate that failed on that very head, and the gate runs again once before `panel.sh record`, which still refuses a head it has not passed on. In the CI stage a repair push runs no local gate either: the required `check` job runs the same command on the push, and the stage waits for it anyway.
 
 No reviewer runs the full gate any more. All five prompts allow a single test or a single linter to verify one claim of their own, and a reviewer whose brief carries no gate result reports that as a finding instead of running the gate itself. `pr-author` quotes the recorded result and runs no verification command at all.
 
 ## Consequences
-A review round costs the reading and the reviewers' own single commands, plus one gate for the whole round instead of one per reviewer, and nothing in a round writes to the worktree while five contexts read it. The reviewers stay what [ADR 0004](0004-reviewers-as-fresh-read-only-subagents.md) made them — fresh, independent, read-only — and lose no judgement: they still verify a specific claim with a single test, they just no longer each re-establish the same fact.
+A review round costs the reading and the reviewers' own single commands and no gate of its own: one runs in the work stage and one before the summary, instead of one per reviewer per round, and nothing in a round writes to the worktree while five contexts read it. The reviewers stay what [ADR 0004](0004-reviewers-as-fresh-read-only-subagents.md) made them — fresh, independent, read-only — and lose no judgement: they still verify a specific claim with a single test, they just no longer each re-establish the same fact.
 
 The price is that a reviewer's gate result is now hearsay: it believes a block the worker pasted. The record's own defences are that it names the commit and is refused for any other one, and that the worker never produces it by hand; a worker that pasted a false block would be a worker that could equally misreport its own run. The output tail is repository output quoted into a brief, so it is indented by two spaces and a line of it cannot be read as a key of the block.
 

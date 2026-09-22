@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The gate result, run once per review round and handed to the reviewers as a fact (ADR 0019).
+# The gate result, run once per review and handed to the reviewers as a fact (ADR 0019).
 # Usage: gate.sh run     run the gate, record the result for this head, print the output only when it failed
 #        gate.sh print   the gate block the review and pull request briefs carry
 #        gate.sh verdict pass, fail or none for this head, the one word another script gates on
@@ -36,7 +36,7 @@ gate_outcome() { if [ "$1" = 0 ]; then printf 'pass (exit 0)'; else printf 'fail
 # What the record says about this head, in one word. A record is only ever read for the commit it was taken
 # at on a clean tree: an older one says nothing about this head, and one taken on a dirty working tree says
 # nothing about any commit, so both read as "none" rather than as a result. `print` states the same decision
-# at length, and `panel.sh round` gates on this word, so the two cannot drift apart.
+# at length, and `panel.sh record` gates on this word, so the two cannot drift apart.
 gate_state() {
   local commit
   [ -f "$record" ] || { printf 'none\n'; return; }
@@ -67,7 +67,7 @@ case "${1:-}" in
       tail -n "$tail_lines" "$log"; } > "$record.tmp"
     mv "$record.tmp" "$record"
     # A failing gate is read here, in the call that ran it, instead of being run a second time for its
-    # output. A passing one is not: this runs in the worker's own context once per round, and the whole
+    # output. A passing one is not: this runs in the worker's own context, and the whole
     # output of a passing gate is 36 KB of "ok" lines nobody reads, in the context the budget is kept in.
     [ "$status" = 0 ] || cat "$log"
     note=""; [ "$dirty" = no ] || note=", with a dirty working tree, so no reader counts it for that commit"
@@ -81,6 +81,15 @@ case "${1:-}" in
     # gate_state's, so the block and the one word can never say different things about the same record.
     if [ "$(gate_state)" != none ]; then
       wf_kv gate_result "$(gate_outcome "$(field status)") at $(git rev-parse --short "$commit")"
+      wf_kv gate_command "$(field command)"
+      wf_kv gate_started "$(field started), $(field duration) s"
+      wf_kv gate_log "$(field log) (the full output)"
+      print_tail
+    elif [ -n "$commit" ] && [ "$(field dirty)" = no ] && [ "$(field status)" = 0 ] && git merge-base --is-ancestor "$commit" HEAD 2>/dev/null; then
+      # A pass at an earlier commit of this branch is the fact the rounds after the first are briefed with:
+      # the fixes of a round are read by the next round and gated once, before the summary, so the block
+      # says how far the head is from the commit the gate ran on instead of hiding a pass behind "none".
+      wf_kv gate_result "pass (exit 0) at $(wf_short "$commit"), $(git rev-list --count "$commit..HEAD") commit(s) since, which it did not run on; the gate runs again before the summary"
       wf_kv gate_command "$(field command)"
       wf_kv gate_started "$(field started), $(field duration) s"
       wf_kv gate_log "$(field log) (the full output)"
