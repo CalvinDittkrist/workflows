@@ -1856,6 +1856,34 @@ class PrWaitTests(ShimTest):
         self.assertIn("draft: true;", r.stdout)
         self.assertNotIn("draft:", self.wait().stdout)
 
+    def test_a_conflicting_pull_request_is_reported_instead_of_green(self):
+        # A branch that conflicts with its base gets no pull_request workflow run from GitHub, so the rollup
+        # stays empty; after the grace period that read as green with nothing to do, the worker reported
+        # ready, and the merge was the first thing to refuse. The conflict is the CI stage's to fix, so the
+        # wait reports it first, before checks and before the bot, with the way to fix it.
+        (self.repo / ".github/workflows").mkdir(parents=True)
+        (self.repo / ".github/workflows/ci.yml").write_text("on: pull_request\n")
+        r = self.wait(SHIM_MERGEABLE="CONFLICTING", SHIM_MERGE_STATE="DIRTY", SHIM_CHECKS_EMPTY="1",
+                      WF_PR_BOT_REVIEWERS="")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("status: conflicts", r.stdout)
+        self.assertIn("merge_state: DIRTY (mergeable: CONFLICTING)", r.stdout)
+        self.assertIn("git merge origin/main", r.stdout, "the fix is printed with the answer")
+        self.assertNotIn("status: green", r.stdout)
+        # And with green checks and the bot review in, the conflict still comes first.
+        r = self.wait(SHIM_MERGEABLE="CONFLICTING", SHIM_MERGE_STATE="DIRTY",
+                      SHIM_REVIEWS='[{"author":{"login":"chatgpt-codex-connector"},"submittedAt":"2026-09-17T11:00:00Z"}]')
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("status: conflicts", r.stdout)
+
+    def test_mergeability_github_is_still_computing_is_waited_out_not_read_as_clean(self):
+        # Right after a push GitHub reports UNKNOWN until it has tried the merge; a green there could be a
+        # conflict a moment later.
+        r = self.wait(SHIM_MERGEABLE="UNKNOWN", SHIM_MERGE_STATE="UNKNOWN", WF_PR_BOT_REVIEWERS="")
+        self.assertEqual(r.returncode, 3, r.stdout + r.stderr)
+        self.assertIn("status: waiting", r.stdout)
+        self.assertIn("merge_state: UNKNOWN (mergeable: UNKNOWN)", r.stdout)
+
     def test_zero_review_wait_does_not_block_on_the_bot(self):
         r = self.wait(WF_PR_REVIEW_WAIT="0")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)

@@ -4,8 +4,9 @@
 # this script and not in the worker's head.
 # Usage: repair.sh round   count a repair round for this branch's pull request; refuses past the limit
 #        repair.sh print   what the record says, counting nothing; the CI stage's brief reads this
-# A repair round is a fix for failed checks or a round of /worker:address-reviews. Waiting for CI is
-# neither: a `waiting` answer runs pr-wait.sh again, not the stage, so it counts nothing.
+# A repair round is a fix for failed checks, a merge of the base after a conflict, or a round of
+# /worker:address-reviews. Waiting for CI is none of them: a `waiting` answer runs pr-wait.sh again, not
+# the stage, so it counts nothing.
 set -euo pipefail
 # shellcheck source=lib.sh
 . "$(dirname "$0")/lib.sh"

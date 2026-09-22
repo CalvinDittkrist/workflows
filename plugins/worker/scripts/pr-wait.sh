@@ -2,6 +2,9 @@
 # Wait for CI checks and bot reviews on a PR. Returns within --max-seconds so a tool call never hangs.
 # Usage: pr-wait.sh [<pr>] [--max-seconds N]
 # Exit: 0 done (see status line), 3 still waiting (call again), 1 error.
+# Status: conflicts (the branch cannot be merged into its base; comes first, because GitHub runs no
+# pull_request workflow for such a branch and an empty rollup would read as green), checks-failed,
+# review-comments, green, waiting.
 set -uo pipefail
 . "$(dirname "$0")/lib.sh"
 wf_need gh; wf_need jq
@@ -16,7 +19,10 @@ owner=$(wf_repo_owner); repo=$(wf_repo_name)
 start=$(date +%s)
 
 snapshot() {
-  view=$(gh pr view "$pr" --json number,url,state,isDraft,mergeStateStatus,statusCheckRollup,reviews,commits) || wf_die "cannot read PR #$pr"
+  view=$(gh pr view "$pr" --json number,url,state,isDraft,mergeable,mergeStateStatus,statusCheckRollup,reviews,commits) || wf_die "cannot read PR #$pr"
+  # Whether the branch merges into its base: MERGEABLE, CONFLICTING, or UNKNOWN while GitHub is still
+  # trying the merge after a push, which is waited out like a pending check and never read as clean.
+  mergeable=$(printf '%s' "$view" | jq -r '.mergeable // ""')
   head_at=$(printf '%s' "$view" | jq -r '.commits[-1].committedDate')
   head_epoch=$(wf_epoch "$head_at" || date +%s)
   checks_total=$(printf '%s' "$view" | jq -r '.statusCheckRollup | length')
@@ -42,13 +48,19 @@ report() {
   wf_kv checks "total=$checks_total pass=$((checks_total-checks_fail-checks_pending)) fail=$checks_fail pending=$checks_pending"
   wf_kv bot_reviews "$bot_reviews on the pull request (expected from: $bots)"
   wf_kv unresolved_threads "$unresolved"
-  wf_kv merge_state "$merge_state"
+  wf_kv merge_state "$merge_state (mergeable: ${mergeable:-unknown})"
   # A draft is the pull request stage's verdict that the panel did not pass (ADR 0018). Nothing in the
   # pipeline lifts it, and no bot reviews it, so say so instead of reporting a plain green.
   [ "$is_draft" != true ] || wf_kv draft "true; the reviewer panel did not pass or left no summary, so the maintainer reads the body and lifts the draft"
   if [ "$checks_fail" -gt 0 ]; then
     printf 'failed_checks:\n'; printf '%s' "$view" | jq -r '.statusCheckRollup[] | select((.conclusion // .state // "") as $c | $c == "FAILURE" or $c == "ERROR" or $c == "CANCELLED" or $c == "TIMED_OUT") | "  - \(.name // .context): \(.detailsUrl // .targetUrl // "")"'
     printf 'help: gh run view <run-id> --log-failed  (run id is the number in the details URL)\n'
+  fi
+  # The fix is printed with the answer, so a context that entered the stage without the skill's text has
+  # it too. A merge and not a rebase: the branch is pushed, and the worker never rewrites pushed history.
+  if [ "$1" = conflicts ]; then
+    base=$(wf_base_branch)
+    printf 'help: the branch conflicts with %s, so no pull_request workflow ran. Count a repair round, then git fetch origin %s && git merge origin/%s, resolve the conflicts, commit the merge, run the gate, push, and run /worker:ci again. Never rebase or force-push.\n' "$base" "$base" "$base"
   fi
 }
 
@@ -61,6 +73,8 @@ while :; do
   if [ "$checks_total" -eq 0 ] && [ $((now-head_epoch)) -lt "$checks_grace" ] && [ -n "$(find .github/workflows -maxdepth 1 \( -name '*.yml' -o -name '*.yaml' \) 2>/dev/null | head -n 1)" ]; then
     checks_pending=1
   fi
+  if [ "$mergeable" = CONFLICTING ]; then report "conflicts"; exit 0; fi
+  [ "$mergeable" != UNKNOWN ] || checks_pending=1
   if [ "$checks_pending" -eq 0 ]; then
     [ -n "$checks_done_at" ] || checks_done_at=$now  # no completedAt in the rollup (statuses): count from first sight
     if [ "$checks_fail" -gt 0 ]; then report "checks-failed"; exit 0; fi
