@@ -1,6 +1,9 @@
 import json
+import os
 import re
 import shlex
+import signal
+import subprocess
 import time
 import unittest
 from pathlib import Path
@@ -389,7 +392,7 @@ class GateRecordTests(ShimTest):
         for args in ([], ["records"]):
             r = self.run_script(WORKER / "gate.sh", *args)
             self.assertEqual(r.returncode, 1, r.stdout)
-            self.assertTrue(r.stderr.startswith("error: usage: gate.sh run | gate.sh print"), r.stderr)
+            self.assertTrue(r.stderr.startswith("error: usage: gate.sh run | gate.sh wait | gate.sh print"), r.stderr)
 
     def test_the_pull_request_brief_carries_the_gate_result(self):
         """End to end over the wiring: what the pr skill injects has to print the recorded gate result,
@@ -408,6 +411,119 @@ class GateRecordTests(ShimTest):
         self.run_gate()
         r = self.run_script(WORKER / "gate.sh", "print", cwd=other)
         self.assertTrue(r.stdout.startswith("gate_result: none recorded for this head"), r.stdout)
+
+
+# A gate slower than the call that starts it: it counts its starts, so a test sees whether a second make ran.
+SLOW_GATE = "check:\n\t@echo started >> starts.log\n\t@echo running the gate\n\t@sleep 3\n\t@echo 'Ran 3 tests in 3s'\n"
+
+
+class SlowGateTests(ShimTest):
+    """A gate that outlasts the Bash tool's ceiling runs on detached from the call and is read by waiting
+    for it in slices under that ceiling (issue #108). The tests lower the slice to a second."""
+
+    def setUp(self):
+        super().setUp()
+        self.git("checkout", "-qb", "feat/108-x")
+        (self.repo / ".gitignore").write_text("starts.log\n")
+        (self.repo / "Makefile").write_text(SLOW_GATE)
+        self.git("add", "."); self.git("commit", "-qm", "chore: slow gate")
+        self.head = self.git("rev-parse", "--short", "HEAD").strip()
+
+    def gate(self, *args, slice=1):
+        return self.run_script(WORKER / "gate.sh", *args, WF_WAIT_SLICE=str(slice))
+
+    def wait_to_the_end(self):
+        """What the worker does: `gate.sh wait` again while it answers that the gate is still running."""
+        for _ in range(30):
+            r = self.gate("wait")
+            if r.returncode != 3:
+                return r
+            self.assertIn("gate_running:", r.stdout)
+        self.fail("the gate never ended")
+
+    def starts(self):
+        return (self.repo / "starts.log").read_text().count("started")
+
+    def test_a_gate_longer_than_one_call_is_waited_for_and_leaves_the_same_record(self):
+        r = self.gate("run")
+        self.assertEqual(r.returncode, 3, r.stdout + r.stderr)
+        self.assertIn(f"gate_running: at {self.head} since ", r.stdout)
+        self.assertIn("gate.sh wait", r.stdout)
+        self.assertTrue(self.run_script(WORKER / "gate.sh", "print").stdout.startswith("gate_result: none"))
+        r = self.wait_to_the_end()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(len(r.stdout.splitlines()), 2, r.stdout)  # the answer of a passing run, as before
+        self.assertIn(f"gate_recorded: pass (exit 0) at {self.head}", r.stdout)
+        brief = self.run_script(WORKER / "gate.sh", "print").stdout
+        self.assertIn(f"gate_result: pass (exit 0) at {self.head}", brief)
+        self.assertRegex(brief, r"gate_started: \S+, [3-9] s")
+        self.assertIn("  Ran 3 tests in 3s", brief)
+        self.assertEqual(self.run_script(WORKER / "gate.sh", "verdict").stdout, "pass\n")
+        self.assertEqual(self.starts(), 1)
+
+    def test_the_gate_survives_the_call_that_started_it_being_killed(self):
+        # What the Bash tool does at its ceiling: the call and its process group end, mid-gate.
+        call = subprocess.Popen(["bash", str(WORKER / "gate.sh"), "run"], cwd=self.repo, start_new_session=True,
+                                env=self.env(WF_WAIT_SLICE="60"), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        deadline = time.time() + 10
+        while not (self.repo / "starts.log").exists() and time.time() < deadline:
+            time.sleep(0.05)
+        os.killpg(call.pid, signal.SIGKILL)
+        call.communicate()
+        r = self.wait_to_the_end()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn(f"gate_recorded: pass (exit 0) at {self.head}", r.stdout)
+        self.assertIn("Ran 3 tests in 3s", Path(re.search(r"gate_log: (\S+)", r.stdout).group(1)).read_text())
+
+    def test_a_failing_slow_gate_prints_its_output_in_the_call_that_sees_it_end(self):
+        (self.repo / "Makefile").write_text(SLOW_GATE + "\t@echo 'FAILED (failures=1)'\n\t@exit 3\n")
+        self.git("add", "."); self.git("commit", "-qm", "chore: failing slow gate")
+        self.assertEqual(self.gate("run").returncode, 3)
+        r = self.wait_to_the_end()
+        self.assertNotIn(r.returncode, (0, 1, 3), r.stdout + r.stderr)
+        self.assertIn("FAILED (failures=1)", r.stdout)
+        self.assertIn(f"gate_recorded: fail (exit {r.returncode})", r.stdout)
+        self.assertEqual(self.run_script(WORKER / "gate.sh", "verdict").stdout, "fail\n")
+
+    def test_a_second_run_joins_the_gate_in_flight_instead_of_starting_another(self):
+        self.assertEqual(self.gate("run").returncode, 3)
+        r = self.gate("run", slice=30)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn(f"gate_recorded: pass (exit 0) at {self.head}", r.stdout)
+        self.assertEqual(self.starts(), 1)
+
+    def test_a_run_at_another_head_while_a_gate_is_in_flight_is_refused(self):
+        self.assertEqual(self.gate("run").returncode, 3)
+        (self.repo / "a.txt").write_text("a")
+        self.git("add", "."); self.git("commit", "-qm", "feat: a")
+        r = self.gate("run")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn(f"a gate is running at {self.head}", r.stderr)
+        self.assertIn("gate.sh wait", r.stderr)
+        self.assertEqual(self.wait_to_the_end().returncode, 0)
+        self.assertEqual(self.starts(), 1)
+
+    def test_a_gate_whose_process_is_gone_without_a_record_is_reported_so(self):
+        self.assertEqual(self.gate("run").returncode, 3)
+        running = Path(self.git("rev-parse", "--path-format=absolute", "--git-dir").strip()) / "worker/gate.running"
+        pid = int(re.search(r"^pid: (\d+)$", running.read_text(), re.M).group(1))
+        os.killpg(pid, signal.SIGKILL)  # the run and its make, as a power cut or an operator would end them
+        r = self.gate("wait")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn(f"the gate started at {self.head} ended without a record", r.stderr)
+        self.assertIn("gate.sh run", r.stderr)
+        # And the way on: a new run starts, it is not refused as one in flight.
+        self.assertEqual(self.gate("run").returncode, 3)
+        self.assertEqual(self.wait_to_the_end().returncode, 0)
+
+    def test_wait_with_nothing_in_flight_answers_with_the_record_or_says_there_is_none(self):
+        r = self.gate("wait")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("no gate is running and none is recorded", r.stderr)
+        self.gate("run", slice=30)
+        r = self.gate("wait")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn(f"gate_recorded: pass (exit 0) at {self.head}", r.stdout)
 
 
 # What one round hands to `panel.sh round`: the reviewers that ran in it, its fixes, its disputes.
