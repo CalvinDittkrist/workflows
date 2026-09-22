@@ -33,6 +33,19 @@ fi
 if [ -n "$(git status --porcelain)" ]; then
   die "the working tree has uncommitted changes; commit them, so the tag names what is released"
 fi
+# A binary that runs on a host is built from what was reviewed and merged, so origin decides what is
+# taggable, not this checkout: one question asks whether the tag is taken there and what main points
+# at (docs/repo-standard.md: releases are tagged on main).
+remote=$(git ls-remote origin "refs/tags/$tag" refs/heads/main) \
+  || die "cannot read the tags and branches of origin; a release is tagged from a checkout that reaches it"
+if printf '%s\n' "$remote" | awk -v t="refs/tags/$tag" '$2 == t { taken = 1 } END { exit !taken }'; then
+  die "the tag $tag exists on origin; bump the version in factory/VERSION and commit it"
+fi
+main=$(printf '%s\n' "$remote" | awk '$2 == "refs/heads/main" { print $1 }')
+[ -n "$main" ] || die "origin has no main branch; releases are tagged on main (docs/repo-standard.md)"
+head=$(git rev-parse HEAD)
+[ "$head" = "$main" ] || die "HEAD is $head and origin/main is $main; releases are tagged on main \
+(docs/repo-standard.md), so a released binary is built from a commit that was reviewed and gated"
 # The gate is what a release stands on: the binaries CI builds are never gated again.
 make check || die "the gate failed; a release is tagged from a green gate, fix it and run this again"
 git tag -a "$tag" -m "factory v$version"

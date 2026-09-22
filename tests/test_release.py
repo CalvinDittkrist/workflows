@@ -29,6 +29,12 @@ class FactoryReleaseTests(unittest.TestCase):
         self.git("init", "-q", "-b", "main")
         self.git("config", "user.email", "t@example.com")
         self.git("config", "user.name", "t")
+        # A release is tagged on main, so the fixture has the origin the script asks what main points
+        # at and which tags are taken. A bare repository next to it answers both without a network.
+        self.origin = Path(self.tmp.name) / "origin.git"
+        subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(self.origin)],
+                       env=self.env(), check=True, text=True, capture_output=True)
+        self.git("remote", "add", "origin", str(self.origin))
         self.commit()
 
     def version(self, said):
@@ -49,9 +55,13 @@ class FactoryReleaseTests(unittest.TestCase):
         return subprocess.run(["git", *args], cwd=self.repo, env=self.env(),
                               check=True, text=True, capture_output=True).stdout
 
-    def commit(self):
+    def commit(self, push=True):
+        """A commit a release can be tagged from, which means one that is on origin/main too.
+        `push=False` leaves it where a maintainer's unpushed commit would be."""
         self.git("add", "-A")
         self.git("commit", "-qm", "release fixture")
+        if push:
+            self.git("push", "-q", "origin", "main")
 
     def release(self, *args):
         return subprocess.run(["bash", "scripts/release.sh", *args], cwd=self.repo,
@@ -59,6 +69,12 @@ class FactoryReleaseTests(unittest.TestCase):
 
     def tags(self):
         return self.git("tag").split()
+
+    def origin_tags(self):
+        """The tags origin carries. An annotated tag is listed twice, the second time dereferenced
+        to the commit it points at; the name is what matters here."""
+        named = [line.split("refs/tags/")[1] for line in self.git("ls-remote", "--tags", "origin").splitlines()]
+        return [tag for tag in named if not tag.endswith("^{}")]
 
     def test_the_factory_is_tagged_from_the_version_file_after_the_gate(self):
         r = self.release("factory")
@@ -68,7 +84,15 @@ class FactoryReleaseTests(unittest.TestCase):
         # Annotated, and it says what it is: `git show` of the tag carries the message.
         self.assertIn("factory v0.1.0", self.git("tag", "-l", "-n1", "factory/v0.1.0"))
         # Nothing pushed without --push, and the command that would is printed.
+        self.assertEqual(self.origin_tags(), [])
         self.assertIn("git push origin factory/v0.1.0", r.stdout)
+
+    def test_push_puts_the_tag_on_origin(self):
+        """`release.sh factory --push` is the command the agent instructions name, and the tag on
+        origin is the whole trigger: nothing else makes CI build the binaries."""
+        r = self.release("factory", "--push")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.origin_tags(), ["factory/v0.1.0"])
 
     def test_the_tag_is_neither_a_plugin_tag_nor_a_milestone_tag(self):
         self.version("1.2.3")
@@ -85,6 +109,29 @@ class FactoryReleaseTests(unittest.TestCase):
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("error: the tag factory/v0.1.0 exists; bump the version", r.stderr)
         self.assertNotIn("the gate ran", r.stdout)
+
+    def test_a_tag_that_exists_on_origin_is_refused_before_the_gate_runs(self):
+        """A checkout that has not fetched for a while knows nothing of a tag another release made:
+        without asking origin it would run the whole gate and only then fail on the push."""
+        self.git("tag", "factory/v0.1.0")
+        self.git("push", "-q", "origin", "factory/v0.1.0")
+        self.git("tag", "-d", "factory/v0.1.0")
+        r = self.release("factory")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("error: the tag factory/v0.1.0 exists on origin", r.stderr)
+        self.assertNotIn("the gate ran", r.stdout)
+        self.assertEqual(self.tags(), [])
+
+    def test_a_commit_that_is_not_what_origin_main_points_at_is_refused(self):
+        """The binaries are built from the tag and never gated again, so what stands behind them is
+        that their commit went through a pull request onto main (docs/repo-standard.md)."""
+        self.version("0.2.0")
+        self.commit(push=False)
+        r = self.release("factory")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("releases are tagged on main", r.stderr)
+        self.assertNotIn("the gate ran", r.stdout)
+        self.assertEqual(self.tags(), [])
 
     def test_a_failing_gate_tags_nothing(self):
         self.gate(green=False)
@@ -127,34 +174,73 @@ class FactoryReleaseTests(unittest.TestCase):
                         f"{self.tags()[0]} does not match {trigger.group(1)}")
 
 
-class FactoryReleaseWorkflowTests(unittest.TestCase):
-    """The workflow that builds the binaries: what starts it, and what it builds."""
+class WorkflowTriggerTests(unittest.TestCase):
+    """Which push starts which workflow. The binaries are built by a factory version tag and by
+    nothing else, and a milestone tag of the orchestrator still starts nothing at all."""
+
+    # One push per kind of ref this repository sees, and the workflows it has to start.
+    STARTS = {
+        "refs/tags/factory/v0.1.0": {"factory-release"},  # what scripts/release.sh factory creates
+        "refs/tags/v1.2.3": set(),                        # a milestone the orchestrator releases
+        "refs/tags/worker--v1.2.3": set(),                # a plugin release of `claude plugin tag`
+        "refs/heads/main": {"ci"},
+        "refs/heads/feat/61-something": set(),
+    }
 
     def setUp(self):
-        self.workflow = WORKFLOW.read_text()
-        self.trigger = self.workflow.split("jobs:")[0]
+        self.workflows = sorted((ROOT / ".github" / "workflows").glob("*.yml"))
+        self.assertTrue(self.workflows, "no workflows to read")
 
-    def test_nothing_but_a_factory_version_tag_starts_it(self):
-        self.assertIn("tags: ['factory/v*']", self.trigger)
-        for never in ("branches:", "pull_request:", "workflow_dispatch:", "schedule:"):
-            self.assertNotIn(never, self.trigger, f"{never} would build binaries outside a release")
+    def test_a_push_starts_the_workflows_it_should_and_no_others(self):
+        for ref, expected in self.STARTS.items():
+            with self.subTest(ref=ref):
+                started = {w.stem for w in self.workflows if starts(w, ref)}
+                self.assertEqual(started, expected)
 
-    def test_the_gate_workflow_is_not_started_by_a_tag(self):
-        ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text()
-        self.assertNotIn("tags:", ci.split("jobs:")[0])
-        # The milestone release of the orchestrator tags vX.Y.Z and expects no workflow of its own.
-        self.assertNotIn("factory/v", ci)
+    def test_every_push_trigger_is_one_this_test_can_read(self):
+        """The triggers are read as written, in brackets. A workflow that names its patterns some
+        other way would pass the test above by matching nothing, so it fails here instead."""
+        for workflow in self.workflows:
+            with self.subTest(workflow=workflow.name):
+                if "  push:" not in on_block(workflow):
+                    continue
+                self.assertTrue(patterns(workflow, "branches") or patterns(workflow, "tags"),
+                                "the push trigger names no branch or tag pattern in brackets")
 
-    def test_it_builds_a_static_binary_for_both_factory_host_architectures(self):
-        self.assertIn("CGO_ENABLED=0 GOOS=linux", self.workflow)
-        for arch in ("amd64", "arm64"):
-            self.assertIn(f"dist/factory-linux-{arch}", self.workflow)
-        self.assertIn("sha256sum factory-linux-* > checksums.txt", self.workflow)
-        self.assertIn("dist/checksums.txt", self.workflow)
-        # With the dashboard inside: the host runs one file and no Node (ADR 0033).
-        self.assertIn("make ui", self.workflow)
+    def test_the_binaries_are_built_by_a_push_and_by_no_other_event(self):
+        """A pull_request, schedule or workflow_dispatch trigger would build release binaries from
+        something that is not a release."""
+        events = [line.strip().rstrip(":") for line in on_block(WORKFLOW) if re.fullmatch(r"  \w+:", line)]
+        self.assertEqual(events, ["push"])
 
-    def test_the_agent_instructions_name_the_release_command(self):
-        agents = (ROOT / "AGENTS.md").read_text()
-        self.assertIn("scripts/release.sh factory --push", agents)
-        self.assertIn("factory/VERSION", agents)
+
+def on_block(workflow):
+    """The lines of a workflow's `on:` block: everything indented under it."""
+    lines = []
+    for line in workflow.read_text().split("\non:\n", 1)[1].splitlines():
+        if line and not line.startswith(" "):
+            break
+        lines.append(line)
+    return lines
+
+
+def patterns(workflow, kind):
+    """The branch or tag patterns a push has to match to start the workflow."""
+    found, under = [], None
+    for line in on_block(workflow):
+        if re.fullmatch(r"  \w+:", line):
+            under = line.strip()
+        elif under == "push:" and line.strip().startswith(f"{kind}: ["):
+            found += re.findall(r"[^\s,'\"\[\]]+", line.split(":", 1)[1])
+    return found
+
+
+def starts(workflow, ref):
+    """Whether pushing `ref` starts `workflow`, matched the way GitHub matches a push trigger."""
+    kind, name = ("branches", ref[len("refs/heads/"):]) if ref.startswith("refs/heads/") \
+        else ("tags", ref[len("refs/tags/"):])
+    return any(fnmatch.fnmatch(name, said) for said in patterns(workflow, kind))
+
+
+if __name__ == "__main__":
+    unittest.main()
