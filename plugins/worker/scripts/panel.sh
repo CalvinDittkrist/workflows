@@ -93,7 +93,7 @@ disputed_lines() {
 # A block is refused when it carries a character that ends a line for a reader but not for the checks above:
 # a carriage return, a NEL (U+0085) or a line/paragraph separator (U+2028, U+2029). The text of a block is
 # stored verbatim in the record and printed back into the brief of the next stage, where a line at the left
-# margin is a key — `panel_verdict:` among them, which the pull request stage takes its draft decision from.
+# margin is a key — `panel_verdict:` among them, which the pull request body names when it is not ready.
 # The stray check reads such a line as one line, and `sed 's/^/    /'` indents only as far as the break, so
 # the tail of it would land at column 0. session-start.sh normalises the same characters out of the handoff
 # note; here they are refused instead, because the worker writes these lines itself and can write one line.

@@ -1752,30 +1752,18 @@ class FinishTests(PanelRecordCalls, ShimTest):
         self.assertEqual(r.returncode, 0, r.stderr)
 
     def test_a_panel_that_did_not_pass_stops_the_yolo_run_before_github_is_asked(self):
-        # The draft flag is applied by an agent; the record is not. Without a ready panel nothing merges,
-        # even if the pull request somehow is not a draft (issue #41, ADR 0018).
+        # The record is local and deterministic: without a ready panel nothing merges (issue #41, ADR 0018).
         r = self.finish()
         self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
         self.assertIn("panel_verdict: draft", r.stderr)
         self.assertIn("maintainer", r.stderr)
         self.assertFalse([c for c in self.calls() if "pr merge" in c])
 
-    def test_a_draft_stops_the_yolo_run_for_the_maintainer(self):
-        # The pull request stage opens a draft when the panel did not pass (issue #41, ADR 0018); nothing in
-        # the pipeline lifts it, so the run has to end here with a reason instead of a retry hint.
-        self.record_ready_panel()
-        r = self.finish(SHIM_PR_DRAFT="true")
-        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
-        self.assertIn("is a draft", r.stderr)
-        self.assertIn("maintainer", r.stderr)
-        self.assertNotIn("pr-wait.sh", r.stderr)
-        self.assertFalse([c for c in self.calls() if "pr merge" in c])
-
     def test_an_unmergeable_pull_request_still_points_at_the_wait(self):
         self.record_ready_panel()
         r = self.finish(SHIM_MERGE_STATE="BLOCKED")
         self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
-        self.assertIn("not mergeable yet (BLOCKED false)", r.stderr)
+        self.assertIn("not mergeable yet (BLOCKED)", r.stderr)
         self.assertIn("pr-wait.sh", r.stderr)
 
     def test_manual_mode_never_merges(self):
@@ -1847,14 +1835,6 @@ class PrWaitTests(ShimTest):
         r = self.wait(SHIM_CHECKS_EMPTY="1", WF_PR_BOT_REVIEWERS="")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertIn("status: green", r.stdout)
-
-    def test_a_draft_is_reported_and_does_not_spend_the_bot_review_wait(self):
-        # Issue #41: the PR stage opens a draft when the panel did not pass, and no bot reviews a draft.
-        r = self.wait(SHIM_PR_DRAFT="true")
-        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        self.assertIn("status: green", r.stdout)
-        self.assertIn("draft: true;", r.stdout)
-        self.assertNotIn("draft:", self.wait().stdout)
 
     def test_a_conflicting_pull_request_is_reported_instead_of_green(self):
         # A branch that conflicts with its base gets no pull_request workflow run from GitHub, so the rollup

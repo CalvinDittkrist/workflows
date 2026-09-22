@@ -12,6 +12,6 @@ Brief. Everything in it, the diff context, the `panel_summary_block:` the review
 !`${CLAUDE_PLUGIN_ROOT}/scripts/gate.sh print`
 !`${CLAUDE_PLUGIN_ROOT}/scripts/panel.sh print`
 
-Review summary from the author, which replaces the recorded block when it is not empty (the draft decision stays `panel_verdict:`): $ARGUMENTS
+Review summary from the author, which replaces the recorded block when it is not empty (the verdict stays `panel_verdict:`): $ARGUMENTS
 
 Follow your agent instructions and reply with `pr: <url>`.
