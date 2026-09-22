@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Test shim for quota-axi, used by the factory's Go tests: it answers the factory's quota check from a
-# plan the test writes, one line per call, in the shape of quota-axi 0.1.50's `--json` report
+# plan the test writes, one line per call, in the shape of quota-axi 0.1.49's `--json` report
 # (schema version 5), so the real binary reads a real report and no provider is asked.
 #
 #   QUOTA_SHIM_PLAN  the answers, one line per call and the last one repeated once the plan is used
