@@ -514,8 +514,7 @@ func TestAWorktreeRemovedByHandStillHasItsBranchPushedBeforeThatBranchGoes(t *te
 
 	data := filepath.Join(t.TempDir(), "data")
 	clone := gh.cloneInto(t, data, "acme/edge-sensors")
-	const poll = 50 * time.Millisecond
-	f := gh.work(t, config{"poll": poll.String(), "deadline": "90s", "data_dir": data,
+	f := gh.work(t, config{"poll": "50ms", "deadline": "90s", "data_dir": data,
 		"repositories": []string{"acme/edge-sensors"}})
 	if run := f.ended(t, 1); !run.Holding {
 		t.Fatalf("run 1 ended as %q (%s) holding=%v, want a run that holds the issue; the factory's log:\n%s",
