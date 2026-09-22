@@ -70,6 +70,16 @@ func run(config string, fake, paused bool) error {
 			settings.Listen, bound, defaultListen)
 	}
 
+	// The address is only half of it: a second factory on this host may be configured to answer on
+	// another one, and what the two of them would then share is the data directory. It is taken
+	// before a run record, a clone or a worktree is touched, and the kernel gives it back when this
+	// process is gone.
+	release, err := lockDataDir(settings.DataDir)
+	if err != nil {
+		return err
+	}
+	defer release()
+
 	factory, err := New(settings, fake)
 	if err != nil {
 		return err

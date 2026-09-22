@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -267,8 +268,13 @@ func TestFakeModeWorksTheCannedQueueOneRunAtATime(t *testing.T) {
 			t.Errorf("run %d has %d events in its log and %d in its record", run.ID, lines, run.EventCount)
 		}
 	}
-	if entries, _ := filepath.Glob(filepath.Join(f.data, "*")); len(entries) != 2*len(cannedIssues) {
-		t.Errorf("the data directory holds %d files, want one record and one event log per run", len(entries))
+	// Nothing else is written there: one record and one event log per run, beside the lock the
+	// factory holds the directory with while it runs.
+	if entries, _ := filepath.Glob(filepath.Join(f.data, "*")); len(entries) != 2*len(cannedIssues)+1 {
+		t.Errorf("the data directory holds %d files, want one record and one event log per run and the lock", len(entries))
+	}
+	if _, err := os.Stat(filepath.Join(f.data, lockFile)); err != nil {
+		t.Errorf("the data directory has no lock (%v); a second factory would work it beside this one", err)
 	}
 
 	// A subagent's events are told apart from the worker's own by the tool-use id they carry.
@@ -474,6 +480,18 @@ func TestAnInvalidConfigurationIsRefusedWithTheFix(t *testing.T) {
 		{"repository that reads as a flag", `{"data_dir":"data","repositories":["-acme/repo"]}`, `is not owner/name`}, // it would name a directory outside the data directory
 		{"base branch that reads as a flag", `{"data_dir":"data","repositories":[{"name":"a/b","base":"-dev"}]}`, `is not a branch name; write it as "dev"`},
 		{"base branch that walks out of refs", `{"data_dir":"data","repositories":[{"name":"a/b","base":"../../x"}]}`, `is not a branch name`},
+		// Names git itself refuses for refs/heads/<name>: they would pass the start and fail the first
+		// claim of that repository, which costs an issue a run (TestABaseBranchIsANameGitTakes).
+		{"base branch git locks a reference with", `{"data_dir":"data","repositories":[{"name":"a/b","base":"release.lock"}]}`, `is not a branch name`},
+		{"base branch with an empty component", `{"data_dir":"data","repositories":[{"name":"a/b","base":"feature//next"}]}`, `is not a branch name`},
+		{"base branch that ends in a dot", `{"data_dir":"data","repositories":[{"name":"a/b","base":"release."}]}`, `is not a branch name`},
+		{"base branch of a hidden component", `{"data_dir":"data","repositories":[{"name":"a/b","base":"team/.secret"}]}`, `is not a branch name`},
+		{"worker arguments that replace the settings", `{"data_dir":"data","repositories":["a/b"],"worker_args":["--settings","{}"]}`, `worker_args carries --settings, which the factory gives the worker itself`},
+		{"worker arguments that replace the settings with one word", `{"data_dir":"data","repositories":["a/b"],"worker_args":["--settings={}"]}`, `worker_args carries --settings`},
+		{"worker arguments that replace the agent", `{"data_dir":"data","repositories":["a/b"],"worker_args":["--agent","planner"]}`, `worker_args carries --agent`},
+		{"worker arguments that replace the prompt", `{"data_dir":"data","repositories":["a/b"],"worker_args":["-p","/worker:pr"]}`, `worker_args carries -p`},
+		{"worker arguments that replace the permission mode", `{"data_dir":"data","repositories":["a/b"],"worker_args":["--permission-mode","plan"]}`, `worker_args carries --permission-mode`},
+		{"worker arguments that replace the output format", `{"data_dir":"data","repositories":["a/b"],"worker_args":["--output-format","text"]}`, `worker_args carries --output-format`},
 		{"repository object with an unknown field", `{"data_dir":"data","repositories":[{"name":"a/b","branch":"dev"}]}`, `a repository is "owner/name" or {"name": "owner/name", "base": "dev"}`},
 		{"no data directory", `{"repositories":["a/b"]}`, `data_dir is missing; name the directory`},
 		{"unknown field", `{"data_dir":"data","repositories":["a/b"],"listn":"x"}`, `unknown field "listn"; the fields are listen, label`},
@@ -529,6 +547,98 @@ func TestAnInvalidConfigurationIsRefusedWithTheFix(t *testing.T) {
 			t.Errorf("the factory said %q, want the fix for a missing configuration", strings.TrimSpace(string(output)))
 		}
 	})
+}
+
+// A base branch reaches git as a reference, so a name the factory takes has to be a name git takes:
+// one git refuses passes the start of the factory and fails the first claim of that repository,
+// which costs an issue a run. `git check-ref-format` is the rule itself and this holds the Go
+// against it. Where the Go is narrower it is so on purpose, and the test says which names those are:
+// a branch of this workflow is spelled the way its slugs are, and a name that reaches a command line
+// must not read as a flag.
+func TestABaseBranchIsANameGitTakes(t *testing.T) {
+	for _, c := range []struct {
+		name     string
+		narrower bool // git takes it and the factory does not
+	}{
+		{name: "main"},
+		{name: "dev"},
+		{name: "release/1.2"},
+		{name: "team/feature-a"},
+		{name: "v1.0.0"},
+		{name: "a.b.c"},
+		{name: "release.lock"},
+		{name: "team/x.lock"},
+		{name: "feature//next"},
+		{name: "release."},
+		{name: "team/.secret"},
+		{name: ".dev"},
+		{name: "a..b"},
+		{name: "/dev"},
+		{name: "dev/"},
+		{name: "a b"},
+		{name: "a~b"},
+		{name: "x@{1}"},
+		{name: "-dev", narrower: true},      // it would read as a flag on a command line
+		{name: "füllstand", narrower: true}, // no branch of this workflow is spelled with it
+		{name: "a+b", narrower: true},
+		{name: "@", narrower: true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			taken := exec.Command("git", "check-ref-format", "refs/heads/"+c.name).Run() == nil
+			if c.narrower {
+				if !taken {
+					t.Fatalf("git refuses %q, so it is not a name the factory is narrower than; move it to the names both refuse", c.name)
+				}
+				if validBase(c.name) {
+					t.Errorf("the factory takes %q as a base branch; this workflow spells no branch that way", c.name)
+				}
+				return
+			}
+			if validBase(c.name) != taken {
+				t.Errorf("the factory %s %q as a base branch, git %s it as refs/heads/%s",
+					says(validBase(c.name)), c.name, says(taken), c.name)
+			}
+		})
+	}
+}
+
+// says is how a test reads a yes or a no of the two rules it compares.
+func says(yes bool) string {
+	if yes {
+		return "takes"
+	}
+	return "refuses"
+}
+
+// Two factories on one host share nothing, and the data directory is what they would share first:
+// the run ids, the records and the clones a worker branches off are written there as if one process
+// were alone with them. The address is no guard for that, because a second configuration names a
+// second address, so the directory itself is held — and it is held by the kernel, so a factory that
+// was killed leaves none of it behind for the next start.
+func TestASecondFactoryOnTheSameDataDirectoryStartsNothing(t *testing.T) {
+	first := start(t, config{"paused": true})
+	path := writeConfig(t, config{"listen": freeAddress(t), "data_dir": first.data, "paused": true,
+		"repositories": []string{"acme/edge-sensors"}})
+
+	// A deadline of its own, so that a second factory which does start is read as the failure it is
+	// rather than as a test that hangs until the suite's own timeout.
+	refused, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	output, err := exec.CommandContext(refused, binary, "-config", path, "-fake").CombinedOutput()
+	if err == nil || refused.Err() != nil {
+		t.Fatalf("a second factory started on the data directory the first one holds (%s); it said %q",
+			first.data, strings.TrimSpace(string(output)))
+	}
+	if !strings.HasPrefix(string(output), "error: ") || !strings.Contains(string(output), "one factory works one data directory") {
+		t.Errorf("the second factory said %q, want an error line naming the data directory it cannot share", strings.TrimSpace(string(output)))
+	}
+
+	// The first factory is killed rather than asked to stop: what it held must be free anyway.
+	if err := first.cmd.Process.Signal(syscall.SIGKILL); err != nil {
+		t.Fatal(err)
+	}
+	_ = first.cmd.Wait()
+	launch(t, config{"data_dir": first.data, "paused": true}, nil, "-fake")
 }
 
 func TestStoppingEndsTheWorkerAndTheRunIsInterrupted(t *testing.T) {

@@ -92,10 +92,45 @@ var branchSpelling = regexp.MustCompile(`^[A-Za-z0-9._/-]+$`)
 
 // validBase says whether a name may be used as a base branch. It is asked of the configuration here
 // and of what a repository declares for itself (declaredBase), because both end up in the same ref
-// and the same command line.
+// and the same command line. The rules below git's are git's own for refs/heads/<name>, the ones
+// `git check-ref-format` enforces, and a drift test holds them against that command: a name this
+// says yes to and git says no to would pass the start of the factory and fail the first claim of
+// that repository, which costs an issue a run.
 func validBase(name string) bool {
-	return branchSpelling.MatchString(name) && !strings.HasPrefix(name, "-") &&
-		!strings.Contains(name, "..") && !strings.HasPrefix(name, "/") && !strings.HasSuffix(name, "/")
+	if !branchSpelling.MatchString(name) || strings.HasPrefix(name, "-") {
+		return false
+	}
+	if strings.Contains(name, "..") || strings.HasPrefix(name, "/") || strings.HasSuffix(name, "/") || strings.HasSuffix(name, ".") {
+		return false
+	}
+	// git reads a ref as the components between its slashes: none of them may be empty, open with a
+	// dot or end in .lock, the name git locks a reference with while it writes it.
+	for _, part := range strings.Split(name, "/") {
+		if part == "" || strings.HasPrefix(part, ".") || strings.HasSuffix(part, ".lock") {
+			return false
+		}
+	}
+	return true
+}
+
+// workerFlags are the arguments of the worker command the run itself is defined by: the agent, the
+// prompt, the shape of the output the factory reads the run from, the permission mode being
+// unattended costs, and the settings object that carries the mode, the issue, the base branch and
+// the compact pin. worker_args is added to that command, so an operator's own copy of one of them
+// would be a second value for something the factory has decided — and a worker started with someone
+// else's --settings would review and open its pull request against the wrong branch, or merge what
+// it built. What Claude Code makes of two of the same flag is not what the factory rests on: it is
+// refused before a run is started (README, Configuration).
+var workerFlags = []string{"--settings", "--agent", "--permission-mode", "--output-format", "-p", "--print"}
+
+// factoryOwns names the flag of the worker command an argument would be a second value for, or "".
+func factoryOwns(arg string) string {
+	for _, flag := range workerFlags {
+		if arg == flag || strings.HasPrefix(arg, flag+"=") {
+			return flag
+		}
+	}
+	return ""
 }
 
 // unspecified says whether a host is a spelling of "every interface": 0.0.0.0, ::, ::0, ::ffff:0.0.0.0
@@ -167,6 +202,11 @@ func Load(path string) (Settings, error) {
 			return bad("poll %q is not a positive duration; write it as \"60s\" or \"2m\"", c.Poll)
 		}
 		s.Poll = d
+	}
+	for _, arg := range c.WorkerArgs {
+		if flag := factoryOwns(arg); flag != "" {
+			return bad("worker_args carries %s, which the factory gives the worker itself; remove it — worker_args adds arguments to a run, it cannot replace the ones the run is defined by", flag)
+		}
 	}
 	if strings.TrimSpace(c.DataDir) == "" {
 		return bad("data_dir is missing; name the directory the runs are written to, such as \"/var/lib/factory\"")
