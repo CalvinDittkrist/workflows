@@ -1,7 +1,7 @@
 # 0016. Approval is per category, and scripts own what they apply
 
 Date: 2026-09-20
-Status: accepted
+Status: accepted; that a scaffolded category without findings cannot be answered is superseded by [ADR 0035](0035-every-category-the-apply-phase-scaffolds-is-answerable.md)
 
 ## Context
 The findings report printed every finding of a category under one heading, `the run performs`, so a reader concluded that each line was an item they had approved and that nothing else would happen (#15, a follow-up of #3). That is true of `delete` and `issue` findings, which the scripts execute one by one, and of `replace` and `create` findings, which `cleanup.sh` turns into `todo:` lines the agent works through. It is not true of `configure`: `workspace.sh --apply` applies the whole difference it computes itself, so a single `configure` line drives nothing. It is also not the whole story for a scaffolded category, because `scaffold.sh` creates every baseline file of it that is missing, listed or not. The audit and the apply phase are separated by a pull request and its merge, so the workspace difference the maintainer read can no longer be the one that is applied.
