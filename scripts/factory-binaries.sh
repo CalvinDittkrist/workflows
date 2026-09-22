@@ -20,7 +20,8 @@ out="$(cd "$out" && pwd)"
 
 # Linux, because that is what a factory host runs, and both architectures it comes as: a Raspberry Pi
 # is arm64, a small server amd64. Without cgo, so the binary needs nothing of the host it lands on,
-# and with -trimpath, so two builds of the same commit are the same file.
+# and with -trimpath, so no path of the machine that built it is in it and two builds of one
+# commit with one toolchain are the same file.
 for arch in amd64 arm64; do
   CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go -C factory build -trimpath -o "$out/factory-linux-$arch" .
 done

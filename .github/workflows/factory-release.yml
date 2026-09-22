@@ -29,7 +29,9 @@ jobs:
       - name: The tag and factory/VERSION have to name the same version
         run: |
           tagged="${GITHUB_REF_NAME#factory/v}"
-          said="$(tr -d '[:space:]' < factory/VERSION)"
+          # Read as the binary reads it: factory/version.go trims the ends of the file and nothing
+          # else, so a version with whitespace inside it is one the binary reports and the tag cannot.
+          said="$(cat factory/VERSION)"
           [ "$tagged" = "$said" ] || {
             echo "error: the tag $GITHUB_REF_NAME was pushed, but factory/VERSION says $said; tag with scripts/release.sh factory --push" >&2
             exit 1
@@ -69,10 +71,18 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         # Not the latest release: the repository's releases are its milestones, and a factory binary
-        # is not one of them. A re-run after a half-finished upload attaches the assets to the release
-        # it already made, which is safe because the tag cannot move and the build is reproducible:
-        # what the second run writes is what the first one wrote.
+        # is not one of them.
         run: |
+          # A version is published once. A re-run that finishes a half-written upload is welcome, and
+          # --clobber is what makes it possible; a re-run of a finished release is not, because the
+          # binaries it would overwrite are the ones hosts downloaded under this version, and they are
+          # not the same file when the tag was moved or the toolchain has moved on. Both look alike
+          # from here, so the finished release is refused and a person decides what to do.
+          published="$(gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets | length' 2>/dev/null || echo 0)"
+          if [ "$published" -ge 3 ]; then # the three files below
+            echo "error: the release $GITHUB_REF_NAME already carries its binaries and checksums; a published version is never rebuilt, release the next version instead" >&2
+            exit 1
+          fi
           gh release create "$GITHUB_REF_NAME" --verify-tag --latest=false \
             --title "factory v${GITHUB_REF_NAME#factory/v}" --generate-notes \
             dist/factory-linux-amd64 dist/factory-linux-arm64 dist/checksums.txt \

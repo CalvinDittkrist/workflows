@@ -21,9 +21,14 @@ for arg in "$@"; do
   esac
 done
 [ -f factory/VERSION ] || die "factory/VERSION is missing; it is the one place the factory's version is written"
-version=$(tr -d '[:space:]' < factory/VERSION)
-printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' \
-  || die "factory/VERSION says \"$version\"; write the version as X.Y.Z"
+# Read as the binary reads it: factory/version.go embeds the file and trims its ends, so whitespace
+# inside it is part of the version the binary reports. Stripping it here would tag a version nothing
+# else in the release ever says.
+version=$(cat factory/VERSION)
+if ! printf '%s' "$version" | grep -Eqx '[0-9]+\.[0-9]+\.[0-9]+' \
+  || [ "$(printf '%s\n' "$version" | wc -l | tr -d '[:space:]')" != 1 ]; then
+  die "factory/VERSION says \"$version\"; write the version as X.Y.Z on one line"
+fi
 # The namespace: a plugin release is tagged <plugin>--vX.Y.Z and a milestone vX.Y.Z, so a tag with a
 # slash in it can be neither. It is also the tag the Go module in factory/ would be published under.
 tag="factory/v$version"
@@ -38,13 +43,18 @@ remote=$(git ls-remote origin "refs/tags/$tag" refs/heads/main) \
 if printf '%s\n' "$remote" | awk -v t="refs/tags/$tag" '$2 == t { taken = 1 } END { exit !taken }'; then
   die "the tag $tag exists on origin; bump the version in factory/VERSION and commit it"
 fi
-if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
-  # Tagged here and never pushed, which is where a run without --push ends: the release is one push
-  # away, so this says that rather than to bump a version the tag already carries.
-  die "the tag $tag exists here and not on origin; push it with: git push origin $tag"
-fi
 main=$(printf '%s\n' "$remote" | awk '$2 == "refs/heads/main" { print $1 }')
 [ -n "$main" ] || die "origin has no main branch; releases are tagged on main (docs/repo-standard.md)"
+if tagged=$(git rev-parse -q --verify "refs/tags/$tag^{commit}"); then
+  # Tagged here and never pushed, which is where a run without --push ends: the release is one push
+  # away, so this says that rather than to bump a version the tag already carries. That holds only
+  # while the tag names what origin/main names: CI asks whether the tagged commit is on main, not
+  # whether it is its tip, so a tag left over from an earlier attempt would release an older factory
+  # under this version.
+  [ "$tagged" = "$main" ] || die "the tag $tag exists here and names $tagged, which is not origin/main \
+($main); it would release an older factory, so delete it with: git tag -d $tag"
+  die "the tag $tag exists here and not on origin; push it with: git push origin $tag"
+fi
 head=$(git rev-parse HEAD)
 [ "$head" = "$main" ] || die "HEAD is $head and origin/main is $main; releases are tagged on main \
 (docs/repo-standard.md), so a released binary is built from a commit that was reviewed and gated"

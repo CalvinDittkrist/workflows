@@ -13,6 +13,21 @@ from helpers import GIT_ISOLATION, ROOT
 WORKFLOW = ROOT / ".github" / "workflows" / "factory-release.yml"
 
 
+def step_script(workflow, name):
+    """The shell of the step called `name`, as the runner would hand it to bash: the block under its
+    `run: |`, without the indentation the YAML carries."""
+    lines = workflow.read_text().splitlines()
+    start = next(i for i, line in enumerate(lines) if line.strip() == f"- name: {name}")
+    run = next(i for i in range(start + 1, len(lines)) if lines[i].strip() == "run: |")
+    indent = len(lines[run]) - len(lines[run].lstrip()) + 2
+    script = []
+    for line in lines[run + 1:]:
+        if line.strip() and not line.startswith(" " * indent):
+            break
+        script.append(line[indent:])
+    return "\n".join(script)
+
+
 class FactoryReleaseTests(unittest.TestCase):
     """`scripts/release.sh factory`: it tags the version in factory/VERSION, and refuses everything
     that would tag something else. The real script runs in a repository of its own, because a
@@ -165,6 +180,35 @@ class FactoryReleaseTests(unittest.TestCase):
                 self.assertIn("write the version as X.Y.Z", r.stderr)
                 self.assertEqual(self.tags(), [])
 
+    def test_a_version_with_whitespace_inside_it_is_refused(self):
+        """factory/version.go trims the ends of VERSION and nothing else, so `0. 1.0` is the version
+        the binary reports. A release that quietly tagged v0.1.0 for it would name a version no
+        binary and no run record ever says."""
+        for said in ("0. 1.0", "0.1\n.0", "0.1.0 "):
+            with self.subTest(said=said):
+                (self.repo / "factory" / "VERSION").write_text(f"{said}\n")
+                self.commit()
+                r = self.release("factory")
+                self.assertNotEqual(r.returncode, 0)
+                self.assertIn("write the version as X.Y.Z on one line", r.stderr)
+                self.assertEqual(self.tags(), [])
+
+    def test_a_local_tag_on_an_older_commit_is_not_a_release_to_push(self):
+        """CI asks whether the tagged commit is on main, not whether it is its tip, so a tag left
+        over from an earlier attempt would release an older factory under this version. It is
+        refused here, where the tag can still be deleted."""
+        old = self.git("rev-parse", "HEAD").strip()
+        self.git("tag", "-a", "factory/v0.1.0", "-m", "factory v0.1.0")
+        (self.repo / "factory" / "run.go").write_text("// a commit the tag does not carry\n")
+        self.commit()
+        r = self.release("factory")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn(f"error: the tag factory/v0.1.0 exists here and names {old}", r.stderr)
+        self.assertIn("git tag -d factory/v0.1.0", r.stderr)
+        self.assertNotIn("git push origin factory/v0.1.0", r.stderr)
+        self.assertNotIn("the gate ran", r.stdout)
+        self.assertEqual(self.origin_tags(), [])
+
     def test_an_unknown_option_is_refused(self):
         r = self.release("factory", "--force")
         self.assertNotEqual(r.returncode, 0)
@@ -234,6 +278,70 @@ class FactoryBinariesTests(unittest.TestCase):
         self.assertIn("error:", r.stderr)
         self.assertIn("make binaries", r.stderr)
         self.assertFalse(out.exists(), "it wrote an output directory before it refused")
+
+
+
+class PublishStepTests(unittest.TestCase):
+    """The step that attaches the binaries to the release, run as GitHub runs it: `bash -e` with a
+    `gh` on PATH. It is shell in a workflow file, so the test reads that shell out of the file and
+    runs it; a step rewritten some other way stops being found and fails here."""
+
+    ASSETS = ["dist/factory-linux-amd64", "dist/factory-linux-arm64", "dist/checksums.txt"]
+    # A gh that says what the release already carries and writes down what it was asked to do. It
+    # answers `release view` the way gh does: an unknown release is an error, not an empty answer.
+    GH = """#!/usr/bin/env bash
+echo "$*" >> "$GH_LOG"
+case "$1 $2" in
+  'release view') [ -n "${GH_ASSETS:-}" ] || { echo "release not found" >&2; exit 1; }; echo "$GH_ASSETS" ;;
+  'release create') [ -z "${GH_ASSETS:-}" ] || { echo "a release with that tag already exists" >&2; exit 1; } ;;
+esac
+"""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="wf-publish-")
+        self.addCleanup(self.tmp.cleanup)
+        self.bin = Path(self.tmp.name) / "bin"
+        self.bin.mkdir()
+        gh = self.bin / "gh"
+        gh.write_text(self.GH)
+        gh.chmod(0o755)
+        self.log = Path(self.tmp.name) / "gh.log"
+        self.script = step_script(WORKFLOW, "Attach them to the release")
+
+    def run_step(self, assets=None):
+        env = {"PATH": f"{self.bin}:{os.environ['PATH']}", "GH_LOG": str(self.log),
+               "GITHUB_REF_NAME": "factory/v0.1.0", "GH_TOKEN": "x", "GH_REPO": "o/r"}
+        if assets is not None:
+            env["GH_ASSETS"] = str(assets)
+        return subprocess.run(["bash", "-e", "-c", self.script], cwd=self.tmp.name,
+                              env=env, text=True, capture_output=True)
+
+    def asked(self):
+        return self.log.read_text() if self.log.exists() else ""
+
+    def test_a_release_that_is_not_there_yet_is_created_with_the_binaries_on_it(self):
+        r = self.run_step()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("release create factory/v0.1.0", self.asked())
+        for asset in self.ASSETS:
+            self.assertIn(asset, self.asked())
+
+    def test_a_half_written_release_is_finished(self):
+        """Why --clobber is there: a run whose upload died halfway is re-run, and the assets it did
+        write are written again over themselves."""
+        r = self.run_step(assets=1)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("release upload --clobber factory/v0.1.0", self.asked())
+
+    def test_a_release_that_already_carries_its_binaries_is_never_overwritten(self):
+        """What a host downloaded under a version stays what it downloaded. A re-run of a finished
+        release — a moved tag, a re-run months later — would replace those files with others, so the
+        job fails instead and a person decides."""
+        r = self.run_step(assets=len(self.ASSETS))
+        self.assertNotEqual(r.returncode, 0, "it overwrote a published release")
+        self.assertIn("error:", r.stderr)
+        self.assertNotIn("release create", self.asked())
+        self.assertNotIn("release upload", self.asked())
 
 
 class WorkflowTriggerTests(unittest.TestCase):
