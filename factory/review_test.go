@@ -1,9 +1,14 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"fmt"
+	"log"
+	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -400,6 +405,71 @@ func TestAReviewIsAnsweredOncePerIssueAndOnlyWhileTheIssueIsIdle(t *testing.T) {
 		t.Error("an issue whose run is still going is read as reviewed; the run would be queued beside itself")
 	} else if _, ok := held.pull(); ok {
 		t.Error("the factory reads the pull request of a run that is still writing to it")
+	}
+}
+
+// What is said about an author GitHub could not be asked about, which is said once while it lasts and
+// again the next time it happens: the factory polls every minute for weeks, so a warning that repeated
+// itself would drown the log — and one that was never cleared would silence the next outage for the
+// life of the process, leaving a review passed over without a word.
+//
+// This one is read from the code itself rather than through the running binary: the gesture it belongs
+// to is driven end to end above, and what is tested here is the bookkeeping of a log line, which the
+// factory shows nowhere else.
+func TestAnAuthorGitHubCouldNotBeAskedAboutIsWarnedAboutAgainAfterItCould(t *testing.T) {
+	const repository, pull, author = "acme/edge-sensors", 104, "maintainer"
+	dir := t.TempDir()
+	reviews, permission := filepath.Join(dir, "reviews.json"), filepath.Join(dir, "permission")
+	// A gh of a few lines: the review list and the push permission are files this test writes, and
+	// everything else is the open pull request the watch needs.
+	if err := os.WriteFile(filepath.Join(dir, "gh"), []byte("#!/bin/sh\ncase \"$*\" in\n"+
+		"*collaborators*) cat "+permission+" 2>/dev/null || { echo 'gh: Not Found (HTTP 404)' >&2; exit 1; } ;;\n"+
+		"*reviews*) cat "+reviews+" ;;\n"+
+		"*) echo open ;;\nesac\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	var said bytes.Buffer
+	log.SetOutput(&said)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+
+	at := time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
+	writeFile(t, reviews, marshal(t, []map[string]any{review(1, author, "CHANGES_REQUESTED", at)}))
+	g := newGitHub(nil, "factory")
+	warnings := func() int { return strings.Count(said.String(), "whether "+author+" may write") }
+
+	// GitHub cannot be asked, twice: the review queues nothing and the reason is said once.
+	for poll := 0; poll < 2; poll++ {
+		if _, err := g.newestRequest(context.Background(), repository, pull); err != nil {
+			t.Fatalf("the reviews could not be read: %v", err)
+		}
+	}
+	if n := warnings(); n != 1 {
+		t.Fatalf("the factory said %d times that %s could not be asked about, want once", n, author)
+	}
+
+	// It answers again — for this review the author is no writer, so nothing is queued either.
+	writeFile(t, permission, "false\n")
+	if _, err := g.newestRequest(context.Background(), repository, pull); err != nil {
+		t.Fatalf("the reviews could not be read: %v", err)
+	}
+	if n := warnings(); n != 1 {
+		t.Fatalf("the factory said %d times that %s could not be asked about, want the one from before", n, author)
+	}
+
+	// A later review of the same author, and GitHub cannot be asked about them again: that is a new
+	// outage and the operator hears of it.
+	if err := os.Remove(permission); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, reviews, marshal(t, []map[string]any{
+		review(1, author, "CHANGES_REQUESTED", at),
+		review(2, author, "CHANGES_REQUESTED", at.Add(20*time.Minute))}))
+	if _, err := g.newestRequest(context.Background(), repository, pull); err != nil {
+		t.Fatalf("the reviews could not be read: %v", err)
+	}
+	if n := warnings(); n != 2 {
+		t.Errorf("the factory said %d times that %s could not be asked about, want a word about each outage", n, author)
 	}
 }
 

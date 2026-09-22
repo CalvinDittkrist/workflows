@@ -227,6 +227,11 @@ func (g *gitHub) newestRequest(ctx context.Context, repository string, pull int)
 			g.warn(g.pullWarnings, key+" by "+review.User.Login, "error: %v; that review queues nothing", err)
 			continue
 		}
+		// The author was read, so the next failure on them is worth a line again. Without this the key
+		// would be set for the life of the process — the pull request's own key above says nothing about
+		// it — and a later review of the same author whose access cannot be read would be passed over in
+		// silence, which is the one thing a warn-once memo may not become.
+		g.readable(g.pullWarnings, key+" by "+review.User.Login)
 		if may {
 			newest = review.SubmittedAt
 		}
