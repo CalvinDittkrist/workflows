@@ -4,9 +4,10 @@
 # Usage: cleanup.sh prepare | open
 # prepare  Needs the backup (backup.sh): the tag pre-standard on origin and the catalogue issue. Creates or
 #          resumes the worktree, brings every path a rejected category or finding names back to the default
-#          branch (what an earlier prepare applied under an answer since changed), removes the targets of approved delete findings (tracked files only), runs
-#          scaffold.sh with --skip for each rejected category, and prints `todo:` lines for what needs
-#          judgement: the approved replace and create findings and the <fill in> placeholders.
+#          branch (what an earlier prepare applied under an answer since changed), removes the targets of
+#          approved delete findings (tracked files only), runs scaffold.sh with --skip for each rejected
+#          category, and prints `todo:` lines for what needs judgement: the approved replace and create
+#          findings and the <fill in> placeholders.
 # open     Refuses while a <fill in> placeholder is left on the branch. Commits the worktree, pushes the branch
 #          without force and opens the pull request, or updates its description. Nothing to change: no PR.
 set -euo pipefail
