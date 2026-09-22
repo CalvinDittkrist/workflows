@@ -62,6 +62,8 @@ type apiRun struct {
 	Worktree    string     `json:"worktree"`
 	Holding     bool       `json:"holding"`
 	Signal      string     `json:"signal"`
+	SignalAt    time.Time  `json:"signalAt"`
+	Kind        string     `json:"kind"`
 	State       string     `json:"state"`
 	Stage       string     `json:"stage"`
 	Stages      []string   `json:"stages"`
