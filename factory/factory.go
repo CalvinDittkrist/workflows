@@ -645,12 +645,12 @@ func workerVariables(issue Issue, claim claimed) map[string]string {
 }
 
 // The compact pin of the workflow, the two numbers the local claim sets and this one restates
-// ([ADR 0031], [ADR 0034]). Their product is the compact trigger, 200 000 tokens.
+// ([ADR 0031], [ADR 0034]). Their product is the compact trigger, 250 000 tokens.
 //
 // [ADR 0031]: ../docs/adr/0031-the-workflow-pins-the-size-at-which-a-worker-session-compacts.md
 // [ADR 0034]: ../docs/adr/0034-the-compact-trigger-is-raised-through-the-window.md
 const (
-	compactWindow     = 250000
+	compactWindow     = 312500
 	compactPercentage = "80"
 )
 
