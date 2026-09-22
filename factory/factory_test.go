@@ -59,6 +59,9 @@ type apiRun struct {
 	Title       string     `json:"title"`
 	Branch      string     `json:"branch"`
 	Base        string     `json:"base"`
+	Worktree    string     `json:"worktree"`
+	Holding     bool       `json:"holding"`
+	Signal      string     `json:"signal"`
 	State       string     `json:"state"`
 	Stage       string     `json:"stage"`
 	Stages      []string   `json:"stages"`
@@ -98,6 +101,8 @@ type apiIssue struct {
 	Number     int       `json:"number"`
 	Title      string    `json:"title"`
 	RoutedAt   time.Time `json:"routedAt"`
+	Signal     string    `json:"signal"`
+	SignalAt   time.Time `json:"signalAt"`
 }
 
 type apiLine struct {
@@ -270,10 +275,10 @@ func TestFakeModeWorksTheCannedQueueOneRunAtATime(t *testing.T) {
 			t.Errorf("run %d has %d events in its log and %d in its record", run.ID, lines, run.EventCount)
 		}
 	}
-	// Nothing else is written there: one record and one event log per run, beside the lock the
-	// factory holds the directory with while it runs.
-	if entries, _ := filepath.Glob(filepath.Join(f.data, "*")); len(entries) != 2*len(cannedIssues)+1 {
-		t.Errorf("the data directory holds %d files, want one record and one event log per run and the lock", len(entries))
+	// Nothing else is written there: one record, one event log and one worker lock per run, beside
+	// the lock the factory holds the directory with while it runs.
+	if entries, _ := filepath.Glob(filepath.Join(f.data, "*")); len(entries) != 3*len(cannedIssues)+1 {
+		t.Errorf("the data directory holds %d files, want a record, an event log and a lock per run, and the directory's lock", len(entries))
 	}
 	if _, err := os.Stat(filepath.Join(f.data, lockFile)); err != nil {
 		t.Errorf("the data directory has no lock (%v); a second factory would work it beside this one", err)
@@ -671,7 +676,7 @@ func TestASecondFactoryOnTheSameDataDirectoryStartsNothing(t *testing.T) {
 
 func TestStoppingEndsTheWorkerAndTheRunIsInterrupted(t *testing.T) {
 	f := start(t, config{"deadline": "5m", "poll": "50ms"})
-	pids := f.waitForTheHangingWorker(t)
+	pids := f.waitForTheHangingWorker(t, len(cannedIssues))
 
 	f.stop(t, syscall.SIGTERM)
 	for _, pid := range pids {
@@ -688,7 +693,7 @@ func TestStoppingEndsTheWorkerAndTheRunIsInterrupted(t *testing.T) {
 
 func TestARestartKeepsTheRunsAndInterruptsWhatWasActive(t *testing.T) {
 	f := start(t, config{"deadline": "5m", "poll": "50ms"})
-	pids := f.waitForTheHangingWorker(t)
+	pids := f.waitForTheHangingWorker(t, len(cannedIssues))
 	// A power cut, not a stop: the factory is gone without ending anything.
 	f.stop(t, syscall.SIGKILL)
 	t.Cleanup(func() {
@@ -702,7 +707,10 @@ func TestARestartKeepsTheRunsAndInterruptsWhatWasActive(t *testing.T) {
 		t.Fatalf("the record of the active run says %v, want running before the restart", record["state"])
 	}
 
-	again := start(t, config{"deadline": "5m", "poll": "50ms", "data_dir": f.data, "listen": freeAddress(t)})
+	// Paused, so the restart is read as it stands: what it made of the records, before it acts on
+	// them. What it then does with the interruption is the test below this one.
+	again := start(t, config{"deadline": "5m", "poll": "50ms", "data_dir": f.data,
+		"listen": freeAddress(t), "paused": true})
 	var line apiLine
 	again.eventually(t, 10*time.Second, "the runs of the first factory", func() bool {
 		line = apiLine{}
@@ -715,17 +723,131 @@ func TestARestartKeepsTheRunsAndInterruptsWhatWasActive(t *testing.T) {
 	if last := line.Done[len(line.Done)-1]; last.ID != len(cannedIssues) || last.Outcome != "interrupted" {
 		t.Errorf("the run that was active is run %d with the outcome %q, want run %d interrupted", last.ID, last.Outcome, len(cannedIssues))
 	}
-	// The log of the run that was active reads to its end: its last event says how the run ended.
+	// The log of the run that was active reads to its end: it says how the run ended. What the start
+	// writes after that is what it did with the worker the killed factory left behind, which is the
+	// test below this one.
 	var interrupted apiRun
 	again.get(t, fmt.Sprintf("/api/runs/%d", len(cannedIssues)), &interrupted)
-	if n := len(interrupted.Events); n == 0 || interrupted.Events[n-1].Title != "interrupted" || interrupted.EventCount != n {
-		t.Errorf("the log of the interrupted run has %d events for an event count of %d and does not end in the interruption", n, interrupted.EventCount)
+	ended := false
+	for _, e := range interrupted.Events {
+		ended = ended || e.Title == "interrupted"
+	}
+	if n := len(interrupted.Events); !ended || interrupted.EventCount != n {
+		t.Errorf("the log of the interrupted run has %d events for an event count of %d and does not say the run was interrupted", n, interrupted.EventCount)
 	}
 	if line.Done[0].Outcome != "ready" {
 		t.Errorf("the restarted factory reads run 1 as %q, want the outcome it was recorded with", line.Done[0].Outcome)
 	}
-	if len(line.Queue) != 0 {
-		t.Errorf("the restarted factory queues %d issues again, want none: every canned entry has a run", len(line.Queue))
+	// Every canned entry has a run, so nothing is claimed again. What the restart does put in the
+	// line is the one thing it owes: the issue whose run it found interrupted, to be resumed.
+	if len(line.Queue) != 1 {
+		t.Fatalf("the restarted factory queues %v, want only the interrupted issue to resume", keys(line.Queue))
+	}
+	if head := line.Queue[0]; head.Number != hangingIssue(t) || head.Signal != "interruption" {
+		t.Errorf("the line opens with #%d on the signal %q, want #%d on an interruption",
+			head.Number, head.Signal, hangingIssue(t))
+	}
+}
+
+// A factory the host kills ends nothing: its worker keeps running, with nobody reading its stream,
+// and the data directory is free the moment the process dies. The next start finds that run
+// interrupted and resumes the issue, so the worker that outlived the factory has to be ended before
+// the new session opens the same worktree — two unattended sessions committing side by side is the
+// one thing a restart may not produce.
+func TestARestartEndsTheWorkerThatOutlivedTheFactory(t *testing.T) {
+	first := start(t, config{"deadline": "5m", "poll": "50ms"})
+	left := first.waitForTheHangingWorker(t, len(cannedIssues))
+	first.stop(t, syscall.SIGKILL) // a kill of the factory alone, not of the host
+	t.Cleanup(func() {
+		for _, pid := range left {
+			_ = syscall.Kill(pid, syscall.SIGKILL)
+		}
+	})
+	// The processes that outlive the factory are the ones that were not writing to the stream it read:
+	// a session in the middle of something, which is what keeps its process group alive and its work
+	// going. The pipe takes the others with the factory, and one survivor is a live group.
+	alive := 0
+	for _, pid := range left {
+		if survived(pid) {
+			alive++
+		}
+	}
+	if alive == 0 {
+		t.Fatalf("every process %v of the worker ended with the factory that was killed; this test needs one that outlives it", left)
+	}
+
+	again := start(t, config{"deadline": "5m", "poll": "50ms", "data_dir": first.data, "listen": freeAddress(t)})
+	for _, pid := range left {
+		if err := syscall.Kill(pid, 0); err == nil {
+			t.Errorf("process %d of the worker the killed factory left behind is still running after the restart", pid)
+		}
+	}
+	var interrupted apiRun
+	again.get(t, fmt.Sprintf("/api/runs/%d", len(cannedIssues)), &interrupted)
+	if n := len(interrupted.Events); n == 0 || !strings.Contains(interrupted.Events[n-1].Title, "worker ended") {
+		t.Errorf("the log of the interrupted run ends on %v, want the start saying it ended the worker that outlived the factory", interrupted.Events[n-1:])
+	}
+
+	// And the issue is resumed after that, in a session that is alone in the worktree.
+	resumed := len(cannedIssues) + 1
+	working := again.waitForTheHangingWorker(t, resumed)
+	for _, pid := range working {
+		for _, old := range left {
+			if pid == old {
+				t.Errorf("the resumed run reports process %d, which is the worker of the run before it", pid)
+			}
+		}
+	}
+}
+
+// The one automatic resume of [ADR 0026], end to end: the factory is stopped while a worker runs,
+// starts again and continues that issue by itself in a new session; stopped a second time on the
+// same issue, it leaves the work standing for a person.
+//
+// [ADR 0026]: ../docs/adr/0026-the-factory-never-deletes-work-on-its-own.md
+func TestAnInterruptedIssueIsResumedOnceByItselfAndASecondInterruptionWaitsForAPerson(t *testing.T) {
+	restart := func(data string) *factory {
+		return start(t, config{"deadline": "5m", "poll": "50ms", "data_dir": data, "listen": freeAddress(t)})
+	}
+	first := start(t, config{"deadline": "5m", "poll": "50ms"})
+	pids := first.waitForTheHangingWorker(t, len(cannedIssues))
+	first.stop(t, syscall.SIGTERM)
+	for _, pid := range pids {
+		if survived(pid) {
+			t.Errorf("process %d of the worker survived the stop", pid)
+		}
+	}
+
+	// The restart resumes that issue by itself: a new run, in a new worker session, on the same
+	// issue, which the first factory never got to finish.
+	resumed := len(cannedIssues) + 1
+	again := restart(first.data)
+	again.waitForTheHangingWorker(t, resumed)
+	var run apiRun
+	again.get(t, fmt.Sprintf("/api/runs/%d", resumed), &run)
+	if run.Issue != hangingIssue(t) || run.Signal != "interruption" {
+		t.Fatalf("run %d works #%d on the signal %q, want #%d on an interruption",
+			resumed, run.Issue, run.Signal, hangingIssue(t))
+	}
+	if !run.Holding || run.State != "running" {
+		t.Errorf("the resumed run is %q and holding=%v, want a running run that holds the issue", run.State, run.Holding)
+	}
+	again.stop(t, syscall.SIGTERM)
+
+	// And that is the one resume. The second interruption of the issue is handled like a failure:
+	// nothing is queued, nothing is started, and the work waits for a person.
+	third := restart(first.data)
+	interrupted := third.ended(t, resumed)
+	if interrupted.Outcome != "interrupted" {
+		t.Fatalf("the resumed run ended as %q, want interrupted", interrupted.Outcome)
+	}
+	third.never(t, 3*time.Second, fmt.Sprintf("the factory resumed #%d a second time by itself", run.Issue),
+		func() bool { return !third.missing(t, resumed+1) })
+	var line apiLine
+	third.get(t, "/api/line", &line)
+	if len(line.Queue) != 0 || len(line.Now) != 0 {
+		t.Errorf("the factory queues %v and runs %d, want an idle line: a second interruption waits for a person",
+			keys(line.Queue), len(line.Now))
 	}
 }
 
@@ -969,14 +1091,31 @@ func (f *factory) ended(t *testing.T, id int) apiRun {
 	return run
 }
 
-// waitForTheHangingWorker waits until the last canned entry, whose scripted worker hangs, is the
-// running one, and answers with the processes it started.
-func (f *factory) waitForTheHangingWorker(t *testing.T) []int {
+// hangingIssue is the canned entry whose scripted worker hangs, which is the issue every test that
+// stops a factory mid-run works with. It is read from the scenario rather than from a position in
+// the canned queue, so re-timing an entry cannot make two assertions speak of two different issues.
+func hangingIssue(t *testing.T) int {
 	t.Helper()
+	for _, canned := range cannedIssues {
+		if canned.scenario == "hang" {
+			return canned.number
+		}
+	}
+	t.Fatal("no canned entry hangs; a test that stops a factory while a worker runs needs one")
+	return 0
+}
+
+// waitForTheHangingWorker waits until the run of that id is the running one and answers with the
+// processes it started. It is the run of the canned entry whose scripted worker hangs, which is what
+// a test that stops a factory mid-run needs, and the helper says so rather than trusting the caller:
+// the id follows from the order the canned queue is worked in, and re-timing an entry would move it.
+func (f *factory) waitForTheHangingWorker(t *testing.T, id int) []int {
+	t.Helper()
+	hanging := hangingIssue(t)
 	var run apiRun
-	f.eventually(t, 60*time.Second, "the hanging worker of the last canned entry and its child", func() bool {
+	f.eventually(t, 60*time.Second, fmt.Sprintf("the hanging worker of run %d and its child", id), func() bool {
 		run = apiRun{}
-		response, err := http.Get(fmt.Sprintf("http://%s/api/runs/%d", f.address, len(cannedIssues)))
+		response, err := http.Get(fmt.Sprintf("http://%s/api/runs/%d", f.address, id))
 		if err != nil || response.StatusCode != http.StatusOK {
 			if response != nil {
 				response.Body.Close()
@@ -989,6 +1128,9 @@ func (f *factory) waitForTheHangingWorker(t *testing.T) []int {
 		}
 		return run.State == "running" && len(workerPids(t, run)) == 2
 	})
+	if run.Issue != hanging {
+		t.Fatalf("run %d works #%d, want the canned entry whose worker hangs (#%d)", id, run.Issue, hanging)
+	}
 	return workerPids(t, run)
 }
 
@@ -1030,6 +1172,26 @@ func (f *factory) do(t *testing.T, method, path string) *http.Response {
 		t.Fatalf("%s %s failed: %v; the factory's log:\n%s", method, path, err, f.output(t))
 	}
 	return response
+}
+
+// never fails when something happens within the time given. It is for the things the factory must
+// not do by itself — a second automatic resume above all — which no single reading can prove.
+func (f *factory) never(t *testing.T, within time.Duration, what string, happened func() bool) {
+	t.Helper()
+	for deadline := time.Now().Add(within); time.Now().Before(deadline); {
+		if happened() {
+			t.Fatalf("%s; the factory's log:\n%s", what, f.output(t))
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// missing says that the interface has no run of that id at all.
+func (f *factory) missing(t *testing.T, id int) bool {
+	t.Helper()
+	response := f.do(t, "GET", fmt.Sprintf("/api/runs/%d", id))
+	defer response.Body.Close()
+	return response.StatusCode == http.StatusNotFound
 }
 
 func (f *factory) eventually(t *testing.T, within time.Duration, what string, done func() bool) {

@@ -54,6 +54,10 @@ test('the whole queue is shown in its order while the factory is paused', async 
     await expect(queue.nth(position)).toContainText(`${position + 1}`)
     await expect(queue.nth(position)).toContainText(issue)
   }
+  // #104 was interrupted and is held, so it stands there as work that is resumed rather than
+  // claimed, and it says so; nothing the factory has not worked yet carries a signal.
+  await expect(queue.first()).toContainText('interruption')
+  await expect(queue.nth(1)).not.toContainText('interruption')
   await expect(page.locator('.line .none').first()).toHaveText('paused')
 })
 

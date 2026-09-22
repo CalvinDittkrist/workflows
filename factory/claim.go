@@ -38,12 +38,17 @@ var errLost = errors.New("the branch exists on the remote already")
 
 // claimed is what a won claim leaves behind: the branch it created on the remote, the base it was
 // cut from, and the worktree the worker runs in. created says the branch is on the remote, which is
-// what an operator reading a failed run needs: the claim after that point leaves it behind.
+// what an operator reading a failed run needs: the claim after that point leaves it behind. holding
+// says the whole claim stands — branch, assignee and worktree — which is what makes the issue this
+// factory's to resume and to release. resumed says this run was not a claim at all but a
+// continuation under one that already stood.
 type claimed struct {
 	branch   string
 	base     string
 	worktree string
 	created  bool
+	holding  bool
+	resumed  bool
 }
 
 // claim takes one issue on the remote and prepares the worktree its worker runs in. The order is the
@@ -113,7 +118,7 @@ func (f *Factory) claim(ctx context.Context, r *Run, issue Issue) (claimed, erro
 	// this record alone, and one that named no branch would hide the one thing left on the remote.
 	f.runs.update(r, func() { r.Branch, r.Base = won.branch, won.base })
 
-	if _, err := gh(ctx, "issue", "edit", strconv.Itoa(issue.Number), "--repo", connected.Name, "--add-assignee", login); err != nil {
+	if err := assignSelf(ctx, connected.Name, issue.Number, login); err != nil {
 		return won, fmt.Errorf("issue #%d of %s could not be assigned to %s: %w", issue.Number, connected.Name, login, err)
 	}
 
@@ -130,7 +135,13 @@ func (f *Factory) claim(ctx context.Context, r *Run, issue Issue) (claimed, erro
 		return won, fmt.Errorf("the worktree for %s could not be created in %s: %w; a run before this one may have left a branch or a worktree of that name in this clone, which nothing here removes", branch, clone, err)
 	}
 	f.runs.event(r, Event{Kind: "factory", Title: "claimed " + branch, Body: "worktree " + worktree})
-	won.worktree = worktree
+	// The claim stands whole from here: the branch is on the remote, the issue is assigned to this
+	// host and the worktree is there. That is what the factory holds, resumes and lets a person
+	// release ([ADR 0026]), and the record says so at the moment it becomes true rather than when
+	// the caller comes back to it: a host cut off from power in between would leave a claim that
+	// stands on GitHub beside a record that holds nothing, which is neither resumed nor releasable.
+	won.worktree, won.holding = worktree, true
+	f.runs.update(r, func() { r.Worktree, r.Holding = won.worktree, won.holding })
 	return won, nil
 }
 
@@ -169,11 +180,20 @@ const worktreesEntry = ".claude/worktrees/"
 // connected is the configured repository of that name.
 func (f *Factory) connected(name string) (Connected, bool) {
 	for _, c := range f.settings.Repositories {
-		if c.Name == name {
+		if repositoryKey(c.Name) == repositoryKey(name) {
 			return c, true
 		}
 	}
 	return Connected{}, false
+}
+
+// assignSelf puts the user this host is logged in as on the issue, which is what says on GitHub that
+// this factory holds it and takes the issue out of every other claimer's line. A claim makes this act
+// and so does a run resumed on a release; the login is read by the caller, because a claim reads it
+// before it creates anything.
+func assignSelf(ctx context.Context, repository string, issue int, login string) error {
+	_, err := gh(ctx, "issue", "edit", strconv.Itoa(issue), "--repo", repository, "--add-assignee", login)
+	return err
 }
 
 // login is the user this host's gh is logged in as, read once: it is the machine user the factory
