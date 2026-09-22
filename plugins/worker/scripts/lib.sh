@@ -71,6 +71,9 @@ wf_dirty_tree() {
 # A commit as a reader wants it, and as the caller has it when git cannot resolve it any more: a record
 # names a commit an amend or a rebase may have taken away, and a brief still has to be able to print it.
 wf_short() { git rev-parse --short "$1" 2>/dev/null || printf '%s\n' "$1"; }
+# How long one call of a waiting script blocks: below the ten-minute ceiling of a Bash tool call, which the
+# skills set as the call's timeout, so the script answers before the call is cut off (pr-wait.sh, gate.sh).
+wf_wait_slice() { printf '%s\n' "${WF_WAIT_SLICE:-540}"; }
 # Where a worker stage leaves a fact for the next one (ADR 0018): this worktree's own git directory, never
 # the common one, so the workers of two issues in two worktrees keep separate records. Removed with the
 # worktree, which is what a pipeline run lives in.
