@@ -110,6 +110,7 @@ Repositories do not override agents or skills locally: the [repository standard]
 - [Architecture](docs/architecture.md) and [ADRs](docs/adr/README.md)
 - [The local workflow, step by step](docs/local-workflow.md)
 - [Security and sandboxing](docs/security.md)
+- [Factory host runbook](docs/factory-runbook.md): from an empty Linux machine to a running factory, and its upkeep
 - [Token budget: what loads when](docs/token-budget.md)
 - [Repository standard](docs/repo-standard.md)
 
