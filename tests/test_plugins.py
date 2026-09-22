@@ -32,12 +32,15 @@ class ManifestTests(unittest.TestCase):
                 self.assertIn(f"name: {agent.stem}\n", fm, agent)
 
     def test_agent_models_match_their_role(self):
-        """The model of a session agent is a decision; every other agent inherits the session it serves."""
+        """The model of an agent is a decision: a session agent names its own, a subagent names one or inherits the session it serves."""
         expected = {
             "orchestrator/agents/orchestrator.md": "sonnet",
             "worker/agents/worker.md": "opus",
             "planner/agents/planner.md": "fable",
+            "worker/agents/code-reviewer.md": "sonnet",
+            "worker/agents/test-reviewer.md": "sonnet",
             "worker/agents/docs-reviewer.md": "sonnet",
+            "worker/agents/pr-author.md": "sonnet",
             "worker/agents/docs-lookup.md": "sonnet",
         }
         agents = sorted(ROOT.glob("plugins/*/agents/*.md"))

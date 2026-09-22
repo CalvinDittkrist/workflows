@@ -15,7 +15,7 @@ Hook: `SessionStart` runs `scripts/session-start.sh`. On startup it assigns the 
 | `/worker:docs` | `claude-docs.sh` in a read-only `docs-lookup` subagent: one Claude Code question answered from the current documentation, pinned to `code.claude.com`, so the pages never enter the worker's context ([ADR 0030](../../docs/adr/0030-agents-verify-claude-code-facts-against-the-live-documentation.md)) |
 | `/worker:address-reviews` | `pr-threads.sh` + `pr-resolve.sh`: fix or decline each thread, reply, resolve |
 
-Agents: `worker` (main thread, opus), `code-reviewer`, `security-reviewer`, `docs-reviewer` (sonnet, no CLAUDE.md), `test-reviewer`, `senior-reviewer` (all read-only, inherit the worker model), `pr-author` (read-only, inherit), `docs-lookup` (read-only, sonnet).
+Agents: `worker` (main thread, opus); the read-only subagents `code-reviewer`, `test-reviewer`, `pr-author` (sonnet), `docs-reviewer` (sonnet, no CLAUDE.md), `docs-lookup` (sonnet, no CLAUDE.md), `security-reviewer` and `senior-reviewer` (inherit the worker model).
 
 Documentation: `scripts/claude-docs.sh` is the worker's pinned way to the Claude Code documentation (not a network boundary: the worker keeps `Bash`, `gh` and `git`). Without an argument it prints the index of the Claude Code documentation, with a page slug (lowercase letters, digits and hyphens, nested with a slash) that page; it builds the URL from a hard-coded origin, speaks https only and prints nothing when the answer came from elsewhere. `WF_DOCS_TIMEOUT` (default 30 s) is the request timeout.
 
