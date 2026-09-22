@@ -29,7 +29,9 @@ validate:
 standard:
 	plugins/repo-standards/scripts/check.sh
 
-test:
+# The suite builds the release binaries with the real scripts/factory-binaries.sh, which refuses to
+# build one without the dashboard inside it, so the build it embeds has to be there first.
+test: $(UI_BUILD)
 	python3 -m unittest discover -s tests -v
 
 # The binaries a factory host downloads, built the way the release workflow builds them: the

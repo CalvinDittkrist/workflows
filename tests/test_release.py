@@ -217,6 +217,24 @@ class FactoryBinariesTests(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertEqual(hashlib.sha256((Path(out.name) / name).read_bytes()).hexdigest(), digest)
 
+    def test_it_refuses_to_build_binaries_that_have_no_dashboard_in_them(self):
+        """The embed pattern matches the committed placeholder, so a build without the dashboard in
+        front of it comes out as a binary that answers 404 under /. The script says what to run
+        instead of writing that file. The fixture is the script alone in an empty tree, which is what
+        a checkout whose dashboard was never built looks like to it."""
+        tmp = tempfile.TemporaryDirectory(prefix="wf-binaries-")
+        self.addCleanup(tmp.cleanup)
+        tree = Path(tmp.name)
+        (tree / "scripts").mkdir()
+        shutil.copy(ROOT / "scripts" / "factory-binaries.sh", tree / "scripts" / "factory-binaries.sh")
+        out = tree / "dist"
+        r = subprocess.run(["bash", "scripts/factory-binaries.sh", str(out)], cwd=tree,
+                           env=os.environ, text=True, capture_output=True)
+        self.assertNotEqual(r.returncode, 0, "it built binaries without a dashboard in them")
+        self.assertIn("error:", r.stderr)
+        self.assertIn("make binaries", r.stderr)
+        self.assertFalse(out.exists(), "it wrote an output directory before it refused")
+
 
 class WorkflowTriggerTests(unittest.TestCase):
     """Which push starts which workflow. The binaries are built by a factory version tag and by

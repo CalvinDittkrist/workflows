@@ -6,6 +6,15 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 out="${1:-dist}"
+
+# The dashboard the binary embeds is built by `make binaries` before this runs, because the Makefile
+# owns what is built. Without it the embed still matches the committed placeholder and the binary
+# answers 404 under /, which is not what a host downloads: refuse instead of shipping that.
+if [ ! -f factory/ui/dist/app/index.html ]; then
+  echo "error: the dashboard is not built, so these binaries would have no interface; run make binaries, which builds it first" >&2
+  exit 1
+fi
+
 mkdir -p "$out"
 out="$(cd "$out" && pwd)"
 
