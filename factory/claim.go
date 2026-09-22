@@ -137,8 +137,11 @@ func (f *Factory) claim(ctx context.Context, r *Run, issue Issue) (claimed, erro
 	f.runs.event(r, Event{Kind: "factory", Title: "claimed " + branch, Body: "worktree " + worktree})
 	// The claim stands whole from here: the branch is on the remote, the issue is assigned to this
 	// host and the worktree is there. That is what the factory holds, resumes and lets a person
-	// release ([ADR 0026]).
+	// release ([ADR 0026]), and the record says so at the moment it becomes true rather than when
+	// the caller comes back to it: a host cut off from power in between would leave a claim that
+	// stands on GitHub beside a record that holds nothing, which is neither resumed nor releasable.
 	won.worktree, won.holding = worktree, true
+	f.runs.update(r, func() { r.Worktree, r.Holding = won.worktree, won.holding })
 	return won, nil
 }
 

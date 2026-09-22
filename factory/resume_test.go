@@ -168,6 +168,49 @@ func TestTheLineResumesWhatTheFactoryHoldsBeforeItClaimsAnythingNew(t *testing.T
 	}
 }
 
+// Answering a release is taking the issue back, and the factory can be stopped in between: the run
+// that stands for the release is recorded before the assignee is put on again. Such a run holds
+// nothing, and the next start reads the release as the unanswered gesture it still is — rather than
+// as an interruption to resume, which would start a worker on an issue GitHub says is nobody's and
+// leave it lying in every other claimer's line ([ADR 0026]).
+//
+// [ADR 0026]: ../docs/adr/0026-the-factory-never-deletes-work-on-its-own.md
+func TestAReleaseThatWasCutOffBeforeTheTakeBackIsStillAnswered(t *testing.T) {
+	gh := newGhShim(t)
+	gh.remote(t, "acme/edge-sensors")
+	gh.loggedInAs(t, "factory-bot")
+	data := filepath.Join(t.TempDir(), "data")
+	gh.cloneInto(t, data, "acme/edge-sensors")
+
+	began := time.Now().UTC().Add(-2 * time.Hour)
+	releasedAt := began.Add(50 * time.Minute)
+	// The claim that holds the issue, and the release run a stop cut off before it had assigned the
+	// issue back to this host: it carries the release it was queued on and holds nothing.
+	cutOff := record(2, claimedIssue, claimedTitle, signalRelease, outcomeInterrupted, false,
+		releasedAt.Add(time.Second), releasedAt.Add(2*time.Second))
+	cutOff.SignalAt = releasedAt
+	records(t, data,
+		record(1, claimedIssue, claimedTitle, signalRouted, outcomeReady, true, began, began.Add(30*time.Minute)),
+		cutOff)
+	// GitHub still shows the issue as the person left it: routed, with nobody on it.
+	gh.issues(t, "acme/edge-sensors",
+		touched(openIssue(claimedIssue, claimedTitle, began.Add(-72*time.Hour)), releasedAt))
+	gh.timeline(t, "acme/edge-sensors", claimedIssue, labeled("factory", began.Add(-6*time.Hour)),
+		assigned("factory-bot", began), unassigned("factory-bot", releasedAt))
+
+	f := gh.start(t, config{"poll": "50ms", "deadline": "90s", "data_dir": data,
+		"repositories": []string{"acme/edge-sensors"}})
+	head := f.queue(t, 1)[0]
+	if head.Number != claimedIssue || head.Signal != "release" {
+		t.Fatalf("the line opens with #%d on the signal %q, want #%d on a release: the take-back never landed",
+			head.Number, head.Signal, claimedIssue)
+	}
+	if !head.SignalAt.Equal(releasedAt.Truncate(time.Second)) {
+		t.Errorf("the released #%d stands at %s, want the time the assignee was removed %s",
+			claimedIssue, head.SignalAt, releasedAt.Truncate(time.Second))
+	}
+}
+
 // A resumed run needs the worktree its claim made, and #58 is where a missing one is put back. Until
 // then such a resume fails, and this is what that failure must cost: the issue's one automatic
 // resume, and nothing else. The repository keeps its place — the next issue in the line is claimed

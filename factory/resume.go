@@ -70,9 +70,12 @@ func holdings(runs []Run) map[string]holding {
 	return out
 }
 
-// releaseAt is the release a run was queued on, and the zero time for a run that was not.
+// releaseAt is the release a run has answered, and the zero time for a run that has not. Answering a
+// release is taking the issue back — the assignee this factory put on it again — and a run that was
+// cut off before it got that far answered nothing: the issue is still lying unassigned where the
+// person who released it left it, and the next start takes it back for good.
 func releaseAt(run Run) time.Time {
-	if run.Signal != signalRelease {
+	if run.Signal != signalRelease || !run.Holding {
 		return time.Time{}
 	}
 	return run.SignalAt
@@ -100,8 +103,14 @@ func (h holding) issue() Issue {
 // as this run lasts.
 func (f *Factory) resume(ctx context.Context, r *Run, e Entry) (claimed, error) {
 	held := claimed{branch: e.resume.Branch, base: e.resume.Base, worktree: e.resume.Worktree,
-		created: true, holding: true, resumed: true}
+		created: true, resumed: true,
+		// An interruption resume holds what the claim under it holds: the issue is assigned to this
+		// host and nothing about that has changed. A release resume holds nothing until the take-back
+		// below has put the assignee back on, so a stop in between leaves a record that says the
+		// release is still unanswered and the next start answers it.
+		holding: e.Signal != signalRelease}
 	if f.fake { // fake mode claims nothing, so it holds no worktree to continue in either
+		held.holding = true
 		return held, nil
 	}
 	if _, err := os.Stat(held.worktree); err != nil {
@@ -116,6 +125,8 @@ func (f *Factory) resume(ctx context.Context, r *Run, e Entry) (claimed, error) 
 		if err := assignSelf(ctx, e.Repository, e.Number, login); err != nil {
 			return held, fmt.Errorf("issue #%d of %s was released but could not be assigned to %s again: %w", e.Number, e.Repository, login, err)
 		}
+		held.holding = true
+		f.runs.update(r, func() { r.Holding = held.holding })
 	}
 	f.runs.event(r, Event{Kind: "factory", Title: "resuming " + held.branch,
 		Body: fmt.Sprintf("%s after run %d; the worker continues in %s", resuming[e.Signal], e.resume.ID, held.worktree)})

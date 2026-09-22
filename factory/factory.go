@@ -309,10 +309,13 @@ func (f *Factory) start(ctx context.Context, entry Entry) {
 		Warnings:   []string{},
 	}
 	// A resumed run says from its first moment which branch and which worktree it continues, so a
-	// host that loses power before the worker starts is read from this record alone.
+	// host that loses power before the worker starts is read from this record alone. What it holds
+	// is the claim's for an interruption and not yet its own for a release: the take-back that
+	// answers a release is the first thing the run does, and until it has landed the issue lies
+	// unassigned where the person who released it left it.
 	if entry.Signal != signalRouted {
-		r.Branch, r.Base, r.Worktree, r.Holding =
-			entry.resume.Branch, entry.resume.Base, entry.resume.Worktree, true
+		r.Branch, r.Base, r.Worktree = entry.resume.Branch, entry.resume.Base, entry.resume.Worktree
+		r.Holding = entry.Signal != signalRelease
 	}
 	f.runs.add(r)
 	f.active.Add(1)
