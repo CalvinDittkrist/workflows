@@ -15,6 +15,7 @@ import (
 // to say which versions it was made by.
 
 func TestARunUpdatesTheWorkerPluginBeforeItStartsAndRecordsWhatItRanWith(t *testing.T) {
+	t.Parallel()
 	gh := newGhShim(t)
 	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
 	gh.loggedInAs(t, "factory-bot")
@@ -85,6 +86,7 @@ func TestARunUpdatesTheWorkerPluginBeforeItStartsAndRecordsWhatItRanWith(t *test
 }
 
 func TestAFactoryStoppedWhileItUpdatesTheWorkerInterruptsTheRunRatherThanFailingIt(t *testing.T) {
+	t.Parallel()
 	gh := newGhShim(t)
 	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
 	gh.loggedInAs(t, "factory-bot")
@@ -136,6 +138,7 @@ func TestAFactoryStoppedWhileItUpdatesTheWorkerInterruptsTheRunRatherThanFailing
 }
 
 func TestAVersionThatCannotBeReadIsAWarningAndNoVersionOnTheRecord(t *testing.T) {
+	t.Parallel()
 	gh := newGhShim(t)
 	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
 	gh.loggedInAs(t, "factory-bot")
@@ -174,6 +177,7 @@ func TestAVersionThatCannotBeReadIsAWarningAndNoVersionOnTheRecord(t *testing.T)
 }
 
 func TestAFailedUpdateIsAWarningAndTheRunGoesOnWithWhatIsInstalled(t *testing.T) {
+	t.Parallel()
 	gh := newGhShim(t)
 	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
 	gh.loggedInAs(t, "factory-bot")
@@ -218,6 +222,7 @@ func TestAFailedUpdateIsAWarningAndTheRunGoesOnWithWhatIsInstalled(t *testing.T)
 }
 
 func TestAWorkerLoadedFromAPluginDirectoryRecordsNoVersionOffTheInstall(t *testing.T) {
+	t.Parallel()
 	gh := newGhShim(t)
 	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
 	gh.loggedInAs(t, "factory-bot")

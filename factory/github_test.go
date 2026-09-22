@@ -19,6 +19,7 @@ import (
 // shim in testdata, watched through its HTTP interface, its data directory and the calls it made.
 
 func TestTheQueueIsTheRoutedIssuesOfEveryConnectedRepositoryOldestRoutingFirst(t *testing.T) {
+	t.Parallel()
 	gh := newGhShim(t)
 	now := time.Now().UTC()
 	// The three are routed out of the order they were opened, and #118 is the oldest issue of all: it
@@ -53,6 +54,7 @@ func TestTheQueueIsTheRoutedIssuesOfEveryConnectedRepositoryOldestRoutingFirst(t
 // An issue whose timeline does not name the routing label keeps its place by the time it was opened,
 // rather than jumping to the head of the line with an empty time.
 func TestAnIssueWithoutALabelEventStandsInTheLineByWhenItWasOpened(t *testing.T) {
+	t.Parallel()
 	gh := newGhShim(t)
 	now := time.Now().UTC()
 	gh.remote(t, "acme/edge-sensors")
@@ -73,6 +75,7 @@ func TestAnIssueWithoutALabelEventStandsInTheLineByWhenItWasOpened(t *testing.T)
 }
 
 func TestTheQueueIsAskedOnEveryPollAndNeverWrittenDown(t *testing.T) {
+	t.Parallel()
 	gh := newGhShim(t)
 	now := time.Now().UTC()
 	gh.remote(t, "acme/edge-sensors")
@@ -96,6 +99,7 @@ func TestTheQueueIsAskedOnEveryPollAndNeverWrittenDown(t *testing.T) {
 }
 
 func TestAConnectedRepositoryIsClonedOnStartAndAFailedCloneIsReported(t *testing.T) {
+	t.Parallel()
 	gh := newGhShim(t)
 	gh.remote(t, "acme/edge-sensors") // the other repository is on no GitHub the host can reach
 	gh.issues(t, "acme/edge-sensors")
@@ -140,6 +144,7 @@ func TestAConnectedRepositoryIsClonedOnStartAndAFailedCloneIsReported(t *testing
 // renamed nothing, and a second clone of the same repository beside the first is a data directory
 // growing by a spelling.
 func TestARepositoryIsClonedOnceHoweverTheConfigurationSpellsIt(t *testing.T) {
+	t.Parallel()
 	gh := newGhShim(t)
 	for _, spelling := range []string{"acme/edge-sensors", "Acme/Edge-Sensors"} {
 		gh.remote(t, spelling)
@@ -167,6 +172,7 @@ func TestARepositoryIsClonedOnceHoweverTheConfigurationSpellsIt(t *testing.T) {
 }
 
 func TestARepositoryThatCannotBeReadIsSaidSoAndDoesNotEmptyTheLineOfTheOthers(t *testing.T) {
+	t.Parallel()
 	gh := newGhShim(t)
 	now := time.Now().UTC()
 	gh.remote(t, "acme/edge-sensors")
@@ -229,6 +235,7 @@ func TestARepositoryThatCannotBeReadIsSaidSoAndDoesNotEmptyTheLineOfTheOthers(t 
 // An issue whose event list cannot be read keeps its place by the time it was opened, and is
 // reported once: the read is tried again on every poll, the line about it is not written again.
 func TestAnIssueWhoseEventsCannotBeReadStandsInTheLineAllTheSame(t *testing.T) {
+	t.Parallel()
 	gh := newGhShim(t)
 	now := time.Now().UTC()
 	gh.remote(t, "acme/edge-sensors")
@@ -259,6 +266,7 @@ func TestAnIssueWhoseEventsCannotBeReadStandsInTheLineAllTheSame(t *testing.T) {
 // issue was touched: a line that stands still is one request per repository and per poll, not one
 // per issue, on a token the whole workflow shares.
 func TestARoutingTimeIsReadAgainOnlyWhenTheIssueWasTouched(t *testing.T) {
+	t.Parallel()
 	gh := newGhShim(t)
 	now := time.Now().UTC()
 	gh.remote(t, "acme/edge-sensors")
@@ -293,6 +301,7 @@ func TestARoutingTimeIsReadAgainOnlyWhenTheIssueWasTouched(t *testing.T) {
 // until then, and because that answer is nothing GitHub confirmed, it is not written down: the next
 // poll looks again and the issue takes the place its routing gives it, without anybody touching it.
 func TestARoutingTimeTheTimelineDoesNotCarryYetIsReadAgain(t *testing.T) {
+	t.Parallel()
 	gh := newGhShim(t)
 	now := time.Now().UTC()
 	gh.remote(t, "acme/edge-sensors")
@@ -319,6 +328,7 @@ func TestARoutingTimeTheTimelineDoesNotCarryYetIsReadAgain(t *testing.T) {
 // gh --paginate answers one JSON array per page, and the routing label may have been set on any of
 // them; the pages are read as the stream of arrays they are.
 func TestTheRoutingTimeIsReadFromEveryPageOfTheTimeline(t *testing.T) {
+	t.Parallel()
 	gh := newGhShim(t)
 	now := time.Now().UTC()
 	gh.remote(t, "acme/edge-sensors")
@@ -337,6 +347,7 @@ func TestTheRoutingTimeIsReadFromEveryPageOfTheTimeline(t *testing.T) {
 // reach that child, and a clone that was cut off must leave nothing the next start would take for a
 // finished clone and hand to a worker.
 func TestACloneThatIsCutOffEndsWithTheFactoryAndLeavesNothingBehind(t *testing.T) {
+	t.Parallel()
 	gh := newGhShim(t)
 	gh.issues(t, "acme/edge-sensors")
 	child := gh.hang(t, 5*time.Minute)
@@ -377,6 +388,7 @@ func TestACloneThatIsCutOffEndsWithTheFactoryAndLeavesNothingBehind(t *testing.T
 // A pause is the brake on everything this host does by itself: it claims nothing, and it answers
 // nothing about the issue it holds either, whatever GitHub says has become of it.
 func TestPausedAgainstGitHubShowsTheLineAndClaimsNothing(t *testing.T) {
+	t.Parallel()
 	gh := newGhShim(t)
 	now := time.Now().UTC()
 	gh.remote(t, "acme/edge-sensors")
@@ -453,6 +465,7 @@ func TestPausedAgainstGitHubShowsTheLineAndClaimsNothing(t *testing.T) {
 // -paused is the operator's brake: it pauses a factory whose configuration says otherwise. There is
 // no flag the other way round, so a paused configuration stays paused whatever the command line says.
 func TestTheCommandLinePausesAFactoryWhoseConfigurationSaysOtherwise(t *testing.T) {
+	t.Parallel()
 	gh := newGhShim(t)
 	gh.routed(t, "acme/edge-sensors", 104, "Retry the upload")
 
@@ -484,6 +497,7 @@ func TestTheCommandLinePausesAFactoryWhoseConfigurationSaysOtherwise(t *testing.
 // those two conditions are the query's and cannot be varied here; what the fixture varies is what
 // each rule decides for itself: assignees, open blockers and pull requests.
 func TestTheFrontierRuleAgreesWithTheOrchestratorBoard(t *testing.T) {
+	t.Parallel()
 	now := time.Now().UTC()
 	free := []int{40, 44}
 	fixture := func(routed bool) []issueJSON {

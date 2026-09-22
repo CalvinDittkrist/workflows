@@ -26,6 +26,10 @@ import (
 // They read the interface as a reader of it does, by its field names, not through the Go types.
 // TestTheReportIsReadFromMarkdown is the one exception: the markdown a worker's final report can be
 // written in has more shapes than a scripted worker can end in, and they are cheapest to pin here.
+//
+// Every test declares itself parallel: each has its own port, temporary directory and gh shim, and
+// the binary is built once. A test that changes state of the whole test process — its environment,
+// the package logger — cannot, says which state in a comment, and runs alone before the others.
 
 var binary string
 
@@ -116,6 +120,7 @@ type apiLine struct {
 }
 
 func TestFakeModeWorksTheCannedQueueOneRunAtATime(t *testing.T) {
+	t.Parallel()
 	// The deadline has to be far above what a scripted run costs — a binary built with the race
 	// detector pays about a second on every exit — or a quick run would be read as a timeout.
 	f := start(t, config{"deadline": "15s", "poll": "100ms"})
@@ -318,6 +323,7 @@ func TestFakeModeWorksTheCannedQueueOneRunAtATime(t *testing.T) {
 // The version is one file in the factory directory: the binary reports what it says, and the runs
 // it records carry the same version (TestFakeModeWorksTheCannedQueueOneRunAtATime).
 func TestTheBinaryReportsTheVersionOfTheVersionFile(t *testing.T) {
+	t.Parallel()
 	output, err := exec.Command(binary, "-version").CombinedOutput()
 	if err != nil {
 		t.Fatalf("factory -version failed: %v, %s", err, output)
@@ -342,6 +348,7 @@ func versionFileSays(t *testing.T) string {
 }
 
 func TestTheInterfaceIsReadOnly(t *testing.T) {
+	t.Parallel()
 	f := start(t, config{"paused": true})
 	for _, path := range []string{"/", "/api/status", "/api/line", "/api/runs/1"} {
 		for _, method := range []string{"POST", "PUT", "PATCH", "DELETE"} {
@@ -373,6 +380,7 @@ func TestTheInterfaceIsReadOnly(t *testing.T) {
 // The host runs one process. The dashboard is built into the binary, so there is no web server and
 // no Node process beside it, and the browser that opens the factory gets everything from it.
 func TestTheBinaryServesTheDashboardFromItself(t *testing.T) {
+	t.Parallel()
 	f := start(t, config{"paused": true})
 
 	page, contentType := f.page(t, "/")
@@ -429,6 +437,7 @@ func TestTheBinaryServesTheDashboardFromItself(t *testing.T) {
 // A clone that has not run make ui builds a factory whose interface works and whose dashboard is
 // not there. It says so, in the one place a reader would look.
 func TestABinaryWithoutTheDashboardSaysHowToBuildIt(t *testing.T) {
+	t.Parallel()
 	server := httptest.NewServer(serveDashboard(fstest.MapFS{"robots.txt": &fstest.MapFile{}}))
 	defer server.Close()
 
@@ -447,6 +456,7 @@ func TestABinaryWithoutTheDashboardSaysHowToBuildIt(t *testing.T) {
 }
 
 func TestPausedShowsTheQueueAndStartsNothing(t *testing.T) {
+	t.Parallel()
 	f := start(t, config{"paused": true, "poll": "50ms"})
 	var status map[string]any
 	f.eventually(t, 10*time.Second, "the first poll", func() bool {
@@ -483,6 +493,7 @@ func TestPausedShowsTheQueueAndStartsNothing(t *testing.T) {
 }
 
 func TestASecondFactoryOnTheSameAddressStartsNothing(t *testing.T) {
+	t.Parallel()
 	first := start(t, config{"paused": true})
 	data := filepath.Join(t.TempDir(), "data")
 	path := writeConfig(t, config{"listen": first.address, "data_dir": data, "paused": true,
@@ -502,6 +513,7 @@ func TestASecondFactoryOnTheSameAddressStartsNothing(t *testing.T) {
 }
 
 func TestAnInvalidConfigurationIsRefusedWithTheFix(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		name   string
 		config string
@@ -605,6 +617,7 @@ func TestAnInvalidConfigurationIsRefusedWithTheFix(t *testing.T) {
 // a branch of this workflow is spelled the way its slugs are, and a name that reaches a command line
 // must not read as a flag.
 func TestABaseBranchIsANameGitTakes(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		name     string
 		narrower bool // git takes it and the factory does not
@@ -665,6 +678,7 @@ func says(yes bool) string {
 // second address, so the directory itself is held — and it is held by the kernel, so a factory that
 // was killed leaves none of it behind for the next start.
 func TestASecondFactoryOnTheSameDataDirectoryStartsNothing(t *testing.T) {
+	t.Parallel()
 	first := start(t, config{"paused": true})
 	path := writeConfig(t, config{"listen": freeAddress(t), "data_dir": first.data, "paused": true,
 		"repositories": []string{"acme/edge-sensors"}})
@@ -691,6 +705,7 @@ func TestASecondFactoryOnTheSameDataDirectoryStartsNothing(t *testing.T) {
 }
 
 func TestStoppingEndsTheWorkerAndTheRunIsInterrupted(t *testing.T) {
+	t.Parallel()
 	f := start(t, config{"deadline": "5m", "poll": "50ms"})
 	pids := f.waitForTheHangingWorker(t, len(cannedIssues))
 
@@ -708,6 +723,7 @@ func TestStoppingEndsTheWorkerAndTheRunIsInterrupted(t *testing.T) {
 }
 
 func TestARestartKeepsTheRunsAndInterruptsWhatWasActive(t *testing.T) {
+	t.Parallel()
 	f := start(t, config{"deadline": "5m", "poll": "50ms"})
 	pids := f.waitForTheHangingWorker(t, len(cannedIssues))
 	// A power cut, not a stop: the factory is gone without ending anything.
@@ -771,6 +787,7 @@ func TestARestartKeepsTheRunsAndInterruptsWhatWasActive(t *testing.T) {
 // the new session opens the same worktree — two unattended sessions committing side by side is the
 // one thing a restart may not produce.
 func TestARestartEndsTheWorkerThatOutlivedTheFactory(t *testing.T) {
+	t.Parallel()
 	first := start(t, config{"deadline": "5m", "poll": "50ms"})
 	left := first.waitForTheHangingWorker(t, len(cannedIssues))
 	first.stop(t, syscall.SIGKILL) // a kill of the factory alone, not of the host
@@ -822,6 +839,7 @@ func TestARestartEndsTheWorkerThatOutlivedTheFactory(t *testing.T) {
 //
 // [ADR 0026]: ../docs/adr/0026-the-factory-never-deletes-work-on-its-own.md
 func TestAnInterruptedIssueIsResumedOnceByItselfAndASecondInterruptionWaitsForAPerson(t *testing.T) {
+	t.Parallel()
 	restart := func(data string) *factory {
 		return start(t, config{"deadline": "5m", "poll": "50ms", "data_dir": data, "listen": freeAddress(t)})
 	}
@@ -868,6 +886,7 @@ func TestAnInterruptedIssueIsResumedOnceByItselfAndASecondInterruptionWaitsForAP
 }
 
 func TestOnlyThePullRequestOfTheRunIsTakenFromAReport(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		name, detail, url string
 	}{
@@ -900,6 +919,7 @@ func TestOnlyThePullRequestOfTheRunIsTakenFromAReport(t *testing.T) {
 // The stage of a run is read from the worker's skill calls, so the names the factory knows have to
 // be the skills the worker plugin has. This is the drift test that binds the two.
 func TestTheStagesAreTheSkillsOfTheWorkerPlugin(t *testing.T) {
+	t.Parallel()
 	for skill := range stages {
 		name, found := strings.CutPrefix(skill, "worker:")
 		if !found {
@@ -919,6 +939,7 @@ func TestTheStagesAreTheSkillsOfTheWorkerPlugin(t *testing.T) {
 }
 
 func TestTheReportIsReadFromMarkdown(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		name            string
 		report          string
@@ -948,6 +969,7 @@ func TestTheReportIsReadFromMarkdown(t *testing.T) {
 // with nobody watching, so working a line is something an operator wrote down and never what a file
 // that forgot the key does by itself — the command line can add the brake and never take it away.
 func TestAConfigurationThatDoesNotNamePausedIsPaused(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		name   string
 		named  config
@@ -975,6 +997,7 @@ func TestAConfigurationThatDoesNotNamePausedIsPaused(t *testing.T) {
 // that names no file is a decision an agent cannot read. The ADRs are renamed while they are written,
 // so the links are held to the documents themselves.
 func TestEveryDecisionTheFactoryLinksToIsAnADRThatExists(t *testing.T) {
+	t.Parallel()
 	files, err := filepath.Glob("*.go")
 	if err != nil || len(files) == 0 {
 		t.Fatalf("the factory's own sources could not be listed (%v): there is nothing to hold here", err)
