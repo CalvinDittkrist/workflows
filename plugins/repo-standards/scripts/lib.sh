@@ -11,9 +11,9 @@ first_of() { local dir=$1 n; shift; for n in "$@"; do has "$dir" "$n" && { print
 # shellcheck disable=SC2034 # used by the scripts that source this file
 WF_CATEGORIES="files agent-config docs tests-ci workspace security"
 # The categories scaffold.sh has templates for. Approving one of them creates every baseline file of it that
-# is missing, whether a finding lists it or not, so the report says so (ADR 0016). Keep it in step with the
-# `put` calls in scaffold.sh; a test scaffolds each category on its own, with every other one skipped, and
-# expects files from exactly these.
+# is missing, whether a finding lists it or not, so the report says so and asks about every one of them
+# (ADR 0035). Keep it in step with the `put` calls in scaffold.sh; a test scaffolds each category on its own,
+# with every other one skipped, and expects files from exactly these.
 # shellcheck disable=SC2034
 WF_SCAFFOLD_CATEGORIES="agent-config docs tests-ci workspace"
 state_dir() {
@@ -21,10 +21,17 @@ state_dir() {
   d=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || { printf 'error: not inside a git repository; run git init first\n' >&2; return 1; }
   printf '%s/standardize' "$d"
 }
+# in_list <value> <space separated list>: the list holds exactly this value. Compared word by word, so a value
+# that is several words, or that carries a glob character, is not a member of anything.
+in_list() { local x; for x in $2; do if [ "$x" = "$1" ]; then return 0; fi; done; return 1; }
 # scaffolded <category>: scaffold.sh has templates for it.
-scaffolded() { case " $WF_SCAFFOLD_CATEGORIES " in *" $1 "*) return 0 ;; esac; return 1; }
-# has_findings <category>: the last report has a finding for it.
-has_findings() { cut -f1 "$(state_dir)/findings" 2>/dev/null | grep -qxF -- "$1"; }
+scaffolded() { in_list "$1" "$WF_SCAFFOLD_CATEGORIES"; }
+# has_findings <category> [<action>]: the last report has a finding for it, of that action when one is named.
+# One process, because a pipeline into `grep -q` reports the SIGPIPE of its first half under `set -o pipefail`.
+has_findings() {
+  awk -F'\t' -v c="$1" -v a="${2-}" '$1 == c && (a == "" || $3 == a) { found = 1; exit }
+    END { exit !found }' "$(state_dir)/findings" 2>/dev/null
+}
 # answerable: the categories the report asks about and approve.sh answers, in report order: every category with
 # a finding, plus every scaffolded one, because the apply phase creates its missing baseline files whether a
 # finding lists them or not (ADR 0035). One source for the report and the answer, so the two cannot drift.

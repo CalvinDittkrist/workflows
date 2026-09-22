@@ -9,7 +9,7 @@ You apply what the maintainer approved in the audit. Every step is a script that
 Approvals:
 !`${CLAUDE_PLUGIN_ROOT}/scripts/approve.sh`
 
-1. If the approvals above start with `error:` or list a `pending` category, relay that and stop; the audit (`/repo-standards:standardize`) comes first.
+1. If the approvals above start with `error:` or list a `pending` category, relay that and stop; the audit (`/repo-standards:standardize`) comes first. An `unanswered:` category does not stop the run: name those categories and say that the run scaffolds their missing baseline files, as it would on an approval, because only a rejection keeps it out.
 2. Run `"${CLAUDE_PLUGIN_ROOT}/scripts/backup.sh"`. It pushes the tag `pre-standard`, protects it and opens or updates the catalogue issue. Show its output. On `error:` stop: nothing may be deleted without the backup.
 3. Say how the GitHub project is chosen, then continue without waiting: the workspace step copies the project `WF_PROJECT_TEMPLATE=<owner>/<number>` names into a repository that has none linked, and without that variable the project stays a `manual:` step. The scripts read it from the environment of the session, so the maintainer sets it in `.claude/settings.json` under `env` (step 4 scaffolds the entry) and runs `/repo-standards:apply` again in a new session to get the project; every other step is done by then.
 4. Run `"${CLAUDE_PLUGIN_ROOT}/scripts/cleanup.sh" prepare`. It prepares the worktree on `chore/standardize` and prints `todo:` lines.

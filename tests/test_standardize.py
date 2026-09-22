@@ -255,6 +255,10 @@ class FactsTests(ShimTest):
         self.assertIn("is not a git repository; run git init first", r.stderr)
 
 
+# approve.sh explains its unanswered line, which names the categories that have no findings and are scaffolded.
+NOTE = ("note: the unanswered categories have no findings; the apply phase scaffolds them unless "
+        "they are rejected\n")
+
 AUDIT = """Here are my findings.
 finding: agent-config | .claude/skills/deploy | delete | repository-local skill written for this repository | high
 - finding: agent-config | CLAUDE.md | replace | holds instructions instead of importing AGENTS.md | high
@@ -368,8 +372,8 @@ next: ask for approval per category, then record the answers with approve.sh <ca
                           f"  rejecting {c} leaves it alone: the apply phase creates none of them\n", r.stdout)
         self.assertNotIn("also:", r.stdout)
         self.assertNotIn("regardless", r.stdout)
-        self.assertEqual(self.approve().stdout,
-                         "approved: none\nrejected: none\npending: files, agent-config, docs, tests-ci, workspace\n")
+        self.assertEqual(self.approve().stdout, "approved: none\nrejected: none\npending: files\n"
+                         "unanswered: agent-config, docs, tests-ci, workspace\n" + NOTE)
         full = self.report(AUDIT + "finding: docs | README.md | create | missing | high\n"
                            "finding: tests-ci | Makefile | create | missing | high\n")
         self.assertNotIn(": no findings\n", full.stdout, "every scaffolded category has findings here")
@@ -400,7 +404,8 @@ next: ask for approval per category, then record the answers with approve.sh <ca
             self.assertNotIn(f"\n{c}:", r.stdout, "a category that is never scaffolded has nothing to answer")
         r = self.approve("docs=reject")
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertEqual(r.stdout, "approved: none\nrejected: docs\npending: agent-config, tests-ci, workspace\n")
+        self.assertEqual(r.stdout, "approved: none\nrejected: docs\npending: none\n"
+                                   "unanswered: agent-config, tests-ci, workspace\n" + NOTE)
 
     def test_a_malformed_finding_fails_the_report_and_keeps_the_stored_one(self):
         self.assertEqual(self.report(AUDIT).returncode, 0)
@@ -451,14 +456,16 @@ next: ask for approval per category, then record the answers with approve.sh <ca
     def test_approval_is_recorded_per_category_and_the_last_answer_wins(self):
         self.assertEqual(self.report(AUDIT).returncode, 0)
         r = self.approve()
-        self.assertEqual(r.stdout,
-                         "approved: none\nrejected: none\npending: files, agent-config, docs, tests-ci, workspace, security\n")
+        self.assertEqual(r.stdout, "approved: none\nrejected: none\n"
+                                   "pending: files, agent-config, workspace, security\n"
+                                   "unanswered: docs, tests-ci\n" + NOTE)
         r = self.approve("agent-config=approve", "security=reject")
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertEqual(r.stdout, "approved: agent-config\nrejected: security\npending: files, docs, tests-ci, workspace\n")
+        self.assertEqual(r.stdout, "approved: agent-config\nrejected: security\n"
+                                   "pending: files, workspace\nunanswered: docs, tests-ci\n" + NOTE)
         r = self.approve("security=approve", "files=reject", "workspace=approve", "docs=reject", "tests-ci=approve")
-        self.assertEqual(r.stdout,
-                         "approved: agent-config, tests-ci, workspace, security\nrejected: files, docs\npending: none\n")
+        self.assertEqual(r.stdout, "approved: agent-config, tests-ci, workspace, security\nrejected: files, docs\n"
+                                   "pending: none\nunanswered: none\n")
         self.assertEqual(sorted(self.state("approvals").splitlines()),
                          ["agent-config\tapprove", "docs\treject", "files\treject", "security\tapprove",
                           "tests-ci\tapprove", "workspace\tapprove"])
@@ -469,6 +476,10 @@ next: ask for approval per category, then record the answers with approve.sh <ca
         for args, message in ((("files=approve", "doc=approve"),
                                "doc is not in the last report and is not scaffolded, so there is nothing to answer "
                                "for it; the report asks about: files agent-config docs tests-ci workspace security"),
+                              (("files agent-config=approve",),
+                               "files agent-config is not in the last report and is not scaffolded, so there is "
+                               "nothing to answer for it; the report asks about: files agent-config docs tests-ci "
+                               "workspace security"),
                               (("files=approve", "security=maybe"), "security=maybe: the answer is approve or reject"),
                               (("files",), "files: use <category>=approve or <category>=reject")):
             r = self.approve(*args)
@@ -480,7 +491,8 @@ next: ask for approval per category, then record the answers with approve.sh <ca
         self.assertEqual(self.report(AUDIT).returncode, 0)
         self.assertEqual(self.approve("files=approve").returncode, 0)
         self.assertEqual(self.report(AUDIT).returncode, 0)
-        self.assertIn("pending: files, agent-config, docs, tests-ci, workspace, security\n", self.approve().stdout)
+        self.assertIn("pending: files, agent-config, workspace, security\nunanswered: docs, tests-ci\n",
+                      self.approve().stdout)
 
     def test_approve_needs_a_report_first(self):
         r = self.approve("files=approve")

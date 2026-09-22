@@ -51,9 +51,12 @@ printf '%s\n' "$parsed" | awk 'NF' > "$dir/findings"
 # A new report answers for a new run: the approvals and the settings the last run worked on go.
 rm -f "$dir/approvals" "$dir/workspace-handled"
 
-CATS="$WF_CATEGORIES" SCAFFOLDED="$WF_SCAFFOLD_CATEGORIES" awk -F'\t' '
-  BEGIN { nc = split(ENVIRON["CATS"], order, " ")
-          ns = split(ENVIRON["SCAFFOLDED"], s, " "); for (i = 1; i <= ns; i++) S[s[i]] = 1 }
+# The categories asked about come from answerable() in lib.sh, the same function approve.sh answers for, so the
+# report and the answer cannot drift apart; it reads the findings written above.
+ANSWERABLE="$(answerable)" SCAFFOLDED="$WF_SCAFFOLD_CATEGORIES" awk -F'\t' '
+  BEGIN { nc = split(ENVIRON["ANSWERABLE"], order, " ")
+          ns = split(ENVIRON["SCAFFOLDED"], s, " "); for (i = 1; i <= ns; i++) S[s[i]] = 1
+          settings = "  approving agent-config also brings .claude/settings.json to the template: the workflow plugins enabled, every other project plugin disabled, the template permissions and env merged" }
   # First pass: which categories delete each target, so a target two auditors delete is shown in both.
   FNR == NR { if ($3 == "delete") by[$2] = by[$2] (by[$2] == "" ? "" : ", ") $1; next }
   { total++; n[$1]++; act[$1, $3]++; if ($3 == "issue") issues++; else runs++
@@ -72,13 +75,12 @@ CATS="$WF_CATEGORIES" SCAFFOLDED="$WF_SCAFFOLD_CATEGORIES" awk -F'\t' '
     split("delete replace create configure issue", acts, " ")
     for (i = 1; i <= nc; i++) {
       c = order[i]
-      # A scaffolded category without findings is asked about too: the apply phase creates its missing baseline
-      # files, and rejecting it is the only way to keep the apply phase out of it (ADR 0035).
+      # An answerable category without findings is one scaffold.sh has templates for: the apply phase creates its
+      # missing baseline files, and rejecting it is the only way to keep the apply phase out of it (ADR 0035).
       if (!(c in n)) {
-        if (!(c in S)) continue
         printf "\n%s: no findings\n", c
         printf "  approving %s creates every baseline file of the category that is missing\n", c
-        if (c == "agent-config") print "  approving agent-config also brings .claude/settings.json to the template: the workflow plugins enabled, every other project plugin disabled, the template permissions and env merged"
+        if (c == "agent-config") print settings
         printf "  rejecting %s leaves it alone: the apply phase creates none of them%s\n", c,
                (c == "agent-config") ? " and leaves .claude/settings.json as it is" : ""
         continue
@@ -94,7 +96,7 @@ CATS="$WF_CATEGORIES" SCAFFOLDED="$WF_SCAFFOLD_CATEGORIES" awk -F'\t' '
       if (c in S) printf "  approving %s %screates every baseline file of the category that is missing, whether a finding above lists it or not\n",
                          c, ((c in per) || (c in dec)) ? "also " : ""
       # scaffold.sh writes the settings of the agent-config category through the plugin commands, existing file or not.
-      if (c == "agent-config") print "  approving agent-config also brings .claude/settings.json to the template: the workflow plugins enabled, every other project plugin disabled, the template permissions and env merged"
+      if (c == "agent-config") print settings
       if (c in iss) printf "  become issues:\n%s", iss[c]; else print "  become issues: none"
     }
   }' "$dir/findings" "$dir/findings"

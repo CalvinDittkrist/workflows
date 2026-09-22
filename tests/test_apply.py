@@ -285,8 +285,10 @@ class ApplyTests(ApplyCase):
         self.assertIn("created: docs/architecture.md\n", out, "the other categories are scaffolded as before")
 
     def test_a_scaffolded_category_without_findings_that_was_not_answered_is_scaffolded(self):
-        """The question is new, the default is not: an unanswered category is scaffolded as it always was."""
-        self.assertNotIn("docs", self.run_script(APPROVE).stdout.split("pending:")[0])
+        """The question is new, the default is not: an unanswered category is scaffolded as it always was, so it is
+        listed apart from the pending ones, which do stop the apply phase."""
+        out = self.run_script(APPROVE).stdout
+        self.assertIn("pending: none\nunanswered: docs\n", out)
         self.step(BACKUP)
         out = self.step(CLEANUP, "prepare").stdout
         for f in ("docs/architecture.md", "docs/adr/README.md", "docs/glossary.md", ".github/PULL_REQUEST_TEMPLATE.md"):
@@ -370,11 +372,26 @@ class ApplyTests(ApplyCase):
         self.merge()
         repo = self.get("repo.json")
         r = self.step(FINALIZE)
-        self.assertIn("workspace: no approved findings, left untouched\n", r.stdout)
+        self.assertIn("workspace: no approved configure finding, left untouched\n", r.stdout)
         self.assertEqual(self.get("repo.json"), repo)
         self.assertEqual(self.get("issues.json")[0]["comments"], [])
         self.assertIn(".github/dependabot.yml", self.origin_git("ls-tree", "-r", "--name-only", "main"),
                       "the category was approved, so its baseline file is scaffolded")
+
+    def test_an_approved_workspace_whose_findings_are_files_configures_nothing(self):
+        """The report promises GitHub is configured on a configure finding; a file finding answers for the file."""
+        self.audit(REPLIES.replace("finding: workspace | repo allow_rebase_merge | configure | rebase merges are allowed | high\n",
+                                   "finding: workspace | .github/dependabot.yml | create | no update configuration | high\n"),
+                   "agent-config=approve", "tests-ci=approve", "security=approve", "workspace=approve", "files=reject")
+        self.through_open()
+        self.merge()
+        repo = self.get("repo.json")
+        r = self.step(FINALIZE)
+        self.assertIn("workspace: no approved configure finding, left untouched\n", r.stdout)
+        self.assertEqual(self.get("repo.json"), repo)
+        self.assertEqual(self.get("issues.json")[0]["comments"], [], "no snapshot: nothing was applied")
+        self.assertIn(".github/dependabot.yml", self.origin_git("ls-tree", "-r", "--name-only", "main"),
+                      "the finding the maintainer answered is done")
 
     def workspace_deviation(self, stdout):
         lines = [l for l in stdout.splitlines() if l.startswith("workspace: the applied difference")]

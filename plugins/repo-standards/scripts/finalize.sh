@@ -80,14 +80,15 @@ esac
 if [ "$state" = merged ]; then printf 'pr: %s merged\n' "$(printf '%s' "$pr" | jq -r .url)"
 else printf 'pr: none (the default branch needed no cleanup)\n'; fi
 
-# The workspace, only when the category was approved and the audit found a difference to apply. Approving a
-# workspace category without findings answers for the baseline file the category scaffolds, not for the GitHub
-# settings, so the apply phase stays what it was before the question was added (ADR 0035). The snapshot goes to
-# the catalogue issue before anything else can fail.
+# The workspace, only when the category was approved and the audit found a GitHub setting to change. What
+# approving `workspace` promises is what the report said it would do: a `configure` finding is the line that
+# says the whole difference between the workspace and the standard is applied, so an approval given for the
+# baseline file the category scaffolds never configures GitHub (ADR 0035). The snapshot goes to the catalogue
+# issue before anything else can fail.
 status=0
 apply_workspace=no
 case " $(categories "$answers" approve) " in *" workspace "*) apply_workspace=yes ;; esac
-has_findings workspace || apply_workspace=no
+has_findings workspace configure || apply_workspace=no
 case "$apply_workspace" in
   yes)
     snap=$(mktemp "$dir/workspace-snapshot.XXXXXX")
@@ -110,7 +111,7 @@ case "$apply_workspace" in
     [ "$rc" = 0 ] || { printf 'workspace: failed; fix the error above and run finalize.sh again\n'; status=1; } ;;
   *) case " $(categories "$answers" reject) " in
        *" workspace "*) printf 'workspace: rejected, left untouched\n' ;;
-       *) printf 'workspace: no approved findings, left untouched\n' ;;
+       *) printf 'workspace: no approved configure finding, left untouched\n' ;;
      esac ;;
 esac
 
