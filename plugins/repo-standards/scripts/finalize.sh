@@ -3,9 +3,9 @@
 # keep its snapshot on the catalogue issue, remove the cleanup worktree, and end with the check.
 # Usage: finalize.sh
 # Refuses while the pull request from chore/standardize is open or was closed without a merge, because the
-# rulesets require the job check that the pull request brings. workspace.sh --apply runs only when the
-# workspace category had findings and was approved; it applies the whole difference, recomputed now, so one line names where
-# that differs from the audit. Its snapshot is posted as a comment on the catalogue issue. The check
+# rulesets require the job check that the pull request brings. workspace.sh --apply runs only when the workspace
+# category was approved and had a `configure` finding; it applies the whole difference, recomputed now, so one
+# line names where that differs from the audit. Its snapshot is posted as a comment on the catalogue issue. The check
 # (check.sh) runs on the head of the default branch on origin. Exit 1 when the check or the workspace fails.
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
@@ -86,34 +86,28 @@ else printf 'pr: none (the default branch needed no cleanup)\n'; fi
 # baseline file the category scaffolds never configures GitHub (ADR 0035). The snapshot goes to the catalogue
 # issue before anything else can fail.
 status=0
-apply_workspace=no
-case " $(categories "$answers" approve) " in *" workspace "*) apply_workspace=yes ;; esac
-has_findings workspace configure || apply_workspace=no
-case "$apply_workspace" in
-  yes)
-    snap=$(mktemp "$dir/workspace-snapshot.XXXXXX")
-    rc=0; out=$(bash "$here/workspace.sh" --apply --snapshot "$snap" 2>&1) || rc=$?
-    printf '%s\n' "$out" | sed 's/^/workspace: /'
-    if printf '%s\n' "$out" | grep -qxF "snapshot: $snap"; then
-      { printf 'Snapshot of the GitHub workspace before `workspace.sh --apply` on %s, for undoing a change by hand.\n\nChanged:\n```\n%s\n```\n\n<details><summary>Previous state</summary>\n\n```json\n' \
-          "$(date -u +%Y-%m-%d)" "$(printf '%s\n' "$out" | grep '^diff: ' || true)"
-        jq . "$snap"; printf '```\n\n</details>\n'; } > "$tmp"
-      jq -n --rawfile b "$tmp" '{body: $b}' | gh api --method POST "repos/$nwo/issues/$catalogue/comments" --input - >/dev/null 2>"$err" \
-        || die "cannot post the snapshot to #$catalogue: $(tail -n1 "$err"); it is in $snap"
-      printf 'snapshot: posted to #%s\n' "$catalogue"
-    fi
-    [ -s "$snap" ] || rm -f "$snap"
-    # After the snapshot is on the catalogue issue, because this only reads: the settings workspace.sh worked
-    # on, how they deviate from the audit, and the note for the next run. It never fails the run.
-    settings=$(printf '%s\n' "$out" | workspace_settings) || settings=""
-    [ "$rc" != 0 ] || workspace_deviation "$settings" || true
-    record_handled "$settings" || true
-    [ "$rc" = 0 ] || { printf 'workspace: failed; fix the error above and run finalize.sh again\n'; status=1; } ;;
-  *) case " $(categories "$answers" reject) " in
-       *" workspace "*) printf 'workspace: rejected, left untouched\n' ;;
-       *) printf 'workspace: no approved configure finding, left untouched\n' ;;
-     esac ;;
-esac
+if in_list workspace "$(categories "$answers" approve)" && has_findings workspace configure; then
+  snap=$(mktemp "$dir/workspace-snapshot.XXXXXX")
+  rc=0; out=$(bash "$here/workspace.sh" --apply --snapshot "$snap" 2>&1) || rc=$?
+  printf '%s\n' "$out" | sed 's/^/workspace: /'
+  if printf '%s\n' "$out" | grep -qxF "snapshot: $snap"; then
+    { printf 'Snapshot of the GitHub workspace before `workspace.sh --apply` on %s, for undoing a change by hand.\n\nChanged:\n```\n%s\n```\n\n<details><summary>Previous state</summary>\n\n```json\n' \
+        "$(date -u +%Y-%m-%d)" "$(printf '%s\n' "$out" | grep '^diff: ' || true)"
+      jq . "$snap"; printf '```\n\n</details>\n'; } > "$tmp"
+    jq -n --rawfile b "$tmp" '{body: $b}' | gh api --method POST "repos/$nwo/issues/$catalogue/comments" --input - >/dev/null 2>"$err" \
+      || die "cannot post the snapshot to #$catalogue: $(tail -n1 "$err"); it is in $snap"
+    printf 'snapshot: posted to #%s\n' "$catalogue"
+  fi
+  [ -s "$snap" ] || rm -f "$snap"
+  # After the snapshot is on the catalogue issue, because this only reads: the settings workspace.sh worked
+  # on, how they deviate from the audit, and the note for the next run. It never fails the run.
+  settings=$(printf '%s\n' "$out" | workspace_settings) || settings=""
+  [ "$rc" != 0 ] || workspace_deviation "$settings" || true
+  record_handled "$settings" || true
+  [ "$rc" = 0 ] || { printf 'workspace: failed; fix the error above and run finalize.sh again\n'; status=1; }
+elif in_list workspace "$(categories "$answers" reject)"; then printf 'workspace: rejected, left untouched\n'
+else printf 'workspace: no approved configure finding, left untouched\n'
+fi
 
 # The cleanup branch is done once its pull request is merged: the worktree, the local branch and the branch on
 # origin go, so the next run starts from the default branch. Only what the merged pull request carried goes.

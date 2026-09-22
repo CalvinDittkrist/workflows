@@ -308,10 +308,12 @@ every other project plugin disabled, the template permissions and env merged
 docs: no findings
   approving docs creates every baseline file of the category that is missing
   rejecting docs leaves it alone: the apply phase creates none of them
+  leaving docs unanswered scaffolds it: only a rejection keeps the apply phase out
 
 tests-ci: no findings
   approving tests-ci creates every baseline file of the category that is missing
   rejecting tests-ci leaves it alone: the apply phase creates none of them
+  leaving tests-ci unanswered scaffolds it: only a rejection keeps the apply phase out
 
 workspace: 1 finding (configure 1)
   deletes: nothing
@@ -365,11 +367,15 @@ next: ask for approval per category, then record the answers with approve.sh <ca
                       "  approving agent-config also brings .claude/settings.json to the template: the workflow plugins enabled, "
                       "every other project plugin disabled, the template permissions and env merged\n"
                       "  rejecting agent-config leaves it alone: the apply phase creates none of them and leaves "
-                      ".claude/settings.json as it is\n", r.stdout)
+                      ".claude/settings.json as it is\n"
+                      "  leaving agent-config unanswered scaffolds it: only a rejection keeps the apply phase out\n",
+                      r.stdout)
         for c in ("docs", "tests-ci", "workspace"):
             self.assertIn(f"\n{c}: no findings\n"
                           f"  approving {c} creates every baseline file of the category that is missing\n"
-                          f"  rejecting {c} leaves it alone: the apply phase creates none of them\n", r.stdout)
+                          f"  rejecting {c} leaves it alone: the apply phase creates none of them\n"
+                          f"  leaving {c} unanswered scaffolds it: only a rejection keeps the apply phase out\n",
+                          r.stdout)
         self.assertNotIn("also:", r.stdout)
         self.assertNotIn("regardless", r.stdout)
         self.assertEqual(self.approve().stdout, "approved: none\nrejected: none\npending: files\n"
@@ -406,6 +412,11 @@ next: ask for approval per category, then record the answers with approve.sh <ca
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(r.stdout, "approved: none\nrejected: docs\npending: none\n"
                                    "unanswered: agent-config, tests-ci, workspace\n" + NOTE)
+        r = self.approve("security=approve")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("error: security is not in the last report and is not scaffolded, so there is nothing to "
+                      "answer for it; the report asks about: agent-config docs tests-ci workspace", r.stderr,
+                      "a category the apply phase never scaffolds stays unanswerable without findings")
 
     def test_a_malformed_finding_fails_the_report_and_keeps_the_stored_one(self):
         self.assertEqual(self.report(AUDIT).returncode, 0)

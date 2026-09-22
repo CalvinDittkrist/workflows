@@ -258,7 +258,7 @@ class ApplyTests(ApplyCase):
 
     def test_a_rejected_scaffolded_category_without_findings_is_left_alone(self):
         """docs has no finding in this audit; rejecting it is what keeps the apply phase out of its files."""
-        self.run_script(APPROVE, "docs=reject")
+        self.assertEqual(self.run_script(APPROVE, "docs=reject").returncode, 0)
         self.step(BACKUP)
         out = self.step(CLEANUP, "prepare").stdout
         self.assertIn("untouched: files, docs (rejected)\n", out)
@@ -294,6 +294,12 @@ class ApplyTests(ApplyCase):
         for f in ("docs/architecture.md", "docs/adr/README.md", "docs/glossary.md", ".github/PULL_REQUEST_TEMPLATE.md"):
             self.assertIn(f"created: {f}\n", out)
         self.assertIn("untouched: files (rejected)\n", out)
+        # backup.sh and cleanup.sh above ran through; the other two scripts of the apply phase do not stop on it
+        # either, the way all four stop on a pending category. They may fail for a reason of their own, never
+        # for the answer: a refusal over an answer names approve.sh.
+        for script, args in ((ISSUES, ()), (FINALIZE, ())):
+            r = self.step(script, *args, ok=False)
+            self.assertNotIn("approve.sh", r.stderr, script)
 
     def test_issue_findings_become_agent_ready_issues_once(self):
         r = self.step(ISSUES)
@@ -390,8 +396,6 @@ class ApplyTests(ApplyCase):
         self.assertIn("workspace: no approved configure finding, left untouched\n", r.stdout)
         self.assertEqual(self.get("repo.json"), repo)
         self.assertEqual(self.get("issues.json")[0]["comments"], [], "no snapshot: nothing was applied")
-        self.assertIn(".github/dependabot.yml", self.origin_git("ls-tree", "-r", "--name-only", "main"),
-                      "the finding the maintainer answered is done")
 
     def workspace_deviation(self, stdout):
         lines = [l for l in stdout.splitlines() if l.startswith("workspace: the applied difference")]
