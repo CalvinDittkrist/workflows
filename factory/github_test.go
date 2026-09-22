@@ -682,12 +682,20 @@ func (g *ghShim) issue(t *testing.T, repository string, issue issueJSON) {
 	g.answer(t, fmt.Sprintf("api repos/%s/issues/%v", repository, issue["number"]), marshal(t, issue))
 }
 
-// pull is what became of a pull request. Merged is a field of its own because GitHub calls a merged
-// pull request closed as well.
+// pull is what became of a pull request of the branch a claim holds its issue by. Merged is a field
+// of its own because GitHub calls a merged pull request closed as well.
 func (g *ghShim) pull(t *testing.T, repository string, number int, state string, merged bool) {
 	t.Helper()
+	g.pullOf(t, repository, number, state, merged, repository, claimedBranch)
+}
+
+// pullOf is a pull request of another branch or another repository than the one the factory holds
+// the issue by: what a report that named the wrong one, or one somebody else's, binds to the run.
+func (g *ghShim) pullOf(t *testing.T, repository string, number int, state string, merged bool, head, branch string) {
+	t.Helper()
 	g.answer(t, fmt.Sprintf("api repos/%s/pulls/%d", repository, number),
-		marshal(t, map[string]any{"number": number, "state": state, "merged": merged}))
+		marshal(t, map[string]any{"number": number, "state": state, "merged": merged,
+			"head": map[string]any{"ref": branch, "repo": map[string]any{"full_name": head}}}))
 }
 
 // unassigns is the answer to the one edit that takes this host off an issue it lets go, so a removal

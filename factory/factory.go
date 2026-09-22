@@ -118,7 +118,12 @@ type source interface {
 type Held struct {
 	Repository  string
 	Number      int
+	Branch      string // the branch the claim of this issue holds it by
 	PullRequest string // the pull request a run of this issue opened, or empty
+	// Running says a worker of this issue is at work. Such an issue is read before the rest: what
+	// the reading carries for it is a cancel, which must reach the worker while it is still working,
+	// and the issues that only wait to be cleaned up are of no hurry beside it.
+	Running bool
 }
 
 func (h Held) key() string { return Issue{Repository: h.Repository, Number: h.Number}.key() }
@@ -266,7 +271,8 @@ func (f *Factory) heldIssuesDue() []Held {
 		if !h.holds || !ok {
 			continue
 		}
-		issue := Held{Repository: connected.Name, Number: h.run.Issue, PullRequest: h.pullRequest}
+		issue := Held{Repository: connected.Name, Number: h.run.Issue, Branch: h.run.Branch,
+			PullRequest: h.pullRequest, Running: !h.idle}
 		state := fmt.Sprintf("%s|%t|%s", issue.key(), h.idle, h.pullRequest)
 		last, known := f.askedHeld[state]
 		if h.idle && known && now.Sub(last) < time.Duration(heldPolls)*f.settings.Poll {
@@ -277,7 +283,15 @@ func (f *Factory) heldIssuesDue() []Held {
 		out = append(out, issue)
 	}
 	f.askedHeld = asked
-	sort.Slice(out, func(a, b int) bool { return out[a].key() < out[b].key() })
+	// The run that is going first, because the reading of what this factory holds is bounded as a
+	// whole (readHeld) and a GitHub that answers slowly may leave the end of it unread: a cancel is
+	// what must not wait for that, and a worktree that waits to be cleaned up can.
+	sort.Slice(out, func(a, b int) bool {
+		if out[a].Running != out[b].Running {
+			return out[a].Running
+		}
+		return out[a].key() < out[b].key()
+	})
 	return out
 }
 

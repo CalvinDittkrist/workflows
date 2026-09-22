@@ -687,6 +687,257 @@ func TestAWorktreeWhoseHeadIsBehindItsBranchStillHasEveryCommitPushed(t *testing
 	}
 }
 
+// The last step of letting an issue go is taking this host off it, and the handover is not done
+// before GitHub has made that removal. A run marked as let go is never taken up again, so an issue
+// marked while its assignee is still there would be one no other claimer and no person ever sees as
+// free. Every step before it can be made again, so the handover stops where it is and a later poll
+// takes it the rest of the way.
+func TestAnIssueIsNotLetGoWhileThisHostIsStillItsAssignee(t *testing.T) {
+	gh := newGhShim(t)
+	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
+	gh.loggedInAs(t, "factory-bot")
+	gh.assigns(t, "acme/edge-sensors", claimedIssue, "factory-bot")
+	gh.unassigns(t, "acme/edge-sensors", claimedIssue, "factory-bot")
+	gh.workerCommits(t, "worked.md")
+	gh.workerReportsBlocked(t, "the repository has no test for this")
+
+	data := filepath.Join(t.TempDir(), "data")
+	clone := gh.cloneInto(t, data, "acme/edge-sensors")
+	f := gh.work(t, config{"poll": "50ms", "deadline": "90s", "data_dir": data,
+		"repositories": []string{"acme/edge-sensors"}})
+	if run := f.ended(t, 1); !run.Holding {
+		t.Fatalf("run 1 ended as %q (%s) holding=%v, want a run that holds the issue; the factory's log:\n%s",
+			run.Outcome, run.Reason, run.Holding, f.output(t))
+	}
+	worktree := filepath.Join(clone, ".claude", "worktrees", claimedWorktree)
+	work := committed(t, f, worktree, "worked.md")
+
+	// GitHub refuses to take the assignee off, and the maintainer takes the routing label off.
+	gh.fail(t, "issue edit * --remove-assignee *")
+	gh.issue(t, "acme/edge-sensors", assignedTo(
+		openIssue(claimedIssue, claimedTitle, time.Now().UTC().Add(-72*time.Hour), readyLabel), "factory-bot"))
+
+	// The work reaches the remote and the worktree goes with it — those steps are done — but the
+	// issue itself is not given back while GitHub still names this host as its assignee.
+	f.eventually(t, 30*time.Second, "the worktree to be removed", func() bool {
+		_, err := os.Stat(worktree)
+		return err != nil
+	})
+	if head := gh.head(t, "acme/edge-sensors", claimedBranch); head != work {
+		t.Errorf("%s of the remote is at %q, want the commit of the run (%s): the worktree is pushed before it goes", claimedBranch, head, work)
+	}
+	var stuck apiRun
+	f.never(t, 2*time.Second, "the issue was let go while this host is still its assignee", func() bool {
+		stuck = apiRun{}
+		f.get(t, "/api/runs/1", &stuck)
+		return stuck.LetGoAt != nil
+	})
+	f.get(t, "/api/runs/1", &stuck)
+	said := 0
+	for _, warning := range stuck.Warnings {
+		if strings.Contains(warning, "could not be taken off") {
+			said++
+		}
+	}
+	if said != 1 {
+		t.Errorf("the run carries %d warnings about the assignee that stayed, want one: %v", said, stuck.Warnings)
+	}
+
+	// GitHub answers again, and a later poll finishes what the one before it could not.
+	gh.fail(t, "")
+	f.eventually(t, 30*time.Second, "the issue to be let go", func() bool {
+		var let apiRun
+		f.get(t, "/api/runs/1", &let)
+		return let.LetGoAt != nil
+	})
+	removal := fmt.Sprintf("issue edit %d --repo acme/edge-sensors --remove-assignee factory-bot", claimedIssue)
+	if made := gh.made(t, removal); made < 2 {
+		t.Errorf("the factory made `gh %s` %d times, want the refused one and the one GitHub took", removal, made)
+	}
+}
+
+// A branch this factory takes back is recognised by the work it carries and not by its name alone.
+// Every claimer spells an issue's branch the same way, so a branch another claimer cut in the
+// seconds between this factory's reading of the line and its fetch carries the name of the run that
+// once held the issue — and two claimers working one branch is what the claim exists to make
+// impossible. A branch is left on the remote only when it carries work the base does not have, so a
+// branch of that name with nothing on it is somebody else's claim and this issue is claimed anew:
+// GitHub refuses the second creation of the reference, and this run is recorded as lost.
+func TestABranchOfTheIssuesNameThatCarriesNoWorkIsNotTakenBack(t *testing.T) {
+	gh := newGhShim(t)
+	gh.remote(t, "acme/edge-sensors")
+	gh.loggedInAs(t, "factory-bot")
+	gh.assigns(t, "acme/edge-sensors", claimedIssue, "factory-bot")
+	gh.workerReportsBlocked(t, "the repository has no test for this")
+
+	data := filepath.Join(t.TempDir(), "data")
+	clone := gh.cloneInto(t, data, "acme/edge-sensors")
+	base := gh.head(t, "acme/edge-sensors", "main")
+
+	// This factory worked the issue once and let it go; its branch carried nothing, so it went from
+	// the remote with everything else.
+	letGoAt := time.Now().UTC().Add(-time.Hour)
+	let := record(1, claimedIssue, claimedTitle, signalRouted, outcomeBlocked, false, letGoAt.Add(-time.Hour), letGoAt)
+	let.LetGoAt = &letGoAt
+	records(t, data, let)
+	// Another claimer has taken the issue since: the branch of it is on the remote again, cut from
+	// the base and carrying nothing of the run before.
+	gh.branchAt(t, "acme/edge-sensors", claimedBranch, base)
+	// And the issue is routed again, which asks this factory for another run.
+	again := letGoAt.Add(time.Minute)
+	gh.issues(t, "acme/edge-sensors", touched(openIssue(claimedIssue, claimedTitle, again), again))
+	gh.timeline(t, "acme/edge-sensors", claimedIssue, labeled("factory", again))
+	gh.issue(t, "acme/edge-sensors", openIssue(claimedIssue, claimedTitle, again))
+
+	f := gh.work(t, config{"poll": "50ms", "deadline": "90s", "data_dir": data,
+		"repositories": []string{"acme/edge-sensors"}})
+	run := f.ended(t, 2)
+	if run.Outcome != outcomeLost {
+		t.Fatalf("run 2 ended as %q (%s), want lost: the branch of that name carries no work of this factory; the factory's log:\n%s",
+			run.Outcome, run.Reason, f.output(t))
+	}
+	// Nothing of the other claimer's branch was touched, and this host took nothing of the issue.
+	if head := gh.head(t, "acme/edge-sensors", claimedBranch); head != base {
+		t.Errorf("%s of the remote is at %q, want the commit the other claimer cut it from (%s)", claimedBranch, head, base)
+	}
+	assigned := fmt.Sprintf("issue edit %d --repo acme/edge-sensors --add-assignee factory-bot", claimedIssue)
+	if made := gh.made(t, assigned); made != 0 {
+		t.Errorf("the factory made `gh %s` %d times, want none: an issue another claimer holds is not assigned to this host", assigned, made)
+	}
+	if workers := gh.workers(t); len(workers) != 0 {
+		t.Errorf("the factory started %d workers, want none: nothing of this issue is this host's to work", len(workers))
+	}
+	if _, err := os.Stat(filepath.Join(clone, ".claude", "worktrees", claimedWorktree)); err == nil {
+		t.Errorf("a worktree of %s was made in %s for a branch another claimer holds", claimedBranch, clone)
+	}
+}
+
+// What became of a pull request is a decision about the issue it was opened for, and about no other.
+// The URL in the record came out of a worker's report, which is written by a model out of a session
+// that reads what a stranger wrote in an issue: a report that names another pull request of the
+// repository must not hand this issue's work to whoever closes that one.
+func TestAPullRequestOfAnotherBranchIsNoDecisionAboutTheIssue(t *testing.T) {
+	gh := newGhShim(t)
+	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
+	gh.loggedInAs(t, "factory-bot")
+	gh.assigns(t, "acme/edge-sensors", claimedIssue, "factory-bot")
+	gh.unassigns(t, "acme/edge-sensors", claimedIssue, "factory-bot")
+	gh.workerCommits(t, "worked.md")
+	gh.workerReports(t, "acme/edge-sensors", claimedIssue)
+
+	data := filepath.Join(t.TempDir(), "data")
+	clone := gh.cloneInto(t, data, "acme/edge-sensors")
+	f := gh.work(t, config{"poll": "50ms", "deadline": "90s", "data_dir": data,
+		"repositories": []string{"acme/edge-sensors"}})
+	if run := f.ended(t, 1); run.PullRequest == "" || !run.Holding {
+		t.Fatalf("run 1 ended as %q (%s) holding=%v with pull request %q, want a run that holds the issue and named one; the factory's log:\n%s",
+			run.Outcome, run.Reason, run.Holding, run.PullRequest, f.output(t))
+	}
+	worktree := filepath.Join(clone, ".claude", "worktrees", claimedWorktree)
+
+	// The pull request that URL names is of another branch of the same repository, and somebody
+	// closes it. The issue itself carries no decision: it is open, routed and held.
+	gh.pullOf(t, "acme/edge-sensors", claimedIssue, "closed", false, "acme/edge-sensors", "feat/900-another-issue-entirely")
+	gh.issue(t, "acme/edge-sensors", assignedTo(
+		openIssue(claimedIssue, claimedTitle, time.Now().UTC().Add(-72*time.Hour)), "factory-bot"))
+	f.never(t, 3*time.Second, "the issue was let go by a pull request of another branch", func() bool {
+		var let apiRun
+		f.get(t, "/api/runs/1", &let)
+		return let.LetGoAt != nil
+	})
+	if _, err := os.Stat(worktree); err != nil {
+		t.Errorf("the worktree %s is gone: %v; a pull request of another branch decides nothing about this issue", worktree, err)
+	}
+	if said := f.output(t); !strings.Contains(said, "not of "+claimedBranch) {
+		t.Errorf("the factory says nothing about the pull request that is not of the branch it holds; its log:\n%s", said)
+	}
+	// The gestures that are about this issue still reach it: the routing label comes off.
+	gh.issue(t, "acme/edge-sensors", assignedTo(
+		openIssue(claimedIssue, claimedTitle, time.Now().UTC().Add(-72*time.Hour), readyLabel), "factory-bot"))
+	f.eventually(t, 30*time.Second, "the issue to be let go", func() bool {
+		var let apiRun
+		f.get(t, "/api/runs/1", &let)
+		return let.LetGoAt != nil
+	})
+}
+
+// The issues this factory holds are read in one bounded pass, and the run that is going is read
+// first. What that reading carries for it is a cancel, which has to reach a worker while it is still
+// working; an issue that only waits to be cleaned up can be read after it, or by the next poll.
+func TestTheIssueOfARunningWorkerIsReadBeforeTheIssuesThatOnlyWait(t *testing.T) {
+	const (
+		waitingIssue = 101 // held, idle, and sorted before the issue being worked
+		waitingTitle = "Widen the retry window"
+	)
+	gh := newGhShim(t)
+	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
+	gh.loggedInAs(t, "factory-bot")
+	gh.assigns(t, "acme/edge-sensors", claimedIssue, "factory-bot")
+	gh.workerWaits(t, 10*time.Minute)
+
+	data := filepath.Join(t.TempDir(), "data")
+	gh.cloneInto(t, data, "acme/edge-sensors")
+	// An issue of an earlier run that this factory still holds and nobody has decided about.
+	ended := time.Now().UTC().Add(-time.Hour)
+	held := record(1, waitingIssue, waitingTitle, signalRouted, outcomeBlocked, true, ended.Add(-time.Hour), ended)
+	records(t, data, held)
+	gh.issue(t, "acme/edge-sensors", assignedTo(openIssue(waitingIssue, waitingTitle, ended), "factory-bot"))
+	gh.issue(t, "acme/edge-sensors", assignedTo(
+		openIssue(claimedIssue, claimedTitle, time.Now().UTC().Add(-72*time.Hour)), "factory-bot"))
+
+	f := gh.work(t, config{"poll": "50ms", "deadline": "90s", "data_dir": data,
+		"repositories": []string{"acme/edge-sensors"}})
+	workerOf(t, f, gh, claimedBranch)
+
+	line := "api " + issuesRequest("acme/edge-sensors", "factory")
+	running := fmt.Sprintf("api repos/acme/edge-sensors/issues/%d", claimedIssue)
+	waiting := fmt.Sprintf("api repos/acme/edge-sensors/issues/%d", waitingIssue)
+	const polls = 3
+	f.eventually(t, 60*time.Second, fmt.Sprintf("%d polls that read both held issues", polls), func() bool {
+		return len(pollsReading(gh.calls(t), line, running, waiting)) >= polls
+	})
+	for i, poll := range pollsReading(gh.calls(t), line, running, waiting) {
+		if positionIn(poll, waiting) < positionIn(poll, running) {
+			t.Fatalf("poll %d asked GitHub about the issue that waits (#%d) before the one being worked (#%d): %v",
+				i, waitingIssue, claimedIssue, poll)
+		}
+	}
+}
+
+// pollsReading splits what the shim logged into one slice per poll of the line and answers with
+// those polls that asked about both of these issues.
+func pollsReading(calls []string, line string, requests ...string) [][]string {
+	polls, poll := [][]string{}, []string{}
+	ends := func() {
+		for _, request := range requests {
+			if positionIn(poll, request) < 0 {
+				return
+			}
+		}
+		polls = append(polls, poll)
+	}
+	for _, call := range calls {
+		if call != line {
+			poll = append(poll, call)
+			continue
+		}
+		ends()
+		poll = []string{}
+	}
+	ends()
+	return polls
+}
+
+// positionIn is where a request stands among the calls of one poll, or -1 when it is not among them.
+func positionIn(calls []string, request string) int {
+	for i, call := range calls {
+		if call == request {
+			return i
+		}
+	}
+	return -1
+}
+
 // ---- reading the host ----
 
 // workerOf waits until the scripted worker of a branch has started and answers with what the shim

@@ -34,6 +34,16 @@ const readyLabel = "ready-for-agent"
 // with it, and the next poll asks again anyway.
 const ghTimeout = 60 * time.Second
 
+// heldReadTimeout bounds the reading of everything this factory holds, however many issues that is
+// (readHeld). One poll spends what one read of GitHub may cost on all of them together and not on
+// each of them, so the questions this factory asks about its own work can never push a poll further
+// away than a single hanging request already does.
+const heldReadTimeout = ghTimeout
+
+// errHeldReadCut is the cause that deadline carries, which tells a reading that ran out of the
+// pass's time from one a stopping factory cut short.
+var errHeldReadCut = errors.New("the issues this factory holds could not all be read within " + heldReadTimeout.String())
+
 // cloneTimeout bounds a clone, which is not a request but a whole repository over the host's line:
 // minutes for a large one, and a clone that is cut off in the middle is work thrown away. It is a
 // bound all the same, so a clone that hangs cannot hold the start for ever.
@@ -116,6 +126,18 @@ func routed(issue ghIssue, routingLabel string) bool {
 type ghPull struct {
 	State  string `json:"state"`
 	Merged bool   `json:"merged"`
+	Head   ghHead `json:"head"`
+}
+
+// ghHead is what a pull request is of: the branch and the repository it was opened from. It is read
+// because the URL in the record came out of a worker's report, and a report is written by a model
+// from text a person or an issue wrote: what it names is checked against what this factory holds
+// before anything is decided by it.
+type ghHead struct {
+	Ref  string `json:"ref"`
+	Repo struct {
+		FullName string `json:"full_name"`
+	} `json:"repo"`
 }
 
 // gitHub is the live queue: the routed issues of the connected repositories, asked from GitHub on
@@ -138,6 +160,11 @@ type gitHub struct {
 	// once a minute for a week: the factory polls every minute and a host runs it for weeks.
 	unreadable map[string]string
 	warned     map[string]bool
+	// refused is what an issue carries that the factory reads and will not act on, with the thing it
+	// was about: a pull request a record names that is not of the branch this factory holds. It is
+	// no failed reading — the issue answered — and it is said once and again when what it is about
+	// changes, because it stands for as long as that record does.
+	refused map[string]string
 }
 
 // reading is one remembered reading of an issue's event list with the issue's updated_at it was made
@@ -198,21 +225,40 @@ func (g *gitHub) queue(ctx context.Context, held []Held) poll {
 // repository nobody can reach must never take a worktree apart ([ADR 0026]), so the factory holds on
 // to what it holds until GitHub answers, and says once that it could not ask.
 //
+// The whole pass is bounded by heldReadTimeout, and the issues it does not reach are read by a later
+// poll. It runs in the working loop, so what it waits for the line waits for: a GitHub that takes a
+// request and answers none of it would otherwise cost this poll one ghTimeout for every issue this
+// host holds — half an hour for thirty of them, in which nothing is dispatched, nothing is cancelled
+// and nothing is let go.
+//
 // [ADR 0023]: ../docs/adr/0023-github-is-the-only-control-surface-of-the-factory.md
 // [ADR 0026]: ../docs/adr/0026-the-factory-never-deletes-work-on-its-own.md
 func (g *gitHub) readHeld(ctx context.Context, held []Held, letGo map[string]string, seen map[string]bool) {
 	for _, issue := range held {
+		// An issue this factory holds is one this poll knows about, answered or not, so what is
+		// remembered of it stays: an unreadable issue would otherwise be warned about anew on every
+		// poll, and a GitHub that is down for a day would fill the log with one sentence. It is
+		// marked before the first of them is read, because the pass below may end before the last.
+		seen[issue.key()] = true
+	}
+	pass, done := context.WithTimeoutCause(ctx, heldReadTimeout, errHeldReadCut)
+	defer done()
+	for _, issue := range held {
 		if ctx.Err() != nil {
 			return // the factory is stopping; a cancelled request says nothing about the issue
 		}
+		if pass.Err() != nil {
+			return // this poll has spent its reading; what is left of it is read by the next one
+		}
 		key := issue.key()
-		// An issue this factory holds is one this poll knows about, answered or not, so what is
-		// remembered of it stays: an unreadable issue would otherwise be warned about anew on every
-		// poll, and a GitHub that is down for a day would fill the log with one sentence.
-		seen[key] = true
-		decision, err := g.decided(ctx, issue)
+		decision, err := g.decided(pass, issue)
 		if err != nil {
-			if ctx.Err() == nil {
+			switch {
+			case ctx.Err() != nil: // the factory is stopping
+			case errors.Is(context.Cause(pass), errHeldReadCut):
+				g.warn(key, "error: the issues this factory holds could not all be read within %s; it stopped at %s and the next poll asks again", heldReadTimeout, key)
+				return
+			default:
 				g.warn(key, "error: %s is held by this factory and could not be read: %v; it stays as it is until GitHub answers", key, err)
 			}
 			continue
@@ -265,6 +311,15 @@ func (g *gitHub) decided(ctx context.Context, held Held) (string, error) {
 // decidedOnPull is what became of the pull request a run of the issue opened. A pull request that is
 // merged or closed is the maintainer's answer to the work, and the issue is done with this factory
 // either way: the worktree it was written in is of no use to anybody after that.
+//
+// Which pull request that is, is asked of GitHub and not of the record. The URL there was read out
+// of a worker's ready report, and the report of a session that works from text a stranger wrote may
+// name any pull request of the repository ([ADR 0023]); one that is not of the branch this factory
+// holds the issue by decides nothing about it, because closing somebody else's would otherwise
+// cancel this worker and take its worktree apart. A pull request from a fork is none of it either:
+// the branch of this claim is on the repository itself.
+//
+// [ADR 0023]: ../docs/adr/0023-github-is-the-only-control-surface-of-the-factory.md
 func (g *gitHub) decidedOnPull(ctx context.Context, held Held) (string, error) {
 	found := pullRequestURL.FindStringSubmatch(held.PullRequest)
 	if found == nil {
@@ -277,6 +332,12 @@ func (g *gitHub) decidedOnPull(ctx context.Context, held Held) (string, error) {
 	var pull ghPull
 	if err := json.Unmarshal(raw, &pull); err != nil {
 		return "", fmt.Errorf("the answer is no pull request: %w", err)
+	}
+	if held.Branch == "" || pull.Head.Ref != held.Branch || !strings.EqualFold(pull.Head.Repo.FullName, held.Repository) {
+		g.refuse(held.key(), held.PullRequest,
+			"error: the pull request %s of %s is of %s:%s and not of %s, the branch this factory holds that issue by; what becomes of it decides nothing about the issue, and the record that names it is worth a look",
+			held.PullRequest, held.key(), pull.Head.Repo.FullName, pull.Head.Ref, held.Branch)
+		return "", nil
 	}
 	switch {
 	case pull.Merged:
@@ -317,6 +378,11 @@ func (g *gitHub) settle(unreadable map[string]string, read, seen map[string]bool
 			delete(g.warned, key)
 		}
 	}
+	for key := range g.refused {
+		if read[repositoryOf(key)] && !seen[key] {
+			delete(g.refused, key)
+		}
+	}
 }
 
 // repositoryOf is the repository an issue key names (owner/name#number).
@@ -333,6 +399,23 @@ func (g *gitHub) warn(key, format string, a ...any) {
 	}
 	first := !g.warned[key]
 	g.warned[key] = true
+	g.mu.Unlock()
+	if first {
+		log.Printf(format, a...)
+	}
+}
+
+// refuse reports something an issue carries that the factory reads and does not act on, once and
+// again whenever what it is about changes. It is not a failed reading and says nothing about whether
+// the issue can be read: a record that names the wrong pull request names it on every poll, and the
+// factory polls every minute for weeks.
+func (g *gitHub) refuse(key, about, format string, a ...any) {
+	g.mu.Lock()
+	if g.refused == nil {
+		g.refused = map[string]string{}
+	}
+	first := g.refused[key] != about
+	g.refused[key] = about
 	g.mu.Unlock()
 	if first {
 		log.Printf(format, a...)

@@ -364,6 +364,50 @@ func TestAResumeWhoseWorktreeIsGoneIsMadeAgainFromTheBranch(t *testing.T) {
 	}
 }
 
+// A worktree is made again on the commits the remote carries now. The name of the branch may still
+// be in this host's clone while its directory is gone — somebody removed that directory by hand —
+// and the remote may have moved on since; a worker put on the old name would work on commits the
+// remote is past and could never push what it wrote on them.
+func TestAWorktreeMadeAgainMovesALocalBranchBehindTheRemoteUpToIt(t *testing.T) {
+	gh := newGhShim(t)
+	gh.remote(t, "acme/edge-sensors")
+	gh.loggedInAs(t, "factory-bot")
+	gh.workerReports(t, "acme/edge-sensors", claimedIssue)
+
+	data := filepath.Join(t.TempDir(), "data")
+	clone := gh.cloneInto(t, data, "acme/edge-sensors")
+	main := gh.head(t, "acme/edge-sensors", "main")
+	gh.branchAt(t, "acme/edge-sensors", claimedBranch, main)
+	// The clone of this host knows the branch as it stood when its worktree was removed, and the
+	// remote has taken a commit on it since.
+	gh.git(t, clone, "branch", claimedBranch, main)
+	work := gh.commitOn(t, "acme/edge-sensors", claimedBranch)
+
+	began := time.Now().UTC().Add(-2 * time.Hour)
+	interrupted := record(1, claimedIssue, claimedTitle, signalRouted, outcomeInterrupted, true, began, began.Add(30*time.Minute))
+	interrupted.Worktree = filepath.Join(clone, ".claude", "worktrees", claimedWorktree)
+	records(t, data, interrupted)
+	gh.issues(t, "acme/edge-sensors")
+	gh.issue(t, "acme/edge-sensors", assignedTo(openIssue(claimedIssue, claimedTitle, began.Add(-72*time.Hour)), "factory-bot"))
+
+	f := gh.work(t, config{"poll": "50ms", "deadline": "90s", "data_dir": data,
+		"repositories": []string{"acme/edge-sensors"}})
+	if resumed := f.ended(t, 2); resumed.Outcome != outcomeReady {
+		t.Fatalf("run 2 ended as %q (%s), want the resume to end ready; the factory's log:\n%s",
+			resumed.Outcome, resumed.Reason, f.output(t))
+	}
+	workers := gh.workers(t)
+	if len(workers) != 1 {
+		t.Fatalf("the factory started %d workers, want one; the factory's log:\n%s", len(workers), f.output(t))
+	}
+	if workers[0].head != work {
+		t.Errorf("the worker ran at %s, want %s: a worktree made again carries what the remote holds now", workers[0].head, work)
+	}
+	if at := gh.git(t, clone, "rev-parse", "refs/heads/"+claimedBranch); at != work {
+		t.Errorf("the branch %s of %s is at %s, want %s: a name that holds nothing the remote does not is moved up to it", claimedBranch, clone, at, work)
+	}
+}
+
 // The one automatic resume per issue, in every shape an issue can reach it in. A run of the factory
 // reaches one of these at a time and a stop is minutes of test for each, so the rule itself is read
 // here, from the records a restart reads it from, and the two signals are driven end to end above

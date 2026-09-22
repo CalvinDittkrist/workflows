@@ -85,21 +85,33 @@ func (f *Factory) claim(ctx context.Context, r *Run, entry Entry) (claimed, erro
 	// they won. The issue number in the branch is what both of them share, and reading it back is the
 	// local driver's own rule (wf_remote_branch_for_issue in the orchestrator's lib.sh) asked of the
 	// references this claim has just fetched.
+	base := baseBranch(ctx, connected, clone)
 	if held := remoteBranchForIssue(ctx, clone, issue.Number); held != "" {
 		// Unless it is this factory's own branch, made by the run that once held the issue and left
-		// on the remote when the issue was let go. The entry carries that run, and a branch of the
-		// name it recorded is taken back rather than claimed a second time ([ADR 0026]). The name is
-		// all the two have in common, so a branch another claimer cut for the same issue under the
-		// same name after the let-go would be taken back with it. What keeps that window shut is the
-		// frontier rule and not this line: an issue a claimer holds carries its assignee, and an
-		// assigned issue is not in this factory's line to begin with.
-		if entry.resume.Branch != held {
+		// on the remote when the issue was let go. The entry carries that run, and that branch is
+		// taken back rather than claimed a second time ([ADR 0026]).
+		//
+		// Which branch that is takes more than its name. The name of an issue's branch is the same
+		// for every claimer, so a branch another claimer cut in the seconds between this factory's
+		// reading of the line and this fetch carries it too — and two claimers on one branch is the
+		// one thing the claim exists to make impossible. What the two cannot share is a commit: a
+		// branch is left on the remote only when it carries work the base does not have
+		// (removeRemoteBranch), and a branch somebody has just cut from the base carries none. So a
+		// branch of the recorded name that carries work is the one this factory left there, and
+		// anything else is a claim that is not this host's, whatever it is called.
+		// The base of the run that held the issue is what its branch was cut from and what it is read
+		// against; a record from before that field was written is read against the base of today.
+		against := entry.resume.Base
+		if against == "" {
+			against = base
+		}
+		carries, err := carriesWork(ctx, clone, held, against)
+		if entry.resume.Branch != held || err != nil || !carries {
 			return claimed{branch: held}, errLost
 		}
-		return f.readopt(ctx, r, connected, clone, entry)
+		return f.readopt(ctx, r, connected, clone, against, entry)
 	}
 
-	base := baseBranch(ctx, connected, clone)
 	head, err := git(ctx, clone, "rev-parse", "refs/remotes/origin/"+base)
 	if err != nil {
 		return claimed{}, fmt.Errorf("the head of the base branch %s of %s could not be read: %w; is that branch on the remote?", base, connected.Name, err)
@@ -163,16 +175,14 @@ func worktreePath(clone, branch string) string {
 // readopt takes an issue back that this factory once held and let go. The branch of the run that
 // held it is still on the remote and carries its commits, so there is nothing to claim: this host is
 // assigned again and the worktree is made from that branch, which is where the run continues
-// ([ADR 0026]). A branch that is gone from the remote never reaches here — the issue is then claimed
-// anew, as a first run of it.
+// ([ADR 0026]). A branch that is gone from the remote never reaches here, and neither does one that
+// carries no work of that run — the issue is then claimed anew, as a first run of it, and the claim
+// decides against whoever else may hold the name.
 //
 // [ADR 0026]: ../docs/adr/0026-the-factory-never-deletes-work-on-its-own.md
-func (f *Factory) readopt(ctx context.Context, r *Run, connected Connected, clone string, entry Entry) (claimed, error) {
+func (f *Factory) readopt(ctx context.Context, r *Run, connected Connected, clone, base string, entry Entry) (claimed, error) {
 	held := entry.resume
-	back := claimed{branch: held.Branch, base: held.Base, created: true, resumed: true}
-	if back.base == "" {
-		back.base = baseBranch(ctx, connected, clone)
-	}
+	back := claimed{branch: held.Branch, base: base, created: true, resumed: true}
 	worktree := held.Worktree
 	if worktree == "" {
 		worktree = worktreePath(clone, back.branch)
@@ -196,6 +206,24 @@ func (f *Factory) readopt(ctx context.Context, r *Run, connected Connected, clon
 	f.runs.update(r, func() { r.Worktree, r.Holding = back.worktree, back.holding })
 	f.runs.event(r, Event{Kind: "factory", Title: "took " + back.branch + " back", Body: "worktree " + worktree})
 	return back, nil
+}
+
+// carriesWork says whether the branch on the remote holds a commit the base it was cut from does
+// not, which is the one reading that tells work from a name. It is what decides that a branch is
+// never deleted (removeRemoteBranch) and what recognises a branch this factory left behind as its
+// own (claim), so both read it the same way and each decides for itself what a reading that failed
+// means: the caller is given the error rather than a false.
+//
+// The caller has fetched: this is what the remote carries now and not what the clone last heard.
+func carriesWork(ctx context.Context, clone, branch, base string) (bool, error) {
+	if branch == "" || base == "" {
+		return false, fmt.Errorf("a branch (%q) or a base (%q) that is not named cannot be read for work", branch, base)
+	}
+	beyond, err := git(ctx, clone, "rev-list", "--count", "refs/remotes/origin/"+base+"..refs/remotes/origin/"+branch)
+	if err != nil {
+		return false, err
+	}
+	return beyond != "0", nil
 }
 
 // makeWorktree puts the worktree of a branch this factory holds back into the clone, on the commits
@@ -227,6 +255,15 @@ func makeWorktree(ctx context.Context, clone, branch, worktree string) error {
 	add := []string{"worktree", "add", "--quiet", worktree, branch}
 	if _, err := git(ctx, clone, "rev-parse", "--verify", "refs/heads/"+branch); err != nil {
 		add = []string{"worktree", "add", "--quiet", "-b", branch, worktree, head}
+	} else if _, err := git(ctx, clone, "merge-base", "--is-ancestor", "refs/heads/"+branch, head); err == nil {
+		// A local name that holds nothing the remote does not is a name and no work, and the fetch
+		// above may have left it behind: somebody removed the worktree and the branch moved on the
+		// remote since. The worker would then continue on commits the remote is past and could never
+		// push what it wrote on them, so the name is moved up to the remote before it is checked out.
+		// A name that is ahead or has gone its own way is not touched: what it holds is work.
+		if _, err := git(ctx, clone, "branch", "--force", branch, head); err != nil {
+			return fmt.Errorf("the branch %s of %s is behind %s and could not be moved up to it: %w; the worktree is not made on commits the remote has gone past", branch, clone, head, err)
+		}
 	}
 	if _, err := git(ctx, clone, add...); err != nil {
 		return fmt.Errorf("the worktree %s could not be made from %s in %s: %w", worktree, branch, clone, err)

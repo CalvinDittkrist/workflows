@@ -45,9 +45,14 @@ var errHandoverCut = errors.New("letting the issue go took longer than " + hando
 
 // letGo gives one issue back, in the order that keeps the work: push, then the worktree and the
 // local branch, then the branch on the remote if it holds nothing, then the assignee if no pull
-// request came of the issue. The record is marked last and only when the worktree is gone, because
-// the mark is what says the issue is out of this factory's hands — a run marked while its worktree
-// is still there would leave that directory on the host for good.
+// request came of the issue. The record is marked last and only when the worktree is gone and this
+// host is off the issue, because the mark is what says the issue is out of this factory's hands: a
+// run marked while its worktree is still there would leave that directory on the host for good, and
+// one marked while GitHub still names this host as the assignee would leave an issue nobody — no
+// other claimer, no person reading the frontier — ever sees as free again.
+//
+// Every step of it may be made again: each reads the host and the remote as they are rather than
+// what the step before it left, so a handover that stops halfway is taken up whole by a later poll.
 //
 // The context is the one handoverTimeout bounds the poll's handovers by, so a step of this one that
 // hangs takes time from the handovers behind it and from nothing else.
@@ -72,7 +77,9 @@ func (f *Factory) letGo(ctx context.Context, h holding, decision string) {
 		return
 	}
 	f.removeRemoteBranch(ctx, record, clone, connected, held)
-	f.removeAssignee(ctx, record, connected, held, h.pullRequest)
+	if !f.removeAssignee(ctx, record, connected, held, h.pullRequest) {
+		return
+	}
 	at := time.Now()
 	f.runs.update(record, func() { record.LetGoAt = &at })
 	f.runs.event(record, Event{Kind: "factory", Title: "let " + held.Branch + " go",
@@ -171,8 +178,8 @@ func (f *Factory) removeRemoteBranch(ctx context.Context, record *Run, clone str
 		f.heldUp(ctx, record, fmt.Sprintf("%s could not be fetched into %s: %v; the branch %s stays on the remote", connected.Name, clone, err, held.Branch))
 		return
 	}
-	beyond, err := git(ctx, clone, "rev-list", "--count", "refs/remotes/origin/"+held.Base+"..refs/remotes/origin/"+held.Branch)
-	if err != nil || beyond != "0" {
+	carries, err := carriesWork(ctx, clone, held.Branch, held.Base)
+	if err != nil || carries {
 		return // it carries commits, it is gone from the remote already, or it cannot be read: it stays
 	}
 	if _, err := gh(ctx, "api", "--method", "DELETE", "repos/"+connected.Name+"/git/refs/heads/"+held.Branch); err != nil {
@@ -188,19 +195,24 @@ func (f *Factory) removeRemoteBranch(ctx context.Context, record *Run, clone str
 // it as free. An issue whose run opened a pull request keeps the assignee — the work is with a
 // person from then on, and who worked it is part of what they read ([ADR 0026]).
 //
+// It is the last step of the handover and the handover stands or falls with it: a removal GitHub
+// refused — a token that expired, a rate limit, a factory that was stopped in the middle of it —
+// leaves the issue marked as this host's, and only a run that is not yet marked as let go is tried
+// again. So the handover stops here, says so on the run, and a later poll asks GitHub once more.
+//
 // [ADR 0026]: ../docs/adr/0026-the-factory-never-deletes-work-on-its-own.md
-func (f *Factory) removeAssignee(ctx context.Context, record *Run, connected Connected, held Run, pull string) {
+func (f *Factory) removeAssignee(ctx context.Context, record *Run, connected Connected, held Run, pull string) bool {
 	if pull != "" {
-		return
+		return true
 	}
 	login, err := f.login(ctx)
 	if err != nil {
-		f.heldUp(ctx, record, fmt.Sprintf("the assignee of %s#%d could not be removed: %v; take this host off the issue by hand", connected.Name, held.Issue, err))
-		return
+		return f.heldUp(ctx, record, fmt.Sprintf("the assignee of %s#%d could not be removed: %v; the issue stays as this host's until it can be taken off", connected.Name, held.Issue, err))
 	}
 	if _, err := gh(ctx, "issue", "edit", strconv.Itoa(held.Issue), "--repo", connected.Name, "--remove-assignee", login); err != nil {
-		f.heldUp(ctx, record, fmt.Sprintf("%s could not be taken off %s#%d: %v; take this host off the issue by hand", login, connected.Name, held.Issue, err))
+		return f.heldUp(ctx, record, fmt.Sprintf("%s could not be taken off %s#%d: %v; the issue stays as this host's until that removal is made", login, connected.Name, held.Issue, err))
 	}
+	return true
 }
 
 // heldUp says on the run what stopped the handover, and answers false so a step can hand its own
