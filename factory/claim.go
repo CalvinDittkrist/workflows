@@ -118,7 +118,7 @@ func (f *Factory) claim(ctx context.Context, r *Run, issue Issue) (claimed, erro
 	// this record alone, and one that named no branch would hide the one thing left on the remote.
 	f.runs.update(r, func() { r.Branch, r.Base = won.branch, won.base })
 
-	if _, err := gh(ctx, "issue", "edit", strconv.Itoa(issue.Number), "--repo", connected.Name, "--add-assignee", login); err != nil {
+	if err := assignSelf(ctx, connected.Name, issue.Number, login); err != nil {
 		return won, fmt.Errorf("issue #%d of %s could not be assigned to %s: %w", issue.Number, connected.Name, login, err)
 	}
 
@@ -182,6 +182,15 @@ func (f *Factory) connected(name string) (Connected, bool) {
 		}
 	}
 	return Connected{}, false
+}
+
+// assignSelf puts the user this host is logged in as on the issue, which is what says on GitHub that
+// this factory holds it and takes the issue out of every other claimer's line. A claim makes this act
+// and so does a run resumed on a release; the login is read by the caller, because a claim reads it
+// before it creates anything.
+func assignSelf(ctx context.Context, repository string, issue int, login string) error {
+	_, err := gh(ctx, "issue", "edit", strconv.Itoa(issue), "--repo", repository, "--add-assignee", login)
+	return err
 }
 
 // login is the user this host's gh is logged in as, read once: it is the machine user the factory

@@ -76,6 +76,17 @@ func TestAReleasedIssueIsAssignedAgainAndResumedInTheSameWorktree(t *testing.T) 
 		t.Errorf("the factory created a reference %d times, want once: a resumed run is under the claim that stands", made)
 	}
 
+	// The release is answered once and no poll after it queues anything: the issue stays unassigned
+	// on GitHub as far as the shim's canned line is concerned, so a factory that read the removal
+	// anew would start a third run on it.
+	f.never(t, 3*time.Second, "the factory started a third run, so it answered the one release twice",
+		func() bool { return !f.missing(t, 3) })
+	var line apiLine
+	f.get(t, "/api/line", &line)
+	if len(line.Queue) != 0 || len(line.Now) != 0 {
+		t.Errorf("the factory queues %v and runs %d after the release, want an idle line", keys(line.Queue), len(line.Now))
+	}
+
 	// The session itself: the same worktree, and on the commit the work there had reached.
 	workers := gh.workers(t)
 	if len(workers) != 2 {
@@ -155,6 +166,73 @@ func TestTheLineResumesWhatTheFactoryHoldsBeforeItClaimsAnythingNew(t *testing.T
 	}
 }
 
+// A resumed run needs the worktree its claim made, and #58 is where a missing one is put back. Until
+// then such a resume fails, and this is what that failure must cost: the issue's one automatic
+// resume, and nothing else. The repository keeps its place — the next issue in the line is claimed
+// and worked — and the issue itself waits for a person, with its branch, its worktree and its
+// assignee untouched ([ADR 0026]).
+//
+// [ADR 0026]: ../docs/adr/0026-the-factory-never-deletes-work-on-its-own.md
+func TestAResumeWhoseWorktreeIsGoneFailsAndSpendsTheResumeOnThatIssueAlone(t *testing.T) {
+	const next, nextTitle = 121, "Document the calibration procedure"
+	gh := newGhShim(t)
+	gh.remote(t, "acme/edge-sensors")
+	gh.loggedInAs(t, "factory-bot")
+	gh.assigns(t, "acme/edge-sensors", next, "factory-bot")
+	gh.workerReports(t, "acme/edge-sensors", next)
+
+	data := filepath.Join(t.TempDir(), "data")
+	gh.cloneInto(t, data, "acme/edge-sensors")
+	began := time.Now().UTC().Add(-2 * time.Hour)
+	// The interrupted run of #104 holds the issue, and the worktree it names is gone from this host —
+	// somebody removed it while the factory was down.
+	interrupted := record(1, claimedIssue, claimedTitle, signalRouted, outcomeInterrupted, true, began, began.Add(30*time.Minute))
+	interrupted.Worktree = filepath.Join(t.TempDir(), "worktrees", "feat-104")
+	records(t, data, interrupted)
+	// #104 is assigned to this host, so GitHub's line carries only the issue nobody has worked yet.
+	gh.issues(t, "acme/edge-sensors", openIssue(next, nextTitle, began.Add(-72*time.Hour)))
+	gh.timeline(t, "acme/edge-sensors", next, labeled("factory", began.Add(-6*time.Hour)))
+
+	f := gh.work(t, config{"poll": "50ms", "deadline": "90s", "data_dir": data,
+		"repositories": []string{"acme/edge-sensors"}})
+	failed := f.ended(t, 2)
+	if failed.Issue != claimedIssue || failed.Signal != "interruption" || failed.Outcome != "failed" {
+		t.Fatalf("run 2 works #%d on the signal %q and ends as %q, want the resume of #%d ending failed; the factory's log:\n%s",
+			failed.Issue, failed.Signal, failed.Outcome, claimedIssue, f.output(t))
+	}
+	// The reason names the worktree that is missing and the branch that still holds the issue, which
+	// is what a person needs to put it back or let the issue go.
+	for _, want := range []string{interrupted.Worktree, claimedBranch} {
+		if !strings.Contains(failed.Reason, want) {
+			t.Errorf("the failed resume gives the reason %q, want %q in it", failed.Reason, want)
+		}
+	}
+	// The issue is left exactly as it was: no worker ran on it and nothing was said to GitHub about it.
+	if made := gh.made(t, fmt.Sprintf("issue edit %d --repo acme/edge-sensors", claimedIssue)); made != 0 {
+		t.Errorf("the factory edited #%d %d times, want none: a resume that cannot start touches nothing", claimedIssue, made)
+	}
+
+	// The repository is not held for it: the failure was the issue's, so the next issue in the line is
+	// claimed and worked as if nothing had happened.
+	worked := f.ended(t, 3)
+	if worked.Issue != next || worked.Outcome != "ready" {
+		t.Fatalf("run 3 works #%d and ends as %q (%s), want #%d ready: the repository keeps working; the factory's log:\n%s",
+			worked.Issue, worked.Outcome, worked.Reason, next, f.output(t))
+	}
+	// And #104 is not resumed a second time: the one automatic resume was spent on the run that failed.
+	f.never(t, 3*time.Second, fmt.Sprintf("the factory started a run after #%d was worked, so it resumed #%d again", next, claimedIssue),
+		func() bool { return !f.missing(t, 4) })
+	var line apiLine
+	f.get(t, "/api/line", &line)
+	if len(line.Queue) != 0 || len(line.Now) != 0 {
+		t.Errorf("the factory queues %v and runs %d, want an idle line: the failed resume waits for a person",
+			keys(line.Queue), len(line.Now))
+	}
+	if workers := gh.workers(t); len(workers) != 1 {
+		t.Errorf("the factory started %d workers, want one: only the claim of #%d had a worktree to run in", len(workers), next)
+	}
+}
+
 // The one automatic resume per issue, in every shape an issue can reach it in. A run of the factory
 // reaches one of these at a time and a stop is minutes of test for each, so the rule itself is read
 // here, from the records a restart reads it from, and the two signals are driven end to end above
@@ -231,6 +309,13 @@ func TestAReleaseIsTheRemovedAssigneeOfAHeldIssueAndIsAnsweredOnce(t *testing.T)
 		r.SignalAt, r.StartedAt = at, at.Add(time.Second)
 		return r
 	}
+	// The same answering run on a host whose clock is five minutes behind GitHub's, so the run
+	// started, as this host tells the time, before the removal that queued it.
+	behind := func(id int, at time.Time) Run {
+		r := answered(id, at)
+		r.StartedAt = at.Add(-5 * time.Minute)
+		return r
+	}
 	for _, c := range []struct {
 		name     string
 		runs     []Run
@@ -242,6 +327,11 @@ func TestAReleaseIsTheRemovedAssigneeOfAHeldIssueAndIsAnsweredOnce(t *testing.T)
 			run(1, signalRouted, outcomeReady, true)}, removed, true, true},
 		{"the same removal while the run it queued has not been recorded", []Run{
 			run(1, signalRouted, outcomeReady, true), answered(2, removed)}, removed, true, false},
+		// And the same removal answered by a run of a host whose clock lags GitHub's. What decides is
+		// the release the run was queued on, which is GitHub's own reading of the removal, so the
+		// drift between the two clocks cannot queue the release a second time.
+		{"the same removal answered by a run that started earlier on this host's clock", []Run{
+			run(1, signalRouted, outcomeReady, true), behind(2, removed)}, removed, true, false},
 		{"another removal after the release that was answered", []Run{
 			run(1, signalRouted, outcomeReady, true), answered(2, removed)},
 			removed.Add(20 * time.Minute), true, true},

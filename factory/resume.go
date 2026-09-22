@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"strconv"
 	"time"
 )
 
@@ -117,7 +116,7 @@ func (f *Factory) resume(ctx context.Context, r *Run, e Entry) (claimed, error) 
 		if err != nil {
 			return held, err
 		}
-		if _, err := gh(ctx, "issue", "edit", strconv.Itoa(e.Number), "--repo", e.Repository, "--add-assignee", login); err != nil {
+		if err := assignSelf(ctx, e.Repository, e.Number, login); err != nil {
 			return held, fmt.Errorf("issue #%d of %s was released but could not be assigned to %s again: %w", e.Number, e.Repository, login, err)
 		}
 	}

@@ -709,9 +709,9 @@ func TestARestartKeepsTheRunsAndInterruptsWhatWasActive(t *testing.T) {
 	if len(line.Queue) != 1 {
 		t.Fatalf("the restarted factory queues %v, want only the interrupted issue to resume", keys(line.Queue))
 	}
-	if head := line.Queue[0]; head.Number != cannedIssues[0].number || head.Signal != "interruption" {
+	if head := line.Queue[0]; head.Number != hangingIssue(t) || head.Signal != "interruption" {
 		t.Errorf("the line opens with #%d on the signal %q, want #%d on an interruption",
-			head.Number, head.Signal, cannedIssues[0].number)
+			head.Number, head.Signal, hangingIssue(t))
 	}
 }
 
@@ -740,9 +740,9 @@ func TestAnInterruptedIssueIsResumedOnceByItselfAndASecondInterruptionWaitsForAP
 	again.waitForTheHangingWorker(t, resumed)
 	var run apiRun
 	again.get(t, fmt.Sprintf("/api/runs/%d", resumed), &run)
-	if run.Issue != cannedIssues[0].number || run.Signal != "interruption" {
+	if run.Issue != hangingIssue(t) || run.Signal != "interruption" {
 		t.Fatalf("run %d works #%d on the signal %q, want #%d on an interruption",
-			resumed, run.Issue, run.Signal, cannedIssues[0].number)
+			resumed, run.Issue, run.Signal, hangingIssue(t))
 	}
 	if !run.Holding || run.State != "running" {
 		t.Errorf("the resumed run is %q and holding=%v, want a running run that holds the issue", run.State, run.Holding)
@@ -1006,18 +1006,27 @@ func (f *factory) ended(t *testing.T, id int) apiRun {
 	return run
 }
 
+// hangingIssue is the canned entry whose scripted worker hangs, which is the issue every test that
+// stops a factory mid-run works with. It is read from the scenario rather than from a position in
+// the canned queue, so re-timing an entry cannot make two assertions speak of two different issues.
+func hangingIssue(t *testing.T) int {
+	t.Helper()
+	for _, canned := range cannedIssues {
+		if canned.scenario == "hang" {
+			return canned.number
+		}
+	}
+	t.Fatal("no canned entry hangs; a test that stops a factory while a worker runs needs one")
+	return 0
+}
+
 // waitForTheHangingWorker waits until the run of that id is the running one and answers with the
 // processes it started. It is the run of the canned entry whose scripted worker hangs, which is what
 // a test that stops a factory mid-run needs, and the helper says so rather than trusting the caller:
 // the id follows from the order the canned queue is worked in, and re-timing an entry would move it.
 func (f *factory) waitForTheHangingWorker(t *testing.T, id int) []int {
 	t.Helper()
-	hanging := 0
-	for _, canned := range cannedIssues {
-		if canned.scenario == "hang" {
-			hanging = canned.number
-		}
-	}
+	hanging := hangingIssue(t)
 	var run apiRun
 	f.eventually(t, 60*time.Second, fmt.Sprintf("the hanging worker of run %d and its child", id), func() bool {
 		run = apiRun{}
