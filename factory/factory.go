@@ -288,6 +288,17 @@ func (f *Factory) execute(parent context.Context, r *Run, issue Issue) {
 	// The plugin the session is about to run is brought up to date and written down, here and not
 	// earlier: the issue is this factory's now, and nothing else of it is running.
 	f.prepare(ctx, r)
+	if ctx.Err() != nil {
+		// Updating the plugins reaches over the host's line and takes as long as that line does, so a
+		// stop or the deadline lands in it far more often than in the microseconds the claim used to be
+		// followed by. No worker was started here, and the record must not name one that failed.
+		if parent.Err() != nil {
+			f.finish(r, outcomeInterrupted, "the factory stopped while this run was preparing its worker"+leftBehind(claim), nil)
+			return
+		}
+		f.finish(r, outcomeTimeout, fmt.Sprintf("the deadline of %s passed while this run was preparing its worker", f.settings.Deadline)+leftBehind(claim), nil)
+		return
+	}
 
 	// The session starts in /worker:work, which invokes no skill for its first stage.
 	f.runs.update(r, func() { r.stage("implement") })
@@ -364,7 +375,8 @@ func (f *Factory) execute(parent context.Context, r *Run, issue Issue) {
 		stdout.Close() // ends the two readers
 		stderr.Close()
 		<-drained
-		f.warn(r, "the worker left a process behind that is outside its process group and still held its output; the factory cannot end it, look for it on the host")
+		f.warn(r, "the worker left a process behind",
+			"the worker left a process behind that is outside its process group and still held its output; the factory cannot end it, look for it on the host")
 	}
 	stdout.Close()
 	stderr.Close()
@@ -586,6 +598,14 @@ func (f *Factory) error(r *Run, e Event) {
 		}
 	})
 	f.runs.event(r, e)
+}
+
+// warn puts a warning on a run: something that went not quite right, on the record the interface
+// serves and in the log, and never the end of the run. The title is the line the log shows before it
+// is opened, so it is short and the sentence stays in the body.
+func (f *Factory) warn(r *Run, title, warning string) {
+	f.runs.update(r, func() { r.Warnings = append(r.Warnings, warning) })
+	f.runs.event(r, Event{Kind: "error", Title: title, Body: warning})
 }
 
 // finish ends a run with an event that says why, so the log reads to the end.

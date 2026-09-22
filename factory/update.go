@@ -53,12 +53,23 @@ func (f *Factory) prepare(ctx context.Context, r *Run) {
 		return
 	}
 	f.updatePlugins(ctx, r)
+	if ctx.Err() != nil {
+		// The factory is stopping or the deadline passed while the plugins were updated. The run ends
+		// in a moment for that reason, and a record saying it ran with versions nobody read would be
+		// a second, invented one.
+		return
+	}
 	f.recordVersions(ctx, r)
 }
 
 // updatePlugins updates the marketplace and then the worker plugin in it, each with Claude Code's
 // own command. The two are separate acts: a marketplace that could not be fetched still holds the
 // release it last knew, and the plugin update can take that one.
+//
+// Neither command is given a scope: `plugin update` acts on the user scope by default ([plugins
+// reference]), which is the scope a run is started from and the one workerVersion reads back.
+//
+// [plugins reference]: https://code.claude.com/docs/en/plugins-reference.md
 func (f *Factory) updatePlugins(ctx context.Context, r *Run) {
 	for _, step := range []struct {
 		what string
@@ -72,7 +83,8 @@ func (f *Factory) updatePlugins(ctx context.Context, r *Run) {
 			return // the factory is stopping or the deadline passed; the run's own end says that
 		}
 		if err != nil {
-			f.warn(r, fmt.Sprintf("%s could not be updated: %s; this run uses the state installed on this host", step.what, reason))
+			f.warn(r, "could not update "+step.what,
+				fmt.Sprintf("%s could not be updated: %s; this run uses the state installed on this host", step.what, reason))
 			continue
 		}
 		f.runs.event(r, Event{Kind: "factory", Title: "updated " + step.what, Body: string(out)})
@@ -86,11 +98,11 @@ func (f *Factory) recordVersions(ctx context.Context, r *Run) {
 	worker, claudeCode := f.workerVersion(ctx, r), f.claudeVersion(ctx, r)
 	f.runs.update(r, func() { r.Versions.Worker, r.Versions.ClaudeCode = worker, claudeCode })
 	f.runs.event(r, Event{Kind: "factory", Title: "versions",
-		Body: fmt.Sprintf("worker %s, Claude Code %s, factory %s", or(worker), or(claudeCode), r.Versions.Factory)})
+		Body: fmt.Sprintf("worker %s, Claude Code %s, factory %s", orUnknown(worker), orUnknown(claudeCode), r.Versions.Factory)})
 }
 
-// or is a version that could not be read, as the log says it.
-func or(version string) string {
+// orUnknown is a version that could not be read, as the log says it.
+func orUnknown(version string) string {
 	if version == "" {
 		return "unknown"
 	}
@@ -103,13 +115,16 @@ type installedPlugin struct {
 	ID      string `json:"id"` // name@marketplace
 	Version string `json:"version"`
 	Scope   string `json:"scope"`
+	Enabled bool   `json:"enabled"`
 }
 
-// workerVersion is the version of the worker plugin this host has installed. A plugin is listed
-// once per scope it is installed in, and the scope of a run is the host's: the machine user the
-// factory runs as installs the plugin once ([ADR 0027]) and every run of every connected repository
-// is started from that one install. A row that belongs to some checkout on the host is another
-// session's business and not what this run runs with.
+// workerVersion is the version of the worker plugin this host has installed and switched on. A
+// plugin is listed once per scope it is installed in, and the scope of a run is the host's: the
+// machine user the factory runs as installs the plugin once ([ADR 0027]) and every run of every
+// connected repository is started from that one install. A row that belongs to some checkout on the
+// host is another session's business and not what this run runs with, and one that is switched off
+// is not what the session runs either — a version recorded off such a row would name a worker the
+// run never had.
 //
 // A host that gives its worker a plugin directory of its own instead (worker_args with
 // --plugin-dir, see the README) runs from that directory, and the update above has already said
@@ -128,11 +143,11 @@ func (f *Factory) workerVersion(ctx context.Context, r *Run) string {
 		return ""
 	}
 	for _, plugin := range installed {
-		if plugin.ID == workerPlugin && hostScope(plugin.Scope) {
+		if plugin.ID == workerPlugin && hostScope(plugin.Scope) && plugin.Enabled {
 			return plugin.Version
 		}
 	}
-	f.versionUnread(ctx, r, workerPlugin+" is not installed for the user this factory runs as")
+	f.versionUnread(ctx, r, workerPlugin+" is not installed and enabled for the user this factory runs as")
 	return ""
 }
 
@@ -172,12 +187,5 @@ func (f *Factory) versionUnread(ctx context.Context, r *Run, said string) {
 	if ctx.Err() != nil {
 		return
 	}
-	f.warn(r, said+"; this run does not say which version it ran with")
-}
-
-// warn puts a warning on a run: something that went not quite right, on the record the interface
-// serves and in the log, and never the end of the run.
-func (f *Factory) warn(r *Run, warning string) {
-	f.runs.update(r, func() { r.Warnings = append(r.Warnings, warning) })
-	f.runs.event(r, Event{Kind: "error", Title: warning, Body: warning})
+	f.warn(r, "a version could not be read", said+"; this run does not say which version it ran with")
 }

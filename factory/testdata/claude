@@ -23,6 +23,9 @@
 #                               the reads of what is installed still answer, as they do on a host
 #                               whose line is down
 #   CLAUDE_SHIM_WORKER_VERSION  the version the plugin list gives worker@workflows in the user scope
+#   CLAUDE_SHIM_WORKER_ENABLED  whether that row is switched on, true by default
+#   CLAUDE_SHIM_PLUGIN_HANG     seconds a plugin call waits before it answers, as a host whose line
+#                               hangs rather than refuses
 #   CLAUDE_SHIM_VERSION         what --version prints
 set -u
 
@@ -35,11 +38,15 @@ case "${1:-}" in
     ;;
   plugin)
     printf '%s\n' "$*" >> "$plugins"
+    if [ -n "${CLAUDE_SHIM_PLUGIN_HANG:-}" ]; then
+      # A marketplace over a line that never answers: the call is logged and then waits to be ended.
+      sleep "$CLAUDE_SHIM_PLUGIN_HANG"
+    fi
     if [ "${2:-}" = list ]; then
       # Two scopes hold the plugin: the host's own install and a checkout's, which is another
       # session's business and carries another version.
-      printf '[{"id":"worker@workflows","version":"%s","scope":"user","enabled":true},' \
-        "${CLAUDE_SHIM_WORKER_VERSION:-1.4.2}"
+      printf '[{"id":"worker@workflows","version":"%s","scope":"user","enabled":%s},' \
+        "${CLAUDE_SHIM_WORKER_VERSION:-1.4.2}" "${CLAUDE_SHIM_WORKER_ENABLED:-true}"
       printf '{"id":"worker@workflows","version":"0.0.1","scope":"project","enabled":true},'
       printf '{"id":"repo-standards@workflows","version":"0.2.1","scope":"user","enabled":true}]\n'
       exit 0

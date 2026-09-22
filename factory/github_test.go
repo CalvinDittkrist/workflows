@@ -662,6 +662,20 @@ func (g *ghShim) installs(t *testing.T, worker, claudeCode string) {
 	g.env = append(g.env, "CLAUDE_SHIM_WORKER_VERSION="+worker, "CLAUDE_SHIM_VERSION="+claudeCode)
 }
 
+// switchedOff makes the worker plugin of the claude shim's user scope an install that is there but
+// disabled, which is a host no session of it runs the worker from.
+func (g *ghShim) switchedOff(t *testing.T) {
+	t.Helper()
+	g.env = append(g.env, "CLAUDE_SHIM_WORKER_ENABLED=false")
+}
+
+// updatesHang makes every plugin call of the claude shim wait to be ended instead of answering, as a
+// host whose line hangs. The call is logged before it waits, so pluginCalls says when it began.
+func (g *ghShim) updatesHang(t *testing.T) {
+	t.Helper()
+	g.env = append(g.env, "CLAUDE_SHIM_PLUGIN_HANG=300")
+}
+
 // updatesFail makes every plugin update of the claude shim fail with that sentence, as a host whose
 // line is down meets it. What is installed can still be read, which is the state such a run uses.
 func (g *ghShim) updatesFail(t *testing.T, said string) {

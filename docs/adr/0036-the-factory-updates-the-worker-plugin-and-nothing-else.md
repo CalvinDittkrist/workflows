@@ -28,6 +28,8 @@ A fix to the pipeline reaches the factory with its next run, and nobody logs in 
 
 Every run says which worker plugin, which Claude Code and which factory made it, on the record the HTTP interface serves and on the dashboard. A run that went wrong after a release can be told from one that went wrong before it.
 
+The marketplace becomes a trust boundary of every host, and this decision accepts it: whoever can publish to the `workflows` marketplace decides what the next unattended run executes, because the run installs that plugin and works an issue with it unwatched. Nothing is pinned here beyond what the plugin commands themselves check, so the marketplace's release path is guarded as the hosts are.
+
 Claude Code and the factory move when the operator moves them. That is deliberate friction: the two pieces whose failure takes the whole line down are the two the factory is not allowed to change about itself.
 
 A host that runs the worker from a checkout instead of from an installed plugin — `worker_args` with `--plugin-dir` — has nothing to update and gets a warning per run saying so. That host is a developer's, and the warning is true: the session it ran did not come from the marketplace.

@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 // What a run is made of, tested the way the rest of the factory is: the real binary, against the gh
@@ -79,6 +81,67 @@ func TestARunUpdatesTheWorkerPluginBeforeItStartsAndRecordsWhatItRanWith(t *test
 	if !(marketplaceAt < pluginAt && pluginAt < versionsAt && versionsAt < workerAt) {
 		t.Errorf("the run logged the marketplace at %d, the plugin at %d, the versions at %d and the worker at %d; want the updates, then the versions, then the worker",
 			marketplaceAt, pluginAt, versionsAt, workerAt)
+	}
+}
+
+func TestAFactoryStoppedWhileItUpdatesTheWorkerInterruptsTheRunRatherThanFailingIt(t *testing.T) {
+	gh := newGhShim(t)
+	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
+	gh.loggedInAs(t, "factory-bot")
+	gh.assigns(t, "acme/edge-sensors", claimedIssue, "factory-bot")
+	gh.workerReports(t, "acme/edge-sensors", claimedIssue)
+	gh.installs(t, "0.9.3", "2.1.278 (Claude Code)")
+	gh.updatesHang(t)
+
+	data := filepath.Join(t.TempDir(), "data")
+	gh.cloneInto(t, data, "acme/edge-sensors")
+
+	f := gh.work(t, config{"poll": "50ms", "deadline": "5m", "data_dir": data,
+		"repositories": []string{"acme/edge-sensors"}})
+	f.eventually(t, 30*time.Second, "the update this run is waiting on", func() bool {
+		return len(gh.pluginCalls(t)) > 0
+	})
+
+	// The update reaches over the host's line, so a stop lands in it. No worker was started, and the
+	// record must not name one that failed.
+	f.stop(t, syscall.SIGTERM)
+	record := map[string]any{}
+	read(t, filepath.Join(data, "run-1.json"), &record)
+	if record["outcome"] != "interrupted" || record["state"] != "ended" {
+		t.Errorf("the run stopped while it updated is recorded as %v/%v (%v), want ended/interrupted",
+			record["state"], record["outcome"], record["reason"])
+	}
+	if workers := gh.workers(t); len(workers) != 0 {
+		t.Errorf("the factory started %d workers, want none: the stop came before the session", len(workers))
+	}
+}
+
+func TestAWorkerPluginThatIsSwitchedOffIsNoVersionTheRunRanWith(t *testing.T) {
+	gh := newGhShim(t)
+	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
+	gh.loggedInAs(t, "factory-bot")
+	gh.assigns(t, "acme/edge-sensors", claimedIssue, "factory-bot")
+	gh.workerReports(t, "acme/edge-sensors", claimedIssue)
+	gh.installs(t, "0.9.3", "2.1.278 (Claude Code)")
+	gh.switchedOff(t)
+
+	data := filepath.Join(t.TempDir(), "data")
+	gh.cloneInto(t, data, "acme/edge-sensors")
+
+	f := gh.work(t, config{"poll": "50ms", "deadline": "90s", "data_dir": data,
+		"repositories": []string{"acme/edge-sensors"}})
+	run := f.ended(t, 1)
+
+	// A plugin that is installed but switched off is not the worker the session ran: naming its
+	// version would put a worker on the record that this run never had.
+	if run.Versions.Worker != "" {
+		t.Errorf("the run records the worker plugin %q, want none: the install it was read from is switched off", run.Versions.Worker)
+	}
+	if run.Versions.ClaudeCode != "2.1.278" {
+		t.Errorf("the run records Claude Code %q, want 2.1.278: one version that cannot be read is not the other", run.Versions.ClaudeCode)
+	}
+	if len(run.Warnings) != 1 || !strings.Contains(run.Warnings[0], workerPlugin) {
+		t.Fatalf("the run carries the warnings %q, want one naming %s: a run nobody can trace to a worker says so", run.Warnings, workerPlugin)
 	}
 }
 
