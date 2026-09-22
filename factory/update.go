@@ -95,7 +95,9 @@ func (f *Factory) updatePlugins(ctx context.Context, r *Run) {
 // the worker is started. The factory's own version is on the record from the moment the run was
 // created; these two are asked of the host.
 func (f *Factory) recordVersions(ctx context.Context, r *Run) {
-	worker, claudeCode := f.workerVersion(ctx, r), f.claudeVersion(ctx, r)
+	// One statement each: either may warn, and the order the warnings land in is this order.
+	worker := f.workerVersion(ctx, r)
+	claudeCode := f.claudeVersion(ctx, r)
 	f.runs.update(r, func() { r.Versions.Worker, r.Versions.ClaudeCode = worker, claudeCode })
 	f.runs.event(r, Event{Kind: "factory", Title: "versions",
 		Body: fmt.Sprintf("worker %s, Claude Code %s, factory %s", orUnknown(worker), orUnknown(claudeCode), r.Versions.Factory)})
