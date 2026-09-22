@@ -122,7 +122,6 @@ func New(settings Settings, fake bool) (*Factory, error) {
 		f.source = &canned{repositories: settings.Repositories, started: f.started}
 	}
 	f.endSurvivors() // before anything of this start can queue a run of an issue one of them is working
-	sayNobodyIsNotified(settings, fake)
 	return f, nil
 }
 

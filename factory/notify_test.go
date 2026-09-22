@@ -91,6 +91,70 @@ func TestAReviewRequestOneLoginIsRefusedStillReachesTheOthers(t *testing.T) {
 	}
 }
 
+// A review request GitHub takes and never answers spends the deadline of that one call and no more:
+// the logins behind it are asked all the same. A deadline over the whole delivery would let the
+// first call that stalls silence every login after it, which is the refusal above in its other form.
+func TestAReviewRequestThatStallsStillReachesTheLoginsBehindIt(t *testing.T) {
+	gh := newGhShim(t)
+	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
+	gh.loggedInAs(t, "factory-bot")
+	gh.assigns(t, "acme/edge-sensors", claimedIssue, "factory-bot")
+	gh.workerReports(t, "acme/edge-sensors", claimedIssue)
+	pullRequest := fmt.Sprintf("https://github.com/acme/edge-sensors/pull/%d", claimedIssue)
+	gh.reviews(t, pullRequest, maintainers...)
+	gh.stall(t, "pr edit * --add-reviewer ada") // the first login's call is taken and never answered
+
+	data := filepath.Join(t.TempDir(), "data")
+	gh.cloneInto(t, data, "acme/edge-sensors")
+	f := gh.work(t, config{"poll": "50ms", "deadline": "90s", "data_dir": data,
+		"repositories": []string{"acme/edge-sensors"}, "notify": maintainers})
+	if run := f.ended(t, 1); run.Outcome != "ready" {
+		t.Fatalf("the run ended as %q (%s), want ready; the factory's log:\n%s", run.Outcome, run.Reason, f.output(t))
+	}
+	// ada's call holds its own deadline and nothing else: linus is asked once it is over.
+	f.eventually(t, notifyTimeout+30*time.Second, "linus to be asked for a review while ada's call stalls", func() bool {
+		return gh.made(t, reviewCall(pullRequest, "linus")) == 1
+	})
+}
+
+// A run that ends ready and names no pull request has nothing to ask a review of, and is an issue
+// the factory still holds and is done with: the maintainer hears of it on the issue, like every
+// other ending that waits for a person.
+func TestAReadyRunThatNamesNoPullRequestIsSaidOnTheIssue(t *testing.T) {
+	gh := newGhShim(t)
+	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
+	gh.loggedInAs(t, "factory-bot")
+	gh.assigns(t, "acme/edge-sensors", claimedIssue, "factory-bot")
+	gh.workerReportsReadyWithout(t, "the work is done and pushed; the pull request is on the fork")
+	gh.comments(t, "acme/edge-sensors", claimedIssue)
+
+	data := filepath.Join(t.TempDir(), "data")
+	gh.cloneInto(t, data, "acme/edge-sensors")
+	f := gh.work(t, config{"poll": "50ms", "deadline": "90s", "data_dir": data,
+		"repositories": []string{"acme/edge-sensors"}, "notify": maintainers})
+	run := f.ended(t, 1)
+	if run.Outcome != "ready" || run.PullRequest != "" {
+		t.Fatalf("the run ended as %q with the pull request %q, want ready with none; the factory's log:\n%s",
+			run.Outcome, run.PullRequest, f.output(t))
+	}
+	f.notified(t, 1)
+
+	said := gh.commented(t, "acme/edge-sensors", claimedIssue)
+	for _, want := range []string{
+		"@ada @linus",           // the maintainers of the configuration, so GitHub tells them
+		"`ready`",               // what became of the run
+		"names no pull request", // why there is nothing to review
+		"Remove the assignee",   // and the one gesture that hands the issue back ([ADR 0026])
+	} {
+		if !strings.Contains(said, want) {
+			t.Errorf("the comment on the issue is %q, want %q in it", said, want)
+		}
+	}
+	if asked := gh.asked(t, "pr edit"); asked != 0 {
+		t.Errorf("the factory asked for a review %d times of a run that names no pull request, want none", asked)
+	}
+}
+
 // TestARunThatWaitsForAPersonCommentsOnTheIssueWithTheReasonAndTheReleaseGesture is the other path
 // end to end: a blocked run, whose reason is the worker's own report.
 func TestARunThatWaitsForAPersonCommentsOnTheIssueWithTheReasonAndTheReleaseGesture(t *testing.T) {

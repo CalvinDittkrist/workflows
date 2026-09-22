@@ -706,6 +706,13 @@ func (g *ghShim) workerReports(t *testing.T, repository string, issue int) {
 	g.env = append(g.env, fmt.Sprintf("CLAUDE_SHIM_PR=https://github.com/%s/pull/%d", repository, issue))
 }
 
+// workerReportsReadyWithout is the ready report of a worker that named no pull request of the
+// repository the run is for, which is a run that ends ready with nothing to ask a review of.
+func (g *ghShim) workerReportsReadyWithout(t *testing.T, said string) {
+	t.Helper()
+	g.env = append(g.env, "CLAUDE_SHIM_REPORT=ready: "+said)
+}
+
 // workerBlocks is the report the scripted worker ends its session with instead of a pull request:
 // the blocker's text, which is what the factory's notification carries.
 func (g *ghShim) workerBlocks(t *testing.T, reason string) {

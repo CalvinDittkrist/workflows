@@ -18,16 +18,20 @@ import (
 // [ADR 0023]: ../docs/adr/0023-github-is-the-only-control-surface-of-the-factory.md
 
 // What a run's record says about the notification its ending owes. It is written before the call
-// and again after it, so the ending survives a host that is cut off in between and is notified
-// exactly once across every start.
+// and again after it, so an ending survives a host that is cut off in between: the next start makes
+// it. GitHub taking the call and the host being cut off before the second write is the one case that
+// says it twice, which is the side of the trade the maintainer can live with — a notification that
+// came twice is read once, one that never came is an issue nobody answers.
 const (
 	notifyPending = "pending"
 	notifyDone    = "done"
 )
 
-// notifyTimeout bounds one notification. It is shorter than a read of the line, because a run that
-// ends on a stop is notified while the factory is stopping: the maintainer has to hear about that
-// ending above all, and the stop must not wait long for it.
+// notifyTimeout bounds one call of a notification, and every call has its own: an ending that asks
+// several logins for a review is one call each, and a deadline over all of them would let the first
+// call that stalls spend the whole budget and silence the logins behind it. It is shorter than a
+// read of the line, because a run that ends on a stop is notified while the factory is stopping: the
+// maintainer has to hear about that ending above all, and the stop must not wait long for a call.
 const notifyTimeout = 30 * time.Second
 
 // maxNotifyReason is how much of a reason a comment carries. A blocker's text is written by a model
@@ -113,40 +117,38 @@ func (f *Factory) owe(r *Run) bool {
 // because a factory that started again after a week would otherwise comment on endings the
 // maintainer has long since answered; what failed is in the run's warnings and in the journal.
 //
-// Its deadline is its own and never the factory's: a run that ends because the factory is stopping
+// Its deadlines are its own and never the factory's: a run that ends because the factory is stopping
 // is the one the maintainer has to hear about, and the factory's own context is cancelled by then.
 func (f *Factory) deliver(r *Run) {
-	ctx, cancel := context.WithTimeout(context.Background(), notifyTimeout)
-	defer cancel()
-	if err := f.deliverTo(ctx, r); err != nil {
+	if err := f.deliverTo(r); err != nil {
 		f.warn(r, "the notification could not be made",
 			fmt.Sprintf("this ending was not notified on GitHub: %v; the run itself is unchanged", err))
 	}
 	f.runs.update(r, func() { r.Notified = notifyDone })
 }
 
-// deliverTo is the notification itself: a review request for a run that ended ready, a comment that
-// mentions the logins for one that waits for a person.
-func (f *Factory) deliverTo(ctx context.Context, r *Run) error {
-	if r.Outcome == outcomeReady {
-		if r.PullRequest == "" {
-			// The report said ready and named no pull request of this repository, which the run's
-			// reason already says. There is nothing to ask for a review of.
-			return fmt.Errorf("this run ended ready and names no pull request")
-		}
+// deliverTo is the notification itself: a review request for a run that ended ready on a pull
+// request, a comment that mentions the logins for every other ending that owes a word.
+//
+// A ready run whose report named no pull request of this repository is commented on like an ending
+// that waits, and not passed over: there is nothing to ask a review of, but the issue is still held
+// by a factory that is done with it, and the run's reason — which says that the report named none —
+// is what tells the maintainer where to look.
+func (f *Factory) deliverTo(r *Run) error {
+	if r.Outcome == outcomeReady && r.PullRequest != "" {
 		// One call per login, and not one that names them all: GitHub refuses a whole review
 		// request that carries a login it will not take — somebody who cannot review that
 		// repository, or the author of the pull request, which the factory's own login can be —
 		// and the maintainers it would have taken would then hear nothing of the run.
 		var refused []error
 		for _, who := range f.settings.Notify {
-			if _, err := ghWithin(ctx, notifyTimeout, "pr", "edit", r.PullRequest, "--add-reviewer", who); err != nil {
+			if _, err := ghWithin(context.Background(), notifyTimeout, "pr", "edit", r.PullRequest, "--add-reviewer", who); err != nil {
 				refused = append(refused, fmt.Errorf("%s was not asked for a review: %w", who, err))
 			}
 		}
 		return errors.Join(refused...)
 	}
-	_, err := ghInput(ctx, notifyTimeout, notifyBody(*r, f.settings.Notify),
+	_, err := ghInput(context.Background(), notifyTimeout, notifyBody(*r, f.settings.Notify),
 		"issue", "comment", strconv.Itoa(r.Issue), "--repo", r.Repository, "--body-file", "-")
 	if err != nil {
 		return fmt.Errorf("%s was not told of this run: %w", strings.Join(f.settings.Notify, ", "), err)

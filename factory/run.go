@@ -94,10 +94,11 @@ type Run struct {
 	Warnings    []string `json:"warnings"`
 	Versions    Versions `json:"versions"`
 	// Notified is what this ending owes the maintainer on GitHub: pending while the notification is
-	// still owed and done once the factory has made it. It is written before the call and again
-	// after it, so a host cut off in between makes it on its next start and a host that made it
-	// never makes it twice. A run that owes nobody anything — an outcome that notifies nobody, a
-	// factory with no logins to notify, a record written before this field — carries none of it.
+	// still owed and done once the factory has tried it — done says it was made, not that GitHub
+	// took it, and a call GitHub refused is a warning on the run and done all the same. It is
+	// written before the call and again after it, so a host cut off in between makes it on its next
+	// start. A run that owes nobody anything — an outcome that notifies nobody, a factory with no
+	// logins to notify, a record written before this field — carries none of it.
 	Notified string `json:"notified,omitempty"`
 
 	// What the stream said, kept for the moment the run ends. Not part of the record.
