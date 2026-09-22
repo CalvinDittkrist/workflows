@@ -105,6 +105,8 @@ test('the selected run shows what it cost, how full its context came and what it
   await expect(detail(page).locator('.facts').first()).toContainText('23 turns')
   await expect(detail(page).locator('.facts').first()).toContainText(/\d+\.\dk context peak/)
   await expect(detail(page).locator('.warnings li')).toContainText('left a process behind')
+  // What the run ran with: the factory that recorded it writes its own version into every run.
+  await expect(detail(page).locator('.versions')).toContainText(/factory \d+\.\d+\.\d+/)
 })
 
 test('the live log sets the events of the worker’s subagents in', async ({ page }) => {
@@ -310,7 +312,10 @@ test('the layout holds', async ({ page }) => {
   // The tolerance leaves room for a machine that rasterises the same glyphs a little differently,
   // and for nothing more: one changed number on the page moves 291 pixels, measured.
   await expect(page).toHaveScreenshot('dashboard.png', {
-    mask: [page.locator('.tick')],
+    // The tick is what counts up between two readings; the versions are what changes with a release,
+    // and both would make a baseline that has to be approved again for nothing. Their text is
+    // asserted where it is read, above.
+    mask: [page.locator('.tick'), page.locator('.versions')],
     maskColor: '#101010', // the background, so the approved look can be read off the baseline
     animations: 'disabled',
     caret: 'hide',
