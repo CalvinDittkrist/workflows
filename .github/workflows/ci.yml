@@ -10,15 +10,35 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      # Every cache below only saves the minute of installation: a miss installs as before, and each key
+      # names what it holds, so a new version or new sources never read an old entry.
       - uses: actions/setup-node@v7
         with:
           node-version: 22
+          cache: npm # the download cache that `npm ci` of the dashboard fills, keyed by its lockfile
+          cache-dependency-path: factory/ui/package-lock.json
       - uses: actions/setup-go@v7
+        id: go
         with:
           go-version: '1.26' # factory/go.mod is written for 1.25; staticcheck 2026.2.1 needs 1.26 to build
-          cache: false # the factory has no dependencies, so there is no go.sum to cache by
+          cache: false # its cache is keyed by go.sum, and the factory has no dependencies to have one
+      - name: Cache staticcheck 2026.2.1
+        id: staticcheck
+        uses: actions/cache@v6
+        with:
+          path: ~/go/bin/staticcheck
+          key: staticcheck-2026.2.1-go${{ steps.go.outputs.go-version }}-${{ runner.os }}-${{ runner.arch }}
       - name: Install staticcheck 2026.2.1 (same version as local, so local and CI findings match)
+        if: steps.staticcheck.outputs.cache-hit != 'true'
         run: go install honnef.co/go/tools/cmd/staticcheck@2026.2.1
+      # The factory's builds, the race detector's among them. The cache is content-addressed, so an entry
+      # restored from other sources is reused where it still matches and ignored where it does not.
+      - name: Cache the Go build
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/go-build
+          key: go-build-go${{ steps.go.outputs.go-version }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('factory/go.mod', 'factory/**/*.go') }}
+          restore-keys: go-build-go${{ steps.go.outputs.go-version }}-${{ runner.os }}-${{ runner.arch }}-
       - name: Install Claude Code (for plugin validation)
         run: npm install -g @anthropic-ai/claude-code
       - name: Install shellcheck 0.11.0 (same as brew, so local and CI findings match)
@@ -26,11 +46,25 @@ jobs:
           sudo apt-get install -y jq
           curl -sSL https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz | tar -xJ -C "$RUNNER_TEMP"
           sudo mv "$RUNNER_TEMP/shellcheck-v0.11.0/shellcheck" /usr/local/bin/shellcheck
-      - name: Install the dashboard's dependencies and the browser its test drives
+      - name: Install the dashboard's dependencies
+        run: npm --prefix factory/ui ci
+      - name: Read the Playwright version the dashboard installed
+        id: playwright
+        # playwright-core is the package that names the browser build it downloads
         run: |
-          npm --prefix factory/ui ci
-          npm --prefix factory/ui exec -- playwright install --with-deps chromium
+          version="$(node -p "require('./factory/ui/node_modules/playwright-core/package.json').version")"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Cache the browser of Playwright ${{ steps.playwright.outputs.version }}
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ steps.playwright.outputs.version }}-${{ runner.os }}-${{ runner.arch }}
+      # With the browser restored this downloads nothing; the system libraries it needs are not cached.
+      - name: Install the browser the dashboard's test drives
+        run: npm --prefix factory/ui exec -- playwright install --with-deps chromium
       - name: Gate
+        env:
+          GOFLAGS: -count=1 # the build cache holds test results too; the gate runs every test anyway
         run: make check
       - name: Keep the browser test's report and what it saw when it failed
         if: failure()
