@@ -113,11 +113,21 @@ func holdings(runs []Run) map[string]holding {
 }
 
 // releaseAt is the release a run has answered, and the zero time for a run that has not. Answering a
-// release is taking the issue back — the assignee this factory put on it again — and a run that was
-// cut off before it got that far answered nothing: the issue is still lying unassigned where the
-// person who released it left it, and the next start takes it back for good.
+// release is taking the issue back — the assignee this factory put on it again — or, short of that,
+// ending on the attempt: a run that reached an outcome of its own has answered the gesture whether
+// the take-back landed or not. Only the interruption is not an answer, because the factory was
+// stopped or cut off under that run rather than done with it: the issue is still lying unassigned
+// where the person who released it left it, and the next start takes it back for good.
+//
+// A failed attempt has to count, or the release is read anew on every poll — nothing about the issue
+// changed, so GitHub keeps answering with it — and the factory works the same failing resume again
+// the moment it ends, for as long as the issue stands. The issue waits for a person instead, and the
+// person's next gesture is a removal newer than this one.
 func releaseAt(run Run) time.Time {
-	if run.Signal != signalRelease || !run.Holding {
+	if run.Signal != signalRelease {
+		return time.Time{}
+	}
+	if !run.Holding && (run.EndedAt == nil || run.Outcome == outcomeInterrupted) {
 		return time.Time{}
 	}
 	return run.SignalAt

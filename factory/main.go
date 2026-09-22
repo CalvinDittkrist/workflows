@@ -101,7 +101,7 @@ func run(config string, fake, paused bool) error {
 	}()
 	log.Printf("factory %s on http://%s (fake=%v paused=%v label=%s deadline=%s data=%s)",
 		version, settings.Listen, fake, settings.Paused, settings.Label, settings.Deadline, settings.DataDir)
-	sayNobodyIsNotified(settings, fake)
+	factory.sayNobodyIsNotified()
 
 	// What a factory before this one owed the maintainer is said first: it is one small write, and a
 	// run that ended in the moment the host was cut off is the one somebody is waiting on.

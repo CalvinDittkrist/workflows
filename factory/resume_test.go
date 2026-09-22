@@ -211,6 +211,55 @@ func TestAReleaseThatWasCutOffBeforeTheTakeBackIsStillAnswered(t *testing.T) {
 	}
 }
 
+// A release the factory took up and could not carry through is answered all the same: the run that
+// was made of it is the answer, whether the take-back landed or not. A factory that read such a
+// release as unanswered would find it again on every poll — the issue lies unassigned exactly as the
+// person left it, and nothing about that changes — and would work the same failing resume for as
+// long as it stands, with a run record and a notification on the issue every few seconds. The issue
+// waits for a person instead, like every other ending that cannot go on.
+func TestAReleaseResumeThatFailedIsAnsweredAndTheIssueWaitsForAPerson(t *testing.T) {
+	gh := newGhShim(t)
+	gh.remote(t, "acme/edge-sensors")
+	gh.loggedInAs(t, "factory-bot")
+	gh.comments(t, "acme/edge-sensors", claimedIssue)
+	data := filepath.Join(t.TempDir(), "data")
+	gh.cloneInto(t, data, "acme/edge-sensors")
+
+	began := time.Now().UTC().Add(-2 * time.Hour)
+	releasedAt := began.Add(50 * time.Minute)
+	// The claim that holds the issue, with the worktree every resume of it continues in gone from
+	// this host: the release below is taken up and fails before the take-back.
+	claim := record(1, claimedIssue, claimedTitle, signalRouted, outcomeReady, true, began, began.Add(30*time.Minute))
+	claim.Worktree = filepath.Join(t.TempDir(), "worktrees", "feat-104")
+	records(t, data, claim)
+	// GitHub shows the issue as the person left it: routed, with nobody on it.
+	gh.issues(t, "acme/edge-sensors",
+		touched(openIssue(claimedIssue, claimedTitle, began.Add(-72*time.Hour)), releasedAt))
+	gh.timeline(t, "acme/edge-sensors", claimedIssue, labeled("factory", began.Add(-6*time.Hour)),
+		assigned("factory-bot", began), unassigned("factory-bot", releasedAt))
+
+	f := gh.work(t, config{"poll": "50ms", "deadline": "90s", "data_dir": data,
+		"repositories": []string{"acme/edge-sensors"}, "notify": maintainers})
+	failed := f.ended(t, 2)
+	if failed.Issue != claimedIssue || failed.Signal != "release" || failed.Outcome != "failed" {
+		t.Fatalf("run 2 works #%d on the signal %q and ends as %q, want the release of #%d ending failed; the factory's log:\n%s",
+			failed.Issue, failed.Signal, failed.Outcome, claimedIssue, f.output(t))
+	}
+	// The release is answered by that one run: no poll after it queues the issue again.
+	f.never(t, 3*time.Second, "the factory started a third run, so it took the one release up again",
+		func() bool { return !f.missing(t, 3) })
+	var line apiLine
+	f.get(t, "/api/line", &line)
+	if len(line.Queue) != 0 || len(line.Now) != 0 {
+		t.Errorf("the factory queues %v and runs %d, want an idle line: the failed release waits for a person",
+			keys(line.Queue), len(line.Now))
+	}
+	// And the maintainers hear of that ending once, not once per attempt.
+	if made := gh.made(t, commentCall("acme/edge-sensors", claimedIssue)); made != 1 {
+		t.Errorf("the factory commented on the issue %d times, want once for the one ending", made)
+	}
+}
+
 // GitHub answers for either spelling of a repository, so the factory reads one name whatever case it
 // is written in. A configuration rewritten from acme/edge-sensors to Acme/Edge-Sensors names the
 // repository whose work this host already holds: the records keep the spelling of the day they were

@@ -197,6 +197,50 @@ func TestARunThatWaitsForAPersonCommentsOnTheIssueWithTheReasonAndTheReleaseGest
 	}
 }
 
+// The hand-back gesture is the gesture of an issue the factory holds, and a run can end waiting for
+// a person while holding none: a claim that created the branch and failed at the assignee leaves
+// that branch on the remote and holds nothing. Its comment says what the run left — the run's own
+// reason does, and the comment must not say the opposite of it — and offers no gesture that would do
+// nothing, because a maintainer who read one would leave the branch standing and every later claim
+// of the issue would be lost to it.
+func TestTheCommentOfARunThatHoldsNothingSaysSoAndOffersNoGesture(t *testing.T) {
+	gh := newGhShim(t)
+	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
+	gh.loggedInAs(t, "factory-bot")
+	gh.comments(t, "acme/edge-sensors", claimedIssue)
+	// No answer for the assignment: the claim wins the branch and fails one step later.
+
+	data := filepath.Join(t.TempDir(), "data")
+	gh.cloneInto(t, data, "acme/edge-sensors")
+	f := gh.work(t, config{"poll": "50ms", "deadline": "90s", "data_dir": data,
+		"repositories": []string{"acme/edge-sensors"}, "notify": maintainers})
+	run := f.ended(t, 1)
+	if run.Outcome != "failed" || run.Holding {
+		t.Fatalf("the run ended as %q (holding=%v), want a failed claim that holds nothing; the factory's log:\n%s",
+			run.Outcome, run.Holding, f.output(t))
+	}
+	f.notified(t, 1)
+
+	said := gh.commented(t, "acme/edge-sensors", claimedIssue)
+	for _, want := range []string{
+		"@ada @linus", // the maintainers of the configuration
+		"`failed`",    // what became of the run
+		claimedBranch, // and what it left on the remote, in the run's own reason
+		"left behind",
+	} {
+		if !strings.Contains(said, want) {
+			t.Errorf("the comment on the issue is %q, want %q in it", said, want)
+		}
+	}
+	// And what must not be in it: the gesture that would do nothing here, and the sentence that says
+	// the factory left nothing of this issue, which the reason above it contradicts.
+	for _, wrong := range []string{"Remove the assignee", "holds nothing"} {
+		if strings.Contains(said, wrong) {
+			t.Errorf("the comment says %q of a run that left %s standing on the remote:\n%s", wrong, claimedBranch, said)
+		}
+	}
+}
+
 // A notification is one small write that may fail like any other call to GitHub: the run keeps its
 // outcome, the failure is a warning on it, and the factory works on.
 func TestANotificationThatFailsIsAWarningOnTheRunAndChangesNothingElse(t *testing.T) {

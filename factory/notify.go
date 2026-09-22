@@ -32,6 +32,13 @@ const (
 // call that stalls spend the whole budget and silence the logins behind it. It is shorter than a
 // read of the line, because a run that ends on a stop is notified while the factory is stopping: the
 // maintainer has to hear about that ending above all, and the stop must not wait long for a call.
+//
+// The logins of a ready run are asked one after another rather than at once, so a stop that lands on
+// a GitHub that answers nothing waits one deadline per login. That is the slow side of the trade: the
+// factory cannot tell whether GitHub reads two additions of one pull request's reviewers as a union,
+// and two concurrent ones that do not would lose a reviewer — the very thing the call per login is
+// there to prevent. Nothing is lost to the wait either way: a host that kills the factory first
+// leaves the ending pending, and the next start makes it.
 const notifyTimeout = 30 * time.Second
 
 // maxNotifyReason is how much of a reason a comment carries. A blocker's text is written by a model
@@ -122,7 +129,7 @@ func (f *Factory) owe(r *Run) bool {
 func (f *Factory) deliver(r *Run) {
 	if err := f.deliverTo(r); err != nil {
 		f.warn(r, "the notification could not be made",
-			fmt.Sprintf("this ending was not notified on GitHub: %v; the run itself is unchanged", err))
+			fmt.Sprintf("this ending was not notified on GitHub in full: %v; the run itself is unchanged", err))
 	}
 	f.runs.update(r, func() { r.Notified = notifyDone })
 }
@@ -161,6 +168,13 @@ func (f *Factory) deliverTo(r *Run) error {
 // issue hands it back to the factory — and it is worth saying, because an unattended run is read
 // weeks after it ended and nothing else on the issue says how to answer it.
 //
+// It is only the gesture of an issue the factory still holds, so a run that ended holding nothing is
+// told what it is instead of what it cannot do. Such a run has still left something behind more
+// often than not — a claim that created the branch and failed at the assignee, a release resume that
+// could not take the issue back over the worktree of the claim under it — and what that is, the run's
+// own reason says a paragraph above; the comment does not say it a second time and must not say the
+// opposite of it.
+//
 // [ADR 0026]: ../docs/adr/0026-the-factory-never-deletes-work-on-its-own.md
 func notifyBody(r Run, logins []string) string {
 	mentions := make([]string, 0, len(logins))
@@ -178,7 +192,9 @@ func notifyBody(r Run, logins []string) string {
 		said = append(said, fmt.Sprintf("The branch `%s`, its worktree on the factory host and the assignee stay as they are. "+
 			"Remove the assignee from this issue to hand it back to the factory: it takes the issue again and resumes the run in that worktree.", r.Branch))
 	} else {
-		said = append(said, "The factory holds nothing of this issue and has queued nothing more of it.")
+		said = append(said, "The factory does not hold this issue and has queued nothing more of it. "+
+			"What the run left behind is what its reason says; removing an assignee hands nothing back, "+
+			"because only an issue this factory still holds is taken up that way.")
 	}
 	return strings.Join(said, "\n\n") + "\n"
 }
@@ -221,9 +237,10 @@ func longestRun(s string, of byte) int {
 
 // sayNobodyIsNotified reports at the start that this factory tells nobody how its runs end, which
 // is what a configuration without logins means. It is said once, where everything else about the
-// start is said, because a line per run for weeks is one nobody reads.
-func sayNobodyIsNotified(settings Settings, fake bool) {
-	if fake || len(settings.Notify) > 0 {
+// start is said, because a line per run for weeks is one nobody reads. Fake mode is silent about it:
+// it notifies nobody by what it is, not by how it was configured.
+func (f *Factory) sayNobodyIsNotified() {
+	if f.fake || f.notifying() {
 		return
 	}
 	log.Printf("notify names nobody: no run of this factory tells anybody how it ended; name the logins to notify in the configuration")
