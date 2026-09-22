@@ -368,6 +368,60 @@ func TestAnIssueRoutedAgainAfterItWasLetGoIsTakenBackOnItsBranch(t *testing.T) {
 	}
 }
 
+// A pull request that ended is a decision about the run that opened it and about no other. The run
+// that takes a routed issue back afterwards stands on a claim of its own and has no pull request
+// yet, so the closed one of the run before it must not reach it: a factory that carries that URL
+// over cancels the new run on its first poll and hands the issue straight back, over and over.
+func TestARoutedIssueIsNotCancelledByThePullRequestOfTheRunBeforeIt(t *testing.T) {
+	gh := newGhShim(t)
+	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
+	gh.loggedInAs(t, "factory-bot")
+	gh.assigns(t, "acme/edge-sensors", claimedIssue, "factory-bot")
+	gh.unassigns(t, "acme/edge-sensors", claimedIssue, "factory-bot")
+	gh.workerCommits(t, "worked.md")
+	gh.workerReports(t, "acme/edge-sensors", claimedIssue)
+	// Both runs take their time, so the second one is still going while the polls of its first
+	// seconds read what the factory holds.
+	gh.workerWaits(t, 3*time.Second)
+
+	data := filepath.Join(t.TempDir(), "data")
+	gh.cloneInto(t, data, "acme/edge-sensors")
+
+	f := gh.work(t, config{"poll": "50ms", "deadline": "90s", "data_dir": data,
+		"repositories": []string{"acme/edge-sensors"}})
+	if run := f.ended(t, 1); run.PullRequest == "" || !run.Holding {
+		t.Fatalf("run 1 ended as %q (%s) holding=%v with pull request %q, want a run that holds the issue and opened one; the factory's log:\n%s",
+			run.Outcome, run.Reason, run.Holding, run.PullRequest, f.output(t))
+	}
+	// The maintainer closes the pull request, which is the decision that lets the issue go.
+	gh.pull(t, "acme/edge-sensors", claimedIssue, "closed", false)
+	gh.issue(t, "acme/edge-sensors", assignedTo(
+		openIssue(claimedIssue, claimedTitle, time.Now().UTC().Add(-72*time.Hour)), "factory-bot"))
+	var let apiRun
+	f.eventually(t, 30*time.Second, "the issue to be let go", func() bool {
+		let = apiRun{}
+		f.get(t, "/api/runs/1", &let)
+		return let.LetGoAt != nil
+	})
+	// And routes the issue again, which asks for another run of work that starts where it stopped.
+	again := let.LetGoAt.Add(time.Second)
+	gh.issue(t, "acme/edge-sensors", openIssue(claimedIssue, claimedTitle, again))
+	gh.issues(t, "acme/edge-sensors", touched(openIssue(claimedIssue, claimedTitle, again), again))
+	gh.timeline(t, "acme/edge-sensors", claimedIssue, labeled("factory", again))
+
+	run := f.ended(t, 2)
+	if run.Outcome == "cancelled" {
+		t.Fatalf("run 2 ended as cancelled (%s), want a run that was left to work: the pull request of run 1 says nothing about it; the factory's log:\n%s",
+			run.Reason, f.output(t))
+	}
+	if run.Outcome != "ready" {
+		t.Errorf("run 2 ended as %q (%s), want ready; the factory's log:\n%s", run.Outcome, run.Reason, f.output(t))
+	}
+	if workers := gh.workers(t); len(workers) != 2 {
+		t.Errorf("the factory started %d workers, want one for each run", len(workers))
+	}
+}
+
 // The one thing that must never let an issue go is a GitHub nobody can reach. A rate limit, a login
 // that expired, a repository that answers an error: none of them is a maintainer's decision, so the
 // factory keeps what it holds until GitHub answers, says so once however long that takes, and acts

@@ -190,7 +190,7 @@ func (g *gitHub) queue(ctx context.Context, held []Held) poll {
 // An issue the factory holds is assigned to this host, so it is not in the line above and there is
 // no other reading of it: this is where a maintainer's decision reaches work in progress ([ADR
 // 0023]). It is one request per issue it is given and one more for a pull request that stands, and
-// which issues those are is the caller's cadence (heldIssues): the run that is going on every poll,
+// which issues those are is the caller's cadence (heldIssuesDue): the run that is going on every poll,
 // so a cancel is heard within one, and what is only waiting to be cleaned up rarely, so a host with
 // a dozen pull requests in review does not spend its hour of requests on them.
 //

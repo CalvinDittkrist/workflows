@@ -92,7 +92,7 @@ type Factory struct {
 	// Only a run of this factory is in it, so a record of an older start can never be signalled here.
 	cancelling map[int]context.CancelCauseFunc
 	// askedHeld is when each issue this factory holds was last asked about on GitHub, by the state it
-	// was in when it was asked (heldIssues). It is the memory the cadence of those readings rests on
+	// was in when it was asked (heldIssuesDue). It is the memory the cadence of those readings rests on
 	// and nothing else reads it.
 	askedHeld map[string]time.Time
 	// quotaUntil is served empty until the quota check arrives (ADR 0028); the interface carries the
@@ -201,7 +201,7 @@ func (f *Factory) Work(ctx context.Context) {
 //
 // [ADR 0025]: ../docs/adr/0025-one-queue-one-worker-work-in-progress-first.md
 func (f *Factory) refreshQueue(ctx context.Context) poll {
-	read := f.source.queue(ctx, f.heldIssues())
+	read := f.source.queue(ctx, f.heldIssuesDue())
 	queue := read.issues
 	sort.SliceStable(queue, func(a, b int) bool {
 		if !queue[a].RoutedAt.Equal(queue[b].RoutedAt) {
@@ -227,10 +227,13 @@ func (f *Factory) refreshQueue(ctx context.Context) poll {
 // few minutes later, which is as fast as a worktree needs to go.
 const heldPolls = 10
 
-// heldIssues is what the factory holds on GitHub right now, read from its own records: one entry per
-// issue whose claim still stands, with the pull request any run of that issue opened. It is empty
-// for a factory that holds nothing, which is what keeps a poll of a quiet line at the one request
-// per repository it has always been.
+// heldIssuesDue is what the factory holds on GitHub and is due to ask about on this poll, read from
+// its own records: one entry per issue whose claim still stands, with the pull request the claim
+// opened. It is empty for a factory that holds nothing, which is what keeps a poll of a quiet line
+// at the one request per repository it has always been.
+//
+// It is a reading and a step of the poll in one: what it answers with it also marks as asked, which
+// is what the cadence below counts. One poll calls it once.
 //
 // An issue is left out of the reading while it is not due: an idle holding is asked about every
 // heldPolls-th poll and not on each one, and the wait starts over whenever the issue is in another
@@ -248,7 +251,7 @@ const heldPolls = 10
 // is touched.
 //
 // [ADR 0023]: ../docs/adr/0023-github-is-the-only-control-surface-of-the-factory.md
-func (f *Factory) heldIssues() []Held {
+func (f *Factory) heldIssuesDue() []Held {
 	out := []Held{}
 	if f.settings.Paused {
 		return out
@@ -284,27 +287,44 @@ func (f *Factory) heldIssues() []Held {
 // one path that removes anything ([ADR 0026]) and the same path a cancelled run is let go by on the
 // poll after it — so nothing is ever taken apart under a worker that is still writing in it.
 //
-// It runs in the working loop rather than beside it: letting an issue go pushes, fetches and removes
-// a worktree of this host's clone, and one place doing that at a time is what keeps two of them off
-// the same clone. The loop waits for it, which is why a handover is bound to the few polls of
-// handoverTimeout and not to the hour a transfer has elsewhere. A paused factory does none of it —
-// it writes nothing anywhere while it is paused, which is what a pause is for.
+// The cancels come first and cost nothing: a signal to a process group this host already has. The
+// handovers come after them and run in the working loop rather than beside it, because letting an
+// issue go pushes, fetches and removes a worktree of this host's clone, and one place doing that at
+// a time is what keeps two of them off the same clone. The loop waits for them, so all of them
+// together are bound to the few polls of handoverTimeout rather than each to itself: whatever many
+// decisions arrive in one poll, the next poll is that deadline away and not a multiple of it. A
+// handover the deadline cuts, and every one behind it, is left for a later poll to make again from
+// the state of the host — which is what a handover reads at every step anyway.
+//
+// A paused factory does none of it — it writes nothing anywhere while it is paused, which is what a
+// pause is for.
 //
 // [ADR 0026]: ../docs/adr/0026-the-factory-never-deletes-work-on-its-own.md
 func (f *Factory) letIssuesGo(ctx context.Context, letGo map[string]string) {
 	if len(letGo) == 0 || f.settings.Paused || ctx.Err() != nil {
 		return
 	}
-	for key, held := range holdings(f.runs.list()) {
+	held := holdings(f.runs.list())
+	handovers := []string{}
+	for key, h := range held {
 		decision, ends := letGo[key]
-		if !ends || !held.holds {
+		if !ends || !h.holds {
 			continue
 		}
-		if !held.idle {
-			f.cancel(held.last, decision)
+		if !h.idle {
+			f.cancel(h.last, decision)
 			continue
 		}
-		f.letGo(ctx, held, decision)
+		handovers = append(handovers, key)
+	}
+	sort.Strings(handovers) // so a poll that cannot finish them all works through them in one order
+	pass, done := context.WithTimeoutCause(ctx, handoverTimeout, errHandoverCut)
+	defer done()
+	for _, key := range handovers {
+		if pass.Err() != nil {
+			return // the deadline is spent; what is left is still held and is let go from a later poll
+		}
+		f.letGo(pass, held[key], letGo[key])
 	}
 }
 

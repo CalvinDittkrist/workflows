@@ -73,9 +73,11 @@ type holding struct {
 	// the record of that run is what a routing of the issue after that moment takes it back by.
 	let   Run
 	letGo bool
-	// pullRequest is the pull request the runs of this issue opened, the latest one that named one.
-	// An issue let go without one loses the assignee this factory put on it; an issue with one keeps
-	// it, because from then on the work is with a person and the assignee says who did it.
+	// pullRequest is the pull request the claim this factory holds has opened, the latest run of it
+	// that named one. An issue let go without one loses the assignee this factory put on it; an
+	// issue with one keeps it, because from then on the work is with a person and the assignee says
+	// who did it. It goes with the claim: what became of it was decided about the runs that opened
+	// it, and a run that takes the issue back afterwards is a claim of its own with nothing to show.
 	pullRequest string
 	// answered is the newest release this issue's runs have already acted on, as GitHub timed the
 	// removal that queued them. A release no newer than this is done with.
@@ -96,17 +98,18 @@ func holdings(runs []Run) map[string]holding {
 		key := run.key()
 		h := out[key]
 		h.last, h.idle = run, run.EndedAt != nil
+		if run.PullRequest != "" {
+			h.pullRequest = run.PullRequest
+		}
 		switch {
 		case run.LetGoAt != nil:
 			// The claim of this run stood and stands no more. What it holds is cleared with it, so a
 			// reader that forgets to ask holds first meets an empty run rather than a worktree that
-			// is not on this host any more.
-			h.run, h.holds, h.let, h.letGo = Run{}, false, run, true
+			// is not on this host any more — and the pull request of that claim goes with it, so the
+			// run that takes the issue back is not decided about by the one before it.
+			h.run, h.holds, h.let, h.letGo, h.pullRequest = Run{}, false, run, true, ""
 		case run.Holding:
 			h.run, h.holds, h.letGo = run, true, false
-		}
-		if run.PullRequest != "" {
-			h.pullRequest = run.PullRequest
 		}
 		switch run.Signal {
 		case signalInterruption:

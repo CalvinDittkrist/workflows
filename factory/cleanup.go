@@ -25,17 +25,17 @@ import (
 //
 // [ADR 0026]: ../docs/adr/0026-the-factory-never-deletes-work-on-its-own.md
 
-// handoverTimeout bounds the whole handover of one issue: its pushes, its fetch and the requests
-// that give the issue back. A handover runs in the working loop, so whatever it waits for the line
-// waits for too — a poll that does not happen, a cancel that does not reach the run it was meant
-// for, an interface whose last poll goes stale under a reader. What it transfers is the commits of
-// one branch and not a repository, which is why it is given the room of a few polls and not the
-// hour a clone has; each of its transfers may take that room, and this deadline over all of them is
-// what keeps the sum of one handover to it.
+// handoverTimeout bounds every handover of one poll: their pushes, their fetches and the requests
+// that give the issues back. Handovers run in the working loop, so whatever they wait for the line
+// waits for too — a poll that does not happen, an interface whose last poll goes stale under a
+// reader. What one of them transfers is the commits of one branch and not a repository, which is
+// why they are given the room of a few polls and not the hour a clone has; each transfer may take
+// that room, and this deadline over the whole pass is what keeps a poll to it however many
+// decisions arrive at once.
 //
 // A handover that is cut loses nothing. Nothing of it is removed before the work is on the remote,
-// every step reads the host and the remote again rather than trusting what the last one left, and
-// the next poll starts it over.
+// every step reads the host and the remote again rather than trusting what the last one left, and a
+// later poll starts it over.
 const handoverTimeout = 2 * time.Minute
 
 // errHandoverCut is the cause that deadline carries, which is what tells a handover that ran out of
@@ -48,6 +48,9 @@ var errHandoverCut = errors.New("letting the issue go took longer than " + hando
 // request came of the issue. The record is marked last and only when the worktree is gone, because
 // the mark is what says the issue is out of this factory's hands — a run marked while its worktree
 // is still there would leave that directory on the host for good.
+//
+// The context is the one handoverTimeout bounds the poll's handovers by, so a step of this one that
+// hangs takes time from the handovers behind it and from nothing else.
 func (f *Factory) letGo(ctx context.Context, h holding, decision string) {
 	held := h.run
 	record, ok := f.runs.find(held.ID)
@@ -62,8 +65,6 @@ func (f *Factory) letGo(ctx context.Context, h holding, decision string) {
 	log.Printf("letting %s#%d go: %s", connected.Name, held.Issue, decision)
 	f.runs.event(record, Event{Kind: "factory", Title: "letting " + held.Branch + " go", Body: decision})
 
-	ctx, done := context.WithTimeoutCause(ctx, handoverTimeout, errHandoverCut)
-	defer done()
 	if !f.pushWorktree(ctx, record, clone, held) {
 		return
 	}
