@@ -247,10 +247,14 @@ func (s *Store) finish(r *Run, outcome, reason string, exitCode *int) {
 	s.write(r)
 }
 
-// write persists a record. It writes a whole file and renames it, so a reader never meets a half
-// written record and a crash of the factory cannot leave one. The bytes are not forced to the disk:
-// a power cut can still cost the last writes, which is why nothing depends on a record that the run
-// itself did not also report to GitHub. Callers hold the lock.
+// write persists a record. It writes a whole file, forces it to the disk and renames it, so a reader
+// never meets a half written record, a crash of the factory cannot leave one, and a host that lost
+// power finds the record as its last write left it. That last part is what the resume rules stand
+// on: what the factory holds and what it has already spent is read from these files and from
+// nothing else, and an issue whose claim stands on GitHub while its record says otherwise would be
+// neither resumed nor released ([ADR 0026]). Callers hold the lock.
+//
+// [ADR 0026]: ../docs/adr/0026-the-factory-never-deletes-work-on-its-own.md
 //
 // The data directory is the factory's only durable output, and nobody watches the host: a write that
 // fails says so in the journal, with the fix, rather than leaving a service that looks healthy and
@@ -275,13 +279,29 @@ func (s *Store) write(r *Run) {
 		failed(err)
 		return
 	}
+	if err := file.Sync(); err != nil {
+		file.Close()
+		failed(err)
+		return
+	}
 	if err := file.Close(); err != nil {
 		failed(err)
 		return
 	}
 	if err := os.Rename(file.Name(), s.recordPath(r.ID)); err != nil {
 		failed(err)
+		return
 	}
+	// And the rename itself, so the record is under its name after a power cut and not only in it.
+	dir, err := os.Open(s.dir)
+	if err != nil {
+		failed(err)
+		return
+	}
+	if err := dir.Sync(); err != nil {
+		failed(err)
+	}
+	dir.Close()
 }
 
 // event appends to a run's log. The log is append-only: it is opened, written and closed per event,

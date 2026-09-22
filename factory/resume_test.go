@@ -119,6 +119,9 @@ func TestTheLineResumesWhatTheFactoryHoldsBeforeItClaimsAnythingNew(t *testing.T
 		record(2, 109, "Warn on an old calibration", signalRouted, outcomeBlocked, true, began, began.Add(10*time.Minute)),
 		record(3, 112, "Replace the CSV parser", signalRouted, outcomeReady, true, began, began.Add(20*time.Minute)),
 		record(4, 115, "Serve the preview", signalRouted, outcomeLost, false, began, began.Add(25*time.Minute)),
+		// And 130 is held in a repository this host is no longer connected to. A repository the
+		// configuration does not name is not worked, whatever the records of it say it holds.
+		in("acme/backtest", record(5, 130, "Cache the fills", signalRouted, outcomeInterrupted, true, began, began.Add(40*time.Minute))),
 	)
 	// What GitHub says: every issue the factory does not hold is routed and unassigned. 109 is still
 	// assigned to the factory, so it is not in the list at all.
@@ -171,6 +174,11 @@ func TestTheAutomaticResumeIsOnePerIssueAndOnlyAReleaseGivesItBack(t *testing.T)
 		{"the second interruption of an issue", []Run{
 			run(1, signalRouted, outcomeInterrupted, true),
 			run(2, signalInterruption, outcomeInterrupted, true)}, false},
+		// The resume is spent by the run it queued, whatever became of that run: a resume that could
+		// not start — a worktree that is not on the host — is not tried again by itself either.
+		{"an automatic resume that ended in something else", []Run{
+			run(1, signalRouted, outcomeInterrupted, true),
+			run(2, signalInterruption, outcomeFailed, true)}, false},
 		{"an interruption after the automatic resume ended otherwise", []Run{
 			run(1, signalRouted, outcomeInterrupted, true),
 			run(2, signalInterruption, outcomeFailed, true),
@@ -206,6 +214,61 @@ func TestTheAutomaticResumeIsOnePerIssueAndOnlyAReleaseGivesItBack(t *testing.T)
 	}
 }
 
+// The release signal, in the shapes a poll can meet it in. What it is read from is one issue of the
+// line GitHub answers with, beside the records of that issue: the gesture itself is driven end to
+// end in TestAReleasedIssueIsAssignedAgainAndResumedInTheSameWorktree, and what is read here is the
+// rule that decides whether a given poll is a release at all — above all that a release is answered
+// once, because the poll that queued it repeats for as long as the re-assignment takes to land.
+func TestAReleaseIsTheRemovedAssigneeOfAHeldIssueAndIsAnsweredOnce(t *testing.T) {
+	began := time.Now().UTC().Add(-time.Hour)
+	ended := began.Add(30 * time.Minute)
+	removed := began.Add(45 * time.Minute) // after the run that held the issue, so it is a release
+	run := func(id int, signal, outcome string, holding bool) Run {
+		return record(id, 104, "Retry the upload", signal, outcome, holding, began, ended)
+	}
+	answered := func(id int, at time.Time) Run {
+		r := run(id, signalRelease, outcomeReady, true)
+		r.SignalAt, r.StartedAt = at, at.Add(time.Second)
+		return r
+	}
+	for _, c := range []struct {
+		name     string
+		runs     []Run
+		at       time.Time // when the assignee came off, as this poll reads it
+		routed   bool      // the issue is in the line GitHub answers with: open, routed, unassigned
+		released bool
+	}{
+		{"the assignee of a held issue was removed", []Run{
+			run(1, signalRouted, outcomeReady, true)}, removed, true, true},
+		{"the same removal while the run it queued has not been recorded", []Run{
+			run(1, signalRouted, outcomeReady, true), answered(2, removed)}, removed, true, false},
+		{"another removal after the release that was answered", []Run{
+			run(1, signalRouted, outcomeReady, true), answered(2, removed)},
+			removed.Add(20 * time.Minute), true, true},
+		{"an assignee somebody removed before the factory claimed the issue", []Run{
+			run(1, signalRouted, outcomeReady, true)}, began.Add(-time.Hour), true, false},
+		{"an issue that is not in the routed line, so nobody unassigned it", []Run{
+			run(1, signalRouted, outcomeReady, true)}, removed, false, false},
+		{"a routed issue whose branch another claimer created", []Run{
+			run(1, signalRouted, outcomeLost, false)}, removed, true, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			held := holdings(c.runs)["acme/edge-sensors#104"]
+			issue := Issue{Repository: "acme/edge-sensors", Number: 104, unassignedAt: c.at}
+			if released := held.released(issue, c.routed); released != c.released {
+				t.Errorf("the factory reads this as a release: %v, want %v", released, c.released)
+			}
+		})
+	}
+	// And nothing is queued beside a run that is still going, however long ago the assignee came off.
+	active := []Run{run(1, signalRouted, "", true)}
+	active[0].EndedAt, active[0].State = nil, "running"
+	issue := Issue{Repository: "acme/edge-sensors", Number: 104, unassignedAt: removed}
+	if holdings(active)["acme/edge-sensors#104"].released(issue, true) {
+		t.Error("an issue whose run is still going is read as released; the run would be queued beside itself")
+	}
+}
+
 // record is one run as the data directory carries it, with the fields the resume rules read.
 func record(id, issue int, title, signal, outcome string, holding bool, started, ended time.Time) Run {
 	return Run{
@@ -215,6 +278,12 @@ func record(id, issue int, title, signal, outcome string, holding bool, started,
 		Signal: signal, State: "ended", Outcome: outcome, Stages: []string{}, Warnings: []string{},
 		StartedAt: started, EndedAt: &ended,
 	}
+}
+
+// in puts a record in another repository than the one the tests work in.
+func in(repository string, run Run) Run {
+	run.Repository = repository
+	return run
 }
 
 // records writes run records into a data directory before the factory starts on it, which is what a

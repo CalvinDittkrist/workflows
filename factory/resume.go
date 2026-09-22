@@ -82,6 +82,10 @@ func releaseAt(run Run) time.Time {
 	return run.SignalAt
 }
 
+// repository is where this issue is, read from a record rather than from the line, because an issue
+// the factory holds is not in the line GitHub answers with.
+func (h holding) repository() string { return h.last.Repository }
+
 // issue is the queue entry of an issue the factory holds, as its own records describe it. An issue
 // it holds is assigned to this host, so it is not in the line GitHub answers with and there is
 // nothing else to read it from: it carries no labels and no routing time, because a resumed run
@@ -135,9 +139,12 @@ var resuming = map[string]string{
 // release a resumed run already stands for, and the start of the latest run, which is what keeps an
 // assignee somebody removed before the factory ever claimed the issue from counting as a release.
 //
-// The comparison against the answered release is between two readings of the same event on GitHub's
-// own clock, so a factory whose poll still shows the issue unassigned, because the assignment of the
-// resumed run has not landed yet, queues nothing twice however far the two clocks are apart.
+// A release the factory has answered is compared with the release its run was queued on: two
+// readings of the same event on GitHub's own clock, so a poll that still shows the issue unassigned,
+// because the assignment of the resumed run has not landed yet, queues nothing twice however far
+// this host's clock and GitHub's are apart. The start of the latest run is this host's clock, and
+// only guards the gesture that came before any run of the issue, where minutes of drift are nothing
+// against the hours such a removal lies back.
 func (h holding) released(issue Issue, routed bool) bool {
 	return routed && h.holds && h.idle && issue.unassignedAt.After(h.answered)
 }

@@ -123,7 +123,7 @@ type gitHub struct {
 	// Reading a timeline is a request of its own per issue, so a line of a few dozen issues asked
 	// every minute would spend a whole hourly budget on standing still. It is memory and no file: the
 	// line itself is still derived from GitHub on every poll ([ADR 0025]).
-	times map[string]routing
+	times map[string]reading
 	// unreadable is the repositories the last poll could not read, with what gh said, and warned the
 	// issues whose event list could not be read. Both are reported when they start failing and not
 	// once a minute for a week: the factory polls every minute and a host runs it for weeks.
@@ -131,10 +131,10 @@ type gitHub struct {
 	warned     map[string]bool
 }
 
-// routing is one remembered reading of an issue's event list with the issue's updated_at it was made
+// reading is one remembered reading of an issue's event list with the issue's updated_at it was made
 // at. GitHub touches updated_at when a label or an assignee changes, so a remembered reading is good
 // until the issue is touched again.
-type routing struct {
+type reading struct {
 	updated time.Time
 	read    signals
 }
@@ -253,9 +253,9 @@ func (g *gitHub) remember(key string, updated time.Time, read signals) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if g.times == nil {
-		g.times = map[string]routing{}
+		g.times = map[string]reading{}
 	}
-	g.times[key] = routing{updated: updated, read: read}
+	g.times[key] = reading{updated: updated, read: read}
 }
 
 // routedIssues asks GitHub for the issues of one repository that carry both labels and keeps those
@@ -316,6 +316,11 @@ func issuesRequest(repository, routingLabel string) string {
 // answer without it, written down against the issue's updated_at, would hold that wrong time until
 // somebody touched the issue again. So a fallback is read again on the next poll, which is one call
 // per poll for as long as the label event is missing, and the issue takes its place as it appears.
+//
+// The removal of an assignee is remembered on the same condition and not on one of its own: an issue
+// that never had an assignee has no such event, and demanding one would read the event list of every
+// routed issue on every poll. A release whose event list is that much behind the issue list is read
+// on the next touch of the issue, and until then the issue stands where it stood.
 func (g *gitHub) signalsOf(ctx context.Context, repository string, issue ghIssue) signals {
 	key := Issue{Repository: repository, Number: issue.Number}.key()
 	if read, ok := g.remembered(key, issue.UpdatedAt); ok {

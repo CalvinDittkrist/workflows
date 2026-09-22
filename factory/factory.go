@@ -235,6 +235,11 @@ func (f *Factory) hold(repository, reason string) {
 // alone — a routed issue whose branch another claimer created is recorded as lost, holds nothing,
 // and is never read as a release.
 //
+// Only a connected repository is in the line, held work included: a repository the configuration no
+// longer names is one this host is not to work, whatever its records say it once held. Nothing of it
+// is touched or deleted — the branch, the worktree and the assignee stay — and connecting it again
+// puts what it holds back in the line.
+//
 // [ADR 0025]: ../docs/adr/0025-one-queue-one-worker-work-in-progress-first.md
 func (f *Factory) waiting() []Entry {
 	records := f.runs.list()
@@ -252,6 +257,9 @@ func (f *Factory) waiting() []Entry {
 
 	out := []Entry{}
 	for key, held := range holdings(records) {
+		if _, ok := f.connected(held.repository()); !ok {
+			continue
+		}
 		issue, routed := routedNow[key]
 		if !routed {
 			// An issue the factory holds is assigned to this host, so the line does not carry it and

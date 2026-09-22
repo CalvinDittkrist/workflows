@@ -1006,10 +1006,18 @@ func (f *factory) ended(t *testing.T, id int) apiRun {
 	return run
 }
 
-// waitForTheHangingWorker waits until the run of that id — the canned entry whose scripted worker
-// hangs — is the running one, and answers with the processes it started.
+// waitForTheHangingWorker waits until the run of that id is the running one and answers with the
+// processes it started. It is the run of the canned entry whose scripted worker hangs, which is what
+// a test that stops a factory mid-run needs, and the helper says so rather than trusting the caller:
+// the id follows from the order the canned queue is worked in, and re-timing an entry would move it.
 func (f *factory) waitForTheHangingWorker(t *testing.T, id int) []int {
 	t.Helper()
+	hanging := 0
+	for _, canned := range cannedIssues {
+		if canned.scenario == "hang" {
+			hanging = canned.number
+		}
+	}
 	var run apiRun
 	f.eventually(t, 60*time.Second, fmt.Sprintf("the hanging worker of run %d and its child", id), func() bool {
 		run = apiRun{}
@@ -1026,6 +1034,9 @@ func (f *factory) waitForTheHangingWorker(t *testing.T, id int) []int {
 		}
 		return run.State == "running" && len(workerPids(t, run)) == 2
 	})
+	if run.Issue != hanging {
+		t.Fatalf("run %d works #%d, want the canned entry whose worker hangs (#%d)", id, run.Issue, hanging)
+	}
 	return workerPids(t, run)
 }
 
