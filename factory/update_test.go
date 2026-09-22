@@ -116,13 +116,14 @@ func TestAFactoryStoppedWhileItUpdatesTheWorkerInterruptsTheRunRatherThanFailing
 	}
 }
 
-func TestAWorkerPluginThatIsSwitchedOffIsNoVersionTheRunRanWith(t *testing.T) {
+func TestAVersionThatCannotBeReadIsAWarningAndNoVersionOnTheRecord(t *testing.T) {
 	gh := newGhShim(t)
 	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
 	gh.loggedInAs(t, "factory-bot")
 	gh.assigns(t, "acme/edge-sensors", claimedIssue, "factory-bot")
 	gh.workerReports(t, "acme/edge-sensors", claimedIssue)
-	gh.installs(t, "0.9.3", "2.1.278 (Claude Code)")
+	// A worker plugin that is installed but switched off, and a Claude Code that printed no version.
+	gh.installs(t, "0.9.3", "")
 	gh.switchedOff(t)
 
 	data := filepath.Join(t.TempDir(), "data")
@@ -137,11 +138,19 @@ func TestAWorkerPluginThatIsSwitchedOffIsNoVersionTheRunRanWith(t *testing.T) {
 	if run.Versions.Worker != "" {
 		t.Errorf("the run records the worker plugin %q, want none: the install it was read from is switched off", run.Versions.Worker)
 	}
-	if run.Versions.ClaudeCode != "2.1.278" {
-		t.Errorf("the run records Claude Code %q, want 2.1.278: one version that cannot be read is not the other", run.Versions.ClaudeCode)
+	if run.Versions.ClaudeCode != "" {
+		t.Errorf("the run records Claude Code %q, want none: the binary printed no version", run.Versions.ClaudeCode)
 	}
-	if len(run.Warnings) != 1 || !strings.Contains(run.Warnings[0], workerPlugin) {
-		t.Fatalf("the run carries the warnings %q, want one naming %s: a run nobody can trace to a worker says so", run.Warnings, workerPlugin)
+	// A run nobody can trace to what it ran with says so, once per version it could not read.
+	if len(run.Warnings) != 2 {
+		t.Fatalf("the run carries the warnings %q, want one for the worker plugin and one for Claude Code", run.Warnings)
+	}
+	if !strings.Contains(run.Warnings[0], workerPlugin) || !strings.Contains(run.Warnings[1], "Claude Code") {
+		t.Errorf("the warnings %q name neither %s nor Claude Code", run.Warnings, workerPlugin)
+	}
+	// The run is worked all the same: an unreadable version is not a reason to give the issue back.
+	if run.Outcome != "ready" {
+		t.Errorf("the run ended as %q (%s), want ready: a version nobody could read must not fail a run", run.Outcome, run.Reason)
 	}
 }
 

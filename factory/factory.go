@@ -500,7 +500,7 @@ const workSkill = "/worker:work"
 func workerSettings(env map[string]string) (string, error) {
 	settings, err := json.Marshal(map[string]any{
 		"env":               env,
-		"enabledPlugins":    map[string]bool{"planner@workflows": false, "orchestrator@workflows": false},
+		"enabledPlugins":    map[string]bool{"planner@" + marketplace: false, "orchestrator@" + marketplace: false},
 		"autoCompactWindow": compactWindow,
 	})
 	if err != nil {

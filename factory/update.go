@@ -152,7 +152,11 @@ func (f *Factory) workerVersion(ctx context.Context, r *Run) string {
 }
 
 // hostScope says that an installed plugin belongs to the host rather than to a checkout on it: the
-// machine user's own install, or one an administrator deployed for the whole machine.
+// machine user's own install, or one an administrator deployed for the whole machine. A plugin is
+// installed in one of four scopes — user, project, local, managed ([plugins reference]) — and the
+// two that outlive a checkout are the run's.
+//
+// [plugins reference]: https://code.claude.com/docs/en/plugins-reference.md
 func hostScope(scope string) bool { return scope == "user" || scope == "managed" }
 
 // claudeVersion is the Claude Code the worker session will be, as the binary reports itself. The
@@ -165,7 +169,11 @@ func (f *Factory) claudeVersion(ctx context.Context, r *Run) string {
 		f.versionUnread(ctx, r, "the version of Claude Code could not be read: "+reason)
 		return ""
 	}
-	return versionOf(string(out))
+	version := versionOf(string(out))
+	if version == "" {
+		f.versionUnread(ctx, r, "the version of Claude Code was printed empty")
+	}
+	return version
 }
 
 // versionOf is the version out of what `claude --version` prints, which is the number and the name

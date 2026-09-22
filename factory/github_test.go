@@ -656,7 +656,8 @@ func (g *ghShim) workerReports(t *testing.T, repository string, issue int) {
 }
 
 // installs is what the claude shim answers about this host: the version of the worker plugin its
-// user scope holds, and what `claude --version` prints.
+// user scope holds, and what `claude --version` prints — an empty one being a binary that printed
+// no version at all.
 func (g *ghShim) installs(t *testing.T, worker, claudeCode string) {
 	t.Helper()
 	g.env = append(g.env, "CLAUDE_SHIM_WORKER_VERSION="+worker, "CLAUDE_SHIM_VERSION="+claudeCode)

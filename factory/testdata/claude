@@ -33,7 +33,8 @@ plugins="${CLAUDE_SHIM_PLUGIN_LOG:-/dev/null}"
 case "${1:-}" in
   --version)
     printf '%s\n' "$*" >> "$plugins"
-    printf '%s\n' "${CLAUDE_SHIM_VERSION:-2.1.278 (Claude Code)}"
+    # Set and empty is a binary that printed nothing, which a run has to notice; unset is a normal one.
+    printf '%s\n' "${CLAUDE_SHIM_VERSION-2.1.278 (Claude Code)}"
     exit 0
     ;;
   plugin)
