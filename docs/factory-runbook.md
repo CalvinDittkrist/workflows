@@ -34,6 +34,8 @@ Run the following as root unless it says otherwise.
    ```
 
    A worker runs each connected repository's `make check`, so install the toolchain those gates need as well (for this repository: shellcheck, Go, Node, Python).
+
+   The gate's length is what tells you whether a host is fast enough. A worker runs it twice per issue, and on a Raspberry Pi 4 this repository's full gate takes an estimated 12 to 15 minutes: in run 4 of #106 (2026-09-22) the first four targets alone took 559 s, and the next attempt was cut off at 600 s in `go test -race`. That is longer than the 600 s ceiling of one Bash tool call, which is why that run could not reach `ready`. The worker now runs the gate detached from the call and waits for it in 540 s slices ([ADR 0019](adr/0019-the-gate-runs-once-per-review-round.md)), so a slow host costs time and no longer blocks a run. To judge a host, time `make check` in a clone of each connected repository as the user `factory`.
 2. **Claude Code**, as the user `factory` (`sudo -iu factory`), with the native installer, which needs no Node and puts `claude` in `~/.local/bin` ([setup](https://code.claude.com/docs/en/setup.md)):
 
    ```sh
