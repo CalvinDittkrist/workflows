@@ -374,12 +374,10 @@ func (f *Factory) execute(parent context.Context, r *Run, entry Entry) {
 		f.finish(r, outcomeFailed, "the issue could not be "+taken(claim)+": "+err.Error()+leftBehind(claim), nil)
 		return
 	}
-	// What the claim or the resume ended up holding, written down before anything is started on it:
-	// a run that ends between here and the worker is still the record of what this factory holds.
-	f.runs.update(r, func() { r.Worktree, r.Holding = claim.worktree, claim.holding })
-
 	// The plugin the session is about to run is brought up to date and written down, here and not
-	// earlier: the issue is this factory's now, and nothing else of it is running.
+	// earlier: the issue is this factory's now, and nothing else of it is running. What the claim
+	// holds is on the record already, written where it became true rather than here, so a run this
+	// update is cut off in is still the held work the next start resumes.
 	f.prepare(ctx, r)
 	if ctx.Err() != nil {
 		// Updating the plugins reaches over the host's line and takes as long as that line does, so a
@@ -393,8 +391,12 @@ func (f *Factory) execute(parent context.Context, r *Run, entry Entry) {
 		return
 	}
 
-	// The session starts in /worker:work, which invokes no skill for its first stage.
-	f.runs.update(r, func() { r.stage("implement") })
+	f.runs.update(r, func() {
+		// What the claim or the resume ended up holding, before a worker is started on it.
+		r.Worktree, r.Holding = claim.worktree, claim.holding
+		// The session starts in /worker:work, which invokes no skill for its first stage.
+		r.stage("implement")
+	})
 
 	cmd, err := f.worker(ctx, entry.Issue, claim)
 	if err != nil {

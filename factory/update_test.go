@@ -114,6 +114,25 @@ func TestAFactoryStoppedWhileItUpdatesTheWorkerInterruptsTheRunRatherThanFailing
 	if workers := gh.workers(t); len(workers) != 0 {
 		t.Errorf("the factory started %d workers, want none: the stop came before the session", len(workers))
 	}
+	// And it is on the record as work this factory holds, which is what an interruption is resumed
+	// from: the claim stands on the remote whether or not the update it was cut off in ever finished.
+	if record["holding"] != true || record["worktree"] == "" {
+		t.Fatalf("the run is recorded as holding=%v in the worktree %q, want held work with the worktree of its claim",
+			record["holding"], record["worktree"])
+	}
+
+	// The next start resumes it once, in that same worktree, the way any interruption is resumed.
+	gh.updatesAnswerAgain(t)
+	again := gh.work(t, config{"poll": "50ms", "deadline": "90s", "data_dir": data,
+		"listen": freeAddress(t), "repositories": []string{"acme/edge-sensors"}})
+	resumed := again.ended(t, 2)
+	if resumed.Outcome != "ready" || resumed.Signal != "interruption" {
+		t.Fatalf("the run after the restart ended as %q on the signal %q, want a resume of the interruption; the factory's log:\n%s",
+			resumed.Outcome, resumed.Signal, again.output(t))
+	}
+	if resumed.Worktree != record["worktree"] {
+		t.Errorf("the resumed run ran in %q, want the worktree %q of the claim the stop cut off", resumed.Worktree, record["worktree"])
+	}
 }
 
 func TestAVersionThatCannotBeReadIsAWarningAndNoVersionOnTheRecord(t *testing.T) {

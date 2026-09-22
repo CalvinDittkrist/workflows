@@ -677,6 +677,18 @@ func (g *ghShim) updatesHang(t *testing.T) {
 	g.env = append(g.env, "CLAUDE_SHIM_PLUGIN_HANG=300")
 }
 
+// updatesAnswerAgain takes that hang off, so the next factory started from this shim is answered.
+func (g *ghShim) updatesAnswerAgain(t *testing.T) {
+	t.Helper()
+	answering := g.env[:0]
+	for _, entry := range g.env {
+		if !strings.HasPrefix(entry, "CLAUDE_SHIM_PLUGIN_HANG=") {
+			answering = append(answering, entry)
+		}
+	}
+	g.env = answering
+}
+
 // updatesFail makes every plugin update of the claude shim fail with that sentence, as a host whose
 // line is down meets it. What is installed can still be read, which is the state such a run uses.
 func (g *ghShim) updatesFail(t *testing.T, said string) {
