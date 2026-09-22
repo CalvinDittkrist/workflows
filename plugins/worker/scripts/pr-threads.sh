@@ -7,7 +7,9 @@
 # threads alone answers it with nothing. What one reviewer says is their latest review that states
 # anything — GitHub leaves an older entry in the list with the state it was submitted with, so an
 # objection its author later approved away is not one that still stands, and a review that only
-# commented states nothing and leaves the one before it standing.
+# commented states nothing and leaves the one before it standing. That fold below is the rule; the
+# states argument of the query is what keeps the window from being spent on reviews that state
+# nothing, which a bot that comments on every push posts by the dozen.
 # Usage: pr-threads.sh [<pr>]
 set -uo pipefail
 . "$(dirname "$0")/lib.sh"
@@ -16,7 +18,8 @@ pr="${1:-}"; pr="${pr#\#}"; [ -n "$pr" ] || pr=$(wf_pr_for_branch)
 [ -n "$pr" ] || wf_die "no open PR for branch $(wf_branch)"
 gh api graphql -F o="$(wf_repo_owner)" -F r="$(wf_repo_name)" -F n="$pr" -f query='
 query($o:String!,$r:String!,$n:Int!){ repository(owner:$o,name:$r){ pullRequest(number:$n){
-  reviews(last:50){ nodes{ state body submittedAt author{login} } }
+  reviews(last:100, states:[APPROVED, CHANGES_REQUESTED, DISMISSED]){
+    nodes{ state body submittedAt author{login} } }
   reviewThreads(first:100){ nodes{ id isResolved isOutdated path line
     comments(first:20){ nodes{ author{login} body createdAt } } } } } } }' \
 | jq -r '.data.repository.pullRequest as $pr
