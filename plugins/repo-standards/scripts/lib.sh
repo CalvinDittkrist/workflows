@@ -11,15 +11,36 @@ first_of() { local dir=$1 n; shift; for n in "$@"; do has "$dir" "$n" && { print
 # shellcheck disable=SC2034 # used by the scripts that source this file
 WF_CATEGORIES="files agent-config docs tests-ci workspace security"
 # The categories scaffold.sh has templates for. Approving one of them creates every baseline file of it that
-# is missing, whether a finding lists it or not, so the report says so (ADR 0016). Keep it in step with the
-# `put` calls in scaffold.sh; a test scaffolds each category on its own, with every other one skipped, and
-# expects files from exactly these.
+# is missing, whether a finding lists it or not, so the report says so and asks about every one of them
+# (ADR 0035). Keep it in step with the `put` calls in scaffold.sh; a test scaffolds each category on its own,
+# with every other one skipped, and expects files from exactly these.
 # shellcheck disable=SC2034
 WF_SCAFFOLD_CATEGORIES="agent-config docs tests-ci workspace"
 state_dir() {
   local d
   d=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || { printf 'error: not inside a git repository; run git init first\n' >&2; return 1; }
   printf '%s/standardize' "$d"
+}
+# in_list <value> <space separated list>: the list holds exactly this value. Compared word by word, so a value
+# that is several words, or that carries a glob character, is not a member of anything.
+in_list() { local x; for x in $2; do if [ "$x" = "$1" ]; then return 0; fi; done; return 1; }
+# scaffolded <category>: scaffold.sh has templates for it.
+scaffolded() { in_list "$1" "$WF_SCAFFOLD_CATEGORIES"; }
+# has_findings <category> [<action>]: the last report has a finding for it, of that action when one is named.
+# One process, because a pipeline into `grep -q` reports the SIGPIPE of its first half under `set -o pipefail`.
+has_findings() {
+  awk -F'\t' -v c="$1" -v a="${2-}" '$1 == c && (a == "" || $3 == a) { found = 1; exit }
+    END { exit !found }' "$(state_dir)/findings" 2>/dev/null
+}
+# answerable: the categories the report asks about and approve.sh answers, in report order: every category with
+# a finding, plus every scaffolded one, because the apply phase creates its missing baseline files whether a
+# finding lists them or not (ADR 0035). One source for the report and the answer, so the two cannot drift.
+answerable() {
+  local c out=""
+  for c in $WF_CATEGORIES; do
+    if has_findings "$c" || scaffolded "$c"; then out="$out${out:+ }$c"; fi
+  done
+  printf '%s' "$out"
 }
 
 # workspace_settings: reads workspace.sh output on stdin and prints the setting of each `diff:` line, one per
@@ -85,16 +106,20 @@ label_json() {
     jq -cn --arg n "$name" --arg c "$color" --arg d "$desc" '{name: $n, color: $c, description: $d}'; }
 }
 
-# decisions: the recorded answer per category of the last report, `<category>\t<approve|reject>`. Fails while
-# the audit has not run or a category is still pending, so nothing is applied that was not answered.
+# decisions: the recorded answer per answerable category of the last report, `<category>\t<approve|reject>`.
+# Fails while the audit has not run or a category with findings is still pending, so no finding is applied that
+# was not answered. A scaffolded category without findings is left out while it is unanswered: the apply phase
+# then scaffolds it as it always has, and only a rejection takes it out (ADR 0035).
 decisions() {
-  local dir cats c v out=""
+  local dir c v out=""
   dir=$(state_dir) || return 1
   [ -f "$dir/findings" ] || { printf 'error: no findings recorded; run /repo-standards:standardize first\n' >&2; return 1; }
-  cats=$(cut -f1 "$dir/findings" | awk '!seen[$0]++')
-  for c in $cats; do
+  for c in $(answerable); do
     v=$(awk -F'\t' -v c="$c" '$1 == c { v = $2 } END { print v }' "$dir/approvals" 2>/dev/null)
-    [ -n "$v" ] || { printf 'error: %s is still pending; record it with approve.sh %s=approve|reject\n' "$c" "$c" >&2; return 1; }
+    if [ -z "$v" ]; then
+      has_findings "$c" || continue
+      printf 'error: %s is still pending; record it with approve.sh %s=approve|reject\n' "$c" "$c" >&2; return 1
+    fi
     out="$out$c"$'\t'"$v"$'\n'
   done
   printf '%s' "$out"
