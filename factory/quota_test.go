@@ -104,6 +104,7 @@ func (f *factory) waitsForQuota(t *testing.T) time.Time {
 // the agent's frontmatter: a worker moved to another model would otherwise be checked against the
 // quota of one it no longer spends.
 func TestTheWorkerModelAgreesWithTheWorkerAgent(t *testing.T) {
+	t.Parallel()
 	agent := readFile(t, abs(t, filepath.Join("..", "plugins", "worker", "agents", "worker.md")))
 	frontmatter, _, _ := strings.Cut(strings.TrimPrefix(agent, "---\n"), "\n---")
 	found := regexp.MustCompile(`(?m)^model:\s*(\S+)\s*$`).FindStringSubmatch(frontmatter)
@@ -119,6 +120,7 @@ func TestTheWorkerModelAgreesWithTheWorkerAgent(t *testing.T) {
 // the all-models scope and the scope of the worker's model; a scope of another model that is nearly
 // used up is none of this run's business.
 func TestARunStartsWhenEnoughQuotaIsLeft(t *testing.T) {
+	t.Parallel()
 	q := newQuotaShim(t, "all=80 opus=40 sonnet=3 reset=+3600")
 	f, _ := claimsWithQuota(t, q, config{})
 	run := f.ended(t, 1)
@@ -147,6 +149,7 @@ func TestARunStartsWhenEnoughQuotaIsLeft(t *testing.T) {
 // and after that reset the check runs again and the run starts. The worker runs on the model
 // worker_args names, so that model's scope is the one read — here the one that is short.
 func TestTooLittleQuotaWaitsForTheResetAndStartsAfterIt(t *testing.T) {
+	t.Parallel()
 	q := newQuotaShim(t, "all=80 opus=90 sonnet=11 reset=+3", "all=80 opus=90 sonnet=60 reset=+3600")
 	f, gh := claimsWithQuota(t, q, config{"worker_args": []string{"--model", "claude-sonnet-4-5"}})
 	until := f.waitsForQuota(t)
@@ -193,6 +196,7 @@ func TestTooLittleQuotaWaitsForTheResetAndStartsAfterIt(t *testing.T) {
 // factory waited leaves nothing to check for, and the interface still says the factory runs again
 // rather than showing a wait for a moment that has passed.
 func TestAQuotaWaitEndsAtTheResetWhenTheLineIsEmpty(t *testing.T) {
+	t.Parallel()
 	q := newQuotaShim(t, "all=80 opus=5 reset=+3")
 	f, gh := claimsWithQuota(t, q, config{})
 	until := f.waitsForQuota(t)
@@ -219,6 +223,7 @@ func TestAQuotaWaitEndsAtTheResetWhenTheLineIsEmpty(t *testing.T) {
 //
 // [ADR 0028]: ../docs/adr/0028-the-quota-check-is-a-courtesy-not-a-guard.md
 func TestARunStartsWithAWarningWhenTheQuotaCheckFails(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		name, plan, path, said string
 	}{
@@ -253,6 +258,7 @@ func TestARunStartsWithAWarningWhenTheQuotaCheckFails(t *testing.T) {
 // that worktree by itself — the resume is the quota's, so the one after an interruption is still
 // there (TestTheAutomaticResumeIsOnePerIssueAndOnlyAReleaseGivesItBack).
 func TestARunThatRanOutOfQuotaIsResumedAfterTheReset(t *testing.T) {
+	t.Parallel()
 	q := newQuotaShim(t, "all=80 opus=60 reset=+3600", "all=0 opus=0 reset=+3", "all=100 opus=100 reset=+3600")
 	f, gh := claimsWithQuota(t, q, config{}, "CLAUDE_SHIM_FAIL=API Error: Claude usage limit reached")
 	first := f.ended(t, 1)

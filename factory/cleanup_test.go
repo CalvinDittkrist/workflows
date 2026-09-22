@@ -25,6 +25,7 @@ const claimedWorktree = "feat-104-retry-the-upload-when-the-broker-drops"
 // progress: the worker's process group goes, the run is recorded cancelled, and the issue is given
 // back — pushed first, and with the branch on the remote kept exactly as long as it carries a commit.
 func TestARunIsCancelledWhenTheRoutingLabelIsTakenOffItsIssue(t *testing.T) {
+	t.Parallel()
 	for _, one := range []struct {
 		name        string
 		commit      string
@@ -127,6 +128,7 @@ func TestARunIsCancelledWhenTheRoutingLabelIsTakenOffItsIssue(t *testing.T) {
 // person from then on — and a branch that carries commits stays on the remote whatever the decision
 // was.
 func TestAnIdleHeldIssueIsLetGoOnTheDecisionGitHubCarries(t *testing.T) {
+	t.Parallel()
 	for _, one := range []struct {
 		name            string
 		blocked         bool // the run reports blocked, so the issue never reached a pull request
@@ -230,6 +232,7 @@ func TestAnIdleHeldIssueIsLetGoOnTheDecisionGitHubCarries(t *testing.T) {
 // worktree stays where it is, the issue keeps its assignee, and the run carries the warning that
 // says what a person has to look at. The alternative is a directory of commits nobody else has.
 func TestAWorktreeWhoseCommitsCannotBePushedStaysAndTheRunWarns(t *testing.T) {
+	t.Parallel()
 	gh := newGhShim(t)
 	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
 	gh.loggedInAs(t, "factory-bot")
@@ -288,6 +291,7 @@ func TestAWorktreeWhoseCommitsCannotBePushedStaysAndTheRunWarns(t *testing.T) {
 // that finds that branch on the remote takes it back and makes the worktree from it, and a run that
 // does not is a first run and claims the issue anew.
 func TestAnIssueRoutedAgainAfterItWasLetGoIsTakenBackOnItsBranch(t *testing.T) {
+	t.Parallel()
 	for _, one := range []struct {
 		name      string
 		commit    string
@@ -373,6 +377,7 @@ func TestAnIssueRoutedAgainAfterItWasLetGoIsTakenBackOnItsBranch(t *testing.T) {
 // yet, so the closed one of the run before it must not reach it: a factory that carries that URL
 // over cancels the new run on its first poll and hands the issue straight back, over and over.
 func TestARoutedIssueIsNotCancelledByThePullRequestOfTheRunBeforeIt(t *testing.T) {
+	t.Parallel()
 	gh := newGhShim(t)
 	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
 	gh.loggedInAs(t, "factory-bot")
@@ -429,6 +434,7 @@ func TestARoutedIssueIsNotCancelledByThePullRequestOfTheRunBeforeIt(t *testing.T
 //
 // [ADR 0026]: ../docs/adr/0026-the-factory-never-deletes-work-on-its-own.md
 func TestAHeldIssueThatCannotBeReadIsKeptAndSaidOnce(t *testing.T) {
+	t.Parallel()
 	gh := newGhShim(t)
 	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
 	gh.loggedInAs(t, "factory-bot")
@@ -497,6 +503,7 @@ func TestAHeldIssueThatCannotBeReadIsKeptAndSaidOnce(t *testing.T) {
 //
 // [ADR 0026]: ../docs/adr/0026-the-factory-never-deletes-work-on-its-own.md
 func TestAWorktreeRemovedByHandStillHasItsBranchPushedBeforeThatBranchGoes(t *testing.T) {
+	t.Parallel()
 	gh := newGhShim(t)
 	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
 	gh.loggedInAs(t, "factory-bot")
@@ -507,7 +514,8 @@ func TestAWorktreeRemovedByHandStillHasItsBranchPushedBeforeThatBranchGoes(t *te
 
 	data := filepath.Join(t.TempDir(), "data")
 	clone := gh.cloneInto(t, data, "acme/edge-sensors")
-	f := gh.work(t, config{"poll": "50ms", "deadline": "90s", "data_dir": data,
+	const poll = 50 * time.Millisecond
+	f := gh.work(t, config{"poll": poll.String(), "deadline": "90s", "data_dir": data,
 		"repositories": []string{"acme/edge-sensors"}})
 	if run := f.ended(t, 1); !run.Holding {
 		t.Fatalf("run 1 ended as %q (%s) holding=%v, want a run that holds the issue; the factory's log:\n%s",
@@ -540,6 +548,7 @@ func TestAWorktreeRemovedByHandStillHasItsBranchPushedBeforeThatBranchGoes(t *te
 // it a lost run, and lost or not the gesture is spent — or the factory would take the issue back on
 // every poll for as long as the label stays on it.
 func TestARoutingAnsweredByARunIsNotTakenUpAgain(t *testing.T) {
+	t.Parallel()
 	gh := newGhShim(t)
 	gh.remote(t, "acme/edge-sensors")
 	now := time.Now().UTC()
@@ -577,6 +586,7 @@ func TestARoutingAnsweredByARunIsNotTakenUpAgain(t *testing.T) {
 // nobody has touched. What that costs is the few minutes such an issue may wait, and the decision
 // made on it is still heard and acted on.
 func TestAnIdleHeldIssueIsAskedAboutFarMoreRarelyThanThePoll(t *testing.T) {
+	t.Parallel()
 	gh := newGhShim(t)
 	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
 	gh.loggedInAs(t, "factory-bot")
@@ -587,7 +597,8 @@ func TestAnIdleHeldIssueIsAskedAboutFarMoreRarelyThanThePoll(t *testing.T) {
 
 	data := filepath.Join(t.TempDir(), "data")
 	clone := gh.cloneInto(t, data, "acme/edge-sensors")
-	f := gh.work(t, config{"poll": "50ms", "deadline": "90s", "data_dir": data,
+	const poll = 50 * time.Millisecond
+	f := gh.work(t, config{"poll": poll.String(), "deadline": "90s", "data_dir": data,
 		"repositories": []string{"acme/edge-sensors"}})
 	if run := f.ended(t, 1); !run.Holding {
 		t.Fatalf("run 1 ended as %q (%s) holding=%v, want a run that holds the issue; the factory's log:\n%s",
@@ -596,17 +607,20 @@ func TestAnIdleHeldIssueIsAskedAboutFarMoreRarelyThanThePoll(t *testing.T) {
 	committed(t, f, filepath.Join(clone, ".claude", "worktrees", claimedWorktree), "worked.md")
 
 	// The line is read once a poll, so what the shim logged of it is how often this factory polled.
+	// The pause between two questions about the issue is heldPolls poll intervals of wall time, and a
+	// poll takes its own work on top of its interval, so the bound is the time the window took: on a
+	// loaded machine the window of polls is longer and fits more questions.
 	line := "api " + issuesRequest("acme/edge-sensors", "factory")
 	held := fmt.Sprintf("api repos/acme/edge-sensors/issues/%d", claimedIssue)
 	const window = 30
-	polled, asked := gh.made(t, line), gh.made(t, held)
+	polled, asked, from := gh.made(t, line), gh.made(t, held), time.Now()
 	f.eventually(t, 60*time.Second, fmt.Sprintf("%d more polls of the line", window), func() bool {
 		return gh.made(t, line)-polled >= window
 	})
-	polls, reads := gh.made(t, line)-polled, gh.made(t, held)-asked
-	if want := polls/heldPolls + 2; reads > want {
-		t.Errorf("the factory asked GitHub about the issue it holds %d times over %d polls, want at most %d: an issue that only waits to be cleaned up is asked about every %dth poll",
-			reads, polls, want, heldPolls)
+	polls, reads, took := gh.made(t, line)-polled, gh.made(t, held)-asked, time.Since(from)
+	if want := int(took/(heldPolls*poll)) + 2; reads > want {
+		t.Errorf("the factory asked GitHub about the issue it holds %d times over %d polls in %s, want at most %d: an issue that only waits to be cleaned up is asked about once every %d poll intervals",
+			reads, polls, took, want, heldPolls)
 	}
 
 	// And rarely is often enough: the decision made on it is read and acted on all the same.
@@ -627,6 +641,7 @@ func TestAnIdleHeldIssueIsAskedAboutFarMoreRarelyThanThePoll(t *testing.T) {
 //
 // [ADR 0026]: ../docs/adr/0026-the-factory-never-deletes-work-on-its-own.md
 func TestAWorktreeWhoseHeadIsBehindItsBranchStillHasEveryCommitPushed(t *testing.T) {
+	t.Parallel()
 	gh := newGhShim(t)
 	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
 	gh.loggedInAs(t, "factory-bot")
@@ -693,6 +708,7 @@ func TestAWorktreeWhoseHeadIsBehindItsBranchStillHasEveryCommitPushed(t *testing
 // free. Every step before it can be made again, so the handover stops where it is and a later poll
 // takes it the rest of the way.
 func TestAnIssueIsNotLetGoWhileThisHostIsStillItsAssignee(t *testing.T) {
+	t.Parallel()
 	gh := newGhShim(t)
 	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
 	gh.loggedInAs(t, "factory-bot")
@@ -764,6 +780,7 @@ func TestAnIssueIsNotLetGoWhileThisHostIsStillItsAssignee(t *testing.T) {
 // branch of that name with nothing on it is somebody else's claim and this issue is claimed anew:
 // GitHub refuses the second creation of the reference, and this run is recorded as lost.
 func TestABranchOfTheIssuesNameThatCarriesNoWorkIsNotTakenBack(t *testing.T) {
+	t.Parallel()
 	gh := newGhShim(t)
 	gh.remote(t, "acme/edge-sensors")
 	gh.loggedInAs(t, "factory-bot")
@@ -817,6 +834,7 @@ func TestABranchOfTheIssuesNameThatCarriesNoWorkIsNotTakenBack(t *testing.T) {
 // that reads what a stranger wrote in an issue: a report that names another pull request of the
 // repository must not hand this issue's work to whoever closes that one.
 func TestAPullRequestOfAnotherBranchIsNoDecisionAboutTheIssue(t *testing.T) {
+	t.Parallel()
 	gh := newGhShim(t)
 	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
 	gh.loggedInAs(t, "factory-bot")
@@ -865,6 +883,7 @@ func TestAPullRequestOfAnotherBranchIsNoDecisionAboutTheIssue(t *testing.T) {
 // first. What that reading carries for it is a cancel, which has to reach a worker while it is still
 // working; an issue that only waits to be cleaned up can be read after it, or by the next poll.
 func TestTheIssueOfARunningWorkerIsReadBeforeTheIssuesThatOnlyWait(t *testing.T) {
+	t.Parallel()
 	const (
 		waitingIssue = 101 // held, idle, and sorted before the issue being worked
 		waitingTitle = "Widen the retry window"

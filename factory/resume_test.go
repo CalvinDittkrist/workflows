@@ -21,6 +21,7 @@ import (
 //
 // [ADR 0026]: ../docs/adr/0026-the-factory-never-deletes-work-on-its-own.md
 func TestAReleasedIssueIsAssignedAgainAndResumedInTheSameWorktree(t *testing.T) {
+	t.Parallel()
 	gh := newGhShim(t)
 	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
 	gh.loggedInAs(t, "factory-bot")
@@ -111,6 +112,7 @@ func TestAReleasedIssueIsAssignedAgainAndResumedInTheSameWorktree(t *testing.T) 
 // The records are written into the data directory the factory then starts on, which is the restart
 // path itself: a factory that was stopped knows what it holds from those files alone.
 func TestTheLineResumesWhatTheFactoryHoldsBeforeItClaimsAnythingNew(t *testing.T) {
+	t.Parallel()
 	gh := newGhShim(t)
 	gh.remote(t, "acme/edge-sensors")
 	gh.loggedInAs(t, "factory-bot")
@@ -176,6 +178,7 @@ func TestTheLineResumesWhatTheFactoryHoldsBeforeItClaimsAnythingNew(t *testing.T
 //
 // [ADR 0026]: ../docs/adr/0026-the-factory-never-deletes-work-on-its-own.md
 func TestAReleaseThatWasCutOffBeforeTheTakeBackIsStillAnswered(t *testing.T) {
+	t.Parallel()
 	gh := newGhShim(t)
 	gh.remote(t, "acme/edge-sensors")
 	gh.loggedInAs(t, "factory-bot")
@@ -217,6 +220,7 @@ func TestAReleaseThatWasCutOffBeforeTheTakeBackIsStillAnswered(t *testing.T) {
 // written, and a factory that told the two apart would drop that work out of its line and claim its
 // issues anew against the branches it owns itself.
 func TestHeldWorkStaysInTheLineWhenTheConfigurationRespellsTheRepository(t *testing.T) {
+	t.Parallel()
 	const respelled, next = "Acme/Edge-Sensors", 121
 	gh := newGhShim(t)
 	gh.remote(t, respelled)
@@ -254,6 +258,7 @@ func TestHeldWorkStaysInTheLineWhenTheConfigurationRespellsTheRepository(t *test
 //
 // [ADR 0026]: ../docs/adr/0026-the-factory-never-deletes-work-on-its-own.md
 func TestAResumeWithNothingLeftOfItsWorkFailsAndSpendsTheResumeOnThatIssueAlone(t *testing.T) {
+	t.Parallel()
 	const next, nextTitle = 121, "Document the calibration procedure"
 	gh := newGhShim(t)
 	gh.remote(t, "acme/edge-sensors")
@@ -321,6 +326,7 @@ func TestAResumeWithNothingLeftOfItsWorkFailsAndSpendsTheResumeOnThatIssueAlone(
 //
 // [ADR 0026]: ../docs/adr/0026-the-factory-never-deletes-work-on-its-own.md
 func TestAResumeWhoseWorktreeIsGoneIsMadeAgainFromTheBranch(t *testing.T) {
+	t.Parallel()
 	gh := newGhShim(t)
 	gh.remote(t, "acme/edge-sensors")
 	gh.loggedInAs(t, "factory-bot")
@@ -369,6 +375,7 @@ func TestAResumeWhoseWorktreeIsGoneIsMadeAgainFromTheBranch(t *testing.T) {
 // and the remote may have moved on since; a worker put on the old name would work on commits the
 // remote is past and could never push what it wrote on them.
 func TestAWorktreeMadeAgainMovesALocalBranchBehindTheRemoteUpToIt(t *testing.T) {
+	t.Parallel()
 	gh := newGhShim(t)
 	gh.remote(t, "acme/edge-sensors")
 	gh.loggedInAs(t, "factory-bot")
@@ -413,6 +420,7 @@ func TestAWorktreeMadeAgainMovesALocalBranchBehindTheRemoteUpToIt(t *testing.T) 
 // here, from the records a restart reads it from, and the two signals are driven end to end above
 // and in TestAnInterruptedIssueIsResumedOnceByItselfAndASecondInterruptionWaitsForAPerson.
 func TestTheAutomaticResumeIsOnePerIssueAndOnlyAReleaseGivesItBack(t *testing.T) {
+	t.Parallel()
 	ended := time.Now().UTC()
 	run := func(id int, signal, outcome string, holding bool) Run {
 		return record(id, 104, "Retry the upload", signal, outcome, holding, ended.Add(-time.Hour), ended)
@@ -501,6 +509,7 @@ func TestTheAutomaticResumeIsOnePerIssueAndOnlyAReleaseGivesItBack(t *testing.T)
 // rule that decides whether a given poll is a release at all — above all that a release is answered
 // once, because the poll that queued it repeats for as long as the re-assignment takes to land.
 func TestAReleaseIsTheRemovedAssigneeOfAHeldIssueAndIsAnsweredOnce(t *testing.T) {
+	t.Parallel()
 	began := time.Now().UTC().Add(-time.Hour)
 	ended := began.Add(30 * time.Minute)
 	removed := began.Add(45 * time.Minute) // after the run that held the issue, so it is a release

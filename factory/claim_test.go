@@ -27,6 +27,7 @@ const (
 )
 
 func TestAClaimCutsTheBranchFromTheFreshlyFetchedBaseAndRunsTheWorkerInItsWorktree(t *testing.T) {
+	t.Parallel()
 	gh := newGhShim(t)
 	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
 	gh.loggedInAs(t, "factory-bot")
@@ -142,6 +143,7 @@ func TestAClaimCutsTheBranchFromTheFreshlyFetchedBaseAndRunsTheWorkerInItsWorktr
 // where the branch is cut, and the worker is told the same base, because the pipeline inside the
 // worktree asks for it again — for the range its reviewers read and for the pull request it opens.
 func TestAClaimOfARepositoryWithItsOwnBaseCutsAndWorksFromThatBase(t *testing.T) {
+	t.Parallel()
 	gh := newGhShim(t)
 	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
 	gh.loggedInAs(t, "factory-bot")
@@ -181,6 +183,7 @@ func TestAClaimOfARepositoryWithItsOwnBaseCutsAndWorksFromThatBase(t *testing.T)
 // says now — the clone's working tree is the day it was written and is never checked out again — so
 // the branch is cut from the base the repository names today and the worker is told that base.
 func TestAClaimReadsTheBaseTheRepositoryDeclaresNowAndNotTheOneItsCloneWasWrittenWith(t *testing.T) {
+	t.Parallel()
 	gh := newGhShim(t)
 	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
 	gh.loggedInAs(t, "factory-bot")
@@ -224,6 +227,7 @@ func TestAClaimReadsTheBaseTheRepositoryDeclaresNowAndNotTheOneItsCloneWasWritte
 // base the remote points at now, and a repository whose old default is gone is still a repository
 // this factory works.
 func TestAClaimFollowsTheRemoteWhenItMovesItsDefaultBranch(t *testing.T) {
+	t.Parallel()
 	gh := newGhShim(t)
 	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
 	gh.loggedInAs(t, "factory-bot")
@@ -268,6 +272,7 @@ func TestAClaimFollowsTheRemoteWhenItMovesItsDefaultBranch(t *testing.T) {
 //
 // [ADR 0026]: ../docs/adr/0026-the-factory-never-deletes-work-on-its-own.md
 func TestAClaimThatFailsAfterTheBranchWasCreatedSaysWhatItLeftBehind(t *testing.T) {
+	t.Parallel()
 	gh := newGhShim(t)
 	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
 	gh.loggedInAs(t, "factory-bot")
@@ -302,6 +307,7 @@ func TestAClaimThatFailsAfterTheBranchWasCreatedSaysWhatItLeftBehind(t *testing.
 // reading it knows there is no branch to remove, and the failure is never read as a lost race — an
 // issue nobody claimed would otherwise be given away by a factory that could not reach GitHub.
 func TestAClaimThatFailsBeforeTheBranchExistsSaysNothingWasClaimed(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		name     string
 		failing  string
@@ -351,6 +357,7 @@ func TestAClaimThatFailsBeforeTheBranchExistsSaysNothingWasClaimed(t *testing.T)
 //
 // [ADR 0026]: ../docs/adr/0026-the-factory-never-deletes-work-on-its-own.md
 func TestARepositoryWhoseClaimTouchedNothingIsHeldInsteadOfSpendingItsLine(t *testing.T) {
+	t.Parallel()
 	gh := newGhShim(t)
 	now := time.Now().UTC()
 	gh.remote(t, "acme/edge-sensors")
@@ -393,6 +400,7 @@ func TestARepositoryWhoseClaimTouchedNothingIsHeldInsteadOfSpendingItsLine(t *te
 // keeps its place instead — a host that could not reach one repository when it started would
 // otherwise spend that repository's whole line on runs that never touched GitHub.
 func TestAnIssueOfARepositoryWithoutACloneKeepsItsPlaceInTheLine(t *testing.T) {
+	t.Parallel()
 	gh := newGhShim(t)
 	now := time.Now().UTC()
 	gh.remote(t, "acme/edge-sensors")
@@ -442,6 +450,7 @@ func TestAnIssueOfARepositoryWithoutACloneKeepsItsPlaceInTheLine(t *testing.T) {
 // the claim itself was won, so the branch stays on the remote and the operator reads why the session
 // ended where it did.
 func TestAWorkerThatEndsInAnErrorFailsTheRunWithWhatItSaid(t *testing.T) {
+	t.Parallel()
 	gh := newGhShim(t)
 	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
 	gh.loggedInAs(t, "factory-bot")
@@ -470,6 +479,7 @@ func TestAWorkerThatEndsInAnErrorFailsTheRunWithWhatItSaid(t *testing.T) {
 //
 // [ADR 0024]: ../docs/adr/0024-a-claim-is-the-creation-of-the-branch-through-the-api.md
 func TestAClaimAnotherClaimerWonIsRecordedAsLostAndTouchesNothingElse(t *testing.T) {
+	t.Parallel()
 	gh := newGhShim(t)
 	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
 	gh.loggedInAs(t, "factory-bot")
@@ -539,6 +549,7 @@ func TestAClaimAnotherClaimerWonIsRecordedAsLostAndTouchesNothingElse(t *testing
 // would otherwise give the two claimers two branch names, and GitHub, which refuses the second
 // creation of one reference and knows nothing of issues, would answer both of them 201.
 func TestAClaimerThatMeetsABranchOfTheIssueUnderAnotherTitleHasLost(t *testing.T) {
+	t.Parallel()
 	gh := newGhShim(t)
 	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
 	gh.loggedInAs(t, "factory-bot")
@@ -584,6 +595,7 @@ func TestAClaimerThatMeetsABranchOfTheIssueUnderAnotherTitleHasLost(t *testing.T
 //
 // [ADR 0026]: ../docs/adr/0026-the-factory-never-deletes-work-on-its-own.md
 func TestTheRunNamesTheBranchAsSoonAsTheRemoteHasIt(t *testing.T) {
+	t.Parallel()
 	gh := newGhShim(t)
 	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
 	gh.loggedInAs(t, "factory-bot")
@@ -621,6 +633,7 @@ func TestTheRunNamesTheBranchAsSoonAsTheRemoteHasIt(t *testing.T) {
 // that creates the branch and lets them through together, so the race is run rather than described.
 // Exactly one of them may own the issue.
 func TestTwoClaimersRacingForOneIssueLeaveExactlyOneWinner(t *testing.T) {
+	t.Parallel()
 	gh := newGhShim(t)
 	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
 	gh.loggedInAs(t, "factory-bot")
@@ -671,6 +684,7 @@ func TestTwoClaimersRacingForOneIssueLeaveExactlyOneWinner(t *testing.T) {
 //
 // [ADR 0027]: ../docs/adr/0027-the-factorys-isolation-boundary-is-the-host.md
 func TestTheWorkerRunsWithNoHerdrAndNoWorkflowVariableOfTheFactorysOwnEnvironment(t *testing.T) {
+	t.Parallel()
 	gh := newGhShim(t)
 	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
 	gh.loggedInAs(t, "factory-bot")
@@ -706,6 +720,7 @@ func TestTheWorkerRunsWithNoHerdrAndNoWorkflowVariableOfTheFactorysOwnEnvironmen
 // One worker at a time, and the next one starts when the run before it ended rather than at the next
 // poll: a factory that polls once a minute must not leave the line standing for a minute per run.
 func TestTheNextRunStartsWhenTheOneBeforeItEndedAndNeverBesideIt(t *testing.T) {
+	t.Parallel()
 	gh := newGhShim(t)
 	now := time.Now().UTC()
 	gh.remote(t, "acme/edge-sensors")
@@ -747,6 +762,7 @@ func TestTheNextRunStartsWhenTheOneBeforeItEndedAndNeverBesideIt(t *testing.T) {
 //
 // [ADR 0022]: ../docs/adr/0022-the-factory-is-a-second-driver-over-the-worker-pipeline.md
 func TestTheBranchNameAgreesWithTheOrchestratorsShell(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		name  string
 		issue Issue
@@ -783,6 +799,7 @@ func TestTheBranchNameAgreesWithTheOrchestratorsShell(t *testing.T) {
 //
 // [ADR 0022]: ../docs/adr/0022-the-factory-is-a-second-driver-over-the-worker-pipeline.md
 func TestTheBaseBranchRuleAgreesWithTheOrchestratorsShell(t *testing.T) {
+	// Serial: inProcess sets this process's PATH, GH_SHIM_* and GIT_CONFIG_* to reach the shim.
 	for _, c := range []struct {
 		name string
 		// The explicit setting, as each side is given it: WF_BASE_BRANCH for the shell, and for the
@@ -837,6 +854,7 @@ func TestTheBaseBranchRuleAgreesWithTheOrchestratorsShell(t *testing.T) {
 // file that names no branch name is read as if the repository had said nothing, because the value
 // reaches a ref and a command line.
 func TestTheConfiguredBaseWinsOverWhatARepositoryDeclaresAndAnUnusableDeclarationIsNone(t *testing.T) {
+	// Serial: inProcess sets this process's PATH, GH_SHIM_* and GIT_CONFIG_* to reach the shim.
 	gh := newGhShim(t)
 	gh.remote(t, "acme/edge-sensors")
 	clone := gh.cloneInto(t, t.TempDir(), "acme/edge-sensors")
@@ -868,6 +886,7 @@ func TestTheConfiguredBaseWinsOverWhatARepositoryDeclaresAndAnUnusableDeclaratio
 // [ADR 0031]: ../docs/adr/0031-the-workflow-pins-the-size-at-which-a-worker-session-compacts.md
 // [ADR 0034]: ../docs/adr/0034-the-compact-trigger-is-raised-through-the-window.md
 func TestTheCompactPinAgreesWithTheOrchestratorsClaim(t *testing.T) {
+	t.Parallel()
 	script := readFile(t, abs(t, filepath.Join("..", "plugins", "orchestrator", "scripts", "claim.sh")))
 	pinned := func(name string) string {
 		t.Helper()
@@ -894,6 +913,7 @@ func TestTheCompactPinAgreesWithTheOrchestratorsClaim(t *testing.T) {
 //
 // [ADR 0022]: ../docs/adr/0022-the-factory-is-a-second-driver-over-the-worker-pipeline.md
 func TestTheIssueABranchBelongsToAgreesWithTheOrchestratorsShell(t *testing.T) {
+	t.Parallel()
 	for _, branch := range []string{
 		"feat/104-retry-the-upload-when-the-broker-drops",
 		"feat/104-retry-the-upload", // the same issue under the title it had two polls ago

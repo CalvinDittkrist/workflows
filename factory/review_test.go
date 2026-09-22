@@ -24,6 +24,7 @@ import (
 //
 // [ADR 0023]: ../docs/adr/0023-github-is-the-only-control-surface-of-the-factory.md
 func TestAReviewThatAsksForChangesRunsTheWorkerOnItInTheSameWorktree(t *testing.T) {
+	t.Parallel()
 	gh := newGhShim(t)
 	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
 	gh.loggedInAs(t, "factory-bot")
@@ -146,6 +147,7 @@ func TestAReviewThatAsksForChangesRunsTheWorkerOnItInTheSameWorktree(t *testing.
 //
 // The factory is paused throughout, so what is read is the line alone.
 func TestAReviewQueuesNothingUnlessAWriterAskedForChangesOnTheOpenPullRequest(t *testing.T) {
+	t.Parallel()
 	gh := newGhShim(t)
 	gh.remote(t, "acme/edge-sensors")
 	gh.loggedInAs(t, "factory-bot")
@@ -221,6 +223,7 @@ func TestAReviewQueuesNothingUnlessAWriterAskedForChangesOnTheOpenPullRequest(t 
 // entry behind that asks for nothing any more; a comment after it states nothing and leaves the
 // approval standing. The same maintainer asking again is what says the fixture was sound.
 func TestOnlyTheLatestReviewOfAReviewerAsksForChanges(t *testing.T) {
+	t.Parallel()
 	gh := newGhShim(t)
 	gh.remote(t, "acme/edge-sensors")
 	gh.loggedInAs(t, "factory-bot")
@@ -263,6 +266,7 @@ func TestOnlyTheLatestReviewOfAReviewerAsksForChanges(t *testing.T) {
 // A pull request state the factory does not understand is not read as a closed one: doing so would
 // end the watch of an open pull request for the life of the process, and without a word.
 func TestAPullRequestStateTheFactoryCannotReadKeepsItWatched(t *testing.T) {
+	t.Parallel()
 	gh := newGhShim(t)
 	gh.remote(t, "acme/edge-sensors")
 	gh.loggedInAs(t, "factory-bot")
@@ -298,6 +302,7 @@ func TestAPullRequestStateTheFactoryCannotReadKeepsItWatched(t *testing.T) {
 // Where a follow-up run stands: with the work the factory resumes, before every issue nobody has
 // worked yet, and among that work by the time of its signal.
 func TestAFollowUpRunStandsWithTheResumedWorkBeforeAnyNewIssue(t *testing.T) {
+	t.Parallel()
 	const reviewed, next = 112, 121
 	gh := newGhShim(t)
 	gh.remote(t, "acme/edge-sensors")
@@ -347,6 +352,7 @@ func TestAFollowUpRunStandsWithTheResumedWorkBeforeAnyNewIssue(t *testing.T) {
 // found — above all that a review is answered once, because the poll that queued it repeats for as
 // long as the follow-up run takes to be recorded.
 func TestAReviewIsAnsweredOncePerIssueAndOnlyWhileTheIssueIsIdle(t *testing.T) {
+	t.Parallel()
 	began := time.Now().UTC().Add(-2 * time.Hour)
 	ended := began.Add(30 * time.Minute)
 	requestedAt := ended.Add(5 * time.Minute) // after the run that opened the pull request
@@ -417,6 +423,7 @@ func TestAReviewIsAnsweredOncePerIssueAndOnlyWhileTheIssueIsIdle(t *testing.T) {
 // to is driven end to end above, and what is tested here is the bookkeeping of a log line, which the
 // factory shows nowhere else.
 func TestAnAuthorGitHubCouldNotBeAskedAboutIsWarnedAboutAgainAfterItCould(t *testing.T) {
+	// Serial: it sets this process's PATH to reach its gh and points the package logger at a buffer.
 	const repository, pull, author = "acme/edge-sensors", 104, "maintainer"
 	dir := t.TempDir()
 	reviews, permission := filepath.Join(dir, "reviews.json"), filepath.Join(dir, "permission")
