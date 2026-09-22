@@ -88,6 +88,14 @@ var repository = regexp.MustCompile(`^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$`)
 // that opens with a hyphen, walks out of refs/heads with .. or ends a ref name.
 var branch = regexp.MustCompile(`^[A-Za-z0-9._/-]+$`)
 
+// validBase says whether a name may be used as a base branch. It is asked of the configuration here
+// and of what a repository declares for itself (declaredBase), because both end up in the same ref
+// and the same command line.
+func validBase(name string) bool {
+	return branch.MatchString(name) && !strings.HasPrefix(name, "-") &&
+		!strings.Contains(name, "..") && !strings.HasPrefix(name, "/") && !strings.HasSuffix(name, "/")
+}
+
 // unspecified says whether a host is a spelling of "every interface": 0.0.0.0, ::, ::0, ::ffff:0.0.0.0
 // and the rest of them. A host that is not an IP literal at all is decided after binding, where the
 // address the kernel actually chose is known.
@@ -178,8 +186,7 @@ func Load(path string) (Settings, error) {
 		}
 		// The base branch is given to git as a ref and to gh as an argument, so a name that opens
 		// with a hyphen or walks out of refs/heads is refused here rather than in a command line.
-		if r.Base != "" && (!branch.MatchString(r.Base) || strings.HasPrefix(r.Base, "-") ||
-			strings.Contains(r.Base, "..") || strings.HasPrefix(r.Base, "/") || strings.HasSuffix(r.Base, "/")) {
+		if r.Base != "" && !validBase(r.Base) {
 			return bad("the base branch %q of %s is not a branch name; write it as \"dev\", or leave it out to follow the repository's default branch", r.Base, r.Name)
 		}
 		// GitHub reads owner and name without regard to case, and so does the filesystem of many a

@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -62,11 +63,18 @@ func TestAClaimCutsTheBranchFromTheFreshlyFetchedBaseAndRunsTheWorkerInItsWorktr
 		t.Errorf("the factory made `gh %s` %d times, want once after it won the claim", assigned, made)
 	}
 
-	// The worktree is in this host's clone, under the path the local workflow uses, and it is what the
-	// worker ran in, on the branch the claim created and at the commit it was cut from.
-	worktree := filepath.Join(clone, ".claude", "worktrees", filepath.FromSlash(claimedBranch))
+	// The worktree is in this host's clone, under the path the local workflow uses — .claude/worktrees
+	// and the branch with its slashes turned into hyphens — and it is what the worker ran in, on the
+	// branch the claim created and at the commit it was cut from.
+	worktree := filepath.Join(clone, ".claude", "worktrees", "feat-104-retry-the-upload-when-the-broker-drops")
 	if _, err := os.Stat(filepath.Join(worktree, "README.md")); err != nil {
 		t.Fatalf("the worktree of the claim is not in the clone: %v", err)
+	}
+	// And the clone does not report its own worktrees as untracked, as the local workflow's clone does
+	// not: the same entry in the same file.
+	exclude, err := os.ReadFile(filepath.Join(clone, ".git", "info", "exclude"))
+	if err != nil || !strings.Contains(string(exclude), ".claude/worktrees/") {
+		t.Errorf("the clone does not exclude .claude/worktrees/ (%v): git would report every worktree of it as untracked\n%s", err, exclude)
 	}
 	workers := gh.workers(t)
 	if len(workers) != 1 {
@@ -99,8 +107,26 @@ func TestAClaimCutsTheBranchFromTheFreshlyFetchedBaseAndRunsTheWorkerInItsWorktr
 		}
 	}
 	settings := worker.settings(t)
-	if settings["WF_ISSUE"] != strconv.Itoa(claimedIssue) || settings["WF_MODE"] != "manual" {
-		t.Errorf("the worker's settings carry %v, want the issue number and the manual mode: the factory never merges", settings)
+	if settings.Env["WF_ISSUE"] != strconv.Itoa(claimedIssue) || settings.Env["WF_MODE"] != "manual" {
+		t.Errorf("the worker's settings carry %v, want the issue number and the manual mode: the factory never merges", settings.Env)
+	}
+	// The base the branch was cut from is the base the worker works against: its review range, its
+	// hand-over note and the pull request it opens all ask the pipeline for it.
+	if settings.Env["WF_BASE_BRANCH"] != "main" {
+		t.Errorf("the worker's settings carry WF_BASE_BRANCH=%q, want main, the base the claim cut the branch from", settings.Env["WF_BASE_BRANCH"])
+	}
+	// The planner and the orchestrator are switched off, as a local claim switches them off: an
+	// unattended session carries no /orchestrator:merge.
+	for _, plugin := range []string{"planner@workflows", "orchestrator@workflows"} {
+		if on, named := settings.EnabledPlugins[plugin]; !named || on {
+			t.Errorf("the worker's settings leave %s enabled (%v); a factory session must not carry it", plugin, settings.EnabledPlugins)
+		}
+	}
+	// The compact pin reaches the session, which is the only safety net it has: nothing hands a
+	// factory session over, so it has to compact where the workflow says.
+	if settings.AutoCompactWindow != compactWindow || settings.Env["CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"] != compactPercentage {
+		t.Errorf("the worker compacts at %q%% of %d, want %s%% of %d, the pin the workflow sets",
+			settings.Env["CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"], settings.AutoCompactWindow, compactPercentage, compactWindow)
 	}
 
 	// Its own process group, so that the deadline and the stop reach everything the session starts.
@@ -109,6 +135,80 @@ func TestAClaimCutsTheBranchFromTheFreshlyFetchedBaseAndRunsTheWorkerInItsWorktr
 	}
 	if worker.pgid == f.cmd.Process.Pid {
 		t.Errorf("the worker is in the factory's own process group (%d); ending it would end the factory", worker.pgid)
+	}
+}
+
+// A repository that does not branch off its default branch: the base of the configuration decides
+// where the branch is cut, and the worker is told the same base, because the pipeline inside the
+// worktree asks for it again — for the range its reviewers read and for the pull request it opens.
+func TestAClaimOfARepositoryWithItsOwnBaseCutsAndWorksFromThatBase(t *testing.T) {
+	gh := newGhShim(t)
+	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
+	gh.loggedInAs(t, "factory-bot")
+	gh.assigns(t, "acme/edge-sensors", claimedIssue, "factory-bot")
+	gh.workerReports(t, "acme/edge-sensors", claimedIssue)
+	// dev is a line of its own on the remote, ahead of main, and the clone's origin/HEAD still names
+	// main: nothing but the configuration says dev.
+	gh.branchAt(t, "acme/edge-sensors", "dev", gh.head(t, "acme/edge-sensors", "main"))
+	dev := gh.commitOn(t, "acme/edge-sensors", "dev")
+
+	data := filepath.Join(t.TempDir(), "data")
+	gh.cloneInto(t, data, "acme/edge-sensors")
+	f := gh.work(t, config{"poll": "50ms", "deadline": "90s", "data_dir": data,
+		"repositories": []any{map[string]any{"name": "acme/edge-sensors", "base": "dev"}}})
+	run := f.ended(t, 1)
+
+	if run.Outcome != "ready" {
+		t.Fatalf("the run ended as %q (%s), want ready; the factory's log:\n%s", run.Outcome, run.Reason, f.output(t))
+	}
+	if run.Base != "dev" {
+		t.Errorf("the run records the base %q, want dev, the base its repository is configured with", run.Base)
+	}
+	if head := gh.head(t, "acme/edge-sensors", claimedBranch); head != dev {
+		t.Errorf("%s of the remote is at %q, want the head of dev (%s) and not of main", claimedBranch, head, dev)
+	}
+	workers := gh.workers(t)
+	if len(workers) != 1 {
+		t.Fatalf("the factory started %d workers, want one", len(workers))
+	}
+	if base := workers[0].settings(t).Env["WF_BASE_BRANCH"]; base != "dev" {
+		t.Errorf("the worker's settings carry WF_BASE_BRANCH=%q; it would review against %[1]s a branch cut from dev, and open its pull request against it", base)
+	}
+}
+
+// A claim that fails after the branch was created is the one failure that leaves something on the
+// remote. The run says so, because nothing rolls a claim back ([ADR 0026]) and the operator is the
+// one who decides.
+//
+// [ADR 0026]: ../docs/adr/0026-what-waits-waits-for-a-person.md
+func TestAClaimThatFailsAfterTheBranchWasCreatedSaysWhatItLeftBehind(t *testing.T) {
+	gh := newGhShim(t)
+	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
+	gh.loggedInAs(t, "factory-bot")
+	// No answer for the assignment: the claim wins the branch and fails one step later.
+
+	data := filepath.Join(t.TempDir(), "data")
+	clone := gh.cloneInto(t, data, "acme/edge-sensors")
+	f := gh.work(t, config{"poll": "50ms", "deadline": "90s", "data_dir": data,
+		"repositories": []string{"acme/edge-sensors"}})
+	run := f.ended(t, 1)
+
+	if run.Outcome != "failed" {
+		t.Fatalf("the run ended as %q (%s), want failed; the factory's log:\n%s", run.Outcome, run.Reason, f.output(t))
+	}
+	for _, want := range []string{claimedBranch, "left behind"} {
+		if !strings.Contains(run.Reason, want) {
+			t.Errorf("the run says %q, want %q in it: the branch is on the remote and holds the issue", run.Reason, want)
+		}
+	}
+	if head := gh.head(t, "acme/edge-sensors", claimedBranch); head == "" {
+		t.Errorf("the run says it left %s on the remote, and the branch is not there", claimedBranch)
+	}
+	if len(gh.workers(t)) != 0 {
+		t.Errorf("a claim that failed started a worker: %v", gh.workers(t))
+	}
+	if _, err := os.Stat(filepath.Join(clone, ".claude", "worktrees")); !os.IsNotExist(err) {
+		t.Errorf("a claim that failed made a worktree in %s: %v", clone, err)
 	}
 }
 
@@ -209,16 +309,19 @@ func TestTwoClaimersRacingForOneIssueLeaveExactlyOneWinner(t *testing.T) {
 }
 
 // The factory may be started from a maintainer's terminal, and a worker that inherited HERDR_ENV
-// would act in that person's Herdr session instead of ending blocked ([ADR 0027]).
+// would act in that person's Herdr session instead of ending blocked ([ADR 0027]). A WF_ variable
+// left in that same terminal must not reach it either: the session's settings say what this run is,
+// and WF_MODE=yolo would be a worker that merges what it built.
 //
 // [ADR 0027]: ../docs/adr/0027-the-factorys-isolation-boundary-is-the-host.md
-func TestTheWorkerRunsWithNoHerdrVariableWhateverTheFactoryWasStartedWith(t *testing.T) {
+func TestTheWorkerRunsWithNoHerdrAndNoWorkflowVariableOfTheFactorysOwnEnvironment(t *testing.T) {
 	gh := newGhShim(t)
 	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
 	gh.loggedInAs(t, "factory-bot")
 	gh.assigns(t, "acme/edge-sensors", claimedIssue, "factory-bot")
 	gh.workerReports(t, "acme/edge-sensors", claimedIssue)
-	gh.env = append(gh.env, "HERDR_ENV=1", "HERDR_SESSION_ID=7", "HERDR_PANE_ID=%3")
+	gh.env = append(gh.env, "HERDR_ENV=1", "HERDR_SESSION_ID=7", "HERDR_PANE_ID=%3",
+		"WF_MODE=yolo", "WF_BASE_BRANCH=release", "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=99")
 
 	data := filepath.Join(t.TempDir(), "data")
 	gh.cloneInto(t, data, "acme/edge-sensors")
@@ -233,6 +336,9 @@ func TestTheWorkerRunsWithNoHerdrVariableWhateverTheFactoryWasStartedWith(t *tes
 	for _, name := range workers[0].env {
 		if strings.HasPrefix(name, "HERDR_") {
 			t.Errorf("the worker's environment carries %s; it would act in the maintainer's Herdr session", name)
+		}
+		if strings.HasPrefix(name, "WF_") || name == "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE" {
+			t.Errorf("the worker's environment carries %s; the session's settings are what say what this run is, and nothing else may answer for that name", name)
 		}
 	}
 	// The rest of the environment is the factory's own, so the check above is not passed by an empty one.
@@ -315,19 +421,24 @@ func TestTheBranchNameAgreesWithTheOrchestratorsShell(t *testing.T) {
 
 // The base branch rule is wf_base_branch in the orchestrator's lib.sh: the explicit setting, then the
 // head the remote points at, then the repository's default branch on GitHub, then main. The explicit
-// setting is WF_BASE_BRANCH there and the repository's base in the configuration here; the rest is
-// the same question asked of the same clone ([ADR 0022]).
+// setting is WF_BASE_BRANCH there, which a session is given by the repository's own settings file;
+// the factory reads that file out of the clone and takes the configuration of its host above it. The
+// rest is the same question asked of the same clone ([ADR 0022]).
 //
 // [ADR 0022]: ../docs/adr/0022-the-factory-is-a-second-driver-over-the-worker-pipeline.md
 func TestTheBaseBranchRuleAgreesWithTheOrchestratorsShell(t *testing.T) {
 	for _, c := range []struct {
-		name       string
+		name string
+		// The explicit setting, as each side is given it: WF_BASE_BRANCH for the shell, and for the
+		// factory either the host's configuration or the settings file of the repository's checkout.
 		explicit   string
+		declared   bool
 		originHead string
 		onGitHub   string
 		want       string
 	}{
-		{name: "the explicit setting wins", explicit: "dev", originHead: "trunk", onGitHub: "release", want: "dev"},
+		{name: "the explicit setting of the configuration wins", explicit: "dev", originHead: "trunk", onGitHub: "release", want: "dev"},
+		{name: "the explicit setting of the repository wins", explicit: "dev", declared: true, originHead: "trunk", onGitHub: "release", want: "dev"},
 		{name: "then the head of the remote", originHead: "trunk", onGitHub: "release", want: "trunk"},
 		{name: "then the default branch on GitHub", onGitHub: "release", want: "release"},
 		{name: "and main when nothing answers", want: "main"},
@@ -336,6 +447,11 @@ func TestTheBaseBranchRuleAgreesWithTheOrchestratorsShell(t *testing.T) {
 			gh := newGhShim(t)
 			gh.remote(t, "acme/edge-sensors")
 			clone := gh.cloneInto(t, t.TempDir(), "acme/edge-sensors")
+			configured := c.explicit
+			if c.declared { // the repository says it in its own settings instead
+				configured = ""
+				declaresBase(t, clone, c.explicit)
+			}
 			if c.originHead != "" {
 				gh.git(t, clone, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/"+c.originHead)
 			} else {
@@ -353,10 +469,63 @@ func TestTheBaseBranchRuleAgreesWithTheOrchestratorsShell(t *testing.T) {
 				t.Fatalf("the orchestrator's shell answers %q, want %q: the fixture does not set up the case it means", want, c.want)
 			}
 			inProcess(t, gh)
-			if got := baseBranch(context.Background(), Connected{Name: "acme/edge-sensors", Base: c.explicit}, clone); got != want {
+			if got := baseBranch(context.Background(), Connected{Name: "acme/edge-sensors", Base: configured}, clone); got != want {
 				t.Errorf("the factory branches off %q; the orchestrator's shell branches off %q", got, want)
 			}
 		})
+	}
+}
+
+// The two explicit settings meet in one case the shell has no word for: a host that connects a
+// repository under a base of its own. The configuration is the operator's and wins, and a settings
+// file that names no branch name is read as if the repository had said nothing, because the value
+// reaches a ref and a command line.
+func TestTheConfiguredBaseWinsOverWhatARepositoryDeclaresAndAnUnusableDeclarationIsNone(t *testing.T) {
+	gh := newGhShim(t)
+	gh.remote(t, "acme/edge-sensors")
+	clone := gh.cloneInto(t, t.TempDir(), "acme/edge-sensors")
+	gh.git(t, clone, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+	inProcess(t, gh)
+
+	declaresBase(t, clone, "trunk")
+	if got := baseBranch(context.Background(), Connected{Name: "acme/edge-sensors", Base: "dev"}, clone); got != "dev" {
+		t.Errorf("the factory branches off %q, want dev: this host connected the repository under that base", got)
+	}
+	for _, unusable := range []string{"-dev", "../../etc", "", "refs/heads/dev "} {
+		declaresBase(t, clone, unusable)
+		if got := baseBranch(context.Background(), Connected{Name: "acme/edge-sensors"}, clone); got != "main" {
+			t.Errorf("a repository that declares %q is branched off %q, want main, the head of the remote: the declaration is no branch name", unusable, got)
+		}
+	}
+	writeSettings(t, clone, "{ this is not JSON\n")
+	if got := baseBranch(context.Background(), Connected{Name: "acme/edge-sensors"}, clone); got != "main" {
+		t.Errorf("a repository whose settings are not JSON is branched off %q, want main, the head of the remote", got)
+	}
+}
+
+// The compact pin is the workflow's, not the factory's: the local claim sets the window and the
+// percentage ([ADR 0031], [ADR 0034]) and this driver restates them, so a session it starts compacts
+// where the workflow says. The numbers are read out of claim.sh itself, which is what makes a change
+// to one of them fail here until the other copy follows ([ADR 0022]).
+//
+// [ADR 0022]: ../docs/adr/0022-the-factory-is-a-second-driver-over-the-worker-pipeline.md
+// [ADR 0031]: ../docs/adr/0031-the-workflow-pins-the-size-at-which-a-worker-session-compacts.md
+// [ADR 0034]: ../docs/adr/0034-the-compact-trigger-is-raised-through-the-window.md
+func TestTheCompactPinAgreesWithTheOrchestratorsClaim(t *testing.T) {
+	script := readFile(t, abs(t, filepath.Join("..", "plugins", "orchestrator", "scripts", "claim.sh")))
+	pinned := func(name string) string {
+		t.Helper()
+		found := regexp.MustCompile(`(?m)^` + name + `=([0-9]+)$`).FindStringSubmatch(script)
+		if found == nil {
+			t.Fatalf("the orchestrator's claim.sh pins no %s; the factory restates that number and cannot be held to it", name)
+		}
+		return found[1]
+	}
+	if window := pinned("compact_window"); window != strconv.Itoa(compactWindow) {
+		t.Errorf("a worker of the factory compacts at a window of %d, the local claim pins %s", compactWindow, window)
+	}
+	if percentage := pinned("compact_pct"); percentage != compactPercentage {
+		t.Errorf("a worker of the factory compacts at %s%% of its window, the local claim pins %s%%", compactPercentage, percentage)
 	}
 }
 
@@ -367,6 +536,23 @@ func shellBranchName(t *testing.T, issue Issue) string {
 	return strings.TrimSpace(shell(t, "",
 		`. "$1"; printf '%s/%s-%s\n' "$(wf_branch_type "$3")" "$2" "$(wf_slug "$4")"`,
 		nil, orchestratorLib(t), strconv.Itoa(issue.Number), strings.Join(issue.Labels, ","), issue.Title))
+}
+
+// declaresBase writes the base a repository declares for itself into its checkout: WF_BASE_BRANCH in
+// the env block of the .claude/settings.json the repository carries, which is where a local session
+// is given the variable wf_base_branch reads.
+func declaresBase(t *testing.T, clone, base string) {
+	t.Helper()
+	writeSettings(t, clone, fmt.Sprintf(`{"env":{"WF_BASE_BRANCH":%q}}`+"\n", base))
+}
+
+// writeSettings puts a settings file into a checkout, whatever it holds.
+func writeSettings(t *testing.T, clone, body string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Join(clone, ".claude"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(clone, ".claude", "settings.json"), body)
 }
 
 // shellBaseBranch is what wf_base_branch answers in a checkout, with the gh shim on its PATH.
@@ -443,8 +629,16 @@ func (w workerStart) carries(name string) bool {
 	return false
 }
 
-// settings is the env block of the session settings the worker was started with.
-func (w workerStart) settings(t *testing.T) map[string]string {
+// sessionSettings is what a worker was started with in --settings: the session's own variables, the
+// plugins it carries and the window it compacts at.
+type sessionSettings struct {
+	Env               map[string]string `json:"env"`
+	EnabledPlugins    map[string]bool   `json:"enabledPlugins"`
+	AutoCompactWindow int               `json:"autoCompactWindow"`
+}
+
+// settings is the session settings the worker was started with.
+func (w workerStart) settings(t *testing.T) sessionSettings {
 	t.Helper()
 	raw := ""
 	for i, arg := range w.args {
@@ -455,13 +649,11 @@ func (w workerStart) settings(t *testing.T) map[string]string {
 	if raw == "" {
 		t.Fatalf("the worker was started without --settings: %v", w.args)
 	}
-	var settings struct {
-		Env map[string]string `json:"env"`
-	}
+	var settings sessionSettings
 	if err := json.Unmarshal([]byte(raw), &settings); err != nil {
 		t.Fatalf("the worker's --settings is not JSON: %v: %s", err, raw)
 	}
-	return settings.Env
+	return settings
 }
 
 // workers is every start of the scripted worker, in the order they happened.

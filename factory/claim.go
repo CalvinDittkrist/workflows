@@ -5,12 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os/exec"
+	"io/fs"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 )
 
@@ -31,11 +31,13 @@ const gitTimeout = 60 * time.Second
 var errLost = errors.New("the branch exists on the remote already")
 
 // claimed is what a won claim leaves behind: the branch it created on the remote, the base it was
-// cut from, and the worktree the worker runs in.
+// cut from, and the worktree the worker runs in. created says the branch is on the remote, which is
+// what an operator reading a failed run needs: the claim after that point leaves it behind.
 type claimed struct {
 	branch   string
 	base     string
 	worktree string
+	created  bool
 }
 
 // claim takes one issue on the remote and prepares the worktree its worker runs in. The order is the
@@ -66,24 +68,69 @@ func (f *Factory) claim(ctx context.Context, r *Run, issue Issue) (claimed, erro
 	if err := createRef(ctx, connected.Name, branch, head); err != nil {
 		return claimed{branch: branch, base: base}, err
 	}
+	// From here on the branch is on the remote whatever else fails, and every claimer after this one
+	// loses the issue to it. Nothing rolls it back — work is never deleted ([ADR 0026]) — so a failure
+	// below says the branch is left behind and the operator decides.
+	//
+	// [ADR 0026]: ../docs/adr/0026-what-waits-waits-for-a-person.md
+	won := claimed{branch: branch, base: base, created: true}
 
 	login, err := f.login(ctx)
 	if err != nil {
-		return claimed{branch: branch, base: base}, err
+		return won, err
 	}
 	if _, err := gh(ctx, "issue", "edit", strconv.Itoa(issue.Number), "--repo", connected.Name, "--add-assignee", login); err != nil {
-		return claimed{branch: branch, base: base}, fmt.Errorf("issue #%d of %s could not be assigned to %s: %w", issue.Number, connected.Name, login, err)
+		return won, fmt.Errorf("issue #%d of %s could not be assigned to %s: %w", issue.Number, connected.Name, login, err)
 	}
 
-	// The worktree lives inside the clone, under the path the local workflow uses: Claude Code's
-	// trust of a workspace covers what lies within it, and an unattended start must meet no dialog.
-	worktree := filepath.Join(clone, ".claude", "worktrees", filepath.FromSlash(branch))
+	// The worktree lies where the local workflow puts its own (wf_create_worktree in the
+	// orchestrator's lib.sh): under .claude/worktrees of the checkout, named after the branch with
+	// every slash turned into a hyphen, and the directory kept out of the clone's status. One
+	// convention for both drivers, so a maintainer who opens this host's clone finds what a Herdr
+	// session would have left. Trust needs no dialog here either way: Claude Code keys it on the
+	// checkout a worktree belongs to, and a print-mode session is never asked
+	// (https://code.claude.com/docs/en/permissions.md, checked 2026-09-22).
+	worktree := filepath.Join(clone, ".claude", "worktrees", strings.ReplaceAll(branch, "/", "-"))
+	excludeWorktrees(clone)
 	if _, err := git(ctx, clone, "worktree", "add", "--quiet", "-b", branch, worktree, head); err != nil {
-		return claimed{branch: branch, base: base}, fmt.Errorf("the worktree for %s could not be created in %s: %w", branch, clone, err)
+		return won, fmt.Errorf("the worktree for %s could not be created in %s: %w", branch, clone, err)
 	}
 	f.runs.event(r, Event{Kind: "factory", Title: "claimed " + branch, Body: "worktree " + worktree})
-	return claimed{branch: branch, base: base, worktree: worktree}, nil
+	won.worktree = worktree
+	return won, nil
 }
+
+// excludeWorktrees keeps the worktrees of a clone out of its own status, the entry wf_create_worktree
+// writes for the local workflow. It is cosmetic: a clone that refuses the write is still a clone a
+// worker can run in, so a claim is never failed for it.
+func excludeWorktrees(clone string) {
+	path := filepath.Join(clone, ".git", "info", "exclude")
+	current, err := os.ReadFile(path)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return
+	}
+	for _, line := range strings.Split(string(current), "\n") {
+		if strings.TrimSpace(line) == worktreesEntry {
+			return
+		}
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return
+	}
+	file, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return
+	}
+	defer file.Close()
+	entry := worktreesEntry + "\n"
+	if len(current) > 0 && !strings.HasSuffix(string(current), "\n") {
+		entry = "\n" + entry // a file whose last line was never ended keeps it
+	}
+	_, _ = file.WriteString(entry)
+}
+
+// worktreesEntry is the line the local workflow appends to .git/info/exclude.
+const worktreesEntry = ".claude/worktrees/"
 
 // connected is the configured repository of that name.
 func (f *Factory) connected(name string) (Connected, bool) {
@@ -159,14 +206,18 @@ var exists = regexp.MustCompile(`(?i)reference already exists`)
 // the head the remote points at, then the repository's default branch on GitHub, and main when
 // nothing answers at all. A drift test binds the two ([ADR 0022]).
 //
-// The explicit setting is the repository's in the configuration, where the shell reads
-// WF_BASE_BRANCH from the repository's settings; the remote's head is read from the clone, where
-// the shell reads it from the checkout.
+// The explicit setting is WF_BASE_BRANCH, which a local session is given by the repository's own
+// settings file; the factory reads the same file out of the clone, and the configuration of this
+// host may say a base of its own above it, for a repository whose settings name none. The remote's
+// head is read from the clone, where the shell reads it from the checkout.
 //
 // [ADR 0022]: ../docs/adr/0022-the-factory-is-a-second-driver-over-the-worker-pipeline.md
 func baseBranch(ctx context.Context, connected Connected, clone string) string {
 	if connected.Base != "" {
 		return connected.Base
+	}
+	if declared := declaredBase(clone); declared != "" {
+		return declared
 	}
 	if head, err := git(ctx, clone, "symbolic-ref", "-q", "--short", "refs/remotes/origin/HEAD"); err == nil && head != "" {
 		return strings.TrimPrefix(head, "origin/")
@@ -177,6 +228,32 @@ func baseBranch(ctx context.Context, connected Connected, clone string) string {
 		}
 	}
 	return "main"
+}
+
+// declaredBase is the base branch a repository declares for itself: WF_BASE_BRANCH in the env block
+// of the .claude/settings.json its checkout carries (README, Configuration). That file is where a
+// local session gets the variable wf_base_branch reads, so this is the same explicit setting and not
+// a second one — and reading it here is what keeps the branch the factory cuts and the base the
+// worker reviews and opens its pull request against the same branch.
+//
+// The file belongs to the repository, so its value is held to the rule a configured base is held to
+// before it reaches a ref or a command line; anything else is read as if the repository said nothing.
+func declaredBase(clone string) string {
+	raw, err := os.ReadFile(filepath.Join(clone, ".claude", "settings.json"))
+	if err != nil {
+		return ""
+	}
+	var settings struct {
+		Env map[string]string `json:"env"`
+	}
+	if err := json.Unmarshal(raw, &settings); err != nil {
+		return ""
+	}
+	declared := settings.Env["WF_BASE_BRANCH"]
+	if !validBase(declared) {
+		return ""
+	}
+	return declared
 }
 
 // branchName is the branch contract of the workflow, restated in Go: <type>/<issue>-<slug>
@@ -248,25 +325,13 @@ func slug(title string) string {
 	return strings.TrimRight(s, "-")
 }
 
-// git runs one command on a clone and answers with its output, the trailing newline removed. Like
-// gh it gets a process group and a deadline of its own, because a fetch that hangs must not hold
-// the run it belongs to for ever.
+// git runs one command on a clone and answers with its output, the trailing newline removed. Like gh
+// it gets a process group and a deadline of its own, because a fetch that hangs must not hold the run
+// it belongs to for ever.
 func git(ctx context.Context, dir string, args ...string) (string, error) {
-	ctx, cancel := context.WithTimeout(ctx, gitTimeout)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error { return endGroup(cmd.Process.Pid, syscall.SIGTERM) }
-	cmd.WaitDelay = 5 * time.Second
-	var stderr strings.Builder
-	cmd.Stderr = &stderr
-	out, err := cmd.Output()
+	out, reason, err := command(ctx, gitTimeout, "git", append([]string{"-C", dir}, args...)...)
 	if err != nil {
-		reason := strings.TrimSpace(stderr.String())
-		if reason == "" {
-			reason = err.Error()
-		}
-		return "", fmt.Errorf("git %s: %s", strings.Join(args, " "), firstLine(reason))
+		return "", fmt.Errorf("git %s: %s", strings.Join(args, " "), reason)
 	}
 	return strings.TrimSpace(string(out)), nil
 }

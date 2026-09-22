@@ -446,13 +446,24 @@ func gh(ctx context.Context, args ...string) ([]byte, error) {
 // carries what gh printed, because that line is what the operator needs: a login that expired, a
 // repository the token cannot see.
 func ghWithin(ctx context.Context, timeout time.Duration, args ...string) ([]byte, error) {
+	out, reason, err := command(ctx, timeout, "gh", args...)
+	if err != nil {
+		return nil, ghError{call: strings.Join(args, " "), said: reason}
+	}
+	return out, nil
+}
+
+// command is how the factory runs another program: under a deadline of its own and in a process group of
+// its own, answering with its output and, when it failed, with the first line it said. gh and git
+// both start children — git for a clone, git for a fetch over the line — so the deadline and the stop
+// have to reach those too: the group is what is ended. WaitDelay closes the pipes after that, because
+// a process that outlived the group still holds the output pipe it inherited, and waiting on that
+// pipe would hold the factory past its own deadline. The reason falls back to the error itself, for a
+// program that fails without a word.
+func command(ctx context.Context, timeout time.Duration, name string, args ...string) ([]byte, string, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "gh", args...)
-	// gh starts children of its own — git, for a clone — so the deadline and the stop have to reach
-	// them: the command gets a process group and the group is what is ended. WaitDelay closes the
-	// pipes after that, because a process that outlived the group still holds the output pipe it
-	// inherited, and waiting on that pipe would hold the factory past its own deadline.
+	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error { return endGroup(cmd.Process.Pid, syscall.SIGTERM) }
 	cmd.WaitDelay = 5 * time.Second
@@ -464,7 +475,7 @@ func ghWithin(ctx context.Context, timeout time.Duration, args ...string) ([]byt
 		if reason == "" {
 			reason = err.Error()
 		}
-		return nil, ghError{call: strings.Join(args, " "), said: firstLine(reason)}
+		return nil, firstLine(reason), err
 	}
-	return out, nil
+	return out, "", nil
 }

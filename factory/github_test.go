@@ -407,9 +407,9 @@ func TestPausedAgainstGitHubShowsTheLineAndClaimsNothing(t *testing.T) {
 	}
 }
 
-// -paused is the operator's brake: it pauses a factory whose configuration says otherwise, and the
-// configuration of an unpaused one cannot unpause it from the command line either way.
-func TestTheCommandLinePausesAFactoryAndNeverUnpausesOne(t *testing.T) {
+// -paused is the operator's brake: it pauses a factory whose configuration says otherwise. There is
+// no flag the other way round, so a paused configuration stays paused whatever the command line says.
+func TestTheCommandLinePausesAFactoryWhoseConfigurationSaysOtherwise(t *testing.T) {
 	gh := newGhShim(t)
 	gh.remote(t, "acme/edge-sensors")
 	gh.issues(t, "acme/edge-sensors")

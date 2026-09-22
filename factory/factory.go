@@ -222,7 +222,13 @@ func (f *Factory) execute(parent context.Context, r *Run, issue Issue) {
 			f.finish(r, outcomeLost, "another claimer holds "+claim.branch+" on the remote; this run touched nothing else", nil)
 			return
 		}
-		f.finish(r, outcomeFailed, "the issue could not be claimed: "+err.Error(), nil)
+		if parent.Err() != nil {
+			// The factory was stopped while it claimed, so git and gh were ended under it. That is not
+			// a claim that failed, and the record must not name a failure that never happened.
+			f.finish(r, outcomeInterrupted, "the factory stopped while this run was claiming the issue"+leftBehind(claim), nil)
+			return
+		}
+		f.finish(r, outcomeFailed, "the issue could not be claimed: "+err.Error()+leftBehind(claim), nil)
 		return
 	}
 	// The session starts in /worker:work, which invokes no skill for its first stage.
@@ -334,6 +340,18 @@ func (f *Factory) execute(parent context.Context, r *Run, issue Issue) {
 	}
 }
 
+// leftBehind says what a claim that did not finish left on the remote, which is what the operator
+// needs to decide: a claim that never got to create the branch took nothing, and one that did holds
+// the issue by it until somebody removes it — nothing here deletes work ([ADR 0026]).
+//
+// [ADR 0026]: ../docs/adr/0026-what-waits-waits-for-a-person.md
+func leftBehind(claim claimed) string {
+	if !claim.created {
+		return "; nothing was claimed on the remote"
+	}
+	return "; the branch " + claim.branch + " was created on the remote and is left behind: remove it to work the issue again"
+}
+
 // take claims the issue on the remote and records the branch that claim is. Fake mode claims
 // nothing: its queue is canned and there is no remote behind it, so its scripted worker runs where
 // the factory itself does.
@@ -362,7 +380,8 @@ func (f *Factory) worker(ctx context.Context, issue Issue, claim claimed) (*exec
 		args := []string{"scripted-worker", issue.scenario, issue.Repository, strconv.Itoa(issue.Number)}
 		return exec.CommandContext(ctx, f.self, append(args, f.settings.WorkerArgs...)...), nil
 	}
-	settings, err := workerSettings(issue)
+	variables := workerVariables(issue, claim)
+	settings, err := workerSettings(variables)
 	if err != nil {
 		return nil, err
 	}
@@ -381,7 +400,7 @@ func (f *Factory) worker(ctx context.Context, issue Issue, claim claimed) (*exec
 	args = append(args, "-p", workSkill)
 	cmd := exec.CommandContext(ctx, "claude", args...)
 	cmd.Dir = claim.worktree
-	cmd.Env = workerEnv(os.Environ())
+	cmd.Env = workerEnv(os.Environ(), variables)
 	return cmd, nil
 }
 
@@ -389,29 +408,78 @@ func (f *Factory) worker(ctx context.Context, issue Issue, claim claimed) (*exec
 const workSkill = "/worker:work"
 
 // workerSettings is the session-scoped configuration a worker is started with, as JSON for
-// --settings. It is the env block of the local claim without what only a Herdr pane can carry.
-func workerSettings(issue Issue) (string, error) {
-	settings, err := json.Marshal(map[string]any{"env": map[string]string{
-		"WF_MODE":                              "manual",
-		"WF_ISSUE":                             strconv.Itoa(issue.Number),
-		"CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1",
-	}})
+// --settings. It is the settings object of the local claim (plugins/orchestrator/scripts/claim.sh)
+// without the one part only a Herdr pane can carry, its status line: nothing renders a status line in
+// print mode, and there is no pane for a checkpoint to hand the stage over to.
+//
+// That is why the compact pin matters more here than anywhere: a factory session has no hand-over at
+// all, so compaction is its only safety net, and it must fire where the workflow says rather than at
+// a default Claude Code does not document ([ADR 0031], [ADR 0034]). The window and the percentage are
+// the claim's numbers, and a drift test binds them to it.
+//
+// WF_BASE_BRANCH is the base the claim actually cut the branch from. The pipeline inside the worktree
+// asks wf_base_branch for it — the review range, the hand-over note, the pull request's --base — and
+// without it a clone whose origin/HEAD names another branch would review and open against a base the
+// branch was never cut from.
+//
+// The plugins the local claim switches off are switched off here too: a worker carries neither the
+// planner's nor the orchestrator's skills, which keeps them out of an unattended context that must
+// never merge what it built ([ADR 0023]).
+//
+// [ADR 0023]: ../docs/adr/0023-github-is-the-factorys-only-control-surface.md
+// [ADR 0031]: ../docs/adr/0031-the-workflow-pins-the-size-at-which-a-worker-session-compacts.md
+// [ADR 0034]: ../docs/adr/0034-the-compact-trigger-is-raised-through-the-window.md
+func workerSettings(env map[string]string) (string, error) {
+	settings, err := json.Marshal(map[string]any{
+		"env":               env,
+		"enabledPlugins":    map[string]bool{"planner@workflows": false, "orchestrator@workflows": false},
+		"autoCompactWindow": compactWindow,
+	})
 	if err != nil {
 		return "", fmt.Errorf("the worker's settings could not be written: %w", err)
 	}
 	return string(settings), nil
 }
 
-// workerEnv is the environment a worker runs in: the factory's own, with every Herdr variable
-// removed. The factory may be started from a maintainer's terminal, and a worker that inherits
-// HERDR_ENV would act in that person's session instead of ending blocked ([ADR 0027]).
+// workerVariables is the env block of those settings: what this one session is, and nothing a host
+// may disagree with.
+func workerVariables(issue Issue, claim claimed) map[string]string {
+	return map[string]string{
+		"WF_MODE":                              "manual",
+		"WF_ISSUE":                             strconv.Itoa(issue.Number),
+		"WF_BASE_BRANCH":                       claim.base,
+		"CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1",
+		"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE":      compactPercentage,
+	}
+}
+
+// The compact pin of the workflow, the two numbers the local claim sets and this one restates
+// ([ADR 0031], [ADR 0034]). Their product is the compact trigger, 200 000 tokens.
+//
+// [ADR 0031]: ../docs/adr/0031-the-workflow-pins-the-size-at-which-a-worker-session-compacts.md
+// [ADR 0034]: ../docs/adr/0034-the-compact-trigger-is-raised-through-the-window.md
+const (
+	compactWindow     = 250000
+	compactPercentage = "80"
+)
+
+// workerEnv is the environment a worker runs in: the factory's own, with two kinds of variable taken
+// out of it. Every Herdr variable, because the factory may be started from a maintainer's terminal
+// and a worker that inherits
+// HERDR_ENV would act in that person's session instead of ending blocked ([ADR 0027]). And every
+// variable of the workflow, WF_*, because the session's settings say what this run is: which of the
+// two Claude Code prefers for a name both carry is not documented, and a WF_MODE=yolo left in a
+// maintainer's shell must not be the answer.
 //
 // [ADR 0027]: ../docs/adr/0027-the-factorys-isolation-boundary-is-the-host.md
-func workerEnv(env []string) []string {
+func workerEnv(env []string, settings map[string]string) []string {
 	out := make([]string, 0, len(env))
 	for _, entry := range env {
 		name, _, _ := strings.Cut(entry, "=")
-		if strings.HasPrefix(name, "HERDR_") {
+		if strings.HasPrefix(name, "HERDR_") || strings.HasPrefix(name, "WF_") {
+			continue
+		}
+		if _, said := settings[name]; said {
 			continue
 		}
 		out = append(out, entry)
