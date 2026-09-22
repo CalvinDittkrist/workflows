@@ -110,7 +110,6 @@ type source interface {
 type Held struct {
 	Repository  string
 	Number      int
-	Run         int    // the run that holds the issue: the one a cancel ends and the record let go
 	PullRequest string // the pull request a run of this issue opened, or empty
 }
 
@@ -212,17 +211,26 @@ func (f *Factory) refreshQueue(ctx context.Context) poll {
 // for a factory that holds nothing, which is what keeps a poll of a quiet line at the one request
 // per repository it has always been.
 //
+// It is empty for a paused factory too. A pause is the brake on everything this host does by itself
+// ([ADR 0023]): it starts nothing, and it answers no decision about what it holds either, so there
+// is nothing to ask GitHub about. What it holds it keeps until it is working again.
+//
 // Only a connected repository is asked about, for the reason its work stays out of the line: a
 // repository the configuration no longer names is one this host is not to work, and nothing of it
 // is touched.
+//
+// [ADR 0023]: ../docs/adr/0023-github-is-the-only-control-surface-of-the-factory.md
 func (f *Factory) heldIssues() []Held {
 	out := []Held{}
+	if f.settings.Paused {
+		return out
+	}
 	for _, h := range holdings(f.runs.list()) {
 		connected, ok := f.connected(h.repository())
 		if !h.holds || !ok {
 			continue
 		}
-		out = append(out, Held{Repository: connected.Name, Number: h.run.Issue, Run: h.run.ID, PullRequest: h.pullRequest})
+		out = append(out, Held{Repository: connected.Name, Number: h.run.Issue, PullRequest: h.pullRequest})
 	}
 	sort.Slice(out, func(a, b int) bool { return out[a].key() < out[b].key() })
 	return out
@@ -236,11 +244,12 @@ func (f *Factory) heldIssues() []Held {
 //
 // It runs in the working loop rather than beside it: letting an issue go pushes, fetches and removes
 // a worktree of this host's clone, and one place doing that at a time is what keeps two of them off
-// the same clone.
+// the same clone. A paused factory does none of it — it writes nothing anywhere while it is paused,
+// which is what a pause is for.
 //
 // [ADR 0026]: ../docs/adr/0026-the-factory-never-deletes-work-on-its-own.md
 func (f *Factory) letIssuesGo(ctx context.Context, letGo map[string]string) {
-	if len(letGo) == 0 || ctx.Err() != nil {
+	if len(letGo) == 0 || f.settings.Paused || ctx.Err() != nil {
 		return
 	}
 	for key, held := range holdings(f.runs.list()) {
@@ -272,6 +281,28 @@ func (f *Factory) cancel(r Run, decision string) {
 		f.runs.event(record, Event{Kind: "factory", Title: "cancelled on GitHub", Body: decision + "; the worker's process group is ended and the issue is let go"})
 	}
 	stop(cancelled{decision})
+}
+
+// warn puts a warning on a run under a title and says it once. A warning is the record of something
+// a person has to look at, and the factory tries most of what it warns about again on every poll:
+// one that polls every minute for a week would otherwise write the same sentence ten thousand times
+// into one record.
+func (f *Factory) warn(r *Run, title, warning string) {
+	said := false
+	f.runs.update(r, func() {
+		for _, already := range r.Warnings {
+			if already == warning {
+				said = true
+				return
+			}
+		}
+		r.Warnings = append(r.Warnings, warning)
+	})
+	if said {
+		return
+	}
+	log.Printf("error: %s", warning)
+	f.runs.event(r, Event{Kind: "error", Title: title, Body: warning})
 }
 
 // dispatch starts the head of the queue. One worker at a time: while a run is active, nothing else
@@ -348,9 +379,12 @@ func (f *Factory) hold(repository, reason string) {
 // ([ADR 0026]). Only a routing newer than the moment it was let go does that: the label that was on
 // the issue all along is the one the maintainer's decision was made under — closing a pull request
 // would otherwise start the same work over by itself — and routing the issue again is the gesture
-// that asks for another run. That is the one comparison in the factory between GitHub's clock and
-// this host's, and a host whose clock is minutes ahead answers a routing made inside that drift only
-// after the label is set once more.
+// that asks for another run. It is answered once, by the run it starts: a routing no newer than the
+// signal the issue's latest run already stands for is one that has been acted on, whatever became of
+// that run, which is what keeps an issue whose take-back was lost from being taken back on every
+// poll for ever. That is the one comparison in the factory between GitHub's clock and this host's,
+// and a host whose clock is minutes ahead answers a routing made inside that drift only after the
+// label is set once more.
 //
 // Only a connected repository is in the line, held work included: a repository the configuration no
 // longer names is one this host is not to work, whatever its records say it once held. Nothing of it
@@ -407,7 +441,7 @@ func (f *Factory) waiting() []Entry {
 		switch {
 		case !worked[issue.key()]:
 			out = append(out, Entry{Issue: issue, Signal: signalRouted, SignalAt: issue.RoutedAt})
-		case gone.letGo && issue.RoutedAt.After(*gone.let.LetGoAt):
+		case gone.letGo && issue.RoutedAt.After(*gone.let.LetGoAt) && issue.RoutedAt.After(gone.last.SignalAt):
 			out = append(out, Entry{Issue: issue, Signal: signalRouted, SignalAt: issue.RoutedAt, resume: gone.let})
 		}
 	}
@@ -604,9 +638,8 @@ func (f *Factory) execute(parent context.Context, r *Run, entry Entry) {
 		stdout.Close() // ends the two readers
 		stderr.Close()
 		<-drained
-		warning := "the worker left a process behind that is outside its process group and still held its output; the factory cannot end it, look for it on the host"
-		f.runs.update(r, func() { r.Warnings = append(r.Warnings, warning) })
-		f.runs.event(r, Event{Kind: "error", Title: "the worker left a process behind", Body: warning})
+		f.warn(r, "the worker left a process behind",
+			"the worker left a process behind that is outside its process group and still held its output; the factory cannot end it, look for it on the host")
 	}
 	stdout.Close()
 	stderr.Close()

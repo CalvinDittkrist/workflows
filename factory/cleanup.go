@@ -43,7 +43,7 @@ func (f *Factory) letGo(ctx context.Context, h holding, decision string) {
 	log.Printf("letting %s#%d go: %s", connected.Name, held.Issue, decision)
 	f.runs.event(record, Event{Kind: "factory", Title: "letting " + held.Branch + " go", Body: decision})
 
-	if !f.pushWorktree(ctx, record, held) {
+	if !f.pushWorktree(ctx, record, clone, held) {
 		return
 	}
 	if !f.removeWorktree(ctx, record, clone, held) {
@@ -57,24 +57,29 @@ func (f *Factory) letGo(ctx context.Context, h holding, decision string) {
 		Body: "the worktree and the local branch are gone and this factory holds the issue no more; its records and its logs stay"})
 }
 
-// pushWorktree puts what the worktree holds on the branch it belongs to, which is the act everything
-// below waits for. A worktree that is not on this host holds nothing to push; a push that is refused
-// — the branch moved on the remote, the host cannot reach it — leaves the worktree, the branch and
-// the assignee exactly as they are, says so on the run, and the next poll tries again. The
-// alternative is a directory of commits nobody else has.
-func (f *Factory) pushWorktree(ctx context.Context, record *Run, held Run) bool {
-	if held.Worktree == "" || held.Branch == "" {
+// pushWorktree puts what this host holds of the branch on the remote, which is the act everything
+// below waits for. What that is depends on what is left: the worktree's HEAD while the worktree is
+// there — whatever the worker checked out on the way is what it did — and the local branch in the
+// clone when the directory is gone and the name is not, which is what a worktree somebody removed by
+// hand leaves behind. A host that holds neither has nothing to push.
+//
+// A push that is refused — the branch moved on the remote, the host cannot reach it — leaves the
+// worktree, the branch and the assignee exactly as they are, says so on the run, and the next poll
+// tries again. The alternative is a directory of commits nobody else has.
+func (f *Factory) pushWorktree(ctx context.Context, record *Run, clone string, held Run) bool {
+	if held.Branch == "" {
 		return true
 	}
-	if _, err := os.Stat(held.Worktree); err != nil {
-		return true
+	from, ref := held.Worktree, "HEAD"
+	if _, err := os.Stat(held.Worktree); held.Worktree == "" || err != nil {
+		from, ref = clone, "refs/heads/"+held.Branch
+		if _, err := git(ctx, clone, "rev-parse", "--verify", ref); err != nil {
+			return true // no worktree and no branch of it on this host: nothing of it to push
+		}
 	}
-	// HEAD and not the branch name: what the worker left the worktree on is what it did, whatever it
-	// checked out on the way.
-	if _, err := gitWithin(ctx, held.Worktree, fetchTimeout, "push", "--quiet", "origin", "HEAD:refs/heads/"+held.Branch); err != nil {
-		f.warn(record, fmt.Sprintf("the commits in %s could not be pushed to %s: %v; the worktree stays on this host and the issue stays as it is until they can be pushed",
-			held.Worktree, held.Branch, err))
-		return false
+	if _, err := gitWithin(ctx, from, fetchTimeout, "push", "--quiet", "origin", ref+":refs/heads/"+held.Branch); err != nil {
+		return f.heldUp(ctx, record, fmt.Sprintf("the commits of %s in %s could not be pushed: %v; nothing of this issue is removed from this host until they are on the remote",
+			held.Branch, from, err))
 	}
 	return true
 }
@@ -85,14 +90,17 @@ func (f *Factory) pushWorktree(ctx context.Context, record *Run, held Run) bool 
 // to go would stay on the host for ever.
 //
 // A worktree that will not go stops the whole handover: the issue keeps its assignee and its branch,
-// so a person finds it where the factory left it. The local branch is a name and not work — the
-// commits are on the remote — so a name that will not go is said and nothing more.
+// so a person finds it where the factory left it. The local branch is a name and no work as long as
+// every commit under it is on the remote, which is what is read before it goes and not assumed of
+// the push above: a name that holds anything the remote does not stays, and so does one that cannot
+// be read ([ADR 0026]).
+//
+// [ADR 0026]: ../docs/adr/0026-the-factory-never-deletes-work-on-its-own.md
 func (f *Factory) removeWorktree(ctx context.Context, record *Run, clone string, held Run) bool {
 	if held.Worktree != "" {
 		if _, err := git(ctx, clone, "worktree", "remove", "--force", held.Worktree); err != nil {
 			if _, there := os.Stat(held.Worktree); there == nil {
-				f.warn(record, fmt.Sprintf("the worktree %s could not be removed from %s: %v; the issue stays as it is until that directory is gone", held.Worktree, clone, err))
-				return false
+				return f.heldUp(ctx, record, fmt.Sprintf("the worktree %s could not be removed from %s: %v; the issue stays as it is until that directory is gone", held.Worktree, clone, err))
 			}
 		}
 	}
@@ -105,8 +113,14 @@ func (f *Factory) removeWorktree(ctx context.Context, record *Run, clone string,
 	if _, err := git(ctx, clone, "rev-parse", "--verify", "refs/heads/"+held.Branch); err != nil {
 		return true // no local branch of that name: nothing to remove
 	}
+	unpushed, err := git(ctx, clone, "rev-list", "--count", "refs/remotes/origin/"+held.Branch+"..refs/heads/"+held.Branch)
+	if err != nil || unpushed != "0" {
+		f.heldUp(ctx, record, fmt.Sprintf("the local branch %s in %s holds commits %s does not have, or could not be read against it (%v); the name stays on this host with them",
+			held.Branch, clone, held.Branch, err))
+		return true
+	}
 	if _, err := git(ctx, clone, "branch", "-D", held.Branch); err != nil {
-		f.warn(record, fmt.Sprintf("the local branch %s could not be removed from %s: %v; its commits are on the remote, so this is a name left behind and no work", held.Branch, clone, err))
+		f.heldUp(ctx, record, fmt.Sprintf("the local branch %s could not be removed from %s: %v; its commits are on the remote, so this is a name left behind and no work", held.Branch, clone, err))
 	}
 	return true
 }
@@ -126,7 +140,7 @@ func (f *Factory) removeRemoteBranch(ctx context.Context, record *Run, clone str
 		return
 	}
 	if _, err := gitWithin(ctx, clone, fetchTimeout, "fetch", "--quiet", "--prune", "origin"); err != nil {
-		f.warn(record, fmt.Sprintf("%s could not be fetched into %s: %v; the branch %s stays on the remote", connected.Name, clone, err, held.Branch))
+		f.heldUp(ctx, record, fmt.Sprintf("%s could not be fetched into %s: %v; the branch %s stays on the remote", connected.Name, clone, err, held.Branch))
 		return
 	}
 	beyond, err := git(ctx, clone, "rev-list", "--count", "refs/remotes/origin/"+held.Base+"..refs/remotes/origin/"+held.Branch)
@@ -134,7 +148,7 @@ func (f *Factory) removeRemoteBranch(ctx context.Context, record *Run, clone str
 		return // it carries commits, it is gone from the remote already, or it cannot be read: it stays
 	}
 	if _, err := gh(ctx, "api", "--method", "DELETE", "repos/"+connected.Name+"/git/refs/heads/"+held.Branch); err != nil {
-		f.warn(record, fmt.Sprintf("the branch %s of %s holds nothing beyond %s and could not be removed from the remote: %v; remove it by hand or leave it", held.Branch, connected.Name, held.Base, err))
+		f.heldUp(ctx, record, fmt.Sprintf("the branch %s of %s holds nothing beyond %s and could not be removed from the remote: %v; remove it by hand or leave it", held.Branch, connected.Name, held.Base, err))
 		return
 	}
 	f.runs.event(record, Event{Kind: "factory", Title: "removed " + held.Branch + " from the remote",
@@ -153,31 +167,20 @@ func (f *Factory) removeAssignee(ctx context.Context, record *Run, connected Con
 	}
 	login, err := f.login(ctx)
 	if err != nil {
-		f.warn(record, fmt.Sprintf("the assignee of %s#%d could not be removed: %v; take this host off the issue by hand", connected.Name, held.Issue, err))
+		f.heldUp(ctx, record, fmt.Sprintf("the assignee of %s#%d could not be removed: %v; take this host off the issue by hand", connected.Name, held.Issue, err))
 		return
 	}
 	if _, err := gh(ctx, "issue", "edit", strconv.Itoa(held.Issue), "--repo", connected.Name, "--remove-assignee", login); err != nil {
-		f.warn(record, fmt.Sprintf("%s could not be taken off %s#%d: %v; take this host off the issue by hand", login, connected.Name, held.Issue, err))
+		f.heldUp(ctx, record, fmt.Sprintf("%s could not be taken off %s#%d: %v; take this host off the issue by hand", login, connected.Name, held.Issue, err))
 	}
 }
 
-// warn puts a warning on a run and says it once. Letting an issue go is tried again on every poll
-// for as long as it is held up, and a factory that polls every minute for a week would otherwise
-// write the same sentence ten thousand times into one record.
-func (f *Factory) warn(r *Run, warning string) {
-	said := false
-	f.runs.update(r, func() {
-		for _, already := range r.Warnings {
-			if already == warning {
-				said = true
-				return
-			}
-		}
-		r.Warnings = append(r.Warnings, warning)
-	})
-	if said {
-		return
+// heldUp says on the run what stopped the handover, and answers false so a step can hand its own
+// answer on. A factory that is stopping says nothing: the git or gh call it cancelled itself failed
+// because of that and not because of this host, and the next start takes the issue up again.
+func (f *Factory) heldUp(ctx context.Context, r *Run, warning string) bool {
+	if ctx.Err() == nil {
+		f.warn(r, "letting the issue go is held up", warning)
 	}
-	log.Printf("error: %s", warning)
-	f.runs.event(r, Event{Kind: "error", Title: "letting the issue go is held up", Body: warning})
+	return false
 }

@@ -374,23 +374,49 @@ func TestACloneThatIsCutOffEndsWithTheFactoryAndLeavesNothingBehind(t *testing.T
 	}
 }
 
+// A pause is the brake on everything this host does by itself: it claims nothing, and it answers
+// nothing about the issue it holds either, whatever GitHub says has become of it.
 func TestPausedAgainstGitHubShowsTheLineAndClaimsNothing(t *testing.T) {
 	gh := newGhShim(t)
 	now := time.Now().UTC()
 	gh.remote(t, "acme/edge-sensors")
 	gh.issues(t, "acme/edge-sensors", openIssue(104, "Retry the upload", now.Add(-72*time.Hour)))
 	gh.timeline(t, "acme/edge-sensors", 104, labeled("factory", now.Add(-6*time.Hour)))
+	// An issue this host holds whose routing label a maintainer has taken off, which is the decision
+	// a working factory would cancel and let go on.
+	gh.issue(t, "acme/edge-sensors", assignedTo(openIssue(121, "Document the calibration procedure", now.Add(-72*time.Hour), readyLabel), "factory-bot"))
 
-	f := gh.start(t, config{"poll": "50ms", "repositories": []string{"acme/edge-sensors"}})
+	data := filepath.Join(t.TempDir(), "data")
+	held := record(1, 121, "Document the calibration procedure", signalRouted, outcomeReady, true, now.Add(-2*time.Hour), now.Add(-time.Hour))
+	held.Worktree = filepath.Join(t.TempDir(), "worktrees", "feat-121")
+	if err := os.MkdirAll(held.Worktree, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	records(t, data, held)
+
+	f := gh.start(t, config{"poll": "50ms", "data_dir": data, "repositories": []string{"acme/edge-sensors"}})
 	f.queue(t, 1)
+
+	// It does not even ask what became of what it holds: there is nothing it would do about it.
+	if asked := gh.asked(t, "api repos/acme/edge-sensors/issues/121"); asked != 0 {
+		t.Errorf("the factory asked about the issue it holds %d times, want none while it is paused", asked)
+	}
+	if _, err := os.Stat(held.Worktree); err != nil {
+		t.Errorf("the worktree %s of the held issue is gone: %v; a paused factory takes nothing apart", held.Worktree, err)
+	}
+	var stillHeld apiRun
+	f.get(t, "/api/runs/1", &stillHeld)
+	if stillHeld.LetGoAt != nil {
+		t.Errorf("the factory let the held issue go at %v while it was paused", stillHeld.LetGoAt)
+	}
 
 	var status map[string]any
 	f.get(t, "/api/status", &status)
 	if status["state"] != "paused" {
 		t.Errorf("the factory says it is %q, want paused", status["state"])
 	}
-	if records, _ := filepath.Glob(filepath.Join(f.data, "run-*.json")); len(records) != 0 {
-		t.Errorf("paused, the factory wrote %d run records, want none", len(records))
+	if written, _ := filepath.Glob(filepath.Join(f.data, "run-*.json")); len(written) != 1 {
+		t.Errorf("paused, the factory left %d run records, want the one it started with", len(written))
 	}
 	// Nothing it did to GitHub is a claim: it reads the line and clones, and writes nothing at all.
 	for _, call := range gh.calls(t) {

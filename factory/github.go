@@ -189,9 +189,10 @@ func (g *gitHub) queue(ctx context.Context, held []Held) poll {
 // readHeld asks GitHub about every issue this factory holds and answers with those it is done with.
 // An issue the factory holds is assigned to this host, so it is not in the line above and there is
 // no other reading of it: this is where a maintainer's decision reaches work in progress ([ADR
-// 0023]). It is one request per held issue and one more for a pull request that stands, and the
-// factory holds one issue at a time as long as its work moves, so a poll of a line at rest is the
-// one request per repository it has always been.
+// 0023]). It is one request per held issue and one more for a pull request that stands, so a poll
+// costs what this host holds: nothing for a factory that holds nothing, and two requests a poll for
+// every issue whose pull request is waiting for a person. That is the price of hearing a decision
+// within a poll, and it is paid only for issues this factory is in the middle of.
 //
 // An issue whose reading fails says nothing at all. A rate limit, a login that expired or a
 // repository nobody can reach must never take a worktree apart ([ADR 0026]), so the factory holds on
@@ -205,6 +206,10 @@ func (g *gitHub) readHeld(ctx context.Context, held []Held, letGo map[string]str
 			return // the factory is stopping; a cancelled request says nothing about the issue
 		}
 		key := issue.key()
+		// An issue this factory holds is one this poll knows about, answered or not, so what is
+		// remembered of it stays: an unreadable issue would otherwise be warned about anew on every
+		// poll, and a GitHub that is down for a day would fill the log with one sentence.
+		seen[key] = true
 		decision, err := g.decided(ctx, issue)
 		if err != nil {
 			if ctx.Err() == nil {
@@ -212,10 +217,7 @@ func (g *gitHub) readHeld(ctx context.Context, held []Held, letGo map[string]str
 			}
 			continue
 		}
-		// It was read, so it is an issue this poll knows about: what is remembered of it is kept and
-		// the next failure is reported anew.
-		seen[key] = true
-		g.readable(key)
+		g.readable(key) // it answered, so the next failure is reported anew
 		if decision != "" {
 			letGo[key] = decision
 		}
@@ -226,6 +228,12 @@ func (g *gitHub) readHeld(ctx context.Context, held []Held, letGo map[string]str
 // the maintainer's: the routing label taken off the issue, the issue closed, and the pull request of
 // its run merged or closed. They are read in that order, because the first two end a run that is
 // still going and the third is only ever about one that is over.
+//
+// The routing label alone is read and not the rest of the frontier rule: routing is what hands an
+// issue to this factory and taking that label off is what takes it back ([ADR 0023]), while
+// ready-for-agent says the issue is ready to be worked at all — an issue already in work is past
+// that question, and a maintainer who wants this run to end says so with the label that named the
+// host.
 //
 // An answer that is not this issue decides nothing: a reading that goes wrong must not be read as a
 // gesture, and neither must a state that is anything other than the closed GitHub spells.

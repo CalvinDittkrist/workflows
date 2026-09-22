@@ -17,9 +17,9 @@ import (
 )
 
 // The outcomes of the vocabulary. A run in fake mode reaches ready, blocked, failed, timeout and
-// interrupted; lost is the race another claimer won ([ADR 0024]), cancelled is a run the maintainer
-// ended by taking the routing label off its issue ([ADR 0023]), and quota arrives with the ticket
-// that adds it.
+// interrupted; lost is the race another claimer won ([ADR 0024]), cancelled is a run a decision on
+// GitHub ended — the routing label taken off its issue, or the issue closed ([ADR 0023]) — and quota
+// arrives with the ticket that adds it.
 //
 // [ADR 0023]: ../docs/adr/0023-github-is-the-only-control-surface-of-the-factory.md
 // [ADR 0024]: ../docs/adr/0024-a-claim-is-the-creation-of-the-branch-through-the-api.md
