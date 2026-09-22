@@ -379,10 +379,10 @@ class PrototypeAndFinishTests(PlanWorktree):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("plan: offline-mode", r.stdout)
         gone = lambda: not wt.exists() and "plan/offline-mode" not in self.git("branch", "--list", "plan/offline-mode")
-        for _ in range(40):
+        for _ in range(200):
             if gone():
                 break
-            time.sleep(0.5)
+            time.sleep(0.1)
         self.assertTrue(gone(), "worktree or branch still present after cleanup")
 
 

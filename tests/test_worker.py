@@ -1850,8 +1850,10 @@ class FinishTests(PanelRecordCalls, ShimTest):
 
 class PrWaitTests(ShimTest):
     def wait(self, **env):
-        env.setdefault("WF_POLL_SECONDS", "1")
-        return self.run_script(WORKER / "pr-wait.sh", "7", "--max-seconds", "2", **env)
+        # A wait that ends does so on its first reading, so the slice is only spent by one that reports
+        # `waiting`; it is whole seconds, which is all the script counts in, and the polls within it are short.
+        env.setdefault("WF_POLL_SECONDS", "0.2")
+        return self.run_script(WORKER / "pr-wait.sh", "7", "--max-seconds", "1", **env)
 
     def test_waits_for_the_bot_review_after_checks_pass(self):
         r = self.wait()
