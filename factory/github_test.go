@@ -392,10 +392,27 @@ func TestPausedAgainstGitHubShowsTheLineAndClaimsNothing(t *testing.T) {
 	if err := os.MkdirAll(held.Worktree, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	records(t, data, held)
+	// And what a factory before this one owes the maintainer: an ending it recorded and did not get
+	// to notify, and a run it left active that this start records as a second interruption, which
+	// waits for a person. A paused start is how a recovered data directory is looked at, so neither
+	// may reach GitHub from here.
+	owed := record(2, 130, "Calibrate the sensors", signalRouted, outcomeFailed, true, now.Add(-4*time.Hour), now.Add(-3*time.Hour))
+	owed.Notified = notifyPending
+	first := record(3, 131, "Log the sensor drift", signalRouted, outcomeInterrupted, true, now.Add(-4*time.Hour), now.Add(-3*time.Hour))
+	cutOff := record(4, 131, "Log the sensor drift", signalInterruption, "", true, now.Add(-2*time.Hour), now.Add(-2*time.Hour))
+	cutOff.State, cutOff.EndedAt = "running", nil
+	records(t, data, held, owed, first, cutOff)
 
-	f := gh.start(t, config{"poll": "50ms", "data_dir": data, "repositories": []string{"acme/edge-sensors"}})
+	f := gh.start(t, config{"poll": "50ms", "data_dir": data, "repositories": []string{"acme/edge-sensors"}, "notify": []string{"ada"}})
 	f.queue(t, 1)
+	// Owed, and kept owed for the first start that works.
+	for _, id := range []int{2, 4} {
+		var run apiRun
+		f.get(t, fmt.Sprintf("/api/runs/%d", id), &run)
+		if run.Notified != notifyPending {
+			t.Errorf("run %d says its notification is %q, want it pending until the factory works again", id, run.Notified)
+		}
+	}
 
 	// It does not even ask what became of what it holds: there is nothing it would do about it.
 	if asked := gh.asked(t, "api repos/acme/edge-sensors/issues/121"); asked != 0 {
@@ -415,8 +432,8 @@ func TestPausedAgainstGitHubShowsTheLineAndClaimsNothing(t *testing.T) {
 	if status["state"] != "paused" {
 		t.Errorf("the factory says it is %q, want paused", status["state"])
 	}
-	if written, _ := filepath.Glob(filepath.Join(f.data, "run-*.json")); len(written) != 1 {
-		t.Errorf("paused, the factory left %d run records, want the one it started with", len(written))
+	if written, _ := filepath.Glob(filepath.Join(f.data, "run-*.json")); len(written) != 4 {
+		t.Errorf("paused, the factory left %d run records, want the four it started with", len(written))
 	}
 	// Nothing it did to GitHub is a claim: it reads the line and clones, and writes nothing at all.
 	for _, call := range gh.calls(t) {
@@ -612,6 +629,7 @@ type ghShim struct {
 	answers  string
 	log      string
 	remotes  string
+	bodies   string // the directory the body of every call that reads one from standard input lands in
 	failing  string // the file holding the pattern of requests that fail
 	stalling string // the file holding the pattern of requests that are never answered
 	hanging  string // the file holding how long a clone sleeps instead of cloning
@@ -628,6 +646,7 @@ func newGhShim(t *testing.T) *ghShim {
 		answers:  filepath.Join(dir, "answers"),
 		log:      filepath.Join(dir, "calls.log"),
 		remotes:  filepath.Join(dir, "remotes"),
+		bodies:   filepath.Join(dir, "bodies"),
 		failing:  filepath.Join(dir, "failing"),
 		stalling: filepath.Join(dir, "stalling"),
 		hanging:  filepath.Join(dir, "hanging"),
@@ -643,6 +662,7 @@ func newGhShim(t *testing.T) *ghShim {
 	g.env = append(gitIsolation(),
 		"PATH="+abs(t, "testdata")+string(os.PathListSeparator)+os.Getenv("PATH"),
 		"HOME="+dir, "GH_SHIM_DIR="+g.answers, "GH_SHIM_LOG="+g.log, "GH_SHIM_REMOTES="+g.remotes,
+		"GH_SHIM_BODIES="+g.bodies,
 		"GH_SHIM_FAIL="+g.failing, "GH_SHIM_STALL="+g.stalling, "GH_SHIM_HANG="+g.hanging,
 		"CLAUDE_SHIM_LOG="+g.worker, "CLAUDE_SHIM_PLUGIN_LOG="+g.plugins)
 	return g
@@ -673,6 +693,54 @@ func (g *ghShim) assigns(t *testing.T, repository string, issue int, login strin
 	t.Helper()
 	g.answer(t, fmt.Sprintf("issue edit %d --repo %s --add-assignee %s", issue, repository, login),
 		fmt.Sprintf("https://github.com/%s/issues/%d\n", repository, issue))
+}
+
+// comments is the answer to a comment on one issue, so a comment the factory does not make exactly
+// that way is a call the shim has no answer for. The body is read from standard input, which is
+// where commented reads it back from.
+func (g *ghShim) comments(t *testing.T, repository string, issue int) {
+	t.Helper()
+	g.answer(t, commentCall(repository, issue),
+		fmt.Sprintf("https://github.com/%s/issues/%d#issuecomment-1\n", repository, issue))
+}
+
+// commented is what the factory wrote in its comments on one issue, all of them in the order it
+// made them, and an empty string when it commented nothing.
+func (g *ghShim) commented(t *testing.T, repository string, issue int) string {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(g.bodies, requestName(commentCall(repository, issue))))
+	if os.IsNotExist(err) {
+		return ""
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(raw)
+}
+
+// reviewRequests is the answer to the review requests the factory makes on a pull request of a run
+// that ended ready: one per login, as the factory asks them.
+func (g *ghShim) reviewRequests(t *testing.T, url string, logins ...string) {
+	t.Helper()
+	for _, login := range logins {
+		g.answer(t, reviewCall(url, login), url+"\n")
+	}
+}
+
+// commentCall and reviewCall are the two calls a notification is: a comment on the issue whose body
+// the factory writes to standard input, and a review request on the pull request, which names one
+// login, because GitHub refuses a whole request that carries one login it will not take.
+func commentCall(repository string, issue int) string {
+	return fmt.Sprintf("issue comment %d --repo %s --body-file -", issue, repository)
+}
+
+func reviewCall(url, login string) string {
+	return "pr edit " + url + " --add-reviewer " + login
+}
+
+// requestName is the file a request's answer and its body lie under, as the shim names them.
+func requestName(request string) string {
+	return regexp.MustCompile(`[^A-Za-z0-9]`).ReplaceAllString(request, "-")
 }
 
 // issue is the answer to the reading of one issue, which is the only reading there is of an issue
@@ -721,7 +789,8 @@ func (g *ghShim) workerWaits(t *testing.T, how time.Duration) {
 }
 
 // workerReportsBlocked ends the scripted worker's session blocked, which is a run that opened no
-// pull request: the issue is the factory's until somebody decides, and it has nothing to show.
+// pull request: the issue is the factory's until somebody decides, and it has nothing to show. The
+// blocker's text is what the factory's notification carries.
 func (g *ghShim) workerReportsBlocked(t *testing.T, reason string) {
 	t.Helper()
 	g.env = append(g.env, "CLAUDE_SHIM_REPORT=blocked: "+reason)
@@ -731,6 +800,13 @@ func (g *ghShim) workerReportsBlocked(t *testing.T, reason string) {
 func (g *ghShim) workerReports(t *testing.T, repository string, issue int) {
 	t.Helper()
 	g.env = append(g.env, fmt.Sprintf("CLAUDE_SHIM_PR=https://github.com/%s/pull/%d", repository, issue))
+}
+
+// workerReportsReadyWithout is the ready report of a worker that named no pull request of the
+// repository the run is for, which is a run that ends ready with nothing to ask a review of.
+func (g *ghShim) workerReportsReadyWithout(t *testing.T, said string) {
+	t.Helper()
+	g.env = append(g.env, "CLAUDE_SHIM_REPORT=ready: "+said)
 }
 
 // installs is what the claude shim answers about this host: the version of the worker plugin its
@@ -822,7 +898,7 @@ func (g *ghShim) openClaims(t *testing.T) {
 // names it.
 func (g *ghShim) answer(t *testing.T, request, body string) {
 	t.Helper()
-	writeFile(t, filepath.Join(g.answers, regexp.MustCompile(`[^A-Za-z0-9]`).ReplaceAllString(request, "-")), body)
+	writeFile(t, filepath.Join(g.answers, requestName(request)), body)
 }
 
 // issues is the issue list of one repository, as GitHub's list endpoint answers it.
@@ -971,7 +1047,14 @@ func (g *ghShim) cloneInto(t *testing.T, dataDir, repository string) string {
 func (g *ghShim) calls(t *testing.T) []string {
 	t.Helper()
 	calls := []string{}
-	for _, call := range strings.Split(readFile(t, g.log), "\n") {
+	raw, err := os.ReadFile(g.log)
+	if os.IsNotExist(err) {
+		return calls // the factory has not called gh yet, which is a reading and not a failure
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, call := range strings.Split(string(raw), "\n") {
 		if call != "" {
 			calls = append(calls, call)
 		}

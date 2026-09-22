@@ -10,8 +10,9 @@
 #   CLAUDE_SHIM_PR     the pull request the session reports, by default the one of o/r that the
 #                      issue in the branch name gives; the factory reads it out of the report
 #   CLAUDE_SHIM_FAIL   when set, the session ends with this on its error output and exit 1
-#   CLAUDE_SHIM_REPORT the report the session ends with, by default the ready: above; a session that
-#                      ends blocked: is what a run without a pull request is
+#   CLAUDE_SHIM_REPORT the final report of the session, by default the ready one above; it is put
+#                      into the stream as it stands, so it is plain text without a quote or a
+#                      backslash in it
 #   CLAUDE_SHIM_COMMIT when set, the session writes and commits a file of that name in the worktree,
 #                      which is the work a run leaves behind for the branch to carry
 #   CLAUDE_SHIM_SLEEP  when set, the session waits that many seconds before it reports, so a test can
@@ -86,6 +87,8 @@ fi
 
 issue=$(git rev-parse --abbrev-ref HEAD 2>/dev/null | sed -n 's#^[a-z][a-z]*/\([0-9][0-9]*\)-.*#\1#p')
 
+report="${CLAUDE_SHIM_REPORT:-**ready: ${CLAUDE_SHIM_PR:-https://github.com/o/r/pull/${issue:-0}}**\\n\\nPanel: five PASS.}"
+
 printf '%s\n' '{"type":"system","subtype":"init","model":"claude-opus-5","permissionMode":"auto","session_id":"5f2d8c11-0b9e-4a3f-9d21-7c6e4b0a1f33"}'
 
 if [ -n "${CLAUDE_SHIM_COMMIT:-}" ]; then
@@ -100,6 +103,5 @@ if [ -n "${CLAUDE_SHIM_SLEEP:-}" ]; then
   wait
 fi
 
-report="${CLAUDE_SHIM_REPORT:-**ready: ${CLAUDE_SHIM_PR:-https://github.com/o/r/pull/${issue:-0}}**}"
-printf '{"type":"result","subtype":"success","is_error":false,"terminal_reason":"completed","num_turns":12,"total_cost_usd":1.5,"result":"%s\\n\\nPanel: five PASS.","usage":{"input_tokens":900,"cache_creation_input_tokens":1200,"cache_read_input_tokens":40000,"output_tokens":3000}}\n' \
+printf '{"type":"result","subtype":"success","is_error":false,"terminal_reason":"completed","num_turns":12,"total_cost_usd":1.5,"result":"%s","usage":{"input_tokens":900,"cache_creation_input_tokens":1200,"cache_read_input_tokens":40000,"output_tokens":3000}}\n' \
   "$report"

@@ -14,6 +14,9 @@
 #   GH_SHIM_HANG     a file holding a number of seconds; `gh repo clone` then sleeps that long in a
 #                    child of its own instead of cloning, as a clone of a large repository does, and
 #                    writes that child's pid beside the file
+#   GH_SHIM_BODIES   a directory the body of every call that reads one from standard input
+#                    (`--body-file -`) is appended to, in a file named after the request, so a test
+#                    can read what the factory wrote to GitHub
 #   GH_SHIM_GATE     a file path that holds the claim: a ref creation writes "<path>.<pid>" and waits
 #                    for "<path>.open" before it touches the repository, so a test can have two
 #                    claimers inside the one act that decides the race
@@ -29,6 +32,22 @@ set -u
 
 request="$*"
 printf '%s\n' "$request" >> "${GH_SHIM_LOG:-/dev/null}"
+
+named=$(printf '%s' "$request" | tr -c 'A-Za-z0-9' '-')
+
+# A call that reads its body from standard input: it is kept where the test reads it, under the name
+# of the request. It is read here, before any answer is decided, so that gh never leaves a body in a
+# pipe nobody empties — a call that fails or stalls reads it as the one that is answered does.
+case " $request " in
+  *" --body-file - "*)
+    if [ -n "${GH_SHIM_BODIES:-}" ]; then
+      mkdir -p "$GH_SHIM_BODIES"
+      cat >> "$GH_SHIM_BODIES/$named"
+    else
+      cat > /dev/null
+    fi
+    ;;
+esac
 
 failing=$(cat "${GH_SHIM_FAIL:-/nowhere}" 2>/dev/null || true)
 if [ -n "$failing" ]; then
@@ -113,6 +132,6 @@ if [ "${1:-}" = api ] && [ "${2:-}" = --method ] && [ "${3:-}" = DELETE ]; then
   esac
 fi
 
-answer="${GH_SHIM_DIR:-/nowhere}/$(printf '%s' "$request" | tr -c 'A-Za-z0-9' '-')"
+answer="${GH_SHIM_DIR:-/nowhere}/$named"
 [ -f "$answer" ] || { echo "gh: the shim has no answer for: $request" >&2; exit 1; }
 cat "$answer"

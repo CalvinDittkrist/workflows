@@ -137,6 +137,13 @@ type Run struct {
 	EventCount  int      `json:"eventCount"`
 	Warnings    []string `json:"warnings"`
 	Versions    Versions `json:"versions"`
+	// Notified is what this ending owes the maintainer on GitHub: pending while the notification is
+	// still owed and done once the factory has tried it — done says it was made, not that GitHub
+	// took it, and a call GitHub refused is a warning on the run and done all the same. It is
+	// written before the call and again after it, so a host cut off in between makes it on its next
+	// start. A run that owes nobody anything — an outcome that notifies nobody, a factory with no
+	// logins to notify, a record written before this field — carries none of it.
+	Notified string `json:"notified,omitempty"`
 
 	// What the stream said, kept for the moment the run ends. Not part of the record.
 	reportOutcome string // ready or blocked, as the worker's final report gave it
@@ -244,7 +251,9 @@ func OpenStore(dir string) (*Store, error) {
 			// The log reads to its end like that of every other run: its last event says how it ended.
 			reason := "the factory stopped while this run was active"
 			s.event(r, Event{Kind: "error", Title: outcomeInterrupted, Body: reason})
-			s.finish(r, outcomeInterrupted, reason, nil)
+			// The marker of such a run is the factory's, in NotifyOwed: what it owes depends on the
+			// records as a whole and on the logins this host notifies, and the store knows neither.
+			s.finish(r, outcomeInterrupted, reason, nil, false)
 			s.cutOff = append(s.cutOff, r.ID)
 		}
 	}
@@ -350,14 +359,20 @@ func (s *Store) raiseContextPeak(r *Run, tokens int) {
 	s.write(r)
 }
 
-// finish ends a run. The reason survives as the record's reason unless the stream already gave one.
-func (s *Store) finish(r *Run, outcome, reason string, exitCode *int) {
+// finish ends a run. The reason survives as the record's reason unless the stream already gave one,
+// and an ending that owes the maintainer a word is marked as owing it here, in the one write: the
+// marker is what a start after a host that was cut off makes the notification from, and an ending
+// that reached the disk without it would be read as one that owed nothing.
+func (s *Store) finish(r *Run, outcome, reason string, exitCode *int, owed bool) {
 	now := time.Now()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	r.State, r.Outcome, r.EndedAt, r.ExitCode = "ended", outcome, &now, exitCode
 	if r.Reason == "" {
 		r.Reason = reason
+	}
+	if owed {
+		r.Notified = notifyPending
 	}
 	s.write(r)
 }

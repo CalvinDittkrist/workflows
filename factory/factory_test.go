@@ -85,6 +85,7 @@ type apiRun struct {
 	ExitCode   *int     `json:"exitCode"`
 	EventCount int      `json:"eventCount"`
 	Warnings   []string `json:"warnings"`
+	Notified   string   `json:"notified"`
 	Versions   struct {
 		Worker     string `json:"worker"`
 		ClaudeCode string `json:"claudeCode"`
@@ -534,6 +535,14 @@ func TestAnInvalidConfigurationIsRefusedWithTheFix(t *testing.T) {
 		{"quota minimum above everything", `{"data_dir":"data","repositories":["a/b"],"quota_minimum":120}`, `quota_minimum 120 is not a percentage; write it as a number from 0 to 100`},
 		{"quota minimum below nothing", `{"data_dir":"data","repositories":["a/b"],"quota_minimum":-1}`, `is not a percentage`},
 		{"no data directory", `{"repositories":["a/b"]}`, `data_dir is missing; name the directory`},
+		// A login reaches gh as an argument and a comment as a mention, so anything that is not one is
+		// refused before a run of this factory tries to notify it.
+		{"login written with the at sign", `{"data_dir":"data","repositories":["a/b"],"notify":["@octocat"]}`, `is not a GitHub login; write it as "octocat"`},
+		{"login that reads as a flag", `{"data_dir":"data","repositories":["a/b"],"notify":["-octocat"]}`, `is not a GitHub login`},
+		{"login with a space in it", `{"data_dir":"data","repositories":["a/b"],"notify":["oct cat"]}`, `is not a GitHub login`},
+		{"login that is a team", `{"data_dir":"data","repositories":["a/b"],"notify":["acme/maintainers"]}`, `is not a GitHub login`},
+		{"empty login", `{"data_dir":"data","repositories":["a/b"],"notify":[""]}`, `is not a GitHub login`},
+		{"login twice in two spellings", `{"data_dir":"data","repositories":["a/b"],"notify":["Octocat","octocat"]}`, `notify names "octocat" twice`},
 		{"unknown field", `{"data_dir":"data","repositories":["a/b"],"listn":"x"}`, `unknown field "listn"; the fields are listen, label`},
 		{"not JSON", `listen = 7341`, `see factory/factory.example.json`},
 		{"deadline in words", `{"data_dir":"data","repositories":["a/b"],"deadline":"90 minutes"}`, `is not a positive duration; write it as "90m"`},

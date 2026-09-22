@@ -700,7 +700,15 @@ func gh(ctx context.Context, args ...string) ([]byte, error) {
 // carries what gh printed, because that line is what the operator needs: a login that expired, a
 // repository the token cannot see.
 func ghWithin(ctx context.Context, timeout time.Duration, args ...string) ([]byte, error) {
-	out, reason, err := command(ctx, timeout, "gh", args...)
+	return ghInput(ctx, timeout, "", args...)
+}
+
+// ghInput is gh with a body on its standard input, which is how the factory writes a text of its
+// own to GitHub: a comment is `--body-file -`. The body stays off the command line, where a long
+// one would meet the system's limit and every one of them would be readable in the host's process
+// list.
+func ghInput(ctx context.Context, timeout time.Duration, input string, args ...string) ([]byte, error) {
+	out, reason, err := commandWith(ctx, timeout, input, "gh", args...)
 	if err != nil {
 		return nil, ghError{call: strings.Join(args, " "), said: reason}
 	}
@@ -715,9 +723,18 @@ func ghWithin(ctx context.Context, timeout time.Duration, args ...string) ([]byt
 // pipe would hold the factory past its own deadline. The reason falls back to the error itself, for a
 // program that fails without a word.
 func command(ctx context.Context, timeout time.Duration, name string, args ...string) ([]byte, string, error) {
+	return commandWith(ctx, timeout, "", name, args...)
+}
+
+// commandWith is that command with a body on its standard input, empty for the commands that read
+// none.
+func commandWith(ctx context.Context, timeout time.Duration, input, name string, args ...string) ([]byte, string, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, name, args...)
+	if input != "" {
+		cmd.Stdin = strings.NewReader(input)
+	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error { return endGroup(cmd.Process.Pid, syscall.SIGTERM) }
 	cmd.WaitDelay = 5 * time.Second

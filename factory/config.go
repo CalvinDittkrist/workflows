@@ -23,7 +23,13 @@ type Config struct {
 	WorkerArgs []string `json:"worker_args"`
 	// Paused is a pointer because its default is not the zero value: a file that does not name it
 	// runs paused, so working a line unattended is always something the operator wrote down.
-	Paused       *bool       `json:"paused"`
+	Paused *bool `json:"paused"`
+	// Notify is the GitHub logins the factory tells how a run ended, written without the @. Nobody
+	// watches the host, so this is how the maintainer learns of it, and GitHub is the only channel
+	// there is ([ADR 0023]).
+	//
+	// [ADR 0023]: ../docs/adr/0023-github-is-the-only-control-surface-of-the-factory.md
+	Notify       []string    `json:"notify"`
 	Repositories []Connected `json:"repositories"`
 	// QuotaAxi is the path of the quota-axi installed on the host, and QuotaMinimum the percentage of
 	// the Claude quota below which no run starts. Without the path the check is off ([ADR 0028]); the
@@ -78,6 +84,7 @@ type Settings struct {
 	DataDir      string
 	WorkerArgs   []string
 	Paused       bool
+	Notify       []string
 	Repositories []Connected
 	QuotaAxi     string // empty: the quota check is off
 	QuotaMinimum int
@@ -93,12 +100,20 @@ const (
 	defaultPoll         = 60 * time.Second
 	defaultQuotaMinimum = 12
 
-	configFields = "listen, label, deadline, poll, data_dir, worker_args, paused, repositories, quota_axi, quota_minimum"
+	configFields = "listen, label, deadline, poll, data_dir, worker_args, paused, notify, repositories, quota_axi, quota_minimum"
 )
 
 // A repository is named as owner/name; the factory never takes a URL or a local path, because the
 // same name has to identify the repository on GitHub and in an issue's link.
 var repository = regexp.MustCompile(`^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$`)
+
+// A GitHub login is alphanumeric with single hyphens between, at most 39 characters, and it reaches
+// gh as an argument and a comment as a mention: a spelling GitHub does not have would ask for a
+// review from nobody, or mention somebody the factory was never told to notify.
+var githubLogin = regexp.MustCompile(`^[A-Za-z0-9](?:-?[A-Za-z0-9])*$`)
+
+// loginLength is the longest login GitHub gives out.
+const loginLength = 39
 
 // A base branch is a branch name, and it reaches git as a ref and gh as an argument: no spelling
 // that opens with a hyphen, walks out of refs/heads with .. or ends a ref name.
@@ -196,6 +211,7 @@ func Load(path string) (Settings, error) {
 		Poll:         defaultPoll,
 		WorkerArgs:   c.WorkerArgs,
 		Paused:       c.Paused == nil || *c.Paused,
+		Notify:       []string{},
 		Repositories: []Connected{},
 		QuotaMinimum: defaultQuotaMinimum,
 		WorkerModel:  modelOf(c.WorkerArgs),
@@ -237,6 +253,21 @@ func Load(path string) (Settings, error) {
 		if flag := factoryOwns(arg); flag != "" {
 			return bad("worker_args carries %s, which the factory gives the worker itself; remove it — worker_args adds arguments to a run, it cannot replace the ones the run is defined by", flag)
 		}
+	}
+	named := map[string]bool{}
+	for _, who := range c.Notify {
+		// The login reaches gh as an argument and a comment as a mention, so a spelling GitHub does
+		// not have is refused here rather than turned into a notification nobody reads.
+		if !githubLogin.MatchString(who) || len(who) > loginLength {
+			return bad("notify carries %q, which is not a GitHub login; write it as \"octocat\", without the @", who)
+		}
+		// GitHub reads a login without regard to case, so two spellings of one person would mention
+		// them twice and ask them for two reviews of the same pull request.
+		if named[strings.ToLower(who)] {
+			return bad("notify names %q twice; remove the duplicate", who)
+		}
+		named[strings.ToLower(who)] = true
+		s.Notify = append(s.Notify, who)
 	}
 	if c.QuotaAxi != "" {
 		// A path and never a name: a name would be looked up on PATH, and the check is the binary the
