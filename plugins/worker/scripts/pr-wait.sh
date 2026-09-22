@@ -10,7 +10,7 @@ while [ $# -gt 0 ]; do case "$1" in --max-seconds) shift; max="$1";; *) pr="${1#
 [ -n "$pr" ] || pr=$(wf_pr_for_branch)
 [ -n "$pr" ] || wf_die "no open PR for branch $(wf_branch)"
 bots="${WF_PR_BOT_REVIEWERS-chatgpt-codex-connector}"  # no colon: an empty value means "no bot reviewer"
-review_wait="${WF_PR_REVIEW_WAIT:-600}"
+review_wait="${WF_PR_REVIEW_WAIT:-1200}"
 checks_grace="${WF_CHECKS_GRACE:-600}"  # seconds after the last push to wait for CI to register its checks
 owner=$(wf_repo_owner); repo=$(wf_repo_name)
 start=$(date +%s)
