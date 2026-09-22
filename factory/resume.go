@@ -74,13 +74,24 @@ type holding struct {
 	// ran out of quota, which is resumed whatever that budget says, unless that run was itself the
 	// resume after a reset.
 	resumes string
+	// let is the latest run of the issue this factory let go, and letGo says the issue is out of its
+	// hands: the worktree and the local branch are gone, the branch may still be on the remote, and
+	// the record of that run is what a routing of the issue after that moment takes it back by.
+	let   Run
+	letGo bool
 	// answered is the newest release this issue's runs have already acted on, as GitHub timed the
 	// removal that queued them. A release no newer than this is done with.
 	answered time.Time
-	// pullRequest is the newest pull request a run of this issue reported, which is the one the
-	// factory watches for a review that asks for changes, and addressed the newest such review a run
-	// of this issue already stands for, as GitHub timed its submission. A review no newer than that
-	// is answered ([ADR 0023]).
+	// pullRequest is the pull request the claim this factory holds has opened, the latest run of it
+	// that named one: the one the factory watches for a review that asks for changes, and the one
+	// whose own end — merged or closed — lets the issue go. An issue let go without one loses the
+	// assignee this factory put on it; an issue with one keeps it, because from then on the work is
+	// with a person and the assignee says who did it. It goes with the claim: what became of it was
+	// decided about the runs that opened it, and a run that takes the issue back afterwards is a
+	// claim of its own with nothing to show.
+	//
+	// addressed is the newest review asking for changes that a run of this issue already stands for,
+	// as GitHub timed its submission. A review no newer than that is answered ([ADR 0023]).
 	//
 	// [ADR 0023]: ../docs/adr/0023-github-is-the-only-control-surface-of-the-factory.md
 	pullRequest string
@@ -90,41 +101,48 @@ type holding struct {
 // holdings reads the run records, oldest first, into one entry per issue.
 //
 // The automatic resume is a budget of one per issue, spent by the resumed run it pays for and given
-// back by a release: a person who hands a held issue back to the factory has decided, and what
-// follows that decision may be interrupted and resumed once again, exactly as the first claim may.
-// Nothing else gives it back, so a factory that loses power twice over one issue stops after the
-// second time and waits. A quota resume neither spends it nor gives it back: its cause passes by
-// itself and has nothing to do with the issue. It is one in a row all the same: a resumed run that
-// runs out of quota again is an issue that uses up a whole window by itself, and the next one after
-// it is the maintainer's to decide on, so that issue waits for a person too.
+// back by every signal that is a person's decision: a claim carries one, a release hands the issue
+// back with one, and so does the routing of an issue this factory had let go. An interruption is the
+// only signal that spends and never gives, so a factory that loses power twice over one issue stops
+// after the second time and waits. A quota resume neither spends it nor gives it back: its cause
+// passes by itself and has nothing to do with the issue. It is one in a row all the same: a resumed
+// run that runs out of quota again is an issue that uses up a whole window by itself, and the next
+// one after it is the maintainer's to decide on, so that issue waits for a person too.
 func holdings(runs []Run) map[string]holding {
 	out := map[string]holding{}
 	budget := map[string]int{}
 	for _, run := range runs {
 		key := run.key()
-		h, seen := out[key]
-		if !seen {
-			budget[key] = 1 // the claim of an issue carries its one automatic resume
-		}
+		h := out[key]
 		h.last, h.idle = run, run.EndedAt != nil
-		if run.Holding {
-			h.run, h.holds = run, true
+		// The pull request of the issue moves forward with the runs that report one — a run that
+		// reported none says nothing about it — and is cleared below with the claim it was opened
+		// under, which is why it is read here and not after that.
+		if run.PullRequest != "" {
+			h.pullRequest = run.PullRequest
+		}
+		switch {
+		case run.LetGoAt != nil:
+			// The claim of this run stood and stands no more. What it holds is cleared with it, so a
+			// reader that forgets to ask holds first meets an empty run rather than a worktree that
+			// is not on this host any more — and the pull request of that claim goes with it, so the
+			// run that takes the issue back is not decided about by the one before it.
+			h.run, h.holds, h.let, h.letGo, h.pullRequest = Run{}, false, run, true, ""
+		case run.Holding:
+			h.run, h.holds, h.letGo = run, true, false
 		}
 		switch run.Signal {
-		case signalRelease:
-			budget[key] = 1
 		case signalInterruption:
 			budget[key]--
+		case signalQuota:
+		default:
+			budget[key] = 1
 		}
 		// Answered stands for the releases this issue is done with, so it only ever moves forward.
 		if at := releaseAt(run); at.After(h.answered) {
 			h.answered = at
 		}
-		// And so do the pull request the issue's runs opened and the review they have answered: a run
-		// that reported none says nothing about either.
-		if run.PullRequest != "" {
-			h.pullRequest = run.PullRequest
-		}
+		// And so does the review the issue's runs have answered.
 		if run.Signal == signalChangesRequested && run.SignalAt.After(h.addressed) {
 			h.addressed = run.SignalAt
 		}
@@ -187,9 +205,26 @@ func (f *Factory) resume(ctx context.Context, r *Run, e Entry) (claimed, error) 
 		held.holding = true
 		return held, nil
 	}
+	clone := clonePath(f.settings.DataDir, e.Repository)
+	if held.worktree == "" {
+		held.worktree = worktreePath(clone, held.branch)
+	}
 	if _, err := os.Stat(held.worktree); err != nil {
-		return held, fmt.Errorf("the worktree %s of run %d is not on this host: %w; the branch %s still holds the issue, so put the worktree back or let the issue go",
-			held.worktree, e.resume.ID, err, held.branch)
+		// The worktree of the claim is not on this host: the data directory was moved or lost, or the
+		// issue was let go and routed again. The work itself is on the remote — every worktree this
+		// factory removes is pushed first ([ADR 0026]) — so the worktree is made again from the branch
+		// and the run continues on those commits. The remote is fetched for it, which a resume that
+		// finds its worktree does not do: that one continues on the commits that are there.
+		if _, err := gitWithin(ctx, clone, fetchTimeout, "fetch", "--quiet", "--prune", "origin"); err != nil {
+			return held, fmt.Errorf("the worktree %s of run %d is not on this host and %s could not be fetched to make it again: %w",
+				held.worktree, e.resume.ID, e.Repository, err)
+		}
+		if err := makeWorktree(ctx, clone, held.branch, held.worktree); err != nil {
+			return held, fmt.Errorf("the worktree %s of run %d is not on this host and could not be made again from the branch %s: %w",
+				held.worktree, e.resume.ID, held.branch, err)
+		}
+		f.runs.event(r, Event{Kind: "factory", Title: "worktree made again from " + held.branch,
+			Body: fmt.Sprintf("the worktree %s of run %d was not on this host; it was made again from the branch on the remote", held.worktree, e.resume.ID)})
 	}
 	if e.Signal == signalRelease {
 		login, err := f.login(ctx)

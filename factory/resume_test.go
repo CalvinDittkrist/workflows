@@ -246,14 +246,14 @@ func TestHeldWorkStaysInTheLineWhenTheConfigurationRespellsTheRepository(t *test
 	}
 }
 
-// A resumed run needs the worktree its claim made, and #58 is where a missing one is put back. Until
-// then such a resume fails, and this is what that failure must cost: the issue's one automatic
-// resume, and nothing else. The repository keeps its place — the next issue in the line is claimed
-// and worked — and the issue itself waits for a person, with its branch, its worktree and its
-// assignee untouched ([ADR 0026]).
+// A resume whose worktree is gone is made again from the branch (the test below), and when nothing
+// of that branch is on the remote either there is nothing to continue: no directory, no commits, no
+// work. This is what that failure must cost: the issue's one automatic resume, and nothing else. The
+// repository keeps its place — the next issue in the line is claimed and worked — and the issue
+// itself waits for a person, with its branch, its worktree and its assignee untouched ([ADR 0026]).
 //
 // [ADR 0026]: ../docs/adr/0026-the-factory-never-deletes-work-on-its-own.md
-func TestAResumeWhoseWorktreeIsGoneFailsAndSpendsTheResumeOnThatIssueAlone(t *testing.T) {
+func TestAResumeWithNothingLeftOfItsWorkFailsAndSpendsTheResumeOnThatIssueAlone(t *testing.T) {
 	const next, nextTitle = 121, "Document the calibration procedure"
 	gh := newGhShim(t)
 	gh.remote(t, "acme/edge-sensors")
@@ -264,8 +264,8 @@ func TestAResumeWhoseWorktreeIsGoneFailsAndSpendsTheResumeOnThatIssueAlone(t *te
 	data := filepath.Join(t.TempDir(), "data")
 	gh.cloneInto(t, data, "acme/edge-sensors")
 	began := time.Now().UTC().Add(-2 * time.Hour)
-	// The interrupted run of #104 holds the issue, and the worktree it names is gone from this host —
-	// somebody removed it while the factory was down.
+	// The interrupted run of #104 holds the issue, and neither the worktree it names nor the branch
+	// that would put it back is anywhere: the data directory was lost and the remote has only main.
 	interrupted := record(1, claimedIssue, claimedTitle, signalRouted, outcomeInterrupted, true, began, began.Add(30*time.Minute))
 	interrupted.Worktree = filepath.Join(t.TempDir(), "worktrees", "feat-104")
 	records(t, data, interrupted)
@@ -310,6 +310,101 @@ func TestAResumeWhoseWorktreeIsGoneFailsAndSpendsTheResumeOnThatIssueAlone(t *te
 	}
 	if workers := gh.workers(t); len(workers) != 1 {
 		t.Errorf("the factory started %d workers, want one: only the claim of #%d had a worktree to run in", len(workers), next)
+	}
+}
+
+// The worktree of a claim is where its commits are read, and the commits themselves are on the
+// remote: every worktree this factory removes is pushed first ([ADR 0026]). So a resume that does
+// not find its worktree makes it again from the branch and goes on from the commits that are on it,
+// which is what a host that lost its data directory, and an issue that was let go and routed again,
+// both come down to. Nothing is claimed a second time: the branch is already there.
+//
+// [ADR 0026]: ../docs/adr/0026-the-factory-never-deletes-work-on-its-own.md
+func TestAResumeWhoseWorktreeIsGoneIsMadeAgainFromTheBranch(t *testing.T) {
+	gh := newGhShim(t)
+	gh.remote(t, "acme/edge-sensors")
+	gh.loggedInAs(t, "factory-bot")
+	gh.workerReports(t, "acme/edge-sensors", claimedIssue)
+
+	data := filepath.Join(t.TempDir(), "data")
+	clone := gh.cloneInto(t, data, "acme/edge-sensors")
+	// The branch of the interrupted run is on the remote and carries the work of that run; the clone
+	// on this host was made before it and has no worktree of it.
+	gh.branchAt(t, "acme/edge-sensors", claimedBranch, gh.head(t, "acme/edge-sensors", "main"))
+	work := gh.commitOn(t, "acme/edge-sensors", claimedBranch)
+
+	began := time.Now().UTC().Add(-2 * time.Hour)
+	interrupted := record(1, claimedIssue, claimedTitle, signalRouted, outcomeInterrupted, true, began, began.Add(30*time.Minute))
+	interrupted.Worktree = filepath.Join(clone, ".claude", "worktrees", claimedWorktree)
+	records(t, data, interrupted)
+	// #104 is held by this host, so it is read on its own and not from the line, which is empty.
+	gh.issues(t, "acme/edge-sensors")
+	gh.issue(t, "acme/edge-sensors", assignedTo(openIssue(claimedIssue, claimedTitle, began.Add(-72*time.Hour)), "factory-bot"))
+
+	f := gh.work(t, config{"poll": "50ms", "deadline": "90s", "data_dir": data,
+		"repositories": []string{"acme/edge-sensors"}})
+	resumed := f.ended(t, 2)
+	if resumed.Issue != claimedIssue || resumed.Signal != "interruption" || resumed.Outcome != "ready" {
+		t.Fatalf("run 2 works #%d on the signal %q and ends as %q (%s), want the resume of #%d ending ready; the factory's log:\n%s",
+			resumed.Issue, resumed.Signal, resumed.Outcome, resumed.Reason, claimedIssue, f.output(t))
+	}
+	// The worker ran where the record says, on the branch, and on the commits the remote carries.
+	workers := gh.workers(t)
+	if len(workers) != 1 {
+		t.Fatalf("the factory started %d workers, want one; the factory's log:\n%s", len(workers), f.output(t))
+	}
+	worker := workers[0]
+	if worker.cwd != resolved(t, interrupted.Worktree) || worker.branch != claimedBranch || worker.head != work {
+		t.Errorf("the worker ran in %s on %s at %s, want %s on %s at %s: the worktree is made again from the branch",
+			worker.cwd, worker.branch, worker.head, resolved(t, interrupted.Worktree), claimedBranch, work)
+	}
+	// And the claim is not made again: the branch of this issue is this factory's own.
+	if made := gh.made(t, "api --method POST repos/acme/edge-sensors/git/refs"); made != 0 {
+		t.Errorf("the factory created a reference %d times, want none: a resume continues the branch its claim made", made)
+	}
+}
+
+// A worktree is made again on the commits the remote carries now. The name of the branch may still
+// be in this host's clone while its directory is gone — somebody removed that directory by hand —
+// and the remote may have moved on since; a worker put on the old name would work on commits the
+// remote is past and could never push what it wrote on them.
+func TestAWorktreeMadeAgainMovesALocalBranchBehindTheRemoteUpToIt(t *testing.T) {
+	gh := newGhShim(t)
+	gh.remote(t, "acme/edge-sensors")
+	gh.loggedInAs(t, "factory-bot")
+	gh.workerReports(t, "acme/edge-sensors", claimedIssue)
+
+	data := filepath.Join(t.TempDir(), "data")
+	clone := gh.cloneInto(t, data, "acme/edge-sensors")
+	main := gh.head(t, "acme/edge-sensors", "main")
+	gh.branchAt(t, "acme/edge-sensors", claimedBranch, main)
+	// The clone of this host knows the branch as it stood when its worktree was removed, and the
+	// remote has taken a commit on it since.
+	gh.git(t, clone, "branch", claimedBranch, main)
+	work := gh.commitOn(t, "acme/edge-sensors", claimedBranch)
+
+	began := time.Now().UTC().Add(-2 * time.Hour)
+	interrupted := record(1, claimedIssue, claimedTitle, signalRouted, outcomeInterrupted, true, began, began.Add(30*time.Minute))
+	interrupted.Worktree = filepath.Join(clone, ".claude", "worktrees", claimedWorktree)
+	records(t, data, interrupted)
+	gh.issues(t, "acme/edge-sensors")
+	gh.issue(t, "acme/edge-sensors", assignedTo(openIssue(claimedIssue, claimedTitle, began.Add(-72*time.Hour)), "factory-bot"))
+
+	f := gh.work(t, config{"poll": "50ms", "deadline": "90s", "data_dir": data,
+		"repositories": []string{"acme/edge-sensors"}})
+	if resumed := f.ended(t, 2); resumed.Outcome != outcomeReady {
+		t.Fatalf("run 2 ended as %q (%s), want the resume to end ready; the factory's log:\n%s",
+			resumed.Outcome, resumed.Reason, f.output(t))
+	}
+	workers := gh.workers(t)
+	if len(workers) != 1 {
+		t.Fatalf("the factory started %d workers, want one; the factory's log:\n%s", len(workers), f.output(t))
+	}
+	if workers[0].head != work {
+		t.Errorf("the worker ran at %s, want %s: a worktree made again carries what the remote holds now", workers[0].head, work)
+	}
+	if at := gh.git(t, clone, "rev-parse", "refs/heads/"+claimedBranch); at != work {
+		t.Errorf("the branch %s of %s is at %s, want %s: a name that holds nothing the remote does not is moved up to it", claimedBranch, clone, at, work)
 	}
 }
 

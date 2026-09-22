@@ -374,23 +374,49 @@ func TestACloneThatIsCutOffEndsWithTheFactoryAndLeavesNothingBehind(t *testing.T
 	}
 }
 
+// A pause is the brake on everything this host does by itself: it claims nothing, and it answers
+// nothing about the issue it holds either, whatever GitHub says has become of it.
 func TestPausedAgainstGitHubShowsTheLineAndClaimsNothing(t *testing.T) {
 	gh := newGhShim(t)
 	now := time.Now().UTC()
 	gh.remote(t, "acme/edge-sensors")
 	gh.issues(t, "acme/edge-sensors", openIssue(104, "Retry the upload", now.Add(-72*time.Hour)))
 	gh.timeline(t, "acme/edge-sensors", 104, labeled("factory", now.Add(-6*time.Hour)))
+	// An issue this host holds whose routing label a maintainer has taken off, which is the decision
+	// a working factory would cancel and let go on.
+	gh.issue(t, "acme/edge-sensors", assignedTo(openIssue(121, "Document the calibration procedure", now.Add(-72*time.Hour), readyLabel), "factory-bot"))
 
-	f := gh.start(t, config{"poll": "50ms", "repositories": []string{"acme/edge-sensors"}})
+	data := filepath.Join(t.TempDir(), "data")
+	held := record(1, 121, "Document the calibration procedure", signalRouted, outcomeReady, true, now.Add(-2*time.Hour), now.Add(-time.Hour))
+	held.Worktree = filepath.Join(t.TempDir(), "worktrees", "feat-121")
+	if err := os.MkdirAll(held.Worktree, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	records(t, data, held)
+
+	f := gh.start(t, config{"poll": "50ms", "data_dir": data, "repositories": []string{"acme/edge-sensors"}})
 	f.queue(t, 1)
+
+	// It does not even ask what became of what it holds: there is nothing it would do about it.
+	if asked := gh.asked(t, "api repos/acme/edge-sensors/issues/121"); asked != 0 {
+		t.Errorf("the factory asked about the issue it holds %d times, want none while it is paused", asked)
+	}
+	if _, err := os.Stat(held.Worktree); err != nil {
+		t.Errorf("the worktree %s of the held issue is gone: %v; a paused factory takes nothing apart", held.Worktree, err)
+	}
+	var stillHeld apiRun
+	f.get(t, "/api/runs/1", &stillHeld)
+	if stillHeld.LetGoAt != nil {
+		t.Errorf("the factory let the held issue go at %v while it was paused", stillHeld.LetGoAt)
+	}
 
 	var status map[string]any
 	f.get(t, "/api/status", &status)
 	if status["state"] != "paused" {
 		t.Errorf("the factory says it is %q, want paused", status["state"])
 	}
-	if records, _ := filepath.Glob(filepath.Join(f.data, "run-*.json")); len(records) != 0 {
-		t.Errorf("paused, the factory wrote %d run records, want none", len(records))
+	if written, _ := filepath.Glob(filepath.Join(f.data, "run-*.json")); len(written) != 1 {
+		t.Errorf("paused, the factory left %d run records, want the one it started with", len(written))
 	}
 	// Nothing it did to GitHub is a claim: it reads the line and clones, and writes nothing at all.
 	for _, call := range gh.calls(t) {
@@ -647,6 +673,58 @@ func (g *ghShim) assigns(t *testing.T, repository string, issue int, login strin
 	t.Helper()
 	g.answer(t, fmt.Sprintf("issue edit %d --repo %s --add-assignee %s", issue, repository, login),
 		fmt.Sprintf("https://github.com/%s/issues/%d\n", repository, issue))
+}
+
+// issue is the answer to the reading of one issue, which is the only reading there is of an issue
+// this factory holds: it is assigned to this host, so no line GitHub answers with carries it.
+func (g *ghShim) issue(t *testing.T, repository string, issue issueJSON) {
+	t.Helper()
+	g.answer(t, fmt.Sprintf("api repos/%s/issues/%v", repository, issue["number"]), marshal(t, issue))
+}
+
+// pull is what became of a pull request of the branch a claim holds its issue by. Merged is a field
+// of its own because GitHub calls a merged pull request closed as well.
+func (g *ghShim) pull(t *testing.T, repository string, number int, state string, merged bool) {
+	t.Helper()
+	g.pullOf(t, repository, number, state, merged, repository, claimedBranch)
+}
+
+// pullOf is a pull request of another branch or another repository than the one the factory holds
+// the issue by: what a report that named the wrong one, or one somebody else's, binds to the run.
+func (g *ghShim) pullOf(t *testing.T, repository string, number int, state string, merged bool, head, branch string) {
+	t.Helper()
+	g.answer(t, fmt.Sprintf("api repos/%s/pulls/%d", repository, number),
+		marshal(t, map[string]any{"number": number, "state": state, "merged": merged,
+			"head": map[string]any{"ref": branch, "repo": map[string]any{"full_name": head}}}))
+}
+
+// unassigns is the answer to the one edit that takes this host off an issue it lets go, so a removal
+// the factory does not make exactly that way is a call the shim has no answer for.
+func (g *ghShim) unassigns(t *testing.T, repository string, issue int, login string) {
+	t.Helper()
+	g.answer(t, fmt.Sprintf("issue edit %d --repo %s --remove-assignee %s", issue, repository, login),
+		fmt.Sprintf("https://github.com/%s/issues/%d\n", repository, issue))
+}
+
+// workerCommits makes the scripted worker write and commit a file in its worktree, which is the work
+// a run leaves behind and the branch carries.
+func (g *ghShim) workerCommits(t *testing.T, file string) {
+	t.Helper()
+	g.env = append(g.env, "CLAUDE_SHIM_COMMIT="+file)
+}
+
+// workerWaits makes the scripted worker sit in its worktree instead of reporting, so a test can act
+// on a run that is still going.
+func (g *ghShim) workerWaits(t *testing.T, how time.Duration) {
+	t.Helper()
+	g.env = append(g.env, fmt.Sprintf("CLAUDE_SHIM_SLEEP=%d", int(how.Seconds())))
+}
+
+// workerReportsBlocked ends the scripted worker's session blocked, which is a run that opened no
+// pull request: the issue is the factory's until somebody decides, and it has nothing to show.
+func (g *ghShim) workerReportsBlocked(t *testing.T, reason string) {
+	t.Helper()
+	g.env = append(g.env, "CLAUDE_SHIM_REPORT=blocked: "+reason)
 }
 
 // workerReports is the pull request the scripted worker of the claude shim ends its session with.
@@ -983,6 +1061,19 @@ func assigned(login string, at time.Time) map[string]any {
 func unassigned(login string, at time.Time) map[string]any {
 	return map[string]any{"event": "unassigned", "created_at": at.Format(time.RFC3339),
 		"assignee": map[string]any{"login": login}}
+}
+
+// assignedTo is an issue this factory holds: the claim put its login on it, which is what takes the
+// issue out of the line GitHub answers with and leaves this reading as the only one of it.
+func assignedTo(issue issueJSON, login string) issueJSON {
+	issue["assignees"] = []any{map[string]any{"login": login}}
+	return issue
+}
+
+// closedIssue is an issue somebody has closed, which is one decision that ends the factory's part.
+func closedIssue(issue issueJSON) issueJSON {
+	issue["state"] = "closed"
+	return issue
 }
 
 // touched is an issue somebody has changed since it was opened. The factory holds what it remembers

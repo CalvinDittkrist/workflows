@@ -17,9 +17,11 @@ import (
 )
 
 // The outcomes of the vocabulary. A run in fake mode reaches ready, blocked, failed, timeout and
-// interrupted; lost is the race another claimer won ([ADR 0024]), quota a session that ended in an
-// error on a used-up quota ([ADR 0037]), and cancelled arrives with the ticket that adds it.
+// interrupted; lost is the race another claimer won ([ADR 0024]), cancelled is a run a decision on
+// GitHub ended — the routing label taken off its issue, or the issue closed ([ADR 0023]) — and quota
+// a session that ended in an error on a used-up quota ([ADR 0037]).
 //
+// [ADR 0023]: ../docs/adr/0023-github-is-the-only-control-surface-of-the-factory.md
 // [ADR 0024]: ../docs/adr/0024-a-claim-is-the-creation-of-the-branch-through-the-api.md
 // [ADR 0037]: ../docs/adr/0037-the-quota-check-waits-below-12-percent-of-the-workers-scope.md
 const (
@@ -29,6 +31,7 @@ const (
 	outcomeTimeout     = "timeout"
 	outcomeInterrupted = "interrupted"
 	outcomeLost        = "lost"
+	outcomeCancelled   = "cancelled"
 	outcomeQuota       = "quota"
 )
 
@@ -92,10 +95,19 @@ type Run struct {
 	// only such an issue can be released, so a lost claim and a claim that failed half way are left
 	// alone — including the branch of another claimer, which this factory never works.
 	Holding bool `json:"holding"`
+	// LetGoAt is when this factory gave the issue back, and nil for as long as it holds it: the
+	// commits pushed, the worktree and the local branch removed, the assignee taken off unless a
+	// pull request stands, and every record and log of the issue kept. Holding stays as it was — it
+	// is the history that says this factory's claim made that branch, which is what a later routing
+	// of the same issue is read against ([ADR 0026]).
+	//
+	// [ADR 0026]: ../docs/adr/0026-the-factory-never-deletes-work-on-its-own.md
+	LetGoAt *time.Time `json:"letGoAt"`
 	// Signal is what queued this run: routed, interruption, quota, release or changes-requested.
 	// SignalAt is when that signal happened — the routing, the interruption, the end of the run that
-	// ran out of quota, the moment the assignee came off, or the moment the review was submitted. It is the answer this run is: a signal of an issue is acted
-	// on once, and a signal no later than the one its records already carry has been answered already.
+	// ran out of quota, the moment the assignee came off, or the moment the review was submitted. It
+	// is the answer this run is: a signal of an issue is acted on once, and a signal no later than the
+	// one its records already carry has been answered already.
 	// That is what keeps the factory from resuming the same release, or answering the same review, for
 	// as long as GitHub reports it, without a clock of its own.
 	Signal   string    `json:"signal"`
