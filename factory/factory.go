@@ -285,6 +285,10 @@ func (f *Factory) execute(parent context.Context, r *Run, issue Issue) {
 		f.finish(r, outcomeFailed, "the issue could not be claimed: "+err.Error()+leftBehind(claim), nil)
 		return
 	}
+	// The plugin the session is about to run is brought up to date and written down, here and not
+	// earlier: the issue is this factory's now, and nothing else of it is running.
+	f.prepare(ctx, r)
+
 	// The session starts in /worker:work, which invokes no skill for its first stage.
 	f.runs.update(r, func() { r.stage("implement") })
 
@@ -360,9 +364,7 @@ func (f *Factory) execute(parent context.Context, r *Run, issue Issue) {
 		stdout.Close() // ends the two readers
 		stderr.Close()
 		<-drained
-		warning := "the worker left a process behind that is outside its process group and still held its output; the factory cannot end it, look for it on the host"
-		f.runs.update(r, func() { r.Warnings = append(r.Warnings, warning) })
-		f.runs.event(r, Event{Kind: "error", Title: "the worker left a process behind", Body: warning})
+		f.warn(r, "the worker left a process behind that is outside its process group and still held its output; the factory cannot end it, look for it on the host")
 	}
 	stdout.Close()
 	stderr.Close()

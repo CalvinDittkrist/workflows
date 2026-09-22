@@ -591,6 +591,7 @@ type ghShim struct {
 	hanging  string // the file holding how long a clone sleeps instead of cloning
 	gate     string // the file that holds a ref creation until the test lets it through
 	worker   string // the log of the claude shim: how every worker was started
+	plugins  string // the log of the claude shim: every plugin and version call before a session
 	env      []string
 }
 
@@ -606,6 +607,7 @@ func newGhShim(t *testing.T) *ghShim {
 		hanging:  filepath.Join(dir, "hanging"),
 		gate:     filepath.Join(dir, "gate"),
 		worker:   filepath.Join(dir, "workers.log"),
+		plugins:  filepath.Join(dir, "plugins.log"),
 	}
 	for _, d := range []string{g.answers, g.remotes} {
 		if err := os.MkdirAll(d, 0o700); err != nil {
@@ -616,7 +618,7 @@ func newGhShim(t *testing.T) *ghShim {
 		"PATH="+abs(t, "testdata")+string(os.PathListSeparator)+os.Getenv("PATH"),
 		"HOME="+dir, "GH_SHIM_DIR="+g.answers, "GH_SHIM_LOG="+g.log, "GH_SHIM_REMOTES="+g.remotes,
 		"GH_SHIM_FAIL="+g.failing, "GH_SHIM_STALL="+g.stalling, "GH_SHIM_HANG="+g.hanging,
-		"CLAUDE_SHIM_LOG="+g.worker)
+		"CLAUDE_SHIM_LOG="+g.worker, "CLAUDE_SHIM_PLUGIN_LOG="+g.plugins)
 	return g
 }
 
@@ -651,6 +653,40 @@ func (g *ghShim) assigns(t *testing.T, repository string, issue int, login strin
 func (g *ghShim) workerReports(t *testing.T, repository string, issue int) {
 	t.Helper()
 	g.env = append(g.env, fmt.Sprintf("CLAUDE_SHIM_PR=https://github.com/%s/pull/%d", repository, issue))
+}
+
+// installs is what the claude shim answers about this host: the version of the worker plugin its
+// user scope holds, and what `claude --version` prints.
+func (g *ghShim) installs(t *testing.T, worker, claudeCode string) {
+	t.Helper()
+	g.env = append(g.env, "CLAUDE_SHIM_WORKER_VERSION="+worker, "CLAUDE_SHIM_VERSION="+claudeCode)
+}
+
+// updatesFail makes every plugin update of the claude shim fail with that sentence, as a host whose
+// line is down meets it. What is installed can still be read, which is the state such a run uses.
+func (g *ghShim) updatesFail(t *testing.T, said string) {
+	t.Helper()
+	g.env = append(g.env, "CLAUDE_SHIM_PLUGIN_FAIL="+said)
+}
+
+// pluginCalls is every plugin and version call the factory made of claude, in the order it made
+// them, one line per call.
+func (g *ghShim) pluginCalls(t *testing.T) []string {
+	t.Helper()
+	raw, err := os.ReadFile(g.plugins)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls := []string{}
+	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+		if line != "" {
+			calls = append(calls, line)
+		}
+	}
+	return calls
 }
 
 // holdClaims makes every ref creation wait inside the shim until openClaims lets it through, so two

@@ -39,3 +39,4 @@ One file per decision, numbered, never edited after acceptance (supersede instea
 | [0033](0033-the-dashboard-is-built-into-the-factory-binary.md) | The dashboard is built into the factory binary | accepted |
 | [0034](0034-the-compact-trigger-is-raised-through-the-window.md) | The compact trigger is 200 000, and the window is what raises it | accepted |
 | [0035](0035-every-category-the-apply-phase-scaffolds-is-answerable.md) | Every category the apply phase scaffolds is answerable | accepted |
+| [0036](0036-the-factory-updates-the-worker-plugin-and-nothing-else.md) | The factory updates the worker plugin and nothing else | accepted |
