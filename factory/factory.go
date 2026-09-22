@@ -259,9 +259,9 @@ const heldPolls = 10
 //
 // An issue is left out of the reading while it is not due: an idle holding is asked about once
 // every heldPolls poll intervals, not on each poll, and the wait starts over whenever the issue is
-// in another state than it was last asked in — the run that held it ended, a pull request came of it — so the
-// factory hears at once about work that has just changed hands and keeps its questions rare about
-// work that lies as it did. A reading that failed counts as asked: GitHub said nothing either way,
+// in another state than it was last asked in — the run that held it ended, a pull request came of
+// it — so the factory hears at once about work that has just changed hands and keeps its questions
+// rare about work that lies as it did. A reading that failed counts as asked: GitHub said nothing either way,
 // and asking a rate limit again every minute is what ran into it.
 //
 // It is empty for a paused factory too. A pause is the brake on everything this host does by itself
