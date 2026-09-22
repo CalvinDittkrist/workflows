@@ -27,9 +27,6 @@ printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' \
 # The namespace: a plugin release is tagged <plugin>--vX.Y.Z and a milestone vX.Y.Z, so a tag with a
 # slash in it can be neither. It is also the tag the Go module in factory/ would be published under.
 tag="factory/v$version"
-if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
-  die "the tag $tag exists; bump the version in factory/VERSION and commit it"
-fi
 if [ -n "$(git status --porcelain)" ]; then
   die "the working tree has uncommitted changes; commit them, so the tag names what is released"
 fi
@@ -40,6 +37,11 @@ remote=$(git ls-remote origin "refs/tags/$tag" refs/heads/main) \
   || die "cannot read the tags and branches of origin; a release is tagged from a checkout that reaches it"
 if printf '%s\n' "$remote" | awk -v t="refs/tags/$tag" '$2 == t { taken = 1 } END { exit !taken }'; then
   die "the tag $tag exists on origin; bump the version in factory/VERSION and commit it"
+fi
+if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+  # Tagged here and never pushed, which is where a run without --push ends: the release is one push
+  # away, so this says that rather than to bump a version the tag already carries.
+  die "the tag $tag exists here and not on origin; push it with: git push origin $tag"
 fi
 main=$(printf '%s\n' "$remote" | awk '$2 == "refs/heads/main" { print $1 }')
 [ -n "$main" ] || die "origin has no main branch; releases are tagged on main (docs/repo-standard.md)"

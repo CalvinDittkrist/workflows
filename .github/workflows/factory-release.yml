@@ -43,17 +43,10 @@ jobs:
             echo "error: $GITHUB_SHA is not on main; a factory release is tagged on main (docs/repo-standard.md)" >&2
             exit 1
           }
-      - name: Build the dashboard the binary embeds
-        run: make ui
-      - name: One static binary per factory host architecture
-        # Without cgo and with the dashboard inside, so the host runs one file: a Raspberry Pi is
-        # arm64, a small server amd64. The gate ran before the tag; these binaries are not gated again.
-        run: |
-          mkdir dist
-          for arch in amd64 arm64; do
-            CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go -C factory build -trimpath -o "../dist/factory-linux-$arch" .
-          done
-          cd dist && sha256sum factory-linux-* > checksums.txt
+      - name: The binaries, the dashboard inside them and their checksums
+        # What they are built with is in scripts/factory-binaries.sh, which a maintainer runs too.
+        # The gate ran before the tag; these binaries are not gated again.
+        run: make binaries
       - uses: actions/upload-artifact@v7
         with:
           name: factory-binaries
@@ -76,8 +69,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         # Not the latest release: the repository's releases are its milestones, and a factory binary
-        # is not one of them.
+        # is not one of them. A re-run after a half-finished upload attaches the assets to the release
+        # it already made, which is safe because the tag cannot move and the build is reproducible:
+        # what the second run writes is what the first one wrote.
         run: |
           gh release create "$GITHUB_REF_NAME" --verify-tag --latest=false \
             --title "factory v${GITHUB_REF_NAME#factory/v}" --generate-notes \
-            dist/factory-linux-amd64 dist/factory-linux-arm64 dist/checksums.txt
+            dist/factory-linux-amd64 dist/factory-linux-arm64 dist/checksums.txt \
+            || gh release upload --clobber "$GITHUB_REF_NAME" \
+              dist/factory-linux-amd64 dist/factory-linux-arm64 dist/checksums.txt

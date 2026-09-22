@@ -1,4 +1,5 @@
 import fnmatch
+import hashlib
 import os
 import re
 import shutil
@@ -83,6 +84,8 @@ class FactoryReleaseTests(unittest.TestCase):
         self.assertEqual(self.tags(), ["factory/v0.1.0"])
         # Annotated, and it says what it is: `git show` of the tag carries the message.
         self.assertIn("factory v0.1.0", self.git("tag", "-l", "-n1", "factory/v0.1.0"))
+        # It names the commit that was reviewed, which is the whole of what stands behind a binary.
+        self.assertEqual(self.git("rev-parse", "factory/v0.1.0^{}"), self.git("rev-parse", "HEAD"))
         # Nothing pushed without --push, and the command that would is printed.
         self.assertEqual(self.origin_tags(), [])
         self.assertIn("git push origin factory/v0.1.0", r.stdout)
@@ -95,20 +98,22 @@ class FactoryReleaseTests(unittest.TestCase):
         self.assertEqual(self.origin_tags(), ["factory/v0.1.0"])
 
     def test_the_tag_is_neither_a_plugin_tag_nor_a_milestone_tag(self):
+        """A version that would read as a milestone on its own: the namespace is what keeps the three
+        kinds of tag apart, so it is read from a release of 1.2.3, not only of the fixture's 0.1.0."""
         self.version("1.2.3")
         self.commit()
         self.assertEqual(self.release("factory").returncode, 0)
-        tag = self.tags()[0]
-        self.assertEqual(tag, "factory/v1.2.3")
-        self.assertNotRegex(tag, r"^v\d+\.\d+\.\d+$")  # a milestone release of the orchestrator
-        self.assertNotIn("--v", tag)  # a plugin release of `claude plugin tag`
+        self.assertEqual(self.tags(), ["factory/v1.2.3"])  # not v1.2.3, and not <plugin>--v1.2.3
 
-    def test_a_tag_that_exists_is_refused_before_the_gate_runs(self):
-        self.git("tag", "factory/v0.1.0")
+    def test_a_tag_that_is_here_and_not_on_origin_is_a_release_one_push_away(self):
+        """Where a run without --push ends. Running it again must not say to bump the version: the
+        tag already carries this one, and the release is a push away."""
+        self.assertEqual(self.release("factory").returncode, 0)
         r = self.release("factory")
         self.assertNotEqual(r.returncode, 0)
-        self.assertIn("error: the tag factory/v0.1.0 exists; bump the version", r.stderr)
-        self.assertNotIn("the gate ran", r.stdout)
+        self.assertIn("error: the tag factory/v0.1.0 exists here and not on origin; "
+                      "push it with: git push origin factory/v0.1.0", r.stderr)
+        self.assertEqual(self.tags(), ["factory/v0.1.0"])
 
     def test_a_tag_that_exists_on_origin_is_refused_before_the_gate_runs(self):
         """A checkout that has not fetched for a while knows nothing of a tag another release made:
@@ -129,6 +134,8 @@ class FactoryReleaseTests(unittest.TestCase):
         self.commit(push=False)
         r = self.release("factory")
         self.assertNotEqual(r.returncode, 0)
+        self.assertIn(f"error: HEAD is {self.git('rev-parse', 'HEAD').strip()} and origin/main is",
+                      r.stderr)
         self.assertIn("releases are tagged on main", r.stderr)
         self.assertNotIn("the gate ran", r.stdout)
         self.assertEqual(self.tags(), [])
@@ -174,6 +181,43 @@ class FactoryReleaseTests(unittest.TestCase):
                         f"{self.tags()[0]} does not match {trigger.group(1)}")
 
 
+class FactoryBinariesTests(unittest.TestCase):
+    """`scripts/factory-binaries.sh`: what a factory host downloads. The flags that build a released
+    binary are written there and nowhere else, so the test runs it and reads what came out."""
+
+    def test_it_builds_one_static_linux_binary_per_host_architecture(self):
+        out = tempfile.TemporaryDirectory(prefix="wf-binaries-")
+        self.addCleanup(out.cleanup)
+        r = subprocess.run(["bash", "scripts/factory-binaries.sh", out.name],
+                           cwd=ROOT, env=os.environ, text=True, capture_output=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        for arch, machine in (("amd64", "x86-64"), ("arm64", "aarch64")):
+            with self.subTest(arch=arch):
+                built = Path(out.name) / f"factory-linux-{arch}"
+                described = subprocess.run(["file", "-b", str(built)], text=True,
+                                           capture_output=True, check=True).stdout
+                self.assertIn("ELF 64-bit", described)
+                self.assertIn(machine, described)
+                # No cgo, so the host it lands on needs no libc of the right version.
+                self.assertIn("statically linked", described)
+
+    def test_the_checksums_are_the_checksums_of_those_binaries(self):
+        """What a host verifies its download against. A checksum file that names something else, or
+        that is written before the build, is worth nothing."""
+        out = tempfile.TemporaryDirectory(prefix="wf-binaries-")
+        self.addCleanup(out.cleanup)
+        subprocess.run(["bash", "scripts/factory-binaries.sh", out.name],
+                       cwd=ROOT, env=os.environ, check=True, capture_output=True)
+        said = {}
+        for line in (Path(out.name) / "checksums.txt").read_text().splitlines():
+            digest, name = line.split()
+            said[name.lstrip("*")] = digest
+        self.assertEqual(sorted(said), ["factory-linux-amd64", "factory-linux-arm64"])
+        for name, digest in said.items():
+            with self.subTest(name=name):
+                self.assertEqual(hashlib.sha256((Path(out.name) / name).read_bytes()).hexdigest(), digest)
+
+
 class WorkflowTriggerTests(unittest.TestCase):
     """Which push starts which workflow. The binaries are built by a factory version tag and by
     nothing else, and a milestone tag of the orchestrator still starts nothing at all."""
@@ -216,8 +260,11 @@ class WorkflowTriggerTests(unittest.TestCase):
 
 def on_block(workflow):
     """The lines of a workflow's `on:` block: everything indented under it."""
+    said = workflow.read_text().split("\non:\n", 1)
+    if len(said) != 2:
+        raise AssertionError(f"{workflow.name} writes its triggers in a way this test cannot read")
     lines = []
-    for line in workflow.read_text().split("\non:\n", 1)[1].splitlines():
+    for line in said[1].splitlines():
         if line and not line.startswith(" "):
             break
         lines.append(line)
@@ -236,7 +283,9 @@ def patterns(workflow, kind):
 
 
 def starts(workflow, ref):
-    """Whether pushing `ref` starts `workflow`, matched the way GitHub matches a push trigger."""
+    """Whether pushing `ref` starts `workflow`. fnmatch stands in for GitHub's ref filter, which
+    differs in one place: there `*` stops at a slash and `**` crosses it. No pattern here relies on
+    that, and one that did would have to be matched properly."""
     kind, name = ("branches", ref[len("refs/heads/"):]) if ref.startswith("refs/heads/") \
         else ("tags", ref[len("refs/tags/"):])
     return any(fnmatch.fnmatch(name, said) for said in patterns(workflow, kind))

@@ -1,7 +1,7 @@
 # The gate: `make check` runs everything CI gates on, locally and in the CI job named `check`.
 SCRIPTS := $(wildcard plugins/*/scripts/*.sh scripts/*.sh) $(wildcard tests/shims/*) factory/testdata/gh
 
-.PHONY: check lint validate standard test ui factory factory-go browser
+.PHONY: check lint validate standard test ui factory factory-go browser binaries
 check: lint validate standard test ui factory browser
 
 # The factory's dashboard: an npm package that Vite builds into factory/ui/dist/app, which the binary
@@ -31,6 +31,11 @@ standard:
 
 test:
 	python3 -m unittest discover -s tests -v
+
+# The binaries a factory host downloads, built the way the release workflow builds them: the
+# dashboard first, because the binary embeds it, then one static binary per host architecture.
+binaries: $(UI_BUILD)
+	scripts/factory-binaries.sh
 
 # The dashboard: the same lint and build the CI job runs, on the sources the binary serves.
 ui: $(UI_BUILD)

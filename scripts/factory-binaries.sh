@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# Build the binaries a factory host downloads, with their checksums. `make binaries` runs this after
+# building the dashboard the binary embeds, and the release workflow runs that, so the flags a
+# released binary was built with are written here and nowhere else.
+# Usage: factory-binaries.sh [output directory, dist by default]
+set -euo pipefail
+cd "$(dirname "$0")/.."
+out="${1:-dist}"
+mkdir -p "$out"
+out="$(cd "$out" && pwd)"
+
+# Linux, because that is what a factory host runs, and both architectures it comes as: a Raspberry Pi
+# is arm64, a small server amd64. Without cgo, so the binary needs nothing of the host it lands on,
+# and with -trimpath, so two builds of the same commit are the same file.
+for arch in amd64 arm64; do
+  CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go -C factory build -trimpath -o "$out/factory-linux-$arch" .
+done
+
+# sha256sum is the GNU tool on the CI runner, shasum the one macOS brings; they write the same format.
+sums() {
+  if command -v sha256sum >/dev/null 2>&1; then sha256sum "$@"; else shasum -a 256 "$@"; fi
+}
+(cd "$out" && sums factory-linux-* > checksums.txt)
+echo "built factory-linux-amd64, factory-linux-arm64 and checksums.txt in $out"
