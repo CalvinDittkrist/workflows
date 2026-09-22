@@ -777,6 +777,20 @@ func (g *ghShim) branchAt(t *testing.T, repository, branch, at string) {
 	g.git(t, g.remotePath(repository), "update-ref", "refs/heads/"+branch, at)
 }
 
+// defaultBranchIs points the head of a repository on the shim's GitHub at one of its branches, as a
+// repository that moves its line of work does.
+func (g *ghShim) defaultBranchIs(t *testing.T, repository, branch string) {
+	t.Helper()
+	g.git(t, g.remotePath(repository), "symbolic-ref", "HEAD", "refs/heads/"+branch)
+}
+
+// dropBranch removes a branch from the shim's GitHub, which is what a clone made before it still
+// remembers until it prunes.
+func (g *ghShim) dropBranch(t *testing.T, repository, branch string) {
+	t.Helper()
+	g.git(t, g.remotePath(repository), "update-ref", "-d", "refs/heads/"+branch)
+}
+
 // commitOn puts one more commit on a branch of the shim's GitHub, which is what a clone made before
 // it has yet to see.
 func (g *ghShim) commitOn(t *testing.T, repository, branch string) string {

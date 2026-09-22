@@ -14,13 +14,15 @@ import (
 // Config is the configuration file, the whole of it. The factory is configured by this file alone:
 // nothing is read from the environment and nothing is written back.
 type Config struct {
-	Listen       string      `json:"listen"`
-	Label        string      `json:"label"`
-	Deadline     string      `json:"deadline"`
-	Poll         string      `json:"poll"`
-	DataDir      string      `json:"data_dir"`
-	WorkerArgs   []string    `json:"worker_args"`
-	Paused       bool        `json:"paused"`
+	Listen     string   `json:"listen"`
+	Label      string   `json:"label"`
+	Deadline   string   `json:"deadline"`
+	Poll       string   `json:"poll"`
+	DataDir    string   `json:"data_dir"`
+	WorkerArgs []string `json:"worker_args"`
+	// Paused is a pointer because its default is not the zero value: a file that does not name it
+	// runs paused, so working a line unattended is always something the operator wrote down.
+	Paused       *bool       `json:"paused"`
 	Repositories []Connected `json:"repositories"`
 }
 
@@ -86,13 +88,13 @@ var repository = regexp.MustCompile(`^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$`)
 
 // A base branch is a branch name, and it reaches git as a ref and gh as an argument: no spelling
 // that opens with a hyphen, walks out of refs/heads with .. or ends a ref name.
-var branch = regexp.MustCompile(`^[A-Za-z0-9._/-]+$`)
+var branchSpelling = regexp.MustCompile(`^[A-Za-z0-9._/-]+$`)
 
 // validBase says whether a name may be used as a base branch. It is asked of the configuration here
 // and of what a repository declares for itself (declaredBase), because both end up in the same ref
 // and the same command line.
 func validBase(name string) bool {
-	return branch.MatchString(name) && !strings.HasPrefix(name, "-") &&
+	return branchSpelling.MatchString(name) && !strings.HasPrefix(name, "-") &&
 		!strings.Contains(name, "..") && !strings.HasPrefix(name, "/") && !strings.HasSuffix(name, "/")
 }
 
@@ -130,7 +132,7 @@ func Load(path string) (Settings, error) {
 		Deadline:     defaultDeadline,
 		Poll:         defaultPoll,
 		WorkerArgs:   c.WorkerArgs,
-		Paused:       c.Paused,
+		Paused:       c.Paused == nil || *c.Paused,
 		Repositories: []Connected{},
 	}
 	if c.Listen != "" {

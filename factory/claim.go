@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -22,9 +23,14 @@ import (
 // [ADR 0022]: ../docs/adr/0022-the-factory-is-a-second-driver-over-the-worker-pipeline.md
 // [ADR 0024]: ../docs/adr/0024-a-claim-is-the-creation-of-the-branch-through-the-api.md
 
-// gitTimeout bounds one git command on a clone. A fetch is a request over the host's line, so it is
-// given the same room a read from GitHub has.
-const gitTimeout = 60 * time.Second
+// gitTimeout bounds one git command on a clone: a question asked of the repository on disk, which
+// answers at once or is hanging. fetchTimeout bounds the one command that is a transfer instead —
+// the whole remote, over the host's line — and it is given the room a clone of the same repository
+// has, because failing a claim for a slow line costs the issue its place in the line.
+const (
+	gitTimeout   = 60 * time.Second
+	fetchTimeout = cloneTimeout
+)
 
 // errLost is the answer of a claim another claimer won: GitHub refuses the second creation of a
 // reference, whatever commit it names, which is what makes the claim decide a race.
@@ -55,8 +61,16 @@ func (f *Factory) claim(ctx context.Context, r *Run, issue Issue) (claimed, erro
 	// The remote is fetched before anything is read of it, so the rule below reads what the
 	// repository says now and the branch is cut from what the base holds now: a clone is written once
 	// and never checked out again, and its working tree is the day this host cloned it.
-	if _, err := git(ctx, clone, "fetch", "--quiet", "--prune", "origin"); err != nil {
+	if _, err := gitWithin(ctx, clone, fetchTimeout, "fetch", "--quiet", "--prune", "origin"); err != nil {
 		return claimed{}, fmt.Errorf("%s could not be fetched into %s: %w; can this host reach the repository?", connected.Name, clone, err)
+	}
+	// A fetch does not touch refs/remotes/origin/HEAD. That reference is written once, when this host
+	// cloned the repository, so "the head the remote points at" would be the head it pointed at then
+	// — and a repository that moves its default branch afterwards would be branched off the old one
+	// for as long as this clone lives, or off a name the remote no longer has at all. Asking the
+	// remote for it again with every claim is what keeps the rule's second step true.
+	if _, err := git(ctx, clone, "remote", "set-head", "origin", "--auto"); err != nil {
+		log.Printf("error: the head %s points at could not be read into %s: %v; this claim uses what that clone last knew", connected.Name, clone, err)
 	}
 	base := baseBranch(ctx, connected, clone)
 	head, err := git(ctx, clone, "rev-parse", "refs/remotes/origin/"+base)
@@ -265,10 +279,15 @@ func declaredBase(ctx context.Context, clone, branch string) string {
 		Env map[string]string `json:"env"`
 	}
 	if err := json.Unmarshal([]byte(raw), &settings); err != nil {
+		log.Printf("error: the .claude/settings.json of %s on %s is not JSON: %v; this run is branched as if the repository declared no base", clone, branch, err)
 		return ""
 	}
 	declared := settings.Env["WF_BASE_BRANCH"]
+	if declared == "" { // the repository declares nothing, which is the usual case and says nothing
+		return ""
+	}
 	if !validBase(declared) {
+		log.Printf("error: %s declares WF_BASE_BRANCH=%q on %s, which is no branch name; this run is branched as if it declared none", clone, declared, branch)
 		return ""
 	}
 	return declared
@@ -347,7 +366,13 @@ func slug(title string) string {
 // it gets a process group and a deadline of its own, because a fetch that hangs must not hold the run
 // it belongs to for ever.
 func git(ctx context.Context, dir string, args ...string) (string, error) {
-	out, reason, err := command(ctx, gitTimeout, "git", append([]string{"-C", dir}, args...)...)
+	return gitWithin(ctx, dir, gitTimeout, args...)
+}
+
+// gitWithin is git with a deadline of the caller's choosing, for the commands the usual one is too
+// short for.
+func gitWithin(ctx context.Context, dir string, within time.Duration, args ...string) (string, error) {
+	out, reason, err := command(ctx, within, "git", append([]string{"-C", dir}, args...)...)
 	if err != nil {
 		return "", fmt.Errorf("git %s: %s", strings.Join(args, " "), reason)
 	}

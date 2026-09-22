@@ -51,7 +51,7 @@ type Factory struct {
 	polledAt   time.Time
 	connecting bool
 	user       string          // the login this host's gh is logged in as, read once and kept
-	unclonable map[string]bool // repositories without a clone, so the log says it once and not per poll
+	held       map[string]bool // repositories this factory claims nothing from, so the log says it once
 	// quotaUntil is served empty until the quota check arrives (ADR 0028); the interface carries the
 	// state from the start so the ticket that fills it changes no reader.
 	quotaUntil *time.Time
@@ -85,7 +85,7 @@ func New(settings Settings, fake bool) (*Factory, error) {
 		return nil, fmt.Errorf("the factory cannot find its own binary: %w", err)
 	}
 	f := &Factory{settings: settings, fake: fake, runs: runs, started: time.Now(), self: self,
-		wake: make(chan struct{}, 1), unclonable: map[string]bool{}}
+		wake: make(chan struct{}, 1), held: map[string]bool{}}
 	f.source = &gitHub{repositories: settings.Repositories, label: settings.Label}
 	if fake {
 		f.source = &canned{repositories: settings.Repositories, started: f.started}
@@ -174,17 +174,35 @@ func (f *Factory) claimable(repository string) bool {
 	if f.fake { // fake mode claims nothing and clones nothing: its worker runs where the factory does
 		return true
 	}
+	f.mu.Lock()
+	held := f.held[repository]
+	f.mu.Unlock()
+	if held {
+		return false
+	}
 	if _, err := os.Stat(filepath.Join(clonePath(f.settings.DataDir, repository), ".git")); err == nil {
 		return true
 	}
+	f.hold(repository, "has no clone on this host; see the error of the clone above")
+	return false
+}
+
+// hold takes a repository out of the claiming line for as long as this factory lives, and says why
+// once. It is the answer to a failure that is the host's or GitHub's and not the issue's: the next
+// issue of that repository would fail the same way, and because the next run starts the moment one
+// ends, a line of twenty issues would be spent on it in seconds. The factory cannot tell a blip from
+// a host that is simply broken and never retries by itself ([ADR 0026]), so what is held waits for
+// the person who starts the factory again.
+//
+// [ADR 0026]: ../docs/adr/0026-the-factory-never-deletes-work-on-its-own.md
+func (f *Factory) hold(repository, reason string) {
 	f.mu.Lock()
-	said := f.unclonable[repository]
-	f.unclonable[repository] = true
+	said := f.held[repository]
+	f.held[repository] = true
 	f.mu.Unlock()
 	if !said {
-		log.Printf("error: %s has no clone on this host, so its issues are left in the line; see the error of the clone above, then start the factory again", repository)
+		log.Printf("error: %s %s; its issues keep their place in the line and this factory claims none of them until it is started again", repository, reason)
 	}
-	return false
 }
 
 // waiting is the queue without the issues a run has already taken. It is what the factory would
@@ -257,6 +275,12 @@ func (f *Factory) execute(parent context.Context, r *Run, issue Issue) {
 			f.finish(r, outcomeInterrupted, "the factory stopped while this run was claiming the issue"+leftBehind(claim), nil)
 			return
 		}
+		if !claim.created {
+			// Nothing of this issue was touched, so the reason lies with this host or with GitHub and
+			// the issue behind it would meet the same one. The repository is held rather than worked
+			// through; this run stays as the record a person reads.
+			f.hold(issue.Repository, "could not be claimed from: "+err.Error())
+		}
 		f.finish(r, outcomeFailed, "the issue could not be claimed: "+err.Error()+leftBehind(claim), nil)
 		return
 	}
@@ -265,7 +289,7 @@ func (f *Factory) execute(parent context.Context, r *Run, issue Issue) {
 
 	cmd, err := f.worker(ctx, issue, claim)
 	if err != nil {
-		f.finish(r, outcomeFailed, "no worker could be started: "+err.Error(), nil)
+		f.finish(r, outcomeFailed, "no worker could be started: "+err.Error()+leftBehind(claim), nil)
 		return
 	}
 	// The worker starts subprocesses of its own; the deadline and the stop have to reach all of them,
@@ -279,14 +303,14 @@ func (f *Factory) execute(parent context.Context, r *Run, issue Issue) {
 	// left the group is not, which is why the reading below has an end of its own.
 	stdout, stdoutWriter, err := os.Pipe()
 	if err != nil {
-		f.finish(r, outcomeFailed, "the factory could not open a pipe for the worker: "+err.Error(), nil)
+		f.finish(r, outcomeFailed, "the factory could not open a pipe for the worker: "+err.Error()+leftBehind(claim), nil)
 		return
 	}
 	stderr, stderrWriter, err := os.Pipe()
 	if err != nil {
 		stdout.Close()
 		stdoutWriter.Close()
-		f.finish(r, outcomeFailed, "the factory could not open a pipe for the worker: "+err.Error(), nil)
+		f.finish(r, outcomeFailed, "the factory could not open a pipe for the worker: "+err.Error()+leftBehind(claim), nil)
 		return
 	}
 	cmd.Stdout, cmd.Stderr = stdoutWriter, stderrWriter
@@ -295,7 +319,7 @@ func (f *Factory) execute(parent context.Context, r *Run, issue Issue) {
 		stdoutWriter.Close()
 		stderr.Close()
 		stderrWriter.Close()
-		f.finish(r, outcomeFailed, "the worker could not be started: "+err.Error(), nil)
+		f.finish(r, outcomeFailed, "the worker could not be started: "+err.Error()+leftBehind(claim), nil)
 		return
 	}
 	stdoutWriter.Close() // the worker holds the only writing ends now

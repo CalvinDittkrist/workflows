@@ -218,6 +218,50 @@ func TestAClaimReadsTheBaseTheRepositoryDeclaresNowAndNotTheOneItsCloneWasWritte
 	}
 }
 
+// The remote moves its default branch after this host cloned it: a repository that adopts a line of
+// its own, or renames the one it had. A clone remembers the head it was written with and a fetch
+// never touches that memory, so the claim asks the remote for it again — the branch is cut from the
+// base the remote points at now, and a repository whose old default is gone is still a repository
+// this factory works.
+func TestAClaimFollowsTheRemoteWhenItMovesItsDefaultBranch(t *testing.T) {
+	gh := newGhShim(t)
+	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
+	gh.loggedInAs(t, "factory-bot")
+	gh.assigns(t, "acme/edge-sensors", claimedIssue, "factory-bot")
+	gh.workerReports(t, "acme/edge-sensors", claimedIssue)
+
+	data := filepath.Join(t.TempDir(), "data")
+	gh.cloneInto(t, data, "acme/edge-sensors") // cloned while the remote's head was main
+	// The repository moves its work to dev and lets main go, as a rename does.
+	gh.branchAt(t, "acme/edge-sensors", "dev", gh.head(t, "acme/edge-sensors", "main"))
+	dev := gh.commitOn(t, "acme/edge-sensors", "dev")
+	gh.defaultBranchIs(t, "acme/edge-sensors", "dev")
+	gh.dropBranch(t, "acme/edge-sensors", "main")
+
+	f := gh.work(t, config{"poll": "50ms", "deadline": "90s", "data_dir": data,
+		"repositories": []string{"acme/edge-sensors"}})
+	run := f.ended(t, 1)
+
+	if run.Outcome != "ready" {
+		t.Fatalf("the run ended as %q (%s), want ready; the factory's log:\n%s", run.Outcome, run.Reason, f.output(t))
+	}
+	if run.Base != "dev" {
+		t.Errorf("the run records the base %q, want dev, the branch the remote points at now", run.Base)
+	}
+	if head := gh.head(t, "acme/edge-sensors", claimedBranch); head != dev {
+		t.Errorf("%s of the remote is at %q, want the head of dev (%s)", claimedBranch, head, dev)
+	}
+	// The shim has no answer for `repo view`, so a run that reached the rule's third step would have
+	// failed: the head above is the one the remote was asked for, not GitHub's default branch.
+	workers := gh.workers(t)
+	if len(workers) != 1 {
+		t.Fatalf("the factory started %d workers, want one", len(workers))
+	}
+	if base := workers[0].settings(t).Env["WF_BASE_BRANCH"]; base != "dev" {
+		t.Errorf("the worker's settings carry WF_BASE_BRANCH=%q, want dev, the base its branch was cut from", base)
+	}
+}
+
 // A claim that fails after the branch was created is the one failure that leaves something on the
 // remote. The run says so, because nothing rolls a claim back ([ADR 0026]) and the operator is the
 // one who decides.
@@ -299,37 +343,98 @@ func TestAClaimThatFailsBeforeTheBranchExistsSaysNothingWasClaimed(t *testing.T)
 	}
 }
 
+// A claim that failed without touching anything failed for a reason of this host or of GitHub, and
+// the issue behind it in the line would meet the same one. Because the next run starts the moment one
+// ends, a repository whose claims fail would be worked through in seconds, every issue of it spent on
+// a run that reached nothing. The repository is held instead, until a person starts the factory again
+// ([ADR 0026]).
+//
+// [ADR 0026]: ../docs/adr/0026-the-factory-never-deletes-work-on-its-own.md
+func TestARepositoryWhoseClaimTouchedNothingIsHeldInsteadOfSpendingItsLine(t *testing.T) {
+	gh := newGhShim(t)
+	now := time.Now().UTC()
+	gh.remote(t, "acme/edge-sensors")
+	gh.issues(t, "acme/edge-sensors",
+		openIssue(claimedIssue, claimedTitle, now.Add(-72*time.Hour)),
+		openIssue(105, "Roll the log files", now.Add(-71*time.Hour)))
+	gh.timeline(t, "acme/edge-sensors", claimedIssue, labeled("factory", now.Add(-6*time.Hour)))
+	gh.timeline(t, "acme/edge-sensors", 105, labeled("factory", now.Add(-5*time.Hour)))
+	gh.fail(t, "api user*") // this host cannot read the user it is logged in as
+
+	data := filepath.Join(t.TempDir(), "data")
+	gh.cloneInto(t, data, "acme/edge-sensors")
+	f := gh.work(t, config{"poll": "50ms", "deadline": "90s", "data_dir": data,
+		"repositories": []string{"acme/edge-sensors"}})
+	run := f.ended(t, 1)
+
+	if run.Outcome != "failed" || run.Issue != claimedIssue {
+		t.Fatalf("run 1 is issue #%d ended as %q (%s), want the head of the line failed; the factory's log:\n%s",
+			run.Issue, run.Outcome, run.Reason, f.output(t))
+	}
+	// Several more polls: the issue behind it is offered every one of them and taken by none.
+	asked := "api " + issuesRequest("acme/edge-sensors", "factory")
+	f.eventually(t, 20*time.Second, "several more polls", func() bool { return gh.made(t, asked) >= 8 })
+	var line apiLine
+	f.get(t, "/api/line", &line)
+	if len(line.Queue) != 1 || line.Queue[0].Number != 105 || len(line.Done) != 1 {
+		t.Errorf("after %d polls the line holds %d waiting and %d ended runs, want issue #105 still waiting after the one failure",
+			gh.made(t, asked), len(line.Queue), len(line.Done))
+	}
+	if records, _ := filepath.Glob(filepath.Join(f.data, "run-*.json")); len(records) != 1 {
+		t.Errorf("the factory wrote %d run records, want the one failure: the rest of the line is held, not spent", len(records))
+	}
+	if said := strings.Count(f.output(t), "until it is started again"); said != 1 {
+		t.Errorf("the factory says %d times that it holds the repository, want once and not per poll; its log:\n%s", said, f.output(t))
+	}
+}
+
 // An issue whose repository has no clone on this host cannot be worked at all: the worktree a worker
 // runs in is made in that clone. A run is what takes an issue out of the line for good, so the issue
 // keeps its place instead — a host that could not reach one repository when it started would
 // otherwise spend that repository's whole line on runs that never touched GitHub.
 func TestAnIssueOfARepositoryWithoutACloneKeepsItsPlaceInTheLine(t *testing.T) {
 	gh := newGhShim(t)
-	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
-	gh.fail(t, "repo clone*") // the host cannot reach the repository when the factory connects
+	now := time.Now().UTC()
+	gh.remote(t, "acme/edge-sensors")
+	gh.issues(t, "acme/edge-sensors", openIssue(claimedIssue, claimedTitle, now.Add(-72*time.Hour)))
+	gh.timeline(t, "acme/edge-sensors", claimedIssue, labeled("factory", now.Add(-6*time.Hour)))
+	// The repository behind it in the line, which this host does have a clone of: its issue is what
+	// proves the line is walked past the one that cannot be claimed rather than stopped at it.
+	gh.routed(t, "acme/backtest", 118, "Roll the log files")
+	gh.timeline(t, "acme/backtest", 118, labeled("factory", now.Add(-5*time.Hour)))
+	gh.loggedInAs(t, "factory-bot")
+	gh.assigns(t, "acme/backtest", 118, "factory-bot")
+	gh.workerReports(t, "acme/backtest", 118)
 
 	data := filepath.Join(t.TempDir(), "data")
-	f := gh.work(t, config{"poll": "50ms", "deadline": "90s", "data_dir": data,
-		"repositories": []string{"acme/edge-sensors"}})
-	f.queue(t, 1)
+	gh.cloneInto(t, data, "acme/backtest")
+	gh.fail(t, "repo clone*") // the host cannot reach the other repository when the factory connects
 
-	// Several more polls: the issue is offered every one of them and taken by none.
+	f := gh.work(t, config{"poll": "50ms", "deadline": "90s", "data_dir": data,
+		"repositories": []string{"acme/edge-sensors", "acme/backtest"}})
+	run := f.ended(t, 1)
+	if run.Outcome != "ready" || run.Issue != 118 {
+		t.Fatalf("run 1 is issue #%d ended as %q (%s), want the issue behind the unclonable one worked; the factory's log:\n%s",
+			run.Issue, run.Outcome, run.Reason, f.output(t))
+	}
+
+	// Several more polls: the issue without a clone is offered every one of them and taken by none.
 	asked := "api " + issuesRequest("acme/edge-sensors", "factory")
 	f.eventually(t, 20*time.Second, "several more polls", func() bool { return gh.made(t, asked) >= 8 })
 	var line apiLine
 	f.get(t, "/api/line", &line)
-	if len(line.Queue) != 1 || len(line.Now) != 0 || len(line.Done) != 0 {
-		t.Errorf("after %d polls the line holds %d waiting, %d running and %d ended runs, want the issue still waiting",
-			gh.made(t, asked), len(line.Queue), len(line.Now), len(line.Done))
+	if len(line.Queue) != 1 || line.Queue[0].Number != claimedIssue || len(line.Now) != 0 || len(line.Done) != 1 {
+		t.Errorf("after %d polls the line holds %d waiting, %d running and %d ended runs, want issue #%d still waiting",
+			gh.made(t, asked), len(line.Queue), len(line.Now), len(line.Done), claimedIssue)
 	}
-	if records, _ := filepath.Glob(filepath.Join(f.data, "run-*.json")); len(records) != 0 {
-		t.Errorf("the factory wrote %d run records for an issue it cannot claim, which would take it out of the line for good", len(records))
+	if records, _ := filepath.Glob(filepath.Join(f.data, "run-*.json")); len(records) != 1 {
+		t.Errorf("the factory wrote %d run records, want the one of the repository it can work: a run of the other would take its issue out of the line for good", len(records))
 	}
 	if head := gh.head(t, "acme/edge-sensors", claimedBranch); head != "" {
 		t.Errorf("the factory created %s on the remote without a clone to work it in", claimedBranch)
 	}
-	if !strings.Contains(f.output(t), "has no clone on this host") {
-		t.Errorf("the factory says nothing about the repository it has no clone of; its log:\n%s", f.output(t))
+	if said := strings.Count(f.output(t), "has no clone on this host"); said != 1 {
+		t.Errorf("the factory says %d times that it has no clone of the repository, want once and not per poll; its log:\n%s", said, f.output(t))
 	}
 }
 

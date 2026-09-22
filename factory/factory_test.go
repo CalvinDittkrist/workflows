@@ -668,23 +668,33 @@ func TestTheReportIsReadFromMarkdown(t *testing.T) {
 
 // ---- starting and watching the real binary ----
 
-type config map[string]any
-
-type factory struct {
-	cmd     *exec.Cmd
-	address string
-	data    string
-	log     string
+// A configuration that does not name paused is paused. The factory spends tokens and pushes branches
+// with nobody watching, so working a line is something an operator wrote down and never what a file
+// that forgot the key does by itself — the command line can add the brake and never take it away.
+func TestAConfigurationThatDoesNotNamePausedIsPaused(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		named  config
+		paused bool
+	}{
+		{name: "a configuration that says nothing about it", named: config{}, paused: true},
+		{name: "a configuration that works its line", named: config{"paused": false}, paused: false},
+		{name: "a configuration that is paused", named: config{"paused": true}, paused: true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			c.named["data_dir"] = filepath.Join(t.TempDir(), "data")
+			c.named["repositories"] = []string{"acme/edge-sensors"}
+			settings, err := Load(writeConfig(t, c.named))
+			if err != nil {
+				t.Fatalf("the configuration was refused: %v", err)
+			}
+			if settings.Paused != c.paused {
+				t.Errorf("the factory reads it as paused=%v, want %v", settings.Paused, c.paused)
+			}
+		})
+	}
 }
 
-// start writes a configuration, starts the binary in fake mode and waits until it answers.
-func start(t *testing.T, c config) *factory {
-	t.Helper()
-	return launch(t, c, nil, "-fake")
-}
-
-// launch starts the binary with the given arguments and environment and waits until it answers. The
-// environment is the test process's, so a shim on PATH is added by the caller.
 // Every decision one of the factory's files names is a link to the ADR that holds it, and a link
 // that names no file is a decision an agent cannot read. The ADRs are renamed while they are written,
 // so the links are held to the documents themselves.
@@ -703,6 +713,23 @@ func TestEveryDecisionTheFactoryLinksToIsAnADRThatExists(t *testing.T) {
 	}
 }
 
+type config map[string]any
+
+type factory struct {
+	cmd     *exec.Cmd
+	address string
+	data    string
+	log     string
+}
+
+// start writes a configuration, starts the binary in fake mode and waits until it answers.
+func start(t *testing.T, c config) *factory {
+	t.Helper()
+	return launch(t, c, nil, "-fake")
+}
+
+// launch starts the binary with the given arguments and environment and waits until it answers. The
+// environment is the test process's, so a shim on PATH is added by the caller.
 func launch(t *testing.T, c config, env []string, args ...string) *factory {
 	t.Helper()
 	if _, ok := c["listen"]; !ok {
@@ -713,6 +740,12 @@ func launch(t *testing.T, c config, env []string, args ...string) *factory {
 	}
 	if _, ok := c["repositories"]; !ok {
 		c["repositories"] = []string{"acme/edge-sensors", "acme/backtest"}
+	}
+	if _, ok := c["paused"]; !ok {
+		// A test works its line unless it says otherwise. The default of a configuration file is the
+		// other way round, which is read where it is decided
+		// (TestAConfigurationThatDoesNotNamePausedIsPaused).
+		c["paused"] = false
 	}
 	path := writeConfig(t, c)
 	f := &factory{
