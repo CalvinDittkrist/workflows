@@ -208,7 +208,7 @@ func TestAResumeWhoseWorktreeIsGoneFailsAndSpendsTheResumeOnThatIssueAlone(t *te
 		}
 	}
 	// The issue is left exactly as it was: no worker ran on it and nothing was said to GitHub about it.
-	if made := gh.made(t, fmt.Sprintf("issue edit %d --repo acme/edge-sensors", claimedIssue)); made != 0 {
+	if made := gh.asked(t, fmt.Sprintf("issue edit %d --repo acme/edge-sensors", claimedIssue)); made != 0 {
 		t.Errorf("the factory edited #%d %d times, want none: a resume that cannot start touches nothing", claimedIssue, made)
 	}
 
