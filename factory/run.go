@@ -29,6 +29,19 @@ const (
 	outcomeLost        = "lost"
 )
 
+// What put a run in the line. routed is an issue taken from the queue of routed issues; the other
+// two are work this factory already holds and continues in the worktree of that claim: the one
+// automatic resume after an interruption, and the run a person asked for by taking the assignee off
+// an issue the factory holds ([ADR 0026]). The signals of an issue's runs are what the next resume
+// is decided from, which is why every run records its own.
+//
+// [ADR 0026]: ../docs/adr/0026-the-factory-never-deletes-work-on-its-own.md
+const (
+	signalRouted       = "routed"
+	signalInterruption = "interruption"
+	signalRelease      = "release"
+)
+
 // Run is one factory run: one worker session, its record. The record is the file in the data
 // directory and the body the HTTP interface serves, so a reader on the host and a reader in a
 // browser see the same fields.
@@ -39,8 +52,24 @@ type Run struct {
 	Title      string `json:"title"`
 	// Branch is the branch the claim created on the remote, and Base the branch it was cut from. A
 	// lost run carries the branch too: it is the one another claimer holds the issue by.
-	Branch      string     `json:"branch"`
-	Base        string     `json:"base"`
+	Branch string `json:"branch"`
+	Base   string `json:"base"`
+	// Worktree is where the worker ran: the directory the claim made in this host's clone, and the
+	// one a resumed run of this issue continues in, on the commits that are there. Empty in fake
+	// mode, which claims nothing, and for a claim that never got that far.
+	Worktree string `json:"worktree"`
+	// Holding says this factory owns the issue on the remote: its claim created the branch, assigned
+	// the issue to this host and made the worktree. Only an issue the factory holds is resumed and
+	// only such an issue can be released, so a lost claim and a claim that failed half way are left
+	// alone — including the branch of another claimer, which this factory never works.
+	Holding bool `json:"holding"`
+	// Signal is what queued this run: routed, interruption or release. SignalAt is when that signal
+	// happened — the routing, the interruption, or the moment the assignee came off. It is the
+	// answer this run is: a signal of an issue is acted on once, and a signal no later than the one
+	// its records already carry has been answered already. That is what keeps the factory from
+	// resuming the same release for as long as GitHub reports it, without a clock of its own.
+	Signal      string     `json:"signal"`
+	SignalAt    time.Time  `json:"signalAt"`
 	State       string     `json:"state"` // running or ended
 	Stage       string     `json:"stage"` // the stage the worker is in, read from its skill calls
 	Stages      []string   `json:"stages"`

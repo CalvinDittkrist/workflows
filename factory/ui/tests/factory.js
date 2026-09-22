@@ -1,5 +1,5 @@
 import { execFileSync, spawn } from 'node:child_process'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -10,6 +10,8 @@ import { remember } from './where.js'
 // embeds and starts it twice in fake mode. The first works its canned queue down to the state the
 // tests read — five runs done and the last entry, whose scripted worker hangs, still running, which
 // holds until the deadline. The second is paused, so the whole queue stays in its order.
+// Its data directory is written before it starts, so it reads what a factory that was stopped while
+// it worked an issue finds there: the run it holds is resumed, and stands in the line as such.
 
 const factoryDir = fileURLToPath(new URL('../..', import.meta.url))
 
@@ -28,6 +30,7 @@ export default async function start() {
   try {
     const ports = await freePorts(['working', 'paused'])
     const working = run(binary, dir, 'working', ports.working, [])
+    interrupted(join(dir, 'paused'))
     const paused = run(binary, dir, 'paused', ports.paused, ['-paused'])
     stops.push(working.stop, paused.stop)
     await Promise.all([
@@ -65,6 +68,37 @@ function hold() {
     server.once('error', failed)
     server.listen(0, '127.0.0.1', () => held(server))
   })
+}
+
+// interrupted writes the record of a run the factory was stopped in the middle of, into the data
+// directory it is about to start on. The issue is the first of the canned queue, so what the paused
+// factory shows is that issue resumed rather than claimed anew.
+function interrupted(data) {
+  const began = new Date(Date.now() - 3 * 60 * 60 * 1000)
+  const ended = new Date(began.getTime() + 20 * 60 * 1000)
+  mkdirSync(data, { recursive: true, mode: 0o700 })
+  writeFileSync(
+    join(data, 'run-1.json'),
+    JSON.stringify({
+      id: 1,
+      repository: 'acme/edge-sensors',
+      issue: 104,
+      title: 'Retry the upload when the broker drops the connection',
+      branch: 'fix/104-retry-the-upload-when-the-broker-drops-the-connection',
+      base: 'main',
+      worktree: '/var/lib/factory/clone/.claude/worktrees/fix-104',
+      holding: true,
+      signal: 'routed',
+      signalAt: began.toISOString(),
+      state: 'ended',
+      stage: 'implement',
+      stages: ['implement'],
+      outcome: 'interrupted',
+      reason: 'the factory was stopped while this run was working',
+      startedAt: began.toISOString(),
+      endedAt: ended.toISOString(),
+    }),
+  )
 }
 
 // run starts one factory in fake mode on its own port and data directory.

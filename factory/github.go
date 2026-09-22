@@ -80,8 +80,11 @@ func (i ghIssue) labelNames() []string {
 }
 
 // ghEvent is one entry of an issue's event list (the events endpoint of an issue, not the timeline
-// endpoint beside it). The queue reads the labeled entries and nothing else: when the routing label
-// was set is the order of the line.
+// endpoint beside it). The queue reads two kinds of entry: labeled, because when the routing label
+// was set is the order of the line, and unassigned, because taking the assignee off an issue the
+// factory holds is the release signal ([ADR 0026]).
+//
+// [ADR 0026]: ../docs/adr/0026-the-factory-never-deletes-work-on-its-own.md
 type ghEvent struct {
 	Event     string                `json:"event"`
 	CreatedAt time.Time             `json:"created_at"`
@@ -116,7 +119,7 @@ type gitHub struct {
 	label        string
 
 	mu sync.Mutex
-	// times is what the factory remembers of the routing times it has read, keyed by the issue.
+	// times is what the factory remembers of the event times it has read, keyed by the issue.
 	// Reading a timeline is a request of its own per issue, so a line of a few dozen issues asked
 	// every minute would spend a whole hourly budget on standing still. It is memory and no file: the
 	// line itself is still derived from GitHub on every poll ([ADR 0025]).
@@ -128,11 +131,20 @@ type gitHub struct {
 	warned     map[string]bool
 }
 
-// routing is one remembered routing time with the issue's updated_at it was read at. GitHub touches
-// updated_at when a label changes, so a remembered time is good until the issue is touched again.
+// routing is one remembered reading of an issue's event list with the issue's updated_at it was made
+// at. GitHub touches updated_at when a label or an assignee changes, so a remembered reading is good
+// until the issue is touched again.
 type routing struct {
 	updated time.Time
-	at      time.Time
+	read    signals
+}
+
+// signals is what one issue's event list says the factory acts on: when the routing label was last
+// set, which is where a new issue stands in the line, and when the assignee was last removed, which
+// for an issue this factory holds is the release signal and where its resumed run stands.
+type signals struct {
+	routedAt     time.Time
+	unassignedAt time.Time
 }
 
 // queue is the line across all connected repositories. A repository that cannot be read is reported
@@ -220,21 +232,21 @@ func (g *gitHub) readable(key string) {
 	delete(g.warned, key)
 }
 
-// remembered answers the routing time read earlier for an issue nothing has touched since.
-func (g *gitHub) remembered(key string, updated time.Time) (time.Time, bool) {
+// remembered answers the reading made earlier for an issue nothing has touched since.
+func (g *gitHub) remembered(key string, updated time.Time) (signals, bool) {
 	if updated.IsZero() { // without an updated_at there is nothing to hold the memory against
-		return time.Time{}, false
+		return signals{}, false
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	known, ok := g.times[key]
 	if !ok || !known.updated.Equal(updated) {
-		return time.Time{}, false
+		return signals{}, false
 	}
-	return known.at, true
+	return known.read, true
 }
 
-func (g *gitHub) remember(key string, updated, at time.Time) {
+func (g *gitHub) remember(key string, updated time.Time, read signals) {
 	if updated.IsZero() {
 		return
 	}
@@ -243,7 +255,7 @@ func (g *gitHub) remember(key string, updated, at time.Time) {
 	if g.times == nil {
 		g.times = map[string]routing{}
 	}
-	g.times[key] = routing{updated: updated, at: at}
+	g.times[key] = routing{updated: updated, read: read}
 }
 
 // routedIssues asks GitHub for the issues of one repository that carry both labels and keeps those
@@ -264,12 +276,14 @@ func (g *gitHub) routedIssues(ctx context.Context, repository string) ([]Issue, 
 		if !routed(issue, g.label) {
 			continue
 		}
+		read := g.signalsOf(ctx, repository, issue)
 		out = append(out, Issue{
-			Repository: repository,
-			Number:     issue.Number,
-			Title:      issue.Title,
-			Labels:     issue.labelNames(),
-			RoutedAt:   g.routedAt(ctx, repository, issue),
+			Repository:   repository,
+			Number:       issue.Number,
+			Title:        issue.Title,
+			Labels:       issue.labelNames(),
+			RoutedAt:     read.routedAt,
+			unassignedAt: read.unassignedAt,
 		})
 	}
 	return out, nil
@@ -286,9 +300,10 @@ func issuesRequest(repository, routingLabel string) string {
 	return "repos/" + repository + "/issues?labels=" + labels + "&state=open&per_page=100"
 }
 
-// routedAt is when the routing label was last set, read from the issue's event list. That time, and
-// not the issue's age, is the order of the line: routing is when the maintainer handed the issue
-// over, so an old issue routed today stands behind one routed yesterday.
+// signalsOf is when the routing label was last set and when the assignee was last removed, read from
+// the issue's event list. The routing time, and not the issue's age, is the order of the line:
+// routing is when the maintainer handed the issue over, so an old issue routed today stands behind
+// one routed yesterday.
 //
 // An issue whose events do not name the label — it fell out of what GitHub keeps, the label came
 // with the issue, or the timeline is still catching up with the list that already carries it —
@@ -301,28 +316,30 @@ func issuesRequest(repository, routingLabel string) string {
 // answer without it, written down against the issue's updated_at, would hold that wrong time until
 // somebody touched the issue again. So a fallback is read again on the next poll, which is one call
 // per poll for as long as the label event is missing, and the issue takes its place as it appears.
-func (g *gitHub) routedAt(ctx context.Context, repository string, issue ghIssue) time.Time {
+func (g *gitHub) signalsOf(ctx context.Context, repository string, issue ghIssue) signals {
 	key := Issue{Repository: repository, Number: issue.Number}.key()
-	if at, ok := g.remembered(key, issue.UpdatedAt); ok {
-		return at
+	if read, ok := g.remembered(key, issue.UpdatedAt); ok {
+		return read
 	}
-	at, found := g.readRoutedAt(ctx, key, repository, issue)
+	read, found := g.readSignals(ctx, key, repository, issue)
 	if found {
-		g.remember(key, issue.UpdatedAt, at)
+		g.remember(key, issue.UpdatedAt, read)
 	}
-	return at
+	return read
 }
 
-// readRoutedAt reads the issue's event list and says whether the routing label was in it.
-func (g *gitHub) readRoutedAt(ctx context.Context, key, repository string, issue ghIssue) (time.Time, bool) {
-	at := issue.CreatedAt
+// readSignals reads the issue's event list and says whether the routing label was in it. The removal
+// of an assignee is read in the same pass: an issue that is released has been touched, so its event
+// list is read again anyway, and a call of its own for it would double what a poll costs.
+func (g *gitHub) readSignals(ctx context.Context, key, repository string, issue ghIssue) (signals, bool) {
+	read := signals{routedAt: issue.CreatedAt}
 	found := false
 	raw, err := gh(ctx, "api", "--paginate", eventsRequest(repository, issue.Number))
 	if err != nil {
 		if ctx.Err() == nil {
 			g.warn(key, "error: the events of %s could not be read: %v; it stands in the line by the time it was opened", key, err)
 		}
-		return at, false
+		return read, false
 	}
 	// --paginate answers one JSON array per page, so the pages are read as a stream of arrays.
 	decoder := json.NewDecoder(bytes.NewReader(raw))
@@ -333,23 +350,29 @@ func (g *gitHub) readRoutedAt(ctx context.Context, key, repository string, issue
 				break
 			}
 			g.warn(key, "error: the events of %s are no event list: %v; it stands in the line by the time it was opened", key, err)
-			return at, false
+			return read, false
 		}
 		for _, event := range page {
-			// The last time the label was set is the answer: a label that was removed and set again
-			// was handed over again. It is the latest of the entries rather than the last one, so the
-			// order GitHub sends the timeline in is not part of the rule.
-			if event.Event == "labeled" && event.Label.Name == g.label {
+			// The last time each of the two happened is the answer: a label that was removed and set
+			// again was handed over again, and the last release is the one this factory answers. It is
+			// the latest of the entries rather than the last one, so the order GitHub sends the
+			// timeline in is not part of the rule.
+			switch {
+			case event.Event == "labeled" && event.Label.Name == g.label:
 				found = true
-				if event.CreatedAt.After(at) {
-					at = event.CreatedAt
+				if event.CreatedAt.After(read.routedAt) {
+					read.routedAt = event.CreatedAt
+				}
+			case event.Event == "unassigned":
+				if event.CreatedAt.After(read.unassignedAt) {
+					read.unassignedAt = event.CreatedAt
 				}
 			}
 		}
 	}
 	// The list was read, whatever it held: an issue this poll could read is no issue to warn about.
 	g.readable(key)
-	return at, found
+	return read, found
 }
 
 func eventsRequest(repository string, issue int) string {
