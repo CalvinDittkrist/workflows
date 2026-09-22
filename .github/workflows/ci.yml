@@ -11,11 +11,11 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       # Every cache below only saves the minute of installation: a miss installs as before, and each key
-      # names what it holds, so a new version or new sources never read an old entry.
+      # names the versions of what it holds, so a new version never reads an entry of an old one.
       - uses: actions/setup-node@v7
         with:
           node-version: 22
-          cache: npm # the download cache that `npm ci` of the dashboard fills, keyed by its lockfile
+          cache: npm # npm's download cache, keyed by the dashboard's lockfile; Claude Code still installs its latest
           cache-dependency-path: factory/ui/package-lock.json
       - uses: actions/setup-go@v7
         id: go
@@ -63,8 +63,6 @@ jobs:
       - name: Install the browser the dashboard's test drives
         run: npm --prefix factory/ui exec -- playwright install --with-deps chromium
       - name: Gate
-        env:
-          GOFLAGS: -count=1 # the build cache holds test results too; the gate runs every test anyway
         run: make check
       - name: Keep the browser test's report and what it saw when it failed
         if: failure()
