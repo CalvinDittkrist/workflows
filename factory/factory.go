@@ -676,6 +676,11 @@ func workerSettings(env map[string]string) (string, error) {
 // answer a review, which is what the worker's repair.sh takes for the count of repair rounds to
 // start again. The pipeline's own repair loop is bounded by that count, so the session may not read
 // its own prompt for the answer, and every other run carries the variable not at all.
+//
+// It names the review it stands for, the time that review was submitted, which is what this run is
+// queued for and dispatched once for. One review is one new mandate on the pull request: the repair
+// record keeps the mandate its count was started for, so the session that answers the review has the
+// rounds of that review and the rounds its own CI stage then drives cannot hand it more.
 func workerVariables(entry Entry, claim claimed) map[string]string {
 	variables := map[string]string{
 		"WF_MODE":                              "manual",
@@ -685,7 +690,7 @@ func workerVariables(entry Entry, claim claimed) map[string]string {
 		"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE":      compactPercentage,
 	}
 	if entry.Signal == signalChangesRequested {
-		variables["WF_REVIEW_MANDATE"] = "1"
+		variables["WF_REVIEW_MANDATE"] = entry.SignalAt.UTC().Format(time.RFC3339)
 	}
 	return variables
 }

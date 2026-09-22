@@ -107,8 +107,12 @@ func TestAReviewThatAsksForChangesRunsTheWorkerOnItInTheSameWorktree(t *testing.
 	// repair.sh starts the pull request's count of repair rounds again on: a maintainer who requests
 	// changes gives the pull request a mandate the rounds its checks once needed must not refuse,
 	// and the session may not read that out of its own prompt. A first run carries it not at all.
-	if mandate := follower.settings(t).Env["WF_REVIEW_MANDATE"]; mandate != "1" {
-		t.Errorf("the follow-up worker's settings carry WF_REVIEW_MANDATE=%q, want 1: without it the repair count of a pull request that spent its rounds refuses the maintainer's review", mandate)
+	// It names the review, so the session has the rounds of that one review: the count it starts again
+	// is kept against this word, and the rounds its own CI stage then drives cannot start it a second
+	// time.
+	wantMandate := requestedAt.UTC().Format(time.RFC3339)
+	if mandate := follower.settings(t).Env["WF_REVIEW_MANDATE"]; mandate != wantMandate {
+		t.Errorf("the follow-up worker's settings carry WF_REVIEW_MANDATE=%q, want the review's own %s: without it the repair count of a pull request that spent its rounds refuses the maintainer's review", mandate, wantMandate)
 	}
 	if mandate, set := workers[0].settings(t).Env["WF_REVIEW_MANDATE"]; set {
 		t.Errorf("the first run's settings carry WF_REVIEW_MANDATE=%q; a run nobody asked for could start its own repair count again", mandate)

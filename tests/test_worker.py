@@ -1200,13 +1200,38 @@ class RepairRecordTests(ShimTest):
         for _ in range(3):
             self.take_round()
         self.assertNotEqual(self.repair("round").returncode, 0, "the limit is reached")
-        r = self.repair("reset", WF_REVIEW_MANDATE="1")
+        r = self.repair("reset", WF_REVIEW_MANDATE="2026-09-22T10:00:00Z")
         self.assertEqual(r.returncode, 0, r.stderr)
         out = self.keys(r.stdout)
         self.assertEqual(out["repair_pr"], "#7")
         self.assertEqual(out["repair_rounds_taken"], "0")
         self.assertTrue(out["repair_reset"].startswith("yes"), out["repair_reset"])
         self.assertEqual(self.take_round()["repair_rounds_taken"], "1", "and the next round is the first again")
+
+    def test_one_review_starts_the_count_again_once_however_often_it_is_named(self):
+        """The mandate is one review, not one round of the session that answers it: that session drives
+        the CI stage itself, which invokes the skill again on the next review comments, and a reset per
+        round would leave the loop of a follow-up run with no bound at all. A later review is another
+        mandate and starts the count again."""
+        first, second = "2026-09-22T10:00:00Z", "2026-09-22T16:30:00Z"
+        for _ in range(2):
+            self.take_round()
+        self.assertTrue(self.keys(self.repair("reset", WF_REVIEW_MANDATE=first).stdout)["repair_reset"].startswith("yes"))
+        for _ in range(3):
+            self.take_round()
+        again = self.keys(self.repair("reset", WF_REVIEW_MANDATE=first).stdout)
+        self.assertEqual(again["repair_rounds_taken"], "3", "the rounds of that one review stand")
+        self.assertTrue(again["repair_reset"].startswith("no"), again["repair_reset"])
+        self.assertNotEqual(self.repair("round").returncode, 0, "and the limit refuses the fourth round of it")
+        later = self.keys(self.repair("reset", WF_REVIEW_MANDATE=second).stdout)
+        self.assertEqual(later["repair_rounds_taken"], "0", "the next review is a mandate of its own")
+        self.assertTrue(later["repair_reset"].startswith("yes"), later["repair_reset"])
+
+    def test_a_mandate_that_is_no_name_for_a_review_is_refused(self):
+        """It goes into the record as a header line, so it is one word of the shape the factory writes."""
+        r = self.repair("reset", WF_REVIEW_MANDATE="2026-09-22T10:00:00Z\nrounds: 0")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("WF_REVIEW_MANDATE", r.stderr)
 
     def test_a_reset_without_that_word_from_the_driver_keeps_the_count(self):
         """The one bound on an unattended repair loop is this count, so a session that reads itself as
