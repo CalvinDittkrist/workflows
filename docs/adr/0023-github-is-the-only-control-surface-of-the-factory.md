@@ -15,7 +15,7 @@ GitHub is the only thing the factory host and a developer's machine share, and t
 
 - **Route**: add the routing label to an agent-ready issue.
 - **Release** a blocked, failed or timed-out run: remove the assignee, after answering on the issue.
-- **Cancel** a running run: remove the routing label.
+- **Cancel** a running run: remove the routing label, or close the issue. Either gesture ends the worker and gives the issue back.
 - **Ask for changes**: a "changes requested" review on the factory's pull request queues a follow-up run.
 - **Merge**: on GitHub, by a person. The factory has no yolo mode.
 

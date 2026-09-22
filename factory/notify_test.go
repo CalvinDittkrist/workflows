@@ -163,7 +163,7 @@ func TestARunThatWaitsForAPersonCommentsOnTheIssueWithTheReasonAndTheReleaseGest
 	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
 	gh.loggedInAs(t, "factory-bot")
 	gh.assigns(t, "acme/edge-sensors", claimedIssue, "factory-bot")
-	gh.workerBlocks(t, blocker)
+	gh.workerReportsBlocked(t, blocker)
 	gh.comments(t, "acme/edge-sensors", claimedIssue)
 
 	data := filepath.Join(t.TempDir(), "data")
@@ -250,7 +250,7 @@ func TestANotificationThatFailsIsAWarningOnTheRunAndChangesNothingElse(t *testin
 	gh.loggedInAs(t, "factory-bot")
 	gh.assigns(t, "acme/edge-sensors", claimedIssue, "factory-bot")
 	gh.assigns(t, "acme/edge-sensors", next, "factory-bot")
-	gh.workerBlocks(t, "the calibration file is nowhere on the host")
+	gh.workerReportsBlocked(t, "the calibration file is nowhere on the host")
 	gh.comments(t, "acme/edge-sensors", claimedIssue)
 	gh.comments(t, "acme/edge-sensors", next)
 	now := time.Now().UTC()
