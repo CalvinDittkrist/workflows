@@ -587,7 +587,7 @@ func (f *Factory) worker(ctx context.Context, entry Entry, claim claimed) (*exec
 		args := []string{"scripted-worker", issue.scenario, issue.Repository, strconv.Itoa(issue.Number)}
 		return exec.CommandContext(ctx, f.self, append(args, f.settings.WorkerArgs...)...), nil
 	}
-	variables := workerVariables(issue, claim)
+	variables := workerVariables(entry, claim)
 	settings, err := workerSettings(variables)
 	if err != nil {
 		return nil, err
@@ -671,14 +671,23 @@ func workerSettings(env map[string]string) (string, error) {
 
 // workerVariables is the env block of those settings: what this one session is, and nothing a host
 // may disagree with.
-func workerVariables(issue Issue, claim claimed) map[string]string {
-	return map[string]string{
+//
+// WF_REVIEW_MANDATE is that for a follow-up run: the driver's word that this session was started to
+// answer a review, which is what the worker's repair.sh takes for the count of repair rounds to
+// start again. The pipeline's own repair loop is bounded by that count, so the session may not read
+// its own prompt for the answer, and every other run carries the variable not at all.
+func workerVariables(entry Entry, claim claimed) map[string]string {
+	variables := map[string]string{
 		"WF_MODE":                              "manual",
-		"WF_ISSUE":                             strconv.Itoa(issue.Number),
+		"WF_ISSUE":                             strconv.Itoa(entry.Issue.Number),
 		"WF_BASE_BRANCH":                       claim.base,
 		"CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1",
 		"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE":      compactPercentage,
 	}
+	if entry.Signal == signalChangesRequested {
+		variables["WF_REVIEW_MANDATE"] = "1"
+	}
+	return variables
 }
 
 // The compact pin of the workflow, the two numbers the local claim sets and this one restates

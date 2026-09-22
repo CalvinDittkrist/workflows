@@ -1196,17 +1196,31 @@ class RepairRecordTests(ShimTest):
     def test_a_round_somebody_asked_for_by_hand_starts_the_count_again(self):
         """The limit bounds the pipeline's own repair loop. A maintainer who read the pull request and
         requested changes has given it a new mandate, and the rounds its checks once needed must not
-        refuse that: the address-reviews skill resets the count when that skill is a session's own
-        prompt, which is the one way into it nothing above is driving."""
+        refuse that: the driver that starts a session for a review says so with WF_REVIEW_MANDATE."""
         for _ in range(3):
             self.take_round()
         self.assertNotEqual(self.repair("round").returncode, 0, "the limit is reached")
-        r = self.repair("reset")
+        r = self.repair("reset", WF_REVIEW_MANDATE="1")
         self.assertEqual(r.returncode, 0, r.stderr)
         out = self.keys(r.stdout)
         self.assertEqual(out["repair_pr"], "#7")
         self.assertEqual(out["repair_rounds_taken"], "0")
+        self.assertTrue(out["repair_reset"].startswith("yes"), out["repair_reset"])
         self.assertEqual(self.take_round()["repair_rounds_taken"], "1", "and the next round is the first again")
+
+    def test_a_reset_without_that_word_from_the_driver_keeps_the_count(self):
+        """The one bound on an unattended repair loop is this count, so a session that reads itself as
+        asked for may not start it again: without WF_REVIEW_MANDATE the reset keeps the count and says
+        so, which leaves the limit where it was and is no error to report."""
+        for _ in range(2):
+            self.take_round()
+        r = self.repair("reset")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        out = self.keys(r.stdout)
+        self.assertEqual(out["repair_rounds_taken"], "2", "the rounds already taken stand")
+        self.assertTrue(out["repair_reset"].startswith("no"), out["repair_reset"])
+        self.assertEqual(self.take_round()["repair_rounds_taken"], "3")
+        self.assertNotEqual(self.repair("round").returncode, 0, "and the limit still refuses the fourth")
 
     def test_a_reset_without_a_pull_request_is_refused(self):
         r = self.repair("reset", SHIM_PR_FOR_BRANCH="")
@@ -1879,10 +1893,6 @@ class PrWaitTests(ShimTest):
         self.assertIn("status: green", r.stdout)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class ReviewListingTests(ShimTest):
     """What the address-reviews stage is shown, which is everything the reviewers are still asking for:
     the summaries of the reviews that ask for changes and the unresolved threads (issue #56). A review
@@ -1978,3 +1988,7 @@ class ReviewAnswerTests(ShimTest):
         r = self.answer("--body", "done", SHIM_PR_FOR_BRANCH="")
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("no open PR", r.stderr)
+
+
+if __name__ == "__main__":
+    unittest.main()

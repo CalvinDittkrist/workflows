@@ -9,8 +9,14 @@
 # Waiting for CI is neither: a `waiting` answer runs pr-wait.sh again, not the stage, so it counts
 # nothing. Nor is a round somebody asked for by hand: the limit bounds the pipeline's own loop, and a
 # maintainer who reads the pull request and requests changes has given it a new mandate that the
-# rounds its checks once needed must not refuse. That is what reset is for, and it is the address-
-# reviews skill that makes it, in the one case where that skill is a session's own prompt.
+# rounds its checks once needed must not refuse. That is what reset is for.
+#
+# Which round this is, however, is not the session's to judge: the count is the one bound on an
+# unattended repair loop, and a stage that could start it again whenever it read itself as asked for
+# would be no bound at all. WF_REVIEW_MANDATE=1 is the driver's word that this session was started to
+# answer a review — the factory sets it on a follow-up run, the one run it dispatches for a review
+# that asks for changes — and without it reset keeps the count and says so, so the address-reviews
+# skill may call it either way and the script decides.
 set -euo pipefail
 # shellcheck source=lib.sh
 . "$(dirname "$0")/lib.sh"
@@ -79,8 +85,14 @@ case "$command" in
   reset)
     [ -n "$pr" ] ||
       wf_die "branch $(wf_branch) has no open pull request, so there is no repair record to start again"
-    write 0
-    report
+    if [ "${WF_REVIEW_MANDATE:-}" = "1" ]; then
+      write 0
+      report
+      wf_kv repair_reset "yes; this session was started to answer a review somebody asked for, so pull request #$pr has its rounds again"
+    else
+      report
+      wf_kv repair_reset "no; this session was not started to answer a review (WF_REVIEW_MANDATE is unset), so the count of pull request #$pr stands: the limit bounds the repair rounds the pipeline drives itself"
+    fi
     ;;
   print) report ;;
 esac

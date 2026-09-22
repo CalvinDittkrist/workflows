@@ -103,6 +103,16 @@ func TestAReviewThatAsksForChangesRunsTheWorkerOnItInTheSameWorktree(t *testing.
 	if !follower.started("-p", "/worker:address-reviews") {
 		t.Errorf("the follow-up worker was started as %v, want the address-reviews skill as its prompt", follower.args)
 	}
+	// And the driver's word that the session is here for a review, which is what the worker's
+	// repair.sh starts the pull request's count of repair rounds again on: a maintainer who requests
+	// changes gives the pull request a mandate the rounds its checks once needed must not refuse,
+	// and the session may not read that out of its own prompt. A first run carries it not at all.
+	if mandate := follower.settings(t).Env["WF_REVIEW_MANDATE"]; mandate != "1" {
+		t.Errorf("the follow-up worker's settings carry WF_REVIEW_MANDATE=%q, want 1: without it the repair count of a pull request that spent its rounds refuses the maintainer's review", mandate)
+	}
+	if mandate, set := workers[0].settings(t).Env["WF_REVIEW_MANDATE"]; set {
+		t.Errorf("the first run's settings carry WF_REVIEW_MANDATE=%q; a run nobody asked for could start its own repair count again", mandate)
+	}
 
 	// One review is one run, however many polls read it: the review stands on GitHub unanswered as far
 	// as the shim is concerned, and the factory polls twenty times a second.
