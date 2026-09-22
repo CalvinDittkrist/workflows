@@ -127,9 +127,7 @@ func New(settings Settings, fake bool) (*Factory, error) {
 	}
 	f := &Factory{settings: settings, fake: fake, runs: runs, started: time.Now(), self: self,
 		wake: make(chan struct{}, 1), held: map[string]bool{}}
-	f.source = &gitHub{repositories: settings.Repositories, label: settings.Label,
-		issueWarnings: map[string]bool{}, pullWarnings: map[string]bool{},
-		writers: map[int64]bool{}, finished: map[string]bool{}}
+	f.source = newGitHub(settings.Repositories, settings.Label)
 	if fake {
 		f.source = &canned{repositories: settings.Repositories, started: f.started}
 	}

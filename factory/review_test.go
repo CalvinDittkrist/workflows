@@ -163,8 +163,13 @@ func TestAReviewQueuesNothingUnlessAWriterAskedForChangesOnTheOpenPullRequest(t 
 
 	// The maintainer asks for changes on the same pull request: the line fills with it.
 	requestedAt := ended.Add(10 * time.Minute).Truncate(time.Second) // GitHub times a review to the second
+	// A newer review by a login GitHub answers nothing for — an app, a deleted account — is beside it:
+	// the maintainer's gesture stands all the same. The shim has no answer for that permission, which
+	// is a request that fails, so an author whose access cannot be read must not take the whole
+	// reading down with them.
 	gh.reviews(t, "acme/edge-sensors", claimedIssue,
-		append(ignored, review(5, "maintainer", "CHANGES_REQUESTED", requestedAt))...)
+		append(ignored, review(5, "maintainer", "CHANGES_REQUESTED", requestedAt),
+			review(6, "ghost", "CHANGES_REQUESTED", ended.Add(20*time.Minute)))...)
 	head := f.queue(t, 1)[0]
 	if head.Number != claimedIssue || head.Signal != signalChangesRequested {
 		t.Fatalf("the line opens with #%d on the signal %q, want #%d on a review that asks for changes",
@@ -188,6 +193,86 @@ func TestAReviewQueuesNothingUnlessAWriterAskedForChangesOnTheOpenPullRequest(t 
 	if again := gh.made(t, asked); again != read {
 		t.Errorf("the merged pull request was read %d more times over %d polls, want none",
 			again-read, gh.made(t, polls)-seen)
+	}
+}
+
+// What one reviewer says about a pull request is their latest review, not every review they ever
+// submitted. GitHub leaves an older entry in the list with the state it carried, so a maintainer who
+// asks for changes and then approves without dismissing the first review leaves a CHANGES_REQUESTED
+// entry behind that asks for nothing any more; a comment after it states nothing and leaves the
+// approval standing. The same maintainer asking again is what says the fixture was sound.
+func TestOnlyTheLatestReviewOfAReviewerAsksForChanges(t *testing.T) {
+	gh := newGhShim(t)
+	gh.remote(t, "acme/edge-sensors")
+	gh.loggedInAs(t, "factory-bot")
+	gh.issues(t, "acme/edge-sensors")
+	data := filepath.Join(t.TempDir(), "data")
+	gh.cloneInto(t, data, "acme/edge-sensors")
+
+	began := time.Now().UTC().Add(-2 * time.Hour)
+	ended := began.Add(30 * time.Minute)
+	held := record(1, claimedIssue, claimedTitle, signalRouted, outcomeReady, true, began, ended)
+	held.PullRequest = fmt.Sprintf("https://github.com/acme/edge-sensors/pull/%d", claimedIssue)
+	records(t, data, held)
+
+	gh.pullRequestIs(t, "acme/edge-sensors", claimedIssue, "open")
+	gh.mayWrite(t, "acme/edge-sensors", "maintainer", true)
+	withdrawn := []map[string]any{
+		review(1, "maintainer", "CHANGES_REQUESTED", ended.Add(10*time.Minute)),
+		review(2, "maintainer", "APPROVED", ended.Add(12*time.Minute)),
+		review(3, "maintainer", "COMMENTED", ended.Add(14*time.Minute)),
+	}
+	gh.reviews(t, "acme/edge-sensors", claimedIssue, withdrawn...)
+
+	f := gh.start(t, config{"poll": "50ms", "deadline": "90s", "data_dir": data,
+		"repositories": []string{"acme/edge-sensors"}})
+	f.queue(t, 0)
+	f.never(t, 3*time.Second, "the factory queued a follow-up run on an objection its reviewer withdrew",
+		func() bool { return len(f.line(t).Queue) > 0 })
+
+	// The same maintainer asks again, after the approval: that is what a run is queued on.
+	againAt := ended.Add(20 * time.Minute).Truncate(time.Second)
+	gh.reviews(t, "acme/edge-sensors", claimedIssue,
+		append(withdrawn, review(4, "maintainer", "CHANGES_REQUESTED", againAt))...)
+	head := f.queue(t, 1)[0]
+	if head.Signal != signalChangesRequested || !head.SignalAt.Equal(againAt) {
+		t.Errorf("the line opens on %q at %s, want a review that asks for changes at %s",
+			head.Signal, head.SignalAt, againAt)
+	}
+}
+
+// A pull request state the factory does not understand is not read as a closed one: doing so would
+// end the watch of an open pull request for the life of the process, and without a word.
+func TestAPullRequestStateTheFactoryCannotReadKeepsItWatched(t *testing.T) {
+	gh := newGhShim(t)
+	gh.remote(t, "acme/edge-sensors")
+	gh.loggedInAs(t, "factory-bot")
+	gh.issues(t, "acme/edge-sensors")
+	data := filepath.Join(t.TempDir(), "data")
+	gh.cloneInto(t, data, "acme/edge-sensors")
+
+	began := time.Now().UTC().Add(-2 * time.Hour)
+	ended := began.Add(30 * time.Minute)
+	held := record(1, claimedIssue, claimedTitle, signalRouted, outcomeReady, true, began, ended)
+	held.PullRequest = fmt.Sprintf("https://github.com/acme/edge-sensors/pull/%d", claimedIssue)
+	records(t, data, held)
+
+	requestedAt := ended.Add(10 * time.Minute).Truncate(time.Second)
+	gh.mayWrite(t, "acme/edge-sensors", "maintainer", true)
+	gh.reviews(t, "acme/edge-sensors", claimedIssue,
+		review(1, "maintainer", "CHANGES_REQUESTED", requestedAt))
+	gh.pullRequestIs(t, "acme/edge-sensors", claimedIssue, "") // neither open nor closed
+
+	f := gh.start(t, config{"poll": "50ms", "deadline": "90s", "data_dir": data,
+		"repositories": []string{"acme/edge-sensors"}})
+	f.queue(t, 0)
+	f.never(t, 3*time.Second, "the factory queued a run on a pull request whose state it could not read",
+		func() bool { return len(f.line(t).Queue) > 0 })
+
+	// GitHub answers as itself again, and the review is read: the watch was never given up.
+	gh.pullRequestIs(t, "acme/edge-sensors", claimedIssue, "open")
+	if head := f.queue(t, 1)[0]; !head.SignalAt.Equal(requestedAt) {
+		t.Errorf("the line opens on a signal at %s, want the review at %s", head.SignalAt, requestedAt)
 	}
 }
 
@@ -306,7 +391,8 @@ func TestAReviewIsAnsweredOncePerIssueAndOnlyWhileTheIssueIsIdle(t *testing.T) {
 
 // ---- the gh shim ----
 
-// pullRequestIs is what GitHub says the state of one pull request is: open, closed or merged.
+// pullRequestIs is what GitHub says the state of one pull request is: open or closed, which is what
+// it calls a merged pull request too.
 func (g *ghShim) pullRequestIs(t *testing.T, repository string, pull int, state string) {
 	t.Helper()
 	g.answer(t, "api "+pullRequestRequest(repository, pull)+" --jq .state", state+"\n")

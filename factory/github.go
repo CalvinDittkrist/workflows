@@ -223,6 +223,22 @@ func (g *gitHub) settle(unreadable map[string]string, read, seen map[string]bool
 	}
 }
 
+// newGitHub is the one way a gitHub is built. Every map it keeps is made here rather than where it
+// is first written: they are written under the mutex from several readings at once, and a lazy one
+// would be a nil map to write into for whichever reading got there first.
+func newGitHub(repositories []Connected, label string) *gitHub {
+	return &gitHub{
+		repositories:  repositories,
+		label:         label,
+		times:         map[string]reading{},
+		unreadable:    map[string]string{},
+		issueWarnings: map[string]bool{},
+		pullWarnings:  map[string]bool{},
+		writers:       map[int64]bool{},
+		finished:      map[string]bool{},
+	}
+}
+
 // repositoryOf is the repository an issue key names (owner/name#number).
 func repositoryOf(key string) string {
 	repository, _, _ := strings.Cut(key, "#")
@@ -269,9 +285,6 @@ func (g *gitHub) remember(key string, updated time.Time, read signals) {
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if g.times == nil {
-		g.times = map[string]reading{}
-	}
 	g.times[key] = reading{updated: updated, read: read}
 }
 
