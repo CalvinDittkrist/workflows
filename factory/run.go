@@ -76,8 +76,9 @@ type Tokens struct {
 	CacheRead     int `json:"cacheRead"`
 }
 
-// Versions is what a run ran with. Empty here: the ticket that updates the plugins before a run
-// fills it, and the record carries the fields from the start so a reader never meets a new shape.
+// Versions is what a run ran with. Factory is the version of the binary that recorded the run; the
+// other two are empty here, because the ticket that updates the plugins before a run fills them,
+// and the record carries the fields from the start so a reader never meets a new shape.
 type Versions struct {
 	Worker     string `json:"worker"`
 	ClaudeCode string `json:"claudeCode"`

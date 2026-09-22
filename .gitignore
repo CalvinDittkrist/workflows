@@ -5,3 +5,5 @@ __pycache__/
 factory/factory
 factory/factory.json
 factory/data/
+# The binaries `make binaries` builds; a release carries them, the repository does not.
+/dist/

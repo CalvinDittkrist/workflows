@@ -31,7 +31,12 @@ func main() {
 	config := flag.String("config", "factory.json", "configuration file")
 	fake := flag.Bool("fake", false, "canned queue and scripted workers: no tokens, no git, no GitHub")
 	paused := flag.Bool("paused", false, "show the queue and start nothing")
+	reportVersion := flag.Bool("version", false, "print the version of this binary and exit")
 	flag.Parse()
+	if *reportVersion {
+		fmt.Printf("factory %s\n", version)
+		return
+	}
 	if err := run(*config, *fake, *paused); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
@@ -90,8 +95,8 @@ func run(config string, fake, paused bool) error {
 			log.Printf("the HTTP interface stopped: %v", err)
 		}
 	}()
-	log.Printf("factory on http://%s (fake=%v paused=%v label=%s deadline=%s data=%s)",
-		settings.Listen, fake, settings.Paused, settings.Label, settings.Deadline, settings.DataDir)
+	log.Printf("factory %s on http://%s (fake=%v paused=%v label=%s deadline=%s data=%s)",
+		version, settings.Listen, fake, settings.Paused, settings.Label, settings.Deadline, settings.DataDir)
 
 	// The clones come after the interface answers and before the first poll: a worker branches off a
 	// clone, so the host is made ready before there is work to give it. A first clone takes minutes,

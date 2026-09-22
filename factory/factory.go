@@ -240,6 +240,7 @@ func (f *Factory) start(ctx context.Context, issue Issue) {
 		StartedAt:  time.Now(),
 		Stages:     []string{},
 		Warnings:   []string{},
+		Versions:   Versions{Factory: version},
 	}
 	f.runs.add(r)
 	f.active.Add(1)

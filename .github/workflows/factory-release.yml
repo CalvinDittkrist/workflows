@@ -1,0 +1,90 @@
+name: factory-release
+# The factory host needs no Go, no Node and no checkout: it downloads one static binary. A factory
+# version tag, and nothing else, builds it — `scripts/release.sh factory --push` creates that tag
+# from a green gate. No branch push and no other tag matches this trigger: a plugin release is
+# tagged <plugin>--vX.Y.Z and a milestone vX.Y.Z, neither of which can carry a slash.
+on:
+  push:
+    tags: ['factory/v*']
+permissions:
+  contents: read
+jobs:
+  binaries:
+    runs-on: ubuntu-latest
+    # Building is the half that runs other people's code — npm packages, their install and build
+    # scripts — so it does it with a token that can only read. Publishing is the other job.
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # the whole history, so the tagged commit can be held against main
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.26' # the version the gate runs on, so the binaries are built by the compiler CI checked with
+          cache: false # the factory has no dependencies, so there is no go.sum to cache by
+      - name: The tag and factory/VERSION have to name the same version
+        run: |
+          tagged="${GITHUB_REF_NAME#factory/v}"
+          # Read as the binary reads it: factory/version.go trims the ends of the file and nothing
+          # else, so a version with whitespace inside it is one the binary reports and the tag cannot.
+          said="$(cat factory/VERSION)"
+          [ "$tagged" = "$said" ] || {
+            echo "error: the tag $GITHUB_REF_NAME was pushed, but factory/VERSION says $said; tag with scripts/release.sh factory --push" >&2
+            exit 1
+          }
+      - name: The tagged commit has to be on main
+        # A tag can be pushed by hand from anywhere, and these binaries are never gated again: what
+        # stands behind them is that the commit went through a pull request onto main.
+        run: |
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor "$GITHUB_SHA" FETCH_HEAD || {
+            echo "error: $GITHUB_SHA is not on main; a factory release is tagged on main (docs/repo-standard.md)" >&2
+            exit 1
+          }
+      - name: The binaries, the dashboard inside them and their checksums
+        # What they are built with is in scripts/factory-binaries.sh, which a maintainer runs too.
+        # The gate ran before the tag; these binaries are not gated again.
+        run: make binaries
+      - uses: actions/upload-artifact@v7
+        with:
+          name: factory-binaries
+          path: dist/
+          if-no-files-found: error
+
+  release:
+    needs: binaries
+    runs-on: ubuntu-latest
+    # The only job that can write, and all it runs is gh: nothing built here, nothing installed.
+    permissions:
+      contents: write # the release the binaries are attached to
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: factory-binaries
+          path: dist
+      - name: Attach them to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        # Not the latest release: the repository's releases are its milestones, and a factory binary
+        # is not one of them.
+        run: |
+          # A version is published once. A re-run that finishes a half-written upload is welcome, and
+          # --clobber is what makes it possible; a re-run of a finished release is not, because the
+          # binaries it would overwrite are the ones hosts downloaded under this version, and they are
+          # not the same file when the tag was moved or the toolchain has moved on. Both look alike
+          # from here, so the finished release is refused and a person decides what to do.
+          published="$(gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets | length' 2>/dev/null || echo 0)"
+          if [ "$published" -ge 3 ]; then # the three files below
+            echo "error: the release $GITHUB_REF_NAME already carries its binaries and checksums; a published version is never rebuilt, release the next version instead" >&2
+            exit 1
+          fi
+          gh release create "$GITHUB_REF_NAME" --verify-tag --latest=false \
+            --title "factory v${GITHUB_REF_NAME#factory/v}" --generate-notes \
+            dist/factory-linux-amd64 dist/factory-linux-arm64 dist/checksums.txt \
+            || gh release upload --clobber "$GITHUB_REF_NAME" \
+              dist/factory-linux-amd64 dist/factory-linux-arm64 dist/checksums.txt
