@@ -191,6 +191,7 @@ func (f *Factory) start(ctx context.Context, issue Issue) {
 		StartedAt:  time.Now(),
 		Stages:     []string{},
 		Warnings:   []string{},
+		Versions:   Versions{Factory: version},
 	}
 	r.stage("implement") // the session starts in /worker:work, which invokes no skill for its first stage
 	f.runs.add(r)

@@ -159,14 +159,16 @@ func TestFakeModeWorksTheCannedQueueOneRunAtATime(t *testing.T) {
 	if ready.Turns != 23 || ready.CostUSD != 4.18 || ready.Tokens.Output != 24800 || ready.Tokens.CacheRead != 1204000 {
 		t.Errorf("run 1 has turns %d, cost %v and tokens %+v, want the totals of the result line", ready.Turns, ready.CostUSD, ready.Tokens)
 	}
-	// Shape, not behaviour: nothing fills warnings or versions yet, and the record carries the fields
-	// from the start so the tickets that fill them change no reader.
-	if ready.Warnings == nil || len(ready.Warnings) != 0 || ready.Versions != (struct {
-		Worker     string `json:"worker"`
-		ClaudeCode string `json:"claudeCode"`
-		Factory    string `json:"factory"`
-	}{}) {
-		t.Errorf("run 1 has warnings %v and versions %+v, want both empty until they are filled", ready.Warnings, ready.Versions)
+	// Shape, not behaviour for the two versions a run cannot know yet: the ticket that updates the
+	// plugins before a run fills them, and the record carries the fields from the start so that
+	// ticket changes no reader.
+	if ready.Warnings == nil || len(ready.Warnings) != 0 || ready.Versions.Worker != "" || ready.Versions.ClaudeCode != "" {
+		t.Errorf("run 1 has warnings %v and versions %+v, want no warnings and no worker or Claude Code version until they are filled",
+			ready.Warnings, ready.Versions)
+	}
+	// The factory's own version is behaviour: every run records the version of the binary that ran it.
+	if ready.Versions.Factory != versionFileSays(t) {
+		t.Errorf("run 1 records the factory version %q, want %q, the version in factory/VERSION", ready.Versions.Factory, versionFileSays(t))
 	}
 
 	// blocked: the reason is the report, to its end.
@@ -295,6 +297,32 @@ func TestFakeModeWorksTheCannedQueueOneRunAtATime(t *testing.T) {
 	if tail.Events[0].Seq != 21 {
 		t.Errorf("after=20 starts at event %d, want 21", tail.Events[0].Seq)
 	}
+}
+
+// The version is one file in the factory directory: the binary reports what it says, and the runs
+// it records carry the same version (TestFakeModeWorksTheCannedQueueOneRunAtATime).
+func TestTheBinaryReportsTheVersionOfTheVersionFile(t *testing.T) {
+	output, err := exec.Command(binary, "-version").CombinedOutput()
+	if err != nil {
+		t.Fatalf("factory -version failed: %v, %s", err, output)
+	}
+	if want := "factory " + versionFileSays(t) + "\n"; string(output) != want {
+		t.Errorf("factory -version said %q, want %q", output, want)
+	}
+}
+
+// versionFileSays is the version the release is tagged from, read the way scripts/release.sh reads it.
+func versionFileSays(t *testing.T) string {
+	t.Helper()
+	raw, err := os.ReadFile("VERSION")
+	if err != nil {
+		t.Fatalf("the factory has no VERSION file: %v", err)
+	}
+	said := strings.TrimSpace(string(raw))
+	if !regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+$`).MatchString(said) {
+		t.Fatalf("factory/VERSION says %q, want a version of the shape X.Y.Z", said)
+	}
+	return said
 }
 
 func TestTheInterfaceIsReadOnly(t *testing.T) {

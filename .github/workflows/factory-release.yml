@@ -1,0 +1,50 @@
+name: factory-release
+# The factory host needs no Go, no Node and no checkout: it downloads one static binary. A factory
+# version tag, and nothing else, builds it — `scripts/release.sh factory --push` creates that tag
+# from a green gate. No branch push and no other tag matches this trigger: a plugin release is
+# tagged <plugin>--vX.Y.Z and a milestone vX.Y.Z, neither of which can carry a slash.
+on:
+  push:
+    tags: ['factory/v*']
+permissions:
+  contents: write # the release the binaries are attached to
+jobs:
+  binaries:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.26' # the version the gate runs on, so the binaries are built by the compiler CI checked with
+          cache: false # the factory has no dependencies, so there is no go.sum to cache by
+      - name: The tag and factory/VERSION have to name the same version
+        run: |
+          tagged="${GITHUB_REF_NAME#factory/v}"
+          said="$(tr -d '[:space:]' < factory/VERSION)"
+          [ "$tagged" = "$said" ] || {
+            echo "error: the tag $GITHUB_REF_NAME was pushed, but factory/VERSION says $said; tag with scripts/release.sh factory --push" >&2
+            exit 1
+          }
+      - name: Build the dashboard the binary embeds
+        run: make ui
+      - name: One static binary per factory host architecture
+        # Without cgo and with the dashboard inside, so the host runs one file: a Raspberry Pi is
+        # arm64, a small server amd64. The gate ran before the tag; these binaries are not gated again.
+        run: |
+          mkdir dist
+          for arch in amd64 arm64; do
+            CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go -C factory build -trimpath -o "../dist/factory-linux-$arch" .
+          done
+          cd dist && sha256sum factory-linux-* > checksums.txt
+      - name: Attach them to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        # Not the latest release: the repository's releases are its milestones, and a factory binary
+        # is not one of them.
+        run: |
+          gh release create "$GITHUB_REF_NAME" --verify-tag --latest=false \
+            --title "factory v${GITHUB_REF_NAME#factory/v}" --generate-notes \
+            dist/factory-linux-amd64 dist/factory-linux-arm64 dist/checksums.txt
