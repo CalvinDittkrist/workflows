@@ -2,6 +2,9 @@
 SCRIPTS := $(wildcard plugins/*/scripts/*.sh scripts/*.sh) $(wildcard tests/shims/*) factory/testdata/gh factory/testdata/claude
 
 .PHONY: check lint validate standard test ui factory factory-go browser binaries
+# The gate parallelises inside its targets (the Python runner's process pool, go test) and never across
+# them: the targets run one after the other so their output does not interleave, because the make that
+# ships with macOS is 3.81 and has no --output-sync to keep a parallel target's lines together.
 check: lint validate standard test ui factory browser
 
 # The factory's dashboard: an npm package that Vite builds into factory/ui/dist/app, which the binary
@@ -30,9 +33,11 @@ standard:
 	plugins/repo-standards/scripts/check.sh
 
 # The suite builds the release binaries with the real scripts/factory-binaries.sh, which refuses to
-# build one without the dashboard inside it, so the build it embeds has to be there first.
+# build one without the dashboard inside it, so the build it embeds has to be there first. The runner
+# runs the test classes on a pool of processes, one per CPU; `python3 tests/run.py -j 1 <module or class>`
+# repeats one alone, and plain `python3 -m unittest discover -s tests` still runs them all.
 test: $(UI_BUILD)
-	python3 -m unittest discover -s tests -v
+	python3 tests/run.py
 
 # The binaries a factory host downloads, built the way the release workflow builds them: the
 # dashboard first, because the binary embeds it, then one static binary per host architecture.
