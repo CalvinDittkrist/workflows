@@ -517,6 +517,122 @@ func TestARoutingAnsweredByARunIsNotTakenUpAgain(t *testing.T) {
 	}
 }
 
+// The issues this factory holds are asked about one by one, and one whose run is over is only
+// waiting to be cleaned up: it is asked about every heldPolls-th poll and not on each one, or a host
+// with a dozen pull requests standing in review would spend its whole hour of requests on issues
+// nobody has touched. What that costs is the few minutes such an issue may wait, and the decision
+// made on it is still heard and acted on.
+func TestAnIdleHeldIssueIsAskedAboutFarMoreRarelyThanThePoll(t *testing.T) {
+	gh := newGhShim(t)
+	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
+	gh.loggedInAs(t, "factory-bot")
+	gh.assigns(t, "acme/edge-sensors", claimedIssue, "factory-bot")
+	gh.unassigns(t, "acme/edge-sensors", claimedIssue, "factory-bot")
+	gh.workerCommits(t, "worked.md")
+	gh.workerReportsBlocked(t, "the repository has no test for this")
+
+	data := filepath.Join(t.TempDir(), "data")
+	clone := gh.cloneInto(t, data, "acme/edge-sensors")
+	f := gh.work(t, config{"poll": "50ms", "deadline": "90s", "data_dir": data,
+		"repositories": []string{"acme/edge-sensors"}})
+	if run := f.ended(t, 1); !run.Holding {
+		t.Fatalf("run 1 ended as %q (%s) holding=%v, want a run that holds the issue; the factory's log:\n%s",
+			run.Outcome, run.Reason, run.Holding, f.output(t))
+	}
+	committed(t, f, filepath.Join(clone, ".claude", "worktrees", claimedWorktree), "worked.md")
+
+	// The line is read once a poll, so what the shim logged of it is how often this factory polled.
+	line := "api " + issuesRequest("acme/edge-sensors", "factory")
+	held := fmt.Sprintf("api repos/acme/edge-sensors/issues/%d", claimedIssue)
+	const window = 30
+	polled, asked := gh.made(t, line), gh.made(t, held)
+	f.eventually(t, 60*time.Second, fmt.Sprintf("%d more polls of the line", window), func() bool {
+		return gh.made(t, line)-polled >= window
+	})
+	polls, reads := gh.made(t, line)-polled, gh.made(t, held)-asked
+	if want := polls/heldPolls + 2; reads > want {
+		t.Errorf("the factory asked GitHub about the issue it holds %d times over %d polls, want at most %d: an issue that only waits to be cleaned up is asked about every %dth poll",
+			reads, polls, want, heldPolls)
+	}
+
+	// And rarely is often enough: the decision made on it is read and acted on all the same.
+	gh.issue(t, "acme/edge-sensors", assignedTo(
+		openIssue(claimedIssue, claimedTitle, time.Now().UTC().Add(-72*time.Hour), readyLabel), "factory-bot"))
+	f.eventually(t, 30*time.Second, "the issue to be let go", func() bool {
+		var let apiRun
+		f.get(t, "/api/runs/1", &let)
+		return let.LetGoAt != nil
+	})
+}
+
+// Pushing a worktree pushes what its HEAD points at, and a worker that left that HEAD behind its own
+// branch — detached, or moved by hand — is the one case where that is not the work. The branch in
+// the clone still holds those commits, so it holds the whole handover up until the poll after it has
+// pushed them from there: a handover that carried on would read a remote branch with nothing beyond
+// its base and delete it, and the work would be on this host alone ([ADR 0026]).
+//
+// [ADR 0026]: ../docs/adr/0026-the-factory-never-deletes-work-on-its-own.md
+func TestAWorktreeWhoseHeadIsBehindItsBranchStillHasEveryCommitPushed(t *testing.T) {
+	gh := newGhShim(t)
+	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
+	gh.loggedInAs(t, "factory-bot")
+	gh.assigns(t, "acme/edge-sensors", claimedIssue, "factory-bot")
+	gh.unassigns(t, "acme/edge-sensors", claimedIssue, "factory-bot")
+	gh.workerCommits(t, "worked.md")
+	gh.workerReportsBlocked(t, "the repository has no test for this")
+
+	data := filepath.Join(t.TempDir(), "data")
+	clone := gh.cloneInto(t, data, "acme/edge-sensors")
+	base := gh.head(t, "acme/edge-sensors", "main")
+	f := gh.work(t, config{"poll": "50ms", "deadline": "90s", "data_dir": data,
+		"repositories": []string{"acme/edge-sensors"}})
+	if run := f.ended(t, 1); !run.Holding {
+		t.Fatalf("run 1 ended as %q (%s) holding=%v, want a run that holds the issue; the factory's log:\n%s",
+			run.Outcome, run.Reason, run.Holding, f.output(t))
+	}
+	worktree := filepath.Join(clone, ".claude", "worktrees", claimedWorktree)
+	work := committed(t, f, worktree, "worked.md")
+	// The HEAD of the worktree goes back to the base, while the branch keeps the commit of the run.
+	checkout := exec.Command("git", "-C", worktree, "checkout", "--quiet", "--detach", base)
+	checkout.Env = gitIsolation()
+	if out, err := checkout.CombinedOutput(); err != nil {
+		t.Fatalf("the HEAD of %s could not be detached: %v: %s", worktree, err, out)
+	}
+
+	gh.issue(t, "acme/edge-sensors", assignedTo(
+		openIssue(claimedIssue, claimedTitle, time.Now().UTC().Add(-72*time.Hour), readyLabel), "factory-bot"))
+	var let apiRun
+	f.eventually(t, 30*time.Second, "the issue to be let go", func() bool {
+		let = apiRun{}
+		f.get(t, "/api/runs/1", &let)
+		return let.LetGoAt != nil
+	})
+	if head := gh.head(t, "acme/edge-sensors", claimedBranch); head != work {
+		t.Errorf("%s of the remote is at %q, want the commit of the run (%s): the commits of the branch are pushed before anything of it goes",
+			claimedBranch, head, work)
+	}
+	removal := "api --method DELETE repos/acme/edge-sensors/git/refs/heads/" + claimedBranch
+	if made := gh.made(t, removal); made != 0 {
+		t.Errorf("the factory made `gh %s` %d times, want none: the branch carries the commit of the run", removal, made)
+	}
+	if localBranch(t, clone, claimedBranch) {
+		t.Errorf("the local branch %s is still in %s after the issue was let go", claimedBranch, clone)
+	}
+	if _, err := os.Stat(worktree); err == nil {
+		t.Errorf("the worktree %s is still on the host after the issue was let go", worktree)
+	}
+	// The poll that could not finish says what it waited for, once.
+	held := 0
+	for _, warning := range let.Warnings {
+		if strings.Contains(warning, "holds commits origin/"+claimedBranch+" does not have") {
+			held++
+		}
+	}
+	if held != 1 {
+		t.Errorf("the run carries %d warnings about the commits only the clone had, want one: %v", held, let.Warnings)
+	}
+}
+
 // ---- reading the host ----
 
 // workerOf waits until the scripted worker of a branch has started and answers with what the shim

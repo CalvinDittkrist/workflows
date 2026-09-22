@@ -87,9 +87,12 @@ func (f *Factory) claim(ctx context.Context, r *Run, entry Entry) (claimed, erro
 	// references this claim has just fetched.
 	if held := remoteBranchForIssue(ctx, clone, issue.Number); held != "" {
 		// Unless it is this factory's own branch, made by the run that once held the issue and left
-		// on the remote when the issue was let go. The entry carries that run, so the branch is
-		// recognised by the record and not by its name, and the issue is taken back under it rather
-		// than claimed a second time ([ADR 0026]).
+		// on the remote when the issue was let go. The entry carries that run, and a branch of the
+		// name it recorded is taken back rather than claimed a second time ([ADR 0026]). The name is
+		// all the two have in common, so a branch another claimer cut for the same issue under the
+		// same name after the let-go would be taken back with it. What keeps that window shut is the
+		// frontier rule and not this line: an issue a claimer holds carries its assignee, and an
+		// assigned issue is not in this factory's line to begin with.
 		if entry.resume.Branch != held {
 			return claimed{branch: held}, errLost
 		}

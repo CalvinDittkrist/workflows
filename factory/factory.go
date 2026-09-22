@@ -61,7 +61,11 @@ type Entry struct {
 	Signal   string    `json:"signal"`
 	SignalAt time.Time `json:"signalAt"`
 
-	resume Run // the run this entry continues; only read when the signal is not routed
+	// resume is the run this entry continues: the claim a resume signal resumes under, and for a
+	// routed issue the run that once held it and was let go, whose branch the claim takes back
+	// instead of claiming the issue anew (waiting, readopt). It is empty for every other routing,
+	// which is an issue this factory has never held.
+	resume Run
 }
 
 // Factory is the service: it holds the queue it last derived, the runs it has made, and the one
@@ -87,6 +91,10 @@ type Factory struct {
 	// works under, by run, put there when the run starts and taken out when it ends or is cancelled.
 	// Only a run of this factory is in it, so a record of an older start can never be signalled here.
 	cancelling map[int]context.CancelCauseFunc
+	// askedHeld is when each issue this factory holds was last asked about on GitHub, by the state it
+	// was in when it was asked (heldIssues). It is the memory the cadence of those readings rests on
+	// and nothing else reads it.
+	askedHeld map[string]time.Time
 	// quotaUntil is served empty until the quota check arrives (ADR 0028); the interface carries the
 	// state from the start so the ticket that fills it changes no reader.
 	quotaUntil *time.Time
@@ -143,7 +151,8 @@ func New(settings Settings, fake bool) (*Factory, error) {
 		return nil, fmt.Errorf("the factory cannot find its own binary: %w", err)
 	}
 	f := &Factory{settings: settings, fake: fake, runs: runs, started: time.Now(), self: self,
-		wake: make(chan struct{}, 1), held: map[string]bool{}, cancelling: map[int]context.CancelCauseFunc{}}
+		wake: make(chan struct{}, 1), held: map[string]bool{}, cancelling: map[int]context.CancelCauseFunc{},
+		askedHeld: map[string]time.Time{}}
 	f.source = &gitHub{repositories: settings.Repositories, label: settings.Label}
 	if fake {
 		f.source = &canned{repositories: settings.Repositories, started: f.started}
@@ -206,10 +215,29 @@ func (f *Factory) refreshQueue(ctx context.Context) poll {
 	return read
 }
 
+// heldPolls is how many polls apart an idle holding is asked about. Reading one costs a request for
+// the issue and another for its pull request, and an issue whose run is over stays held until a
+// person is done with that pull request — days of polling, for every pull request this host has
+// waiting at once. Asking about all of them every minute would spend the host's whole hour of
+// requests on issues nobody has touched, and the token that runs out is the one the workers use.
+//
+// A run that is going is the other case and is asked about on every poll: that is the reading a
+// cancel arrives through, and there is one such run at a time. So the price of hearing a decision
+// within a poll is paid for work in progress, and what is only waiting to be cleaned up is heard a
+// few minutes later, which is as fast as a worktree needs to go.
+const heldPolls = 10
+
 // heldIssues is what the factory holds on GitHub right now, read from its own records: one entry per
 // issue whose claim still stands, with the pull request any run of that issue opened. It is empty
 // for a factory that holds nothing, which is what keeps a poll of a quiet line at the one request
 // per repository it has always been.
+//
+// An issue is left out of the reading while it is not due: an idle holding is asked about every
+// heldPolls-th poll and not on each one, and the wait starts over whenever the issue is in another
+// state than it was last asked in — the run that held it ended, a pull request came of it — so the
+// factory hears at once about work that has just changed hands and keeps its questions rare about
+// work that lies as it did. A reading that failed counts as asked: GitHub said nothing either way,
+// and asking a rate limit again every minute is what ran into it.
 //
 // It is empty for a paused factory too. A pause is the brake on everything this host does by itself
 // ([ADR 0023]): it starts nothing, and it answers no decision about what it holds either, so there
@@ -225,13 +253,27 @@ func (f *Factory) heldIssues() []Held {
 	if f.settings.Paused {
 		return out
 	}
-	for _, h := range holdings(f.runs.list()) {
+	held := holdings(f.runs.list())
+	now := time.Now()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	asked := make(map[string]time.Time, len(held)) // only what is held now, so the memory cannot grow
+	for _, h := range held {
 		connected, ok := f.connected(h.repository())
 		if !h.holds || !ok {
 			continue
 		}
-		out = append(out, Held{Repository: connected.Name, Number: h.run.Issue, PullRequest: h.pullRequest})
+		issue := Held{Repository: connected.Name, Number: h.run.Issue, PullRequest: h.pullRequest}
+		state := fmt.Sprintf("%s|%t|%s", issue.key(), h.idle, h.pullRequest)
+		last, known := f.askedHeld[state]
+		if h.idle && known && now.Sub(last) < time.Duration(heldPolls)*f.settings.Poll {
+			asked[state] = last
+			continue
+		}
+		asked[state] = now
+		out = append(out, issue)
 	}
+	f.askedHeld = asked
 	sort.Slice(out, func(a, b int) bool { return out[a].key() < out[b].key() })
 	return out
 }
@@ -244,8 +286,9 @@ func (f *Factory) heldIssues() []Held {
 //
 // It runs in the working loop rather than beside it: letting an issue go pushes, fetches and removes
 // a worktree of this host's clone, and one place doing that at a time is what keeps two of them off
-// the same clone. A paused factory does none of it — it writes nothing anywhere while it is paused,
-// which is what a pause is for.
+// the same clone. The loop waits for it, which is why a handover is bound to the few polls of
+// handoverTimeout and not to the hour a transfer has elsewhere. A paused factory does none of it —
+// it writes nothing anywhere while it is paused, which is what a pause is for.
 //
 // [ADR 0026]: ../docs/adr/0026-the-factory-never-deletes-work-on-its-own.md
 func (f *Factory) letIssuesGo(ctx context.Context, letGo map[string]string) {

@@ -189,10 +189,10 @@ func (g *gitHub) queue(ctx context.Context, held []Held) poll {
 // readHeld asks GitHub about every issue this factory holds and answers with those it is done with.
 // An issue the factory holds is assigned to this host, so it is not in the line above and there is
 // no other reading of it: this is where a maintainer's decision reaches work in progress ([ADR
-// 0023]). It is one request per held issue and one more for a pull request that stands, so a poll
-// costs what this host holds: nothing for a factory that holds nothing, and two requests a poll for
-// every issue whose pull request is waiting for a person. That is the price of hearing a decision
-// within a poll, and it is paid only for issues this factory is in the middle of.
+// 0023]). It is one request per issue it is given and one more for a pull request that stands, and
+// which issues those are is the caller's cadence (heldIssues): the run that is going on every poll,
+// so a cancel is heard within one, and what is only waiting to be cleaned up rarely, so a host with
+// a dozen pull requests in review does not spend its hour of requests on them.
 //
 // An issue whose reading fails says nothing at all. A rate limit, a login that expired or a
 // repository nobody can reach must never take a worktree apart ([ADR 0026]), so the factory holds on
@@ -225,9 +225,11 @@ func (g *gitHub) readHeld(ctx context.Context, held []Held, letGo map[string]str
 }
 
 // decided is the decision GitHub carries about one held issue, or nothing. The three gestures are
-// the maintainer's: the routing label taken off the issue, the issue closed, and the pull request of
-// its run merged or closed. They are read in that order, because the first two end a run that is
-// still going and the third is only ever about one that is over.
+// the maintainer's: the routing label taken off the issue, the issue closed, and the pull request a
+// run of it opened merged or closed. They are read in that order, because the first two are the
+// answer to the issue itself while the third is the answer to one run's work, and every one of them
+// ends whatever of the issue is still going: a factory that worked the issue on while its pull
+// request was decided would be working against the decision.
 //
 // The routing label alone is read and not the rest of the frontier rule: routing is what hands an
 // issue to this factory and taking that label off is what takes it back ([ADR 0023]), while

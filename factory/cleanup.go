@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -24,6 +25,24 @@ import (
 //
 // [ADR 0026]: ../docs/adr/0026-the-factory-never-deletes-work-on-its-own.md
 
+// handoverTimeout bounds the whole handover of one issue: its pushes, its fetch and the requests
+// that give the issue back. A handover runs in the working loop, so whatever it waits for the line
+// waits for too — a poll that does not happen, a cancel that does not reach the run it was meant
+// for, an interface whose last poll goes stale under a reader. What it transfers is the commits of
+// one branch and not a repository, which is why it is given the room of a few polls and not the
+// hour a clone has; each of its transfers may take that room, and this deadline over all of them is
+// what keeps the sum of one handover to it.
+//
+// A handover that is cut loses nothing. Nothing of it is removed before the work is on the remote,
+// every step reads the host and the remote again rather than trusting what the last one left, and
+// the next poll starts it over.
+const handoverTimeout = 2 * time.Minute
+
+// errHandoverCut is the cause that deadline carries, which is what tells a handover that ran out of
+// its own time from one a stopping factory cut short: the first is trouble on this host and is said
+// on the run, the second is the operator's own act and says nothing.
+var errHandoverCut = errors.New("letting the issue go took longer than " + handoverTimeout.String())
+
 // letGo gives one issue back, in the order that keeps the work: push, then the worktree and the
 // local branch, then the branch on the remote if it holds nothing, then the assignee if no pull
 // request came of the issue. The record is marked last and only when the worktree is gone, because
@@ -43,6 +62,8 @@ func (f *Factory) letGo(ctx context.Context, h holding, decision string) {
 	log.Printf("letting %s#%d go: %s", connected.Name, held.Issue, decision)
 	f.runs.event(record, Event{Kind: "factory", Title: "letting " + held.Branch + " go", Body: decision})
 
+	ctx, done := context.WithTimeoutCause(ctx, handoverTimeout, errHandoverCut)
+	defer done()
 	if !f.pushWorktree(ctx, record, clone, held) {
 		return
 	}
@@ -77,7 +98,7 @@ func (f *Factory) pushWorktree(ctx context.Context, record *Run, clone string, h
 			return true // no worktree and no branch of it on this host: nothing of it to push
 		}
 	}
-	if _, err := gitWithin(ctx, from, fetchTimeout, "push", "--quiet", "origin", ref+":refs/heads/"+held.Branch); err != nil {
+	if _, err := gitWithin(ctx, from, handoverTimeout, "push", "--quiet", "origin", ref+":refs/heads/"+held.Branch); err != nil {
 		return f.heldUp(ctx, record, fmt.Sprintf("the commits of %s in %s could not be pushed: %v; nothing of this issue is removed from this host until they are on the remote",
 			held.Branch, from, err))
 	}
@@ -94,6 +115,13 @@ func (f *Factory) pushWorktree(ctx context.Context, record *Run, clone string, h
 // every commit under it is on the remote, which is what is read before it goes and not assumed of
 // the push above: a name that holds anything the remote does not stays, and so does one that cannot
 // be read ([ADR 0026]).
+//
+// Such a name stops the handover too, rather than leaving it to run on without it. The push above
+// puts the worktree's HEAD on the remote, and a worker that left that HEAD behind its own branch —
+// detached, or moved on by hand — is the one way the two differ; carrying on would then read a
+// remote branch that holds nothing beyond its base and delete it, and the commits the name holds
+// would be on this host alone. The next poll finds the worktree gone, pushes the name itself and
+// takes the issue the rest of the way.
 //
 // [ADR 0026]: ../docs/adr/0026-the-factory-never-deletes-work-on-its-own.md
 func (f *Factory) removeWorktree(ctx context.Context, record *Run, clone string, held Run) bool {
@@ -115,9 +143,8 @@ func (f *Factory) removeWorktree(ctx context.Context, record *Run, clone string,
 	}
 	unpushed, err := git(ctx, clone, "rev-list", "--count", "refs/remotes/origin/"+held.Branch+"..refs/heads/"+held.Branch)
 	if err != nil || unpushed != "0" {
-		f.heldUp(ctx, record, fmt.Sprintf("the local branch %s in %s holds commits %s does not have, or could not be read against it (%v); the name stays on this host with them",
+		return f.heldUp(ctx, record, fmt.Sprintf("the local branch %s in %s holds commits origin/%s does not have, or could not be read against it (%v); it stays with them, and nothing more of this issue is given back until they are on the remote",
 			held.Branch, clone, held.Branch, err))
-		return true
 	}
 	if _, err := git(ctx, clone, "branch", "-D", held.Branch); err != nil {
 		f.heldUp(ctx, record, fmt.Sprintf("the local branch %s could not be removed from %s: %v; its commits are on the remote, so this is a name left behind and no work", held.Branch, clone, err))
@@ -139,7 +166,7 @@ func (f *Factory) removeRemoteBranch(ctx context.Context, record *Run, clone str
 	if held.Branch == "" || held.Base == "" {
 		return
 	}
-	if _, err := gitWithin(ctx, clone, fetchTimeout, "fetch", "--quiet", "--prune", "origin"); err != nil {
+	if _, err := gitWithin(ctx, clone, handoverTimeout, "fetch", "--quiet", "--prune", "origin"); err != nil {
 		f.heldUp(ctx, record, fmt.Sprintf("%s could not be fetched into %s: %v; the branch %s stays on the remote", connected.Name, clone, err, held.Branch))
 		return
 	}
@@ -177,9 +204,11 @@ func (f *Factory) removeAssignee(ctx context.Context, record *Run, connected Con
 
 // heldUp says on the run what stopped the handover, and answers false so a step can hand its own
 // answer on. A factory that is stopping says nothing: the git or gh call it cancelled itself failed
-// because of that and not because of this host, and the next start takes the issue up again.
+// because of that and not because of this host, and the next start takes the issue up again. A
+// handover that ran out of its own time (errHandoverCut) is this host's trouble all the same — a
+// line that cannot carry a branch in two minutes — so that one is said.
 func (f *Factory) heldUp(ctx context.Context, r *Run, warning string) bool {
-	if ctx.Err() == nil {
+	if ctx.Err() == nil || errors.Is(context.Cause(ctx), errHandoverCut) {
 		f.warn(r, "letting the issue go is held up", warning)
 	}
 	return false
