@@ -518,6 +518,89 @@ func TestAClaimAnotherClaimerWonIsRecordedAsLostAndTouchesNothingElse(t *testing
 	}
 }
 
+// A claimer loses an issue to the branch another claimer created, not to the name that branch
+// happens to spell: a title edited between two polls — or a label that decides the branch type —
+// would otherwise give the two claimers two branch names, and GitHub, which refuses the second
+// creation of one reference and knows nothing of issues, would answer both of them 201.
+func TestAClaimerThatMeetsABranchOfTheIssueUnderAnotherTitleHasLost(t *testing.T) {
+	gh := newGhShim(t)
+	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
+	gh.loggedInAs(t, "factory-bot")
+
+	data := filepath.Join(t.TempDir(), "data")
+	clone := gh.cloneInto(t, data, "acme/edge-sensors")
+	// The other claimer took the issue while it was still called something shorter: the same issue,
+	// the same contract, another slug.
+	held := gh.head(t, "acme/edge-sensors", "main")
+	const taken = "feat/104-retry-the-upload"
+	gh.branchAt(t, "acme/edge-sensors", taken, held)
+
+	f := gh.work(t, config{"poll": "50ms", "deadline": "90s", "data_dir": data,
+		"repositories": []string{"acme/edge-sensors"}})
+	run := f.ended(t, 1)
+
+	if run.Outcome != "lost" {
+		t.Fatalf("the run ended as %q (%s), want lost; the factory's log:\n%s", run.Outcome, run.Reason, f.output(t))
+	}
+	if run.Branch != taken {
+		t.Errorf("the lost run records the branch %q, want %q: the branch the issue is already held by", run.Branch, taken)
+	}
+	if head := gh.head(t, "acme/edge-sensors", claimedBranch); head != "" {
+		t.Errorf("a second branch of the issue was created on the remote (%s at %s); one claim wins an issue, not one name", claimedBranch, head)
+	}
+	if len(gh.workers(t)) != 0 {
+		t.Errorf("a claimer that lost started a worker: %v", gh.workers(t))
+	}
+	for _, call := range gh.calls(t) {
+		if strings.HasPrefix(call, "issue edit ") {
+			t.Errorf("a claimer that lost called `gh %s`; the issue is the winner's and nothing else was touched", call)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(clone, ".claude", "worktrees")); !os.IsNotExist(err) {
+		t.Errorf("a claimer that lost made a worktree in %s: %v", clone, err)
+	}
+}
+
+// A won claim is one act on GitHub and then two more: the branch exists from the moment GitHub
+// confirms it, and the assignment and the worktree follow. A host that loses power in that gap is
+// read afterwards from the run record alone, so the record names the branch before the gap and not
+// after it — nothing else on this host says what was left on the remote ([ADR 0026]).
+//
+// [ADR 0026]: ../docs/adr/0026-the-factory-never-deletes-work-on-its-own.md
+func TestTheRunNamesTheBranchAsSoonAsTheRemoteHasIt(t *testing.T) {
+	gh := newGhShim(t)
+	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
+	gh.loggedInAs(t, "factory-bot")
+	// The assignment is reached and never answered, so the claim stands where a power cut would find
+	// it: the branch created, nothing else done.
+	gh.stall(t, "issue edit *")
+
+	data := filepath.Join(t.TempDir(), "data")
+	gh.cloneInto(t, data, "acme/edge-sensors")
+	f := gh.work(t, config{"poll": "50ms", "deadline": "90s", "data_dir": data,
+		"repositories": []string{"acme/edge-sensors"}})
+
+	f.eventually(t, 30*time.Second, "the branch of the claim on the remote", func() bool {
+		return gh.head(t, "acme/edge-sensors", claimedBranch) != ""
+	})
+	// The record in the data directory, which is all a restart of this host has to go on.
+	var record Run
+	f.eventually(t, 30*time.Second, "the run record to name the branch it created", func() bool {
+		raw, err := os.ReadFile(filepath.Join(data, "run-1.json"))
+		if err != nil {
+			return false
+		}
+		record = Run{}
+		return json.Unmarshal(raw, &record) == nil && record.Branch != ""
+	})
+	if record.Branch != claimedBranch || record.Base != "main" {
+		t.Errorf("the run record says %q off %q, want %q off main", record.Branch, record.Base, claimedBranch)
+	}
+	if record.EndedAt != nil {
+		t.Fatalf("the run had already ended as %q; this reads the record of a claim still in flight", record.Outcome)
+	}
+}
+
 // Two factories reach for the same issue in the same moment: the shim holds both inside the one act
 // that creates the branch and lets them through together, so the race is run rather than described.
 // Exactly one of them may own the issue.
@@ -788,6 +871,40 @@ func TestTheCompactPinAgreesWithTheOrchestratorsClaim(t *testing.T) {
 
 // shellBranchName is the branch the orchestrator's claim.sh names for an issue, built by the shell
 // itself out of the helpers in its lib.sh.
+// Which issue a branch belongs to is wf_issue_from_branch in the orchestrator's lib.sh, the rule a
+// local claim asks the remote with (wf_remote_branch_for_issue) before it takes an issue somebody
+// else already holds. The factory asks it of the references it fetched, so both drivers have to read
+// the same branch names the same way ([ADR 0022]).
+//
+// [ADR 0022]: ../docs/adr/0022-the-factory-is-a-second-driver-over-the-worker-pipeline.md
+func TestTheIssueABranchBelongsToAgreesWithTheOrchestratorsShell(t *testing.T) {
+	for _, branch := range []string{
+		"feat/104-retry-the-upload-when-the-broker-drops",
+		"feat/104-retry-the-upload", // the same issue under the title it had two polls ago
+		"fix/9-crash-on-start",
+		"docs/12-explain-the-gate",
+		"chore/7-bump-the-pins",
+		"feat/104-", // a title that slugs to nothing
+		"feat/0104-retry",
+		"plan/104-a-plan-branch-carries-a-topic",
+		"plan/retry-the-upload",
+		"main",
+		"release/1.2",
+		"Feat/104-upper-case-is-no-branch-type",
+		"feat/retry-104-the-upload",
+		"feature-104-the-hyphen-is-no-slash",
+		"origin/HEAD",
+		"HEAD",
+	} {
+		t.Run(branch, func(t *testing.T) {
+			want := strings.TrimSpace(shell(t, "", `. "$1"; wf_issue_from_branch "$2"`, nil, orchestratorLib(t), branch))
+			if got := issueFromBranch(branch); got != want {
+				t.Errorf("the factory reads %q as the branch of issue %q; the orchestrator's shell reads it as %q", branch, got, want)
+			}
+		})
+	}
+}
+
 func shellBranchName(t *testing.T, issue Issue) string {
 	t.Helper()
 	return strings.TrimSpace(shell(t, "",

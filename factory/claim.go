@@ -72,6 +72,17 @@ func (f *Factory) claim(ctx context.Context, r *Run, issue Issue) (claimed, erro
 	if _, err := git(ctx, clone, "remote", "set-head", "origin", "--auto"); err != nil {
 		log.Printf("error: the head %s points at could not be read into %s: %v; this claim uses what that clone last knew", connected.Name, clone, err)
 	}
+	// A branch of this issue on the remote is a claim somebody has made already, whatever slug its
+	// title spelled at the time. GitHub refuses the second creation of one reference, not the second
+	// claim of one issue, so two claimers on opposite sides of an edited title — or of an edited
+	// label, which decides the branch type — would each create a branch of their own and both believe
+	// they won. The issue number in the branch is what both of them share, and reading it back is the
+	// local driver's own rule (wf_remote_branch_for_issue in the orchestrator's lib.sh) asked of the
+	// references this claim has just fetched.
+	if held := remoteBranchForIssue(ctx, clone, issue.Number); held != "" {
+		return claimed{branch: held}, errLost
+	}
+
 	base := baseBranch(ctx, connected, clone)
 	head, err := git(ctx, clone, "rev-parse", "refs/remotes/origin/"+base)
 	if err != nil {
@@ -97,6 +108,10 @@ func (f *Factory) claim(ctx context.Context, r *Run, issue Issue) (claimed, erro
 	//
 	// [ADR 0026]: ../docs/adr/0026-the-factory-never-deletes-work-on-its-own.md
 	won := claimed{branch: branch, base: base, created: true}
+	// The run says which branch it holds the issue by as soon as GitHub has confirmed it, before the
+	// assignee and before the worktree: a host that loses power in between is read afterwards from
+	// this record alone, and one that named no branch would hide the one thing left on the remote.
+	f.runs.update(r, func() { r.Branch, r.Base = won.branch, won.base })
 
 	if _, err := gh(ctx, "issue", "edit", strconv.Itoa(issue.Number), "--repo", connected.Name, "--add-assignee", login); err != nil {
 		return won, fmt.Errorf("issue #%d of %s could not be assigned to %s: %w", issue.Number, connected.Name, login, err)
@@ -301,6 +316,46 @@ func declaredBase(ctx context.Context, clone, branch string) string {
 // [ADR 0022]: ../docs/adr/0022-the-factory-is-a-second-driver-over-the-worker-pipeline.md
 func branchName(issue Issue) string {
 	return branchType(issue.Labels) + "/" + strconv.Itoa(issue.Number) + "-" + slug(issue.Title)
+}
+
+// remoteBranchForIssue is the branch on the remote that belongs to an issue, as the clone knows it
+// after the fetch, or empty when the remote has none and when it cannot be asked. It is
+// wf_remote_branch_for_issue of the orchestrator's lib.sh restated in Go, and like the shell it
+// reads the issue out of the branch name rather than out of the issue's labels or title: those are
+// edited, the number in the branch is not. A drift test binds the two ([ADR 0022]).
+//
+// [ADR 0022]: ../docs/adr/0022-the-factory-is-a-second-driver-over-the-worker-pipeline.md
+func remoteBranchForIssue(ctx context.Context, clone string, issue int) string {
+	// The references of the remote as this clone holds them, without refs/remotes/origin/ in front,
+	// in the order git sorts them: the first branch of the issue wins, as the shell's does.
+	heads, err := git(ctx, clone, "for-each-ref", "--format=%(refname:lstrip=3)", "refs/remotes/origin/")
+	if err != nil {
+		return "" // the creation of the reference decides the claim either way
+	}
+	number := strconv.Itoa(issue)
+	for _, head := range strings.Split(heads, "\n") {
+		if issueFromBranch(head) == number {
+			return head
+		}
+	}
+	return ""
+}
+
+// branchOfIssue is the shape the branch contract gives every branch of an issue: the type, the
+// number, and the slug of the title at the time it was created.
+var branchOfIssue = regexp.MustCompile(`^[a-z]+/([0-9]+)-`)
+
+// issueFromBranch is the issue a branch belongs to, as the digits the branch spells it with, or
+// empty (wf_issue_from_branch). A plan branch belongs to no issue: it carries a topic, not a number.
+func issueFromBranch(branch string) string {
+	if strings.HasPrefix(branch, "plan/") {
+		return ""
+	}
+	found := branchOfIssue.FindStringSubmatch(branch)
+	if found == nil {
+		return ""
+	}
+	return found[1]
 }
 
 // branchType maps an issue's labels to the type of its branch (wf_branch_type). The order is the

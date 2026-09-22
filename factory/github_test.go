@@ -583,27 +583,29 @@ func boardFrontierOf(t *testing.T, issues []issueJSON) ([]int, string) {
 // ghShim is the gh the factory finds on PATH: canned answers, a log of every call and the local
 // repositories a clone comes from (factory/testdata/gh).
 type ghShim struct {
-	answers string
-	log     string
-	remotes string
-	failing string // the file holding the pattern of requests that fail
-	hanging string // the file holding how long a clone sleeps instead of cloning
-	gate    string // the file that holds a ref creation until the test lets it through
-	worker  string // the log of the claude shim: how every worker was started
-	env     []string
+	answers  string
+	log      string
+	remotes  string
+	failing  string // the file holding the pattern of requests that fail
+	stalling string // the file holding the pattern of requests that are never answered
+	hanging  string // the file holding how long a clone sleeps instead of cloning
+	gate     string // the file that holds a ref creation until the test lets it through
+	worker   string // the log of the claude shim: how every worker was started
+	env      []string
 }
 
 func newGhShim(t *testing.T) *ghShim {
 	t.Helper()
 	dir := t.TempDir()
 	g := &ghShim{
-		answers: filepath.Join(dir, "answers"),
-		log:     filepath.Join(dir, "calls.log"),
-		remotes: filepath.Join(dir, "remotes"),
-		failing: filepath.Join(dir, "failing"),
-		hanging: filepath.Join(dir, "hanging"),
-		gate:    filepath.Join(dir, "gate"),
-		worker:  filepath.Join(dir, "workers.log"),
+		answers:  filepath.Join(dir, "answers"),
+		log:      filepath.Join(dir, "calls.log"),
+		remotes:  filepath.Join(dir, "remotes"),
+		failing:  filepath.Join(dir, "failing"),
+		stalling: filepath.Join(dir, "stalling"),
+		hanging:  filepath.Join(dir, "hanging"),
+		gate:     filepath.Join(dir, "gate"),
+		worker:   filepath.Join(dir, "workers.log"),
 	}
 	for _, d := range []string{g.answers, g.remotes} {
 		if err := os.MkdirAll(d, 0o700); err != nil {
@@ -613,7 +615,8 @@ func newGhShim(t *testing.T) *ghShim {
 	g.env = append(gitIsolation(),
 		"PATH="+abs(t, "testdata")+string(os.PathListSeparator)+os.Getenv("PATH"),
 		"HOME="+dir, "GH_SHIM_DIR="+g.answers, "GH_SHIM_LOG="+g.log, "GH_SHIM_REMOTES="+g.remotes,
-		"GH_SHIM_FAIL="+g.failing, "GH_SHIM_HANG="+g.hanging, "CLAUDE_SHIM_LOG="+g.worker)
+		"GH_SHIM_FAIL="+g.failing, "GH_SHIM_STALL="+g.stalling, "GH_SHIM_HANG="+g.hanging,
+		"CLAUDE_SHIM_LOG="+g.worker)
 	return g
 }
 
@@ -705,6 +708,14 @@ func (g *ghShim) timeline(t *testing.T, repository string, issue int, events ...
 func (g *ghShim) fail(t *testing.T, pattern string) {
 	t.Helper()
 	writeFile(t, g.failing, pattern)
+}
+
+// stall makes every request that matches the shell pattern wait instead of answering, as a GitHub
+// that takes a call and says nothing does. It leaves the factory standing inside one act of a claim,
+// which is where a test reads what that claim had written down by then.
+func (g *ghShim) stall(t *testing.T, pattern string) {
+	t.Helper()
+	writeFile(t, g.stalling, pattern)
 }
 
 // hang makes `gh repo clone` sleep in a child of its own instead of cloning, as a clone of a large

@@ -8,6 +8,9 @@
 #   GH_SHIM_FAIL     a file holding a shell pattern; a request that matches it fails as an
 #                    unreachable GitHub does. It is read per call, so a test can break GitHub and
 #                    mend it again while the factory runs
+#   GH_SHIM_STALL    a file holding a shell pattern; a request that matches it is reached and never
+#                    answered, as a GitHub that takes a call and says nothing is. It is read per
+#                    call, so a test can stop the factory inside one act of a claim
 #   GH_SHIM_HANG     a file holding a number of seconds; `gh repo clone` then sleeps that long in a
 #                    child of its own instead of cloning, as a clone of a large repository does, and
 #                    writes that child's pid beside the file
@@ -31,6 +34,15 @@ if [ -n "$failing" ]; then
   # shellcheck disable=SC2254  # the variable is the pattern: the test writes it
   case "$request" in
     $failing) echo "gh: error connecting to api.github.com" >&2; exit 1 ;;
+  esac
+fi
+
+stalling=$(cat "${GH_SHIM_STALL:-/nowhere}" 2>/dev/null || true)
+if [ -n "$stalling" ]; then
+  # shellcheck disable=SC2254  # the variable is the pattern: the test writes it
+  case "$request" in
+    # In a child, so that the signal the factory ends this call with is taken while it waits.
+    $stalling) sleep 600 & wait; exit 1 ;;
   esac
 fi
 
