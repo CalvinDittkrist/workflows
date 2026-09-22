@@ -17,10 +17,11 @@ import (
 )
 
 // The outcomes of the vocabulary. A run in fake mode reaches ready, blocked, failed, timeout and
-// interrupted; lost is the race another claimer won ([ADR 0024]), and cancelled and quota arrive
-// with the tickets that add them.
+// interrupted; lost is the race another claimer won ([ADR 0024]), quota a session that ended in an
+// error on a used-up quota ([ADR 0028]), and cancelled arrives with the ticket that adds it.
 //
 // [ADR 0024]: ../docs/adr/0024-a-claim-is-the-creation-of-the-branch-through-the-api.md
+// [ADR 0028]: ../docs/adr/0028-the-quota-check-is-a-courtesy-not-a-guard.md
 const (
 	outcomeReady       = "ready"
 	outcomeBlocked     = "blocked"
@@ -28,18 +29,21 @@ const (
 	outcomeTimeout     = "timeout"
 	outcomeInterrupted = "interrupted"
 	outcomeLost        = "lost"
+	outcomeQuota       = "quota"
 )
 
 // What put a run in the line. routed is an issue taken from the queue of routed issues; the other
-// two are work this factory already holds and continues in the worktree of that claim: the one
-// automatic resume after an interruption, and the run a person asked for by taking the assignee off
-// an issue the factory holds ([ADR 0026]). The signals of an issue's runs are what the next resume
-// is decided from, which is why every run records its own.
+// three are work this factory already holds and continues in the worktree of that claim: the one
+// automatic resume after an interruption, the resume after the quota reset that a run which ran out
+// of it waits for, and the run a person asked for by taking the assignee off an issue the factory
+// holds ([ADR 0026]). The signals of an issue's runs are what the next resume is decided from, which
+// is why every run records its own.
 //
 // [ADR 0026]: ../docs/adr/0026-the-factory-never-deletes-work-on-its-own.md
 const (
 	signalRouted       = "routed"
 	signalInterruption = "interruption"
+	signalQuota        = "quota"
 	signalRelease      = "release"
 )
 

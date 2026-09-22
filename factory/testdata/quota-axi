@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+# Test shim for quota-axi, used by the factory's Go tests: it answers the factory's quota check from a
+# plan the test writes, one line per call, in the shape of quota-axi 0.1.50's `--json` report
+# (schema version 5), so the real binary reads a real report and no provider is asked.
+#
+#   QUOTA_SHIM_PLAN  the answers, one line per call and the last one repeated once the plan is used
+#                    up. A line is one of
+#                      all=<percent> [<model>=<percent> ...] reset=+<seconds>
+#                                 a report whose all-models scope and model scopes have that much
+#                                 left, every window of them resetting that many seconds after the
+#                                 call; reset=none names no reset time at all
+#                      fail       quota-axi's own error, on its error output with exit 1
+#                      garbage    output that is not a report
+#   QUOTA_SHIM_LOG   one line per call: when it came, in seconds since the epoch, and its arguments
+#   QUOTA_SHIM_COUNT the file the calls are counted in, which is how a line of the plan is chosen
+set -euo pipefail
+
+printf '%s %s\n' "$(date +%s)" "$*" >> "${QUOTA_SHIM_LOG:-/dev/null}"
+
+count=0
+if [ -f "$QUOTA_SHIM_COUNT" ]; then
+  count=$(cat "$QUOTA_SHIM_COUNT")
+fi
+count=$((count + 1))
+printf '%s\n' "$count" > "$QUOTA_SHIM_COUNT"
+
+lines=$(wc -l < "$QUOTA_SHIM_PLAN" | tr -d ' ')
+if [ "$count" -gt "$lines" ]; then
+  count=$lines
+fi
+answer=$(sed -n "${count}p" "$QUOTA_SHIM_PLAN")
+
+case "$answer" in
+  fail)
+    echo "error: no Claude credentials found; run claude and log in" >&2
+    exit 1
+    ;;
+  garbage)
+    echo "quota: fine, probably"
+    exit 0
+    ;;
+esac
+
+all="" reset="" windows="" scopes=""
+models=()
+for field in $answer; do
+  case "$field" in
+    all=*) all=${field#all=} ;;
+    reset=*) reset=${field#reset=} ;;
+    *=*) models+=("$field") ;;
+  esac
+done
+
+if [ "$reset" = none ]; then
+  resets_at=null
+else
+  at=$(( $(date +%s) + ${reset#+} ))
+  # BSD date reads an epoch with -r, GNU date with -d @.
+  resets_at=\"$(date -u -r "$at" +%Y-%m-%dT%H:%M:%S.000000+00:00 2>/dev/null || date -u -d "@$at" +%Y-%m-%dT%H:%M:%S.000000+00:00)\"
+fi
+
+windows='{"id":"five_hour","label":"session","kind":"session","resetsAt":'"$resets_at"',"percentRemaining":'"$all"'}'
+scopes='{"scope":"all_models","status":"known","effectivePercentRemaining":'"$all"',"boundedBy":["five_hour"],"limitingWindowIds":["five_hour"]}'
+for model in ${models[@]+"${models[@]}"}; do
+  name=${model%%=*}
+  left=${model#*=}
+  windows="$windows"',{"id":"model:'"$name"'","label":"'"$name"' week","kind":"model","resetsAt":'"$resets_at"',"percentRemaining":'"$left"'}'
+  scopes="$scopes"',{"scope":"model:'"$name"'","status":"known","effectivePercentRemaining":'"$left"',"boundedBy":["five_hour","model:'"$name"'"],"limitingWindowIds":["model:'"$name"'"]}'
+done
+
+printf '{"generatedAt":"%s","schemaVersion":5,"providers":[{"provider":"claude","plan":"max","windows":[%s],"state":{"status":"fresh","stale":false},"quotaSemantics":{"status":"known","effectiveAvailability":[%s]}}]}\n' \
+  "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$windows" "$scopes"

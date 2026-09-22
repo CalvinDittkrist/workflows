@@ -11,9 +11,11 @@ import (
 
 // Resuming work the factory already holds. Nothing here deletes anything and nothing here retries by
 // itself more than once: the factory resumes an interruption exactly once per issue, and after that
-// the issue waits for a person, whose gesture is taking the assignee off it ([ADR 0026]).
+// the issue waits for a person, whose gesture is taking the assignee off it ([ADR 0026]). The one
+// resume that is not counted is the one after a quota reset, because running out of quota says
+// nothing about the issue (quota.go).
 //
-// Both signals are read from the run records in the data directory rather than from memory, so a
+// Every signal is read from the run records in the data directory rather than from memory, so a
 // factory that was stopped, rebooted or cut off from power knows on its next start what it holds and
 // what it has already spent.
 //
@@ -63,11 +65,14 @@ const workerGrace = 10 * time.Second
 // holds the issue on the remote, which is the branch and the worktree a resumed run continues in,
 // the latest run of the issue whatever it was, and whether the one automatic resume is unspent.
 type holding struct {
-	run     Run  // the latest run that holds the issue; only read when holds is true
-	holds   bool // this factory owns the issue on the remote
-	last    Run  // the latest run of the issue
-	idle    bool // that run has ended, so another one of this issue may be queued
-	resumes bool // it was interrupted and the one automatic resume is still there to be spent
+	run   Run  // the latest run that holds the issue; only read when holds is true
+	holds bool // this factory owns the issue on the remote
+	last  Run  // the latest run of the issue
+	idle  bool // that run has ended, so another one of this issue may be queued
+	// resumes is the signal the factory resumes the issue on by itself, or empty: interruption when
+	// that run was interrupted and the one automatic resume is still there to be spent, quota when it
+	// ran out of quota, which is resumed whatever that budget says.
+	resumes string
 	// answered is the newest release this issue's runs have already acted on, as GitHub timed the
 	// removal that queued them. A release no newer than this is done with.
 	answered time.Time
@@ -79,7 +84,8 @@ type holding struct {
 // back by a release: a person who hands a held issue back to the factory has decided, and what
 // follows that decision may be interrupted and resumed once again, exactly as the first claim may.
 // Nothing else gives it back, so a factory that loses power twice over one issue stops after the
-// second time and waits.
+// second time and waits. A quota resume neither spends it nor gives it back: its cause passes by
+// itself and has nothing to do with the issue.
 func holdings(runs []Run) map[string]holding {
 	out := map[string]holding{}
 	budget := map[string]int{}
@@ -106,7 +112,13 @@ func holdings(runs []Run) map[string]holding {
 		out[key] = h
 	}
 	for key, h := range out {
-		h.resumes = h.holds && h.idle && h.last.Outcome == outcomeInterrupted && budget[key] > 0
+		switch {
+		case !h.holds || !h.idle:
+		case h.last.Outcome == outcomeQuota:
+			h.resumes = signalQuota
+		case h.last.Outcome == outcomeInterrupted && budget[key] > 0:
+			h.resumes = signalInterruption
+		}
 		out[key] = h
 	}
 	return out
@@ -179,6 +191,7 @@ func (f *Factory) resume(ctx context.Context, r *Run, e Entry) (claimed, error) 
 // work rather than claiming it.
 var resuming = map[string]string{
 	signalInterruption: "the one automatic resume after an interruption",
+	signalQuota:        "the resume after the reset of the quota the run before ran out of",
 	signalRelease:      "a person released the issue by removing the assignee",
 }
 
@@ -209,7 +222,7 @@ func (h holding) released(issue Issue, routed bool) bool {
 	return issue.unassignedAt.After(issue.assignedAt)
 }
 
-// signalAt is when the interruption this resume answers happened.
+// signalAt is when the interruption or the quota run this resume answers ended.
 func (h holding) signalAt() time.Time {
 	if h.last.EndedAt == nil {
 		return h.last.StartedAt
