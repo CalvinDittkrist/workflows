@@ -5,11 +5,12 @@
 # Usage: repair.sh round   count a repair round for this branch's pull request; refuses past the limit
 #        repair.sh print   what the record says, counting nothing; the CI stage's brief reads this
 #        repair.sh reset   start this pull request's count again, for a round somebody asked for
-# A repair round is a fix for failed checks or a round of /worker:address-reviews the CI stage drove.
-# Waiting for CI is neither: a `waiting` answer runs pr-wait.sh again, not the stage, so it counts
-# nothing. Nor is a round somebody asked for by hand: the limit bounds the pipeline's own loop, and a
-# maintainer who reads the pull request and requests changes has given it a new mandate that the
-# rounds its checks once needed must not refuse. That is what reset is for.
+# A repair round is a fix for failed checks, a merge of the base after a conflict, or a round of
+# /worker:address-reviews the CI stage drove. Waiting for CI is none of them: a `waiting` answer runs
+# pr-wait.sh again, not the stage, so it counts nothing. Nor is a round somebody asked for by hand: the
+# limit bounds the pipeline's own loop, and a maintainer who reads the pull request and requests changes
+# has given it a new mandate that the rounds its checks once needed must not refuse. That is what reset
+# is for.
 #
 # Which round this is, however, is not the session's to judge: the count is the one bound on an
 # unattended repair loop, and a stage that could start it again whenever it read itself as asked for

@@ -13,7 +13,7 @@
     "WF_REVIEWERS": "code,security,docs,tests,senior",
     "WF_REVIEW_ROUNDS": "3",
     "WF_PR_BOT_REVIEWERS": "chatgpt-codex-connector",
-    "WF_PR_REVIEW_WAIT": "600",
+    "WF_PR_REVIEW_WAIT": "1200",
     "WF_PROJECT_TEMPLATE": ""
   },
   "permissions": {

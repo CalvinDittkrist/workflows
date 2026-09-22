@@ -28,11 +28,11 @@ class ClaimTests(ShimTest):
         self.assertEqual(settings["env"], {"WF_MODE": "manual", "WF_ISSUE": "12",
                                            "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1",
                                            "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "80"})
-        self.assertEqual(settings["autoCompactWindow"], 250000)
+        self.assertEqual(settings["autoCompactWindow"], 312500)
         # The pane shows the worker's context size and writes it into the worktree for the checkpoint.
         # claude runs the command through a shell, so it is read back the way that shell reads it: the script,
         # then the compact trigger, which is the window above times the percentage beside it.
-        self.assertEqual(shlex.split(settings["statusLine"]["command"]), [str(ORCH / "statusline.sh"), "200000"])
+        self.assertEqual(shlex.split(settings["statusLine"]["command"]), [str(ORCH / "statusline.sh"), "250000"])
         self.assertEqual(settings["statusLine"]["type"], "command")
         # A long tool call changes no message; without the interval the value would go stale under it.
         self.assertEqual(settings["statusLine"]["refreshInterval"], 60)
@@ -56,8 +56,8 @@ class ClaimTests(ShimTest):
         self.assertEqual(settings["env"], {"WF_MODE": "manual", "WF_ISSUE": "12",
                                            "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1",
                                            "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "80"})
-        self.assertEqual(shlex.split(settings["statusLine"]["command"]), [str(ORCH / "statusline.sh"), "200000"])
-        self.assertEqual(settings["autoCompactWindow"], 250000)
+        self.assertEqual(shlex.split(settings["statusLine"]["command"]), [str(ORCH / "statusline.sh"), "250000"])
+        self.assertEqual(settings["autoCompactWindow"], 312500)
         self.assertEqual(words[-1], "/worker:work")
         # The pane the command runs in has its own working directory, so the script is named by its full path.
         self.assertEqual(words[0], str(ORCH / "sbx-worker.sh"))
@@ -72,14 +72,14 @@ class ClaimTests(ShimTest):
         self.assertEqual(r.returncode, 0, r.stderr)
         start = [c for c in self.argv_calls() if c[1:3] == ["agent", "start"]][0]
         command = json.loads(start[start.index("--settings") + 1])["statusLine"]["command"]
-        self.assertEqual(shlex.split(command), [str(spaced / "scripts/statusline.sh"), "200000"])
+        self.assertEqual(shlex.split(command), [str(spaced / "scripts/statusline.sh"), "250000"])
         # And the shell really runs it: the line it prints is what the pane would show. The window is a
-        # million tokens, so the 200k in the line is the trigger the command carries and not the model's window.
+        # million tokens, so the 250k in the line is the trigger the command carries and not the model's window.
         payload = json.dumps({"cwd": str(self.repo), "context_window": {"total_input_tokens": 78231, "context_window_size": 1000000}})
         rendered = subprocess.run(["sh", "-c", command], input=payload, text=True, capture_output=True,
                                   env=self.env(WF_ISSUE="12", WF_MODE="manual"))
         self.assertEqual(rendered.returncode, 0, rendered.stderr)
-        self.assertEqual(rendered.stdout.strip(), "#12 · manual · 78k/200k (39%)")
+        self.assertEqual(rendered.stdout.strip(), "#12 · manual · 78k/250k (31%)")
 
     def test_the_sandboxed_start_survives_a_plugin_path_with_a_space(self):
         # The sandbox start hands the whole settings object to the shell of a pane as one word. That object
@@ -96,8 +96,8 @@ class ClaimTests(ShimTest):
         settings = json.loads(words[words.index("--settings") + 1])
         self.assertEqual(settings["env"]["WF_ISSUE"], "12")
         self.assertEqual(settings["env"]["CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"], "80")
-        self.assertEqual(settings["autoCompactWindow"], 250000)
-        self.assertEqual(shlex.split(settings["statusLine"]["command"]), [str(spaced / "scripts/statusline.sh"), "200000"])
+        self.assertEqual(settings["autoCompactWindow"], 312500)
+        self.assertEqual(shlex.split(settings["statusLine"]["command"]), [str(spaced / "scripts/statusline.sh"), "250000"])
         self.assertEqual(words[words.index("--name") + 1], "#12")
 
     def test_yolo_flag_is_passed_to_the_worker_session(self):
@@ -349,8 +349,8 @@ class ClaimEnvTests(ShimTest):
     def assert_session_shape(self, settings):
         """What every claim gives a worker session, knob or no knob: the status line the checkpoint reads the
         context from, the compact trigger under it, and the plugin isolation that leaves only worker skills."""
-        self.assertEqual(settings["autoCompactWindow"], 250000)
-        self.assertEqual(shlex.split(settings["statusLine"]["command"]), [str(ORCH / "statusline.sh"), "200000"])
+        self.assertEqual(settings["autoCompactWindow"], 312500)
+        self.assertEqual(shlex.split(settings["statusLine"]["command"]), [str(ORCH / "statusline.sh"), "250000"])
         self.assertEqual(settings["enabledPlugins"],
                          {"planner@workflows": False, "orchestrator@workflows": False})
 
@@ -1023,13 +1023,13 @@ class StatusLineTests(ShimTest):
         self.assertRegex(recorded["at"], r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 
     def test_the_size_is_shown_against_the_compact_trigger(self):
-        # A worker on a million-token model compacts at 200k, so 78k is well over a third of what it has; the
+        # A worker on a million-token model compacts at 250k, so 78k is almost a third of what it has; the
         # model's 7 % would read as room the session never gets. Without the argument nothing changes.
         big = {**self.LINE, "context_window": {"total_input_tokens": 78231, "context_window_size": 1000000}}
         self.assertEqual(self.statusline(big, WF_ISSUE="12", WF_MODE="manual"), "#12 · manual · 78k/1000k (7%)")
-        r = self.run_script(ORCH / "statusline.sh", "200000", stdin=json.dumps({**big, "cwd": str(self.repo)}),
+        r = self.run_script(ORCH / "statusline.sh", "250000", stdin=json.dumps({**big, "cwd": str(self.repo)}),
                             WF_ISSUE="12", WF_MODE="manual")
-        self.assertEqual(r.stdout.strip(), "#12 · manual · 78k/200k (39%)")
+        self.assertEqual(r.stdout.strip(), "#12 · manual · 78k/250k (31%)")
         # The model's window wins when it is the smaller one, and the recorded value stays the model's.
         r = self.run_script(ORCH / "statusline.sh", "500000", stdin=json.dumps({**self.LINE, "cwd": str(self.repo)}),
                             WF_ISSUE="12", WF_MODE="manual")

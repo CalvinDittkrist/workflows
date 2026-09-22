@@ -282,20 +282,32 @@ class GateRecordTests(ShimTest):
         self.assertEqual(len(brief), 1, brief)
         self.assertTrue(brief[0].startswith("gate_result: none recorded for this head"), brief)
 
-    def test_a_record_from_an_older_commit_is_no_result_for_this_head(self):
+    def test_a_pass_at_an_earlier_commit_is_briefed_with_the_commits_since(self):
+        # The rounds after the first read the fixes of the round before, and the gate runs once before the
+        # summary, not after every round: their brief says where the gate passed and how far the head is.
         self.run_gate()
+        recorded = self.head()
+        self.commit_file("a.txt"); self.commit_file("b.txt")
+        brief = self.brief()
+        self.assertIn(f"gate_result: pass (exit 0) at {recorded}, 2 commit(s) since", brief)
+        self.assertIn("  Ran 3 tests", brief)
+        # The one word answers for this head alone: the summary and the finish stage gate on it.
+        self.assertEqual(self.run_script(WORKER / "gate.sh", "verdict").stdout, "none\n")
+        # And the way on: the gate runs again, and the brief answers for the new head.
+        self.run_gate()
+        brief = self.brief()
+        self.assertIn(f"gate_result: pass (exit 0) at {self.head()}", brief)
+        self.assertNotIn("commit(s) since", brief)
+
+    def test_a_failure_at_an_earlier_commit_is_no_result_for_this_head(self):
+        self.set_gate(FAILING_GATE)
+        self.assertNotEqual(self.run_gate().returncode, 0)
         recorded = self.head()
         self.commit_file("a.txt")
         brief = self.brief()
         self.assertEqual(len(brief.splitlines()), 1, brief)
         self.assertTrue(brief.startswith("gate_result: none for this head"), brief)
         self.assertIn(recorded, brief)  # it names the commit the stale record belongs to
-        self.assertNotIn("Ran 3 tests", brief)
-        # And the way back: the review stage runs the gate again, and the brief answers for the new head.
-        self.run_gate()
-        brief = self.brief()
-        self.assertIn(f"gate_result: pass (exit 0) at {self.head()}", brief)
-        self.assertIn("  Ran 3 tests", brief)
 
     def test_a_record_taken_on_a_dirty_working_tree_is_marked_and_counts_as_none(self):
         (self.repo / "scratch.txt").write_text("uncommitted\n")
@@ -501,27 +513,31 @@ class ReviewRoundTests(PanelRecordCalls, ShimTest):
         self.assertLess(out.index("review_round_recorded:"), out.index("context_tokens:"))
         self.assertIn("review_rounds_recorded: 2", self.rounds(), "the round is recorded before the hand-over")
 
-    def test_a_round_without_a_clean_tree_or_a_passing_gate_for_this_head_is_refused(self):
+    def test_a_round_needs_a_clean_tree_and_no_gate_on_its_head_but_refuses_one_that_failed_there(self):
         (self.repo / "scratch.txt").write_text("not committed")
         r = self.round(gate=False)
         self.assertEqual(r.returncode, 1, r.stdout)
         self.assertIn("scratch.txt", r.stderr)
         self.assertIn("record the round again", r.stderr)
         (self.repo / "scratch.txt").unlink()
-        # A gate that has not run on this head says nothing about the commit the round would be recorded at.
-        self.passing_gate()
-        self.commit("later.txt")
-        r = self.round(gate=False)
-        self.assertEqual(r.returncode, 1, r.stdout)
-        self.assertIn("the gate answers 'none' for this head", r.stderr)
-        self.assertIn("gate.sh run", r.stderr)
+        # A gate that ran on this head and failed is refused: the reviewers would read code that does not work.
         (self.repo / "Makefile").write_text(FAILING_GATE)
         self.git("add", "."); self.git("commit", "-qm", "chore: failing gate")
         self.assertNotEqual(self.run_script(WORKER / "gate.sh", "run").returncode, 0)
         r = self.round(gate=False)
         self.assertEqual(r.returncode, 1, r.stdout)
-        self.assertIn("the gate answers 'fail' for this head", r.stderr)
-        self.assertIn("review_rounds_recorded: none", self.rounds(), "and none of the three recorded a round")
+        self.assertIn("the gate ran on this head and failed", r.stderr)
+        self.assertIn("gate.sh run", r.stderr)
+        self.assertIn("review_rounds_recorded: none", self.rounds(), "and neither recorded a round")
+        # A gate that has not run on this head is no refusal: the gate runs once per review, before the
+        # summary, and the next round reads the fixes this round is recorded at.
+        (self.repo / "Makefile").write_text(PASSING_GATE)
+        self.git("add", "."); self.git("commit", "-qm", "chore: passing gate")
+        self.passing_gate()
+        self.commit("later.txt")
+        r = self.round(gate=False)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("review_rounds_recorded: 1", self.rounds())
 
     def test_records_count_while_their_commit_is_in_the_history_of_this_head(self):
         self.round()
@@ -1811,30 +1827,18 @@ class FinishTests(PanelRecordCalls, ShimTest):
         self.assertEqual(r.returncode, 0, r.stderr)
 
     def test_a_panel_that_did_not_pass_stops_the_yolo_run_before_github_is_asked(self):
-        # The draft flag is applied by an agent; the record is not. Without a ready panel nothing merges,
-        # even if the pull request somehow is not a draft (issue #41, ADR 0018).
+        # The record is local and deterministic: without a ready panel nothing merges (issue #41, ADR 0018).
         r = self.finish()
         self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
         self.assertIn("panel_verdict: draft", r.stderr)
         self.assertIn("maintainer", r.stderr)
         self.assertFalse([c for c in self.calls() if "pr merge" in c])
 
-    def test_a_draft_stops_the_yolo_run_for_the_maintainer(self):
-        # The pull request stage opens a draft when the panel did not pass (issue #41, ADR 0018); nothing in
-        # the pipeline lifts it, so the run has to end here with a reason instead of a retry hint.
-        self.record_ready_panel()
-        r = self.finish(SHIM_PR_DRAFT="true")
-        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
-        self.assertIn("is a draft", r.stderr)
-        self.assertIn("maintainer", r.stderr)
-        self.assertNotIn("pr-wait.sh", r.stderr)
-        self.assertFalse([c for c in self.calls() if "pr merge" in c])
-
     def test_an_unmergeable_pull_request_still_points_at_the_wait(self):
         self.record_ready_panel()
         r = self.finish(SHIM_MERGE_STATE="BLOCKED")
         self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
-        self.assertIn("not mergeable yet (BLOCKED false)", r.stderr)
+        self.assertIn("not mergeable yet (BLOCKED)", r.stderr)
         self.assertIn("pr-wait.sh", r.stderr)
 
     def test_manual_mode_never_merges(self):
@@ -1863,20 +1867,23 @@ class PrWaitTests(ShimTest):
                                    '"submittedAt":"2026-09-17T11:00:00Z"}]')
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertIn("status: green", r.stdout)
-        self.assertIn("bot_reviews: 1 since last push", r.stdout)
+        self.assertIn("bot_reviews: 1 on the pull request", r.stdout)
         self.assertEqual("", r.stderr.strip(), r.stderr)
 
     def test_a_review_from_anybody_else_does_not_end_the_wait(self):
         r = self.wait(SHIM_REVIEWS='[{"author":{"login":"maintainer"},"submittedAt":"2026-09-17T11:00:00Z"}]')
         self.assertEqual(r.returncode, 3, r.stdout + r.stderr)
         self.assertIn("status: waiting", r.stdout)
-        self.assertIn("bot_reviews: 0 since last push", r.stdout)
+        self.assertIn("bot_reviews: 0 on the pull request", r.stdout)
 
-    def test_a_bot_review_from_before_the_last_push_does_not_count(self):
+    def test_a_bot_review_from_before_the_last_push_ends_the_wait_too(self):
+        # A bot review on an older commit still ends the wait: the bot reviews a pull request once, so a
+        # repair push after its review must not spend the review window again on a second one.
         r = self.wait(SHIM_REVIEWS='[{"author":{"login":"chatgpt-codex-connector"},'
                                    '"submittedAt":"2026-09-17T09:00:00Z"}]')
-        self.assertEqual(r.returncode, 3, r.stdout + r.stderr)
-        self.assertIn("bot_reviews: 0 since last push", r.stdout)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("status: green", r.stdout)
+        self.assertIn("bot_reviews: 1 on the pull request", r.stdout)
 
     def test_empty_bot_list_means_green_as_soon_as_checks_pass(self):
         r = self.wait(WF_PR_BOT_REVIEWERS="")
@@ -1904,13 +1911,33 @@ class PrWaitTests(ShimTest):
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertIn("status: green", r.stdout)
 
-    def test_a_draft_is_reported_and_does_not_spend_the_bot_review_wait(self):
-        # Issue #41: the PR stage opens a draft when the panel did not pass, and no bot reviews a draft.
-        r = self.wait(SHIM_PR_DRAFT="true")
+    def test_a_conflicting_pull_request_is_reported_instead_of_green(self):
+        # A branch that conflicts with its base gets no pull_request workflow run from GitHub, so the rollup
+        # stays empty; after the grace period that read as green with nothing to do, the worker reported
+        # ready, and the merge was the first thing to refuse. The conflict is the CI stage's to fix, so the
+        # wait reports it first, before checks and before the bot, with the way to fix it.
+        (self.repo / ".github/workflows").mkdir(parents=True)
+        (self.repo / ".github/workflows/ci.yml").write_text("on: pull_request\n")
+        r = self.wait(SHIM_MERGEABLE="CONFLICTING", SHIM_MERGE_STATE="DIRTY", SHIM_CHECKS_EMPTY="1",
+                      WF_PR_BOT_REVIEWERS="")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        self.assertIn("status: green", r.stdout)
-        self.assertIn("draft: true;", r.stdout)
-        self.assertNotIn("draft:", self.wait().stdout)
+        self.assertIn("status: conflicts", r.stdout)
+        self.assertIn("merge_state: DIRTY (mergeable: CONFLICTING)", r.stdout)
+        self.assertIn("git merge origin/main", r.stdout, "the fix is printed with the answer")
+        self.assertNotIn("status: green", r.stdout)
+        # And with green checks and the bot review in, the conflict still comes first.
+        r = self.wait(SHIM_MERGEABLE="CONFLICTING", SHIM_MERGE_STATE="DIRTY",
+                      SHIM_REVIEWS='[{"author":{"login":"chatgpt-codex-connector"},"submittedAt":"2026-09-17T11:00:00Z"}]')
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("status: conflicts", r.stdout)
+
+    def test_mergeability_github_is_still_computing_is_waited_out_not_read_as_clean(self):
+        # Right after a push GitHub reports UNKNOWN until it has tried the merge; a green there could be a
+        # conflict a moment later.
+        r = self.wait(SHIM_MERGEABLE="UNKNOWN", SHIM_MERGE_STATE="UNKNOWN", WF_PR_BOT_REVIEWERS="")
+        self.assertEqual(r.returncode, 3, r.stdout + r.stderr)
+        self.assertIn("status: waiting", r.stdout)
+        self.assertIn("merge_state: UNKNOWN (mergeable: UNKNOWN)", r.stdout)
 
     def test_zero_review_wait_does_not_block_on_the_bot(self):
         r = self.wait(WF_PR_REVIEW_WAIT="0")

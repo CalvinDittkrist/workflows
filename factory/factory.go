@@ -388,6 +388,23 @@ func (f *Factory) execute(parent context.Context, r *Run, entry Entry) {
 		f.finish(r, outcomeFailed, "the issue could not be "+taken(claim)+": "+err.Error()+leftBehind(claim), nil)
 		return
 	}
+	// The plugin the session is about to run is brought up to date and written down, here and not
+	// earlier: the issue is this factory's now, and nothing else of it is running. What the claim
+	// holds is on the record already, written where it became true rather than here, so a run this
+	// update is cut off in is still the held work the next start resumes.
+	f.prepare(ctx, r)
+	if ctx.Err() != nil {
+		// Updating the plugins reaches over the host's line and takes as long as that line does, so a
+		// stop or the deadline lands in it far more often than in the microseconds the claim used to be
+		// followed by. No worker was started here, and the record must not name one that failed.
+		if parent.Err() != nil {
+			f.finish(r, outcomeInterrupted, "the factory stopped while this run was preparing its worker"+leftBehind(claim), nil)
+			return
+		}
+		f.finish(r, outcomeTimeout, fmt.Sprintf("the deadline of %s passed while this run was preparing its worker", f.settings.Deadline)+leftBehind(claim), nil)
+		return
+	}
+
 	f.runs.update(r, func() {
 		// What the claim or the resume ended up holding, before a worker is started on it.
 		r.Worktree, r.Holding = claim.worktree, claim.holding
@@ -487,9 +504,8 @@ func (f *Factory) execute(parent context.Context, r *Run, entry Entry) {
 		stdout.Close() // ends the two readers
 		stderr.Close()
 		<-drained
-		warning := "the worker left a process behind that is outside its process group and still held its output; the factory cannot end it, look for it on the host"
-		f.runs.update(r, func() { r.Warnings = append(r.Warnings, warning) })
-		f.runs.event(r, Event{Kind: "error", Title: "the worker left a process behind", Body: warning})
+		f.warn(r, "the worker left a process behind",
+			"the worker left a process behind that is outside its process group and still held its output; the factory cannot end it, look for it on the host")
 	}
 	stdout.Close()
 	stderr.Close()
@@ -660,7 +676,7 @@ func firstStage(signal string) string {
 func workerSettings(env map[string]string) (string, error) {
 	settings, err := json.Marshal(map[string]any{
 		"env":               env,
-		"enabledPlugins":    map[string]bool{"planner@workflows": false, "orchestrator@workflows": false},
+		"enabledPlugins":    map[string]bool{"planner@" + marketplace: false, "orchestrator@" + marketplace: false},
 		"autoCompactWindow": compactWindow,
 	})
 	if err != nil {
@@ -696,12 +712,12 @@ func workerVariables(entry Entry, claim claimed) map[string]string {
 }
 
 // The compact pin of the workflow, the two numbers the local claim sets and this one restates
-// ([ADR 0031], [ADR 0034]). Their product is the compact trigger, 200 000 tokens.
+// ([ADR 0031], [ADR 0034]). Their product is the compact trigger, 250 000 tokens.
 //
 // [ADR 0031]: ../docs/adr/0031-the-workflow-pins-the-size-at-which-a-worker-session-compacts.md
 // [ADR 0034]: ../docs/adr/0034-the-compact-trigger-is-raised-through-the-window.md
 const (
-	compactWindow     = 250000
+	compactWindow     = 312500
 	compactPercentage = "80"
 )
 
@@ -772,6 +788,14 @@ func (f *Factory) error(r *Run, e Event) {
 		}
 	})
 	f.runs.event(r, e)
+}
+
+// warn puts a warning on a run: something that went not quite right, on the record the interface
+// serves and in the log, and never the end of the run. The title is the line the log shows before it
+// is opened, so it is short and the sentence stays in the body.
+func (f *Factory) warn(r *Run, title, warning string) {
+	f.runs.update(r, func() { r.Warnings = append(r.Warnings, warning) })
+	f.runs.event(r, Event{Kind: "error", Title: title, Body: warning})
 }
 
 // finish ends a run with an event that says why, so the log reads to the end.
