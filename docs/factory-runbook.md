@@ -185,7 +185,7 @@ The logins in `notify` are asked for a review when a run ends `ready`, and menti
 ## Upkeep
 
 ### Updating
-The factory updates the `workflows` marketplace and the `worker` plugin before every run itself. Claude Code, the factory binary and quota-axi are yours ([ADR 0036](adr/0036-the-factory-updates-the-worker-plugin-and-nothing-else.md)). Update them between runs: stopping the factory interrupts the run that is going, which is resumed once by itself, and a second interruption of the same issue waits for you. `curl -s http://127.0.0.1:7341/api/line | jq .now` prints `null` when nothing runs; pause the factory first (below) to keep it that way.
+The factory updates the `workflows` marketplace and the `worker` plugin before every run itself. Claude Code, the factory binary and quota-axi are yours ([ADR 0036](adr/0036-the-factory-updates-the-worker-plugin-and-nothing-else.md)). Update them between runs: stopping the factory interrupts the run that is going, which is resumed once by itself, and a second interruption of the same issue waits for you. `curl -s http://127.0.0.1:7341/api/line | jq '.now | length'` prints `0` when nothing runs; pause the factory first (below) to keep it that way.
 
 - **Claude Code**, as the user `factory`: `claude update`, then `claude --version`. Every run records the version it was made with.
 - **The factory binary**: download and check it as in [Installation](#installation), then `systemctl stop factory`, `install -m 0755 factory-linux-$arch /usr/local/bin/factory`, `systemctl start factory`, and look for the new version in the journal's first line.
