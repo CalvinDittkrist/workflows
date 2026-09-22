@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
+	"syscall"
 	"time"
 )
 
@@ -16,6 +18,46 @@ import (
 // what it has already spent.
 //
 // [ADR 0026]: ../docs/adr/0026-the-factory-never-deletes-work-on-its-own.md
+
+// endSurvivors ends the worker of every run this start found active whose process group is still
+// alive. A factory that was stopped ends its worker itself, but one the host killed — the kernel out
+// of memory, a `kill -9`, a service manager that does not take the whole group with it — ends
+// nothing, and its worker runs on with nobody reading its stream. The run it belongs to is over as
+// far as every record goes, so resuming that issue beside it would leave two unattended sessions
+// committing in one worktree.
+//
+// The run's lock is the proof: it is held by that process group and by nothing else, so a lock this
+// factory cannot take says a process of the group is there, and a process group whose members are
+// alive is one no other process on this host has been given the number of. Only then is the recorded
+// number signalled — the same group, ended the same way a stop ends it, and killed if it does not go.
+func (f *Factory) endSurvivors() {
+	for _, id := range f.runs.cutOff {
+		run, ok := f.runs.find(id)
+		if !ok || run.WorkerGroup == 0 || f.runs.free(id) {
+			continue
+		}
+		log.Printf("run %d (%s#%d) left a worker behind: ending process group %d, which no factory has been reading",
+			run.ID, run.Repository, run.Issue, run.WorkerGroup)
+		f.runs.event(run, Event{Kind: "factory", Title: "worker ended after the factory",
+			Body: fmt.Sprintf("the process group %d of this run outlived the factory that started it and was ended before the issue is resumed", run.WorkerGroup)})
+		if err := endGroup(run.WorkerGroup, syscall.SIGTERM); err != nil {
+			log.Printf("error: the worker group %d of run %d could not be ended: %v; end it by hand before this issue is worked again", run.WorkerGroup, run.ID, err)
+			continue
+		}
+		if f.runs.freed(id, workerGrace) {
+			continue
+		}
+		_ = endGroup(run.WorkerGroup, syscall.SIGKILL)
+		if !f.runs.freed(id, workerGrace) {
+			log.Printf("error: the worker group %d of run %d is still there after a kill; end what is left of it by hand before this issue is worked again", run.WorkerGroup, run.ID)
+		}
+	}
+}
+
+// workerGrace is how long a worker that outlived its factory is given to end, first on the signal a
+// stop uses and then on the one nothing survives. It is the room a session needs to write out what
+// it holds, which is what the stop gives it too.
+const workerGrace = 10 * time.Second
 
 // holding is what this factory's records say about one issue it has worked: the latest run that
 // holds the issue on the remote, which is the branch and the worktree a resumed run continues in,

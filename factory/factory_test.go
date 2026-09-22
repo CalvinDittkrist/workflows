@@ -273,10 +273,10 @@ func TestFakeModeWorksTheCannedQueueOneRunAtATime(t *testing.T) {
 			t.Errorf("run %d has %d events in its log and %d in its record", run.ID, lines, run.EventCount)
 		}
 	}
-	// Nothing else is written there: one record and one event log per run, beside the lock the
-	// factory holds the directory with while it runs.
-	if entries, _ := filepath.Glob(filepath.Join(f.data, "*")); len(entries) != 2*len(cannedIssues)+1 {
-		t.Errorf("the data directory holds %d files, want one record and one event log per run and the lock", len(entries))
+	// Nothing else is written there: one record, one event log and one worker lock per run, beside
+	// the lock the factory holds the directory with while it runs.
+	if entries, _ := filepath.Glob(filepath.Join(f.data, "*")); len(entries) != 3*len(cannedIssues)+1 {
+		t.Errorf("the data directory holds %d files, want a record, an event log and a lock per run, and the directory's lock", len(entries))
 	}
 	if _, err := os.Stat(filepath.Join(f.data, lockFile)); err != nil {
 		t.Errorf("the data directory has no lock (%v); a second factory would work it beside this one", err)
@@ -695,11 +695,17 @@ func TestARestartKeepsTheRunsAndInterruptsWhatWasActive(t *testing.T) {
 	if last := line.Done[len(line.Done)-1]; last.ID != len(cannedIssues) || last.Outcome != "interrupted" {
 		t.Errorf("the run that was active is run %d with the outcome %q, want run %d interrupted", last.ID, last.Outcome, len(cannedIssues))
 	}
-	// The log of the run that was active reads to its end: its last event says how the run ended.
+	// The log of the run that was active reads to its end: it says how the run ended. What the start
+	// writes after that is what it did with the worker the killed factory left behind, which is the
+	// test below this one.
 	var interrupted apiRun
 	again.get(t, fmt.Sprintf("/api/runs/%d", len(cannedIssues)), &interrupted)
-	if n := len(interrupted.Events); n == 0 || interrupted.Events[n-1].Title != "interrupted" || interrupted.EventCount != n {
-		t.Errorf("the log of the interrupted run has %d events for an event count of %d and does not end in the interruption", n, interrupted.EventCount)
+	ended := false
+	for _, e := range interrupted.Events {
+		ended = ended || e.Title == "interrupted"
+	}
+	if n := len(interrupted.Events); !ended || interrupted.EventCount != n {
+		t.Errorf("the log of the interrupted run has %d events for an event count of %d and does not say the run was interrupted", n, interrupted.EventCount)
 	}
 	if line.Done[0].Outcome != "ready" {
 		t.Errorf("the restarted factory reads run 1 as %q, want the outcome it was recorded with", line.Done[0].Outcome)
@@ -712,6 +718,57 @@ func TestARestartKeepsTheRunsAndInterruptsWhatWasActive(t *testing.T) {
 	if head := line.Queue[0]; head.Number != hangingIssue(t) || head.Signal != "interruption" {
 		t.Errorf("the line opens with #%d on the signal %q, want #%d on an interruption",
 			head.Number, head.Signal, hangingIssue(t))
+	}
+}
+
+// A factory the host kills ends nothing: its worker keeps running, with nobody reading its stream,
+// and the data directory is free the moment the process dies. The next start finds that run
+// interrupted and resumes the issue, so the worker that outlived the factory has to be ended before
+// the new session opens the same worktree — two unattended sessions committing side by side is the
+// one thing a restart may not produce.
+func TestARestartEndsTheWorkerThatOutlivedTheFactory(t *testing.T) {
+	first := start(t, config{"deadline": "5m", "poll": "50ms"})
+	left := first.waitForTheHangingWorker(t, len(cannedIssues))
+	first.stop(t, syscall.SIGKILL) // a kill of the factory alone, not of the host
+	t.Cleanup(func() {
+		for _, pid := range left {
+			_ = syscall.Kill(pid, syscall.SIGKILL)
+		}
+	})
+	// The processes that outlive the factory are the ones that were not writing to the stream it read:
+	// a session in the middle of something, which is what keeps its process group alive and its work
+	// going. The pipe takes the others with the factory, and one survivor is a live group.
+	alive := 0
+	for _, pid := range left {
+		if survived(pid) {
+			alive++
+		}
+	}
+	if alive == 0 {
+		t.Fatalf("every process %v of the worker ended with the factory that was killed; this test needs one that outlives it", left)
+	}
+
+	again := start(t, config{"deadline": "5m", "poll": "50ms", "data_dir": first.data, "listen": freeAddress(t)})
+	for _, pid := range left {
+		if err := syscall.Kill(pid, 0); err == nil {
+			t.Errorf("process %d of the worker the killed factory left behind is still running after the restart", pid)
+		}
+	}
+	var interrupted apiRun
+	again.get(t, fmt.Sprintf("/api/runs/%d", len(cannedIssues)), &interrupted)
+	if n := len(interrupted.Events); n == 0 || !strings.Contains(interrupted.Events[n-1].Title, "worker ended") {
+		t.Errorf("the log of the interrupted run ends on %v, want the start saying it ended the worker that outlived the factory", interrupted.Events[n-1:])
+	}
+
+	// And the issue is resumed after that, in a session that is alone in the worktree.
+	resumed := len(cannedIssues) + 1
+	working := again.waitForTheHangingWorker(t, resumed)
+	for _, pid := range working {
+		for _, old := range left {
+			if pid == old {
+				t.Errorf("the resumed run reports process %d, which is the worker of the run before it", pid)
+			}
+		}
 	}
 }
 

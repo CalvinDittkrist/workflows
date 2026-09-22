@@ -121,6 +121,7 @@ func New(settings Settings, fake bool) (*Factory, error) {
 	if fake {
 		f.source = &canned{repositories: settings.Repositories, started: f.started}
 	}
+	f.endSurvivors() // before anything of this start can queue a run of an issue one of them is working
 	return f, nil
 }
 
@@ -406,7 +407,23 @@ func (f *Factory) execute(parent context.Context, r *Run, entry Entry) {
 		return
 	}
 	cmd.Stdout, cmd.Stderr = stdoutWriter, stderrWriter
-	if err := cmd.Start(); err != nil {
+	// The run's lock goes into the worker's process group and nowhere else: the factory opens it,
+	// hands it over and lets go of it, so what holds it from here is that group alone and the kernel
+	// gives it back when the last process of it is gone. A factory the host killed ends nothing, and
+	// this is what the next start reads to find the worker that outlived it (endSurvivors).
+	lock, err := f.runs.lock(r.ID)
+	if err != nil {
+		stdout.Close()
+		stdoutWriter.Close()
+		stderr.Close()
+		stderrWriter.Close()
+		f.finish(r, outcomeFailed, "the factory could not take the lock of this run: "+err.Error()+leftBehind(claim), nil)
+		return
+	}
+	cmd.ExtraFiles = []*os.File{lock}
+	err = cmd.Start()
+	lock.Close() // the worker's group holds it now, and a worker that never started holds nothing
+	if err != nil {
 		stdout.Close()
 		stdoutWriter.Close()
 		stderr.Close()
@@ -416,6 +433,9 @@ func (f *Factory) execute(parent context.Context, r *Run, entry Entry) {
 	}
 	stdoutWriter.Close() // the worker holds the only writing ends now
 	stderrWriter.Close()
+	// The process group of the session, recorded before a line of its output is read: it is what ends
+	// the session, and a factory that is gone cannot say it afterwards.
+	f.runs.update(r, func() { r.WorkerGroup = cmd.Process.Pid })
 	f.runs.event(r, Event{Kind: "factory", Title: "worker started", Body: fmt.Sprint(cmd.Args)})
 
 	var readers sync.WaitGroup

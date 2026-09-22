@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 	"unicode/utf8"
 )
@@ -84,10 +85,14 @@ type Run struct {
 	CostUSD     float64    `json:"costUsd"`
 	Tokens      Tokens     `json:"tokens"`
 	ContextPeak int        `json:"contextPeak"` // the largest context one message of the worker carried
-	ExitCode    *int       `json:"exitCode"`
-	EventCount  int        `json:"eventCount"`
-	Warnings    []string   `json:"warnings"`
-	Versions    Versions   `json:"versions"`
+	// WorkerGroup is the process group the worker session ran in, which is the process group this
+	// host ends to end the session. It is recorded so that a factory the host killed rather than
+	// stopped can be started again and end the worker that outlived it.
+	WorkerGroup int      `json:"workerGroup"`
+	ExitCode    *int     `json:"exitCode"`
+	EventCount  int      `json:"eventCount"`
+	Warnings    []string `json:"warnings"`
+	Versions    Versions `json:"versions"`
 
 	// What the stream said, kept for the moment the run ends. Not part of the record.
 	reportOutcome string // ready or blocked, as the worker's final report gave it
@@ -136,14 +141,18 @@ const (
 // directory. There is no database. It is the only place that writes there, and it guards the run
 // records the HTTP interface reads.
 type Store struct {
-	dir  string
-	mu   sync.Mutex
-	runs []*Run
+	dir string
+	// cutOff is the runs this start found active in the data directory and recorded as interrupted.
+	// Their worker had no factory left to end it, which is what the run's lock is read for.
+	cutOff []int
+	mu     sync.Mutex
+	runs   []*Run
 }
 
 // OpenStore reads the runs already in the data directory. A run that was active when the factory
-// stopped has no process any more: it is recorded as interrupted, so it neither blocks the next run
-// nor claims to be running.
+// stopped is over whatever became of its worker: it is recorded as interrupted, so it neither blocks
+// the next run nor claims to be running, and it is named in cutOff, because a worker of it may still
+// be running with no factory reading it.
 func OpenStore(dir string) (*Store, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("the data directory %s cannot be created: %w; name a writable data_dir", dir, err)
@@ -185,6 +194,7 @@ func OpenStore(dir string) (*Store, error) {
 			reason := "the factory stopped while this run was active"
 			s.event(r, Event{Kind: "error", Title: outcomeInterrupted, Body: reason})
 			s.finish(r, outcomeInterrupted, reason, nil)
+			s.cutOff = append(s.cutOff, r.ID)
 		}
 	}
 	return s, nil
@@ -196,6 +206,60 @@ func (s *Store) recordPath(id int) string {
 
 func (s *Store) eventsPath(id int) string {
 	return filepath.Join(s.dir, fmt.Sprintf("run-%d.events.jsonl", id))
+}
+
+// The lock of a run says whether its worker is still there. It is taken before the worker starts and
+// handed to it, so it is held by that one process group and by nothing else, and the kernel gives it
+// back when the last process of the group is gone — whatever ended them, and whether or not the
+// factory that started them is still alive to notice ([ADR 0027]).
+//
+// [ADR 0027]: ../docs/adr/0027-the-factorys-isolation-boundary-is-the-host.md
+func (s *Store) lockPath(id int) string {
+	return filepath.Join(s.dir, fmt.Sprintf("run-%d.lock", id))
+}
+
+// lock takes a run's lock and answers with the open file. The caller hands it to the worker and
+// closes its own copy: the lock lives on in the process group that inherited the file, which is what
+// makes it the group's liveness and not this factory's.
+func (s *Store) lock(id int) (*os.File, error) {
+	file, err := os.OpenFile(s.lockPath(id), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		file.Close()
+		return nil, err
+	}
+	return file, nil
+}
+
+// free says that a run's lock can be taken, which is the kernel saying no process of its worker is
+// left. A lock this host cannot open at all is read as free and said so: the data directory is then
+// unwritable, which the record and the log of every run report anyway.
+func (s *Store) free(id int) bool {
+	file, err := os.OpenFile(s.lockPath(id), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		log.Printf("error: the lock of run %d cannot be opened: %v; is %s writable?", id, err, s.dir)
+		return true
+	}
+	defer file.Close()
+	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		return false
+	}
+	_ = syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
+	return true
+}
+
+// freed waits for that to happen, and answers false when it has not happened in time.
+func (s *Store) freed(id int, within time.Duration) bool {
+	for deadline := time.Now().Add(within); ; time.Sleep(50 * time.Millisecond) {
+		if s.free(id) {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+	}
 }
 
 // add starts a run's record. The id continues the ids in the data directory, so a restart never
@@ -355,6 +419,19 @@ func (s *Store) get(id int) (Run, bool) {
 		}
 	}
 	return Run{}, false
+}
+
+// find is the run of that id as the store holds it, so a caller can write to its record and its log
+// rather than to a copy of them.
+func (s *Store) find(id int) (*Run, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, r := range s.runs {
+		if r.ID == id {
+			return r, true
+		}
+	}
+	return nil, false
 }
 
 // events reads a run's log from disk and serves the events after the sequence number after, so a
