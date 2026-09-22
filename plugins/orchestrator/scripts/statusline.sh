@@ -60,7 +60,7 @@ fi
 # The line itself: what the maintainer sees of this pane across the whole workspace, so it is short and the
 # context size is the part that changes. The size is shown against the size this session really reaches: the
 # model's window, or the compact trigger given as the argument when that is smaller. A session on a
-# million-token model that compacts at 200k is at a fifth of its window there, and 7 % would read as room it
+# million-token model that compacts at 250k is at a quarter of its window there, and 7 % would read as room it
 # does not have.
 shown="$window"
 if num "${1:-}" && [ "${1:-0}" -gt 0 ]; then

@@ -19,7 +19,53 @@
 #
 # The report is the one thing the pipeline owes the factory: a final report that says ready: with
 # the pull request (ADR 0022).
+#
+# Before a session the factory asks this same command for the plugin update and for the versions it
+# records. Those calls are answered here and logged apart from the sessions, because the worker log
+# is read as one record per session:
+#
+#   CLAUDE_SHIM_PLUGIN_LOG      one line per plugin or version call: its arguments
+#   CLAUDE_SHIM_PLUGIN_FAIL     when set, an update prints this on its error output and exits 1;
+#                               the reads of what is installed still answer, as they do on a host
+#                               whose line is down
+#   CLAUDE_SHIM_WORKER_VERSION  the version the plugin list gives worker@workflows in the user scope
+#   CLAUDE_SHIM_WORKER_ENABLED  whether that row is switched on, true by default
+#   CLAUDE_SHIM_PLUGIN_HANG     seconds a plugin call waits before it answers, as a host whose line
+#                               hangs rather than refuses
+#   CLAUDE_SHIM_VERSION         what --version prints
 set -u
+
+plugins="${CLAUDE_SHIM_PLUGIN_LOG:-/dev/null}"
+case "${1:-}" in
+  --version)
+    printf '%s\n' "$*" >> "$plugins"
+    # Set and empty is a binary that printed nothing, which a run has to notice; unset is a normal one.
+    printf '%s\n' "${CLAUDE_SHIM_VERSION-2.1.278 (Claude Code)}"
+    exit 0
+    ;;
+  plugin)
+    printf '%s\n' "$*" >> "$plugins"
+    if [ -n "${CLAUDE_SHIM_PLUGIN_HANG:-}" ]; then
+      # A marketplace over a line that never answers: the call is logged and then waits to be ended.
+      sleep "$CLAUDE_SHIM_PLUGIN_HANG"
+    fi
+    if [ "${2:-}" = list ]; then
+      # Two scopes hold the plugin: the host's own install and a checkout's, which is another
+      # session's business and carries another version.
+      printf '[{"id":"worker@workflows","version":"%s","scope":"user","enabled":%s},' \
+        "${CLAUDE_SHIM_WORKER_VERSION:-1.4.2}" "${CLAUDE_SHIM_WORKER_ENABLED:-true}"
+      printf '{"id":"worker@workflows","version":"0.0.1","scope":"project","enabled":true},'
+      printf '{"id":"repo-standards@workflows","version":"0.2.1","scope":"user","enabled":true}]\n'
+      exit 0
+    fi
+    if [ -n "${CLAUDE_SHIM_PLUGIN_FAIL:-}" ]; then
+      echo "$CLAUDE_SHIM_PLUGIN_FAIL" >&2
+      exit 1
+    fi
+    printf 'updated %s\n' "$*"
+    exit 0
+    ;;
+esac
 
 log="${CLAUDE_SHIM_LOG:-/dev/null}"
 {

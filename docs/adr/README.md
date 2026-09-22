@@ -22,7 +22,7 @@ One file per decision, numbered, never edited after acceptance (supersede instea
 | [0016](0016-approval-is-per-category-and-scripts-own-what-they-apply.md) | Approval is per category, and scripts own what they apply | accepted; partly superseded by [0035](0035-every-category-the-apply-phase-scaffolds-is-answerable.md) |
 | [0017](0017-worker-subagents-run-in-the-foreground.md) | Worker sessions run subagents in the foreground, and the agent never waits by polling | accepted |
 | [0018](0018-worker-stages-hand-facts-over-through-the-worktree-git-dir.md) | A worker stage hands a fact to the next one through the worktree's git directory | accepted |
-| [0019](0019-the-gate-runs-once-per-review-round.md) | The gate runs once per review round, and its result is a fact in the brief | accepted |
+| [0019](0019-the-gate-runs-once-per-review-round.md) | The gate runs once per review, and its result is a fact in the brief | accepted; amended 2026-09-22: once per review, not per round, and CI gates the repair pushes |
 | [0020](0020-the-pane-measures-the-context-and-the-worktree-carries-the-value.md) | The pane's status line measures a worker's context, and the worktree carries the value | accepted |
 | [0021](0021-routing-is-decided-in-the-planner-and-never-stands-alone.md) | Routing is decided in the planner, and the routing label never stands alone | accepted |
 | [0022](0022-the-factory-is-a-second-driver-over-the-worker-pipeline.md) | The factory is a second driver over the worker pipeline | accepted |
@@ -39,3 +39,4 @@ One file per decision, numbered, never edited after acceptance (supersede instea
 | [0033](0033-the-dashboard-is-built-into-the-factory-binary.md) | The dashboard is built into the factory binary | accepted |
 | [0034](0034-the-compact-trigger-is-raised-through-the-window.md) | The compact trigger is 200 000, and the window is what raises it | accepted |
 | [0035](0035-every-category-the-apply-phase-scaffolds-is-answerable.md) | Every category the apply phase scaffolds is answerable | accepted |
+| [0036](0036-the-factory-updates-the-worker-plugin-and-nothing-else.md) | The factory updates the worker plugin and nothing else | accepted |

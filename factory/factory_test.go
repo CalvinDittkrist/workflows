@@ -168,11 +168,10 @@ func TestFakeModeWorksTheCannedQueueOneRunAtATime(t *testing.T) {
 	if ready.Turns != 23 || ready.CostUSD != 4.18 || ready.Tokens.Output != 24800 || ready.Tokens.CacheRead != 1204000 {
 		t.Errorf("run 1 has turns %d, cost %v and tokens %+v, want the totals of the result line", ready.Turns, ready.CostUSD, ready.Tokens)
 	}
-	// Shape, not behaviour for the two versions a run cannot know yet: the ticket that updates the
-	// plugins before a run fills them, and the record carries the fields from the start so that
-	// ticket changes no reader.
+	// A scripted run is this binary and no Claude Code at all: there is no plugin in it to update and
+	// no version of one to record, and fake mode changes nothing about the machine it is tried on.
 	if ready.Warnings == nil || len(ready.Warnings) != 0 || ready.Versions.Worker != "" || ready.Versions.ClaudeCode != "" {
-		t.Errorf("run 1 has warnings %v and versions %+v, want no warnings and no worker or Claude Code version until they are filled",
+		t.Errorf("run 1 has warnings %v and versions %+v, want no warnings and no worker or Claude Code version: fake mode asks claude nothing",
 			ready.Warnings, ready.Versions)
 	}
 	// The factory's own version is behaviour: every run records the version of the binary that ran it.
