@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -37,8 +38,10 @@ func TestARunThatEndsReadyAsksTheMaintainersForAReviewOfItsPullRequest(t *testin
 		t.Fatalf("the run ended as %q (%s), want ready; the factory's log:\n%s", run.Outcome, run.Reason, f.output(t))
 	}
 	f.notified(t, 1)
-	if made := gh.made(t, reviewCall(pullRequest, maintainers...)); made != 1 {
-		t.Errorf("the factory asked for a review of %s %d times, want once for the maintainers of the configuration", pullRequest, made)
+	for _, who := range maintainers {
+		if made := gh.made(t, reviewCall(pullRequest, who)); made != 1 {
+			t.Errorf("the factory asked %s for a review of %s %d times, want once for every login of the configuration", who, pullRequest, made)
+		}
 	}
 	// A ready run is a pull request to read, not an issue to answer: nothing is said on the issue.
 	if said := gh.commented(t, "acme/edge-sensors", claimedIssue); said != "" {
@@ -51,8 +54,40 @@ func TestARunThatEndsReadyAsksTheMaintainersForAReviewOfItsPullRequest(t *testin
 	settings["listen"] = freeAddress(t)
 	again := gh.work(t, settings)
 	again.queue(t, 0) // a poll of the line, so the start is over and whatever it owed is made
-	if made := gh.made(t, reviewCall(pullRequest, maintainers...)); made != 1 {
-		t.Errorf("the factory asked for a review %d times over two starts, want once; the second start's log:\n%s", made, again.output(t))
+	for _, who := range maintainers {
+		if made := gh.made(t, reviewCall(pullRequest, who)); made != 1 {
+			t.Errorf("the factory asked %s for a review %d times over two starts, want once; the second start's log:\n%s", who, made, again.output(t))
+		}
+	}
+}
+
+// A review request GitHub refuses is refused for one login — somebody who cannot review that
+// repository, the author of the pull request — and the maintainers it takes still hear of the run.
+func TestAReviewRequestOneLoginIsRefusedStillReachesTheOthers(t *testing.T) {
+	gh := newGhShim(t)
+	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
+	gh.loggedInAs(t, "factory-bot")
+	gh.assigns(t, "acme/edge-sensors", claimedIssue, "factory-bot")
+	gh.workerReports(t, "acme/edge-sensors", claimedIssue)
+	pullRequest := fmt.Sprintf("https://github.com/acme/edge-sensors/pull/%d", claimedIssue)
+	gh.reviews(t, pullRequest, maintainers...)
+	gh.fail(t, "pr edit * --add-reviewer ada") // the one login GitHub will not take
+
+	data := filepath.Join(t.TempDir(), "data")
+	gh.cloneInto(t, data, "acme/edge-sensors")
+	f := gh.work(t, config{"poll": "50ms", "deadline": "90s", "data_dir": data,
+		"repositories": []string{"acme/edge-sensors"}, "notify": maintainers})
+	if run := f.ended(t, 1); run.Outcome != "ready" {
+		t.Fatalf("the run ended as %q (%s), want ready; the factory's log:\n%s", run.Outcome, run.Reason, f.output(t))
+	}
+	f.notified(t, 1)
+	if made := gh.made(t, reviewCall(pullRequest, "linus")); made != 1 {
+		t.Errorf("the factory asked linus for a review %d times, want once although ada was refused", made)
+	}
+	run := f.ended(t, 1)
+	warned := strings.Join(run.Warnings, "\n")
+	if !strings.Contains(warned, "ada") || !strings.Contains(warned, "was not asked for a review") {
+		t.Errorf("the run carries the warnings %q, want one naming the login GitHub refused", warned)
 	}
 }
 
@@ -217,7 +252,7 @@ func TestAnEndingThatWasRecordedAndNotNotifiedIsNotifiedOnTheNextStart(t *testin
 	began := time.Now().UTC().Add(-2 * time.Hour)
 	owed := record(1, claimedIssue, claimedTitle, signalRouted, outcomeFailed, true, began, began.Add(time.Minute))
 	owed.Reason = "the session ended in an error (exit 1): the gate did not pass"
-	owed.Notify = notifyPending
+	owed.Notified = notifyPending
 	records(t, data, owed)
 
 	settings := config{"poll": "50ms", "data_dir": data,
@@ -236,6 +271,37 @@ func TestAnEndingThatWasRecordedAndNotNotifiedIsNotifiedOnTheNextStart(t *testin
 	again.queue(t, 0)
 	if made := gh.made(t, commentCall("acme/edge-sensors", claimedIssue)); made != 1 {
 		t.Errorf("the factory commented %d times over two starts, want once; the second start's log:\n%s", made, again.output(t))
+	}
+}
+
+// A factory that is stopped before it has worked through what it owes keeps the rest of it: the
+// endings stay pending and the next start makes them. A stop must not burn the notification
+// somebody is waiting on, which is what the pending mark is there for.
+func TestAStopBeforeTheOwedNotificationsAreMadeLeavesThemPending(t *testing.T) {
+	data := filepath.Join(t.TempDir(), "data")
+	began := time.Now().UTC().Add(-2 * time.Hour)
+	owed := record(1, claimedIssue, claimedTitle, signalRouted, outcomeFailed, true, began, began.Add(time.Minute))
+	owed.Notified = notifyPending
+	records(t, data, owed)
+
+	f, err := New(Settings{DataDir: data, Notify: maintainers}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stopping, stop := context.WithCancel(context.Background())
+	stop() // the factory was signalled before it could work through what it owes
+	f.NotifyOwed(stopping)
+
+	store, err := OpenStore(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, ok := store.find(1)
+	if !ok {
+		t.Fatal("the record of run 1 is gone")
+	}
+	if run.Notified != notifyPending {
+		t.Errorf("the ending the stop cut off says %q, want it still pending for the next start", run.Notified)
 	}
 }
 
@@ -266,8 +332,8 @@ func TestWithoutLoginsToNotifyTheFactoryNotifiesNobodyAndSaysSoAtItsStart(t *tes
 	// Nothing is recorded as owed either, so naming a login later does not comment on what is over.
 	var run apiRun
 	f.get(t, "/api/runs/1", &run)
-	if run.Notify != "" {
-		t.Errorf("the run says it owes the notification %q, want nothing owed", run.Notify)
+	if run.Notified != "" {
+		t.Errorf("the run says it owes the notification %q, want nothing owed", run.Notified)
 	}
 }
 
@@ -362,6 +428,6 @@ func (f *factory) notified(t *testing.T, id int) {
 	f.eventually(t, 30*time.Second, fmt.Sprintf("run %d to be notified", id), func() bool {
 		var run apiRun
 		f.get(t, fmt.Sprintf("/api/runs/%d", id), &run)
-		return run.Notify == notifyDone
+		return run.Notified == notifyDone
 	})
 }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"strconv"
@@ -55,10 +56,10 @@ func notifies(r Run, held holding) bool {
 	}
 }
 
-// Notify makes the notifications this start still owes: the endings a factory before it recorded
-// and did not get to make, and the runs this start found active, whose ending is decided here like
-// any other. It is called once, before the factory takes work.
-func (f *Factory) Notify(ctx context.Context) {
+// NotifyOwed makes the notifications this start still owes: the endings a factory before it
+// recorded and did not get to make, and the runs this start found active, whose ending is decided
+// here like any other. It is called once, before the factory takes work.
+func (f *Factory) NotifyOwed(ctx context.Context) {
 	if !f.notifying() {
 		return
 	}
@@ -68,25 +69,27 @@ func (f *Factory) Notify(ctx context.Context) {
 		}
 	}
 	for _, record := range f.runs.list() {
-		if record.Notify != notifyPending {
+		if record.Notified != notifyPending {
 			continue
 		}
+		if ctx.Err() != nil {
+			// The factory is stopping before it worked through what it owes. What is still owed
+			// stays pending and the next start makes it, which is what the marker is there for: a
+			// stop must not burn the endings somebody is waiting on.
+			return
+		}
 		if run, ok := f.runs.find(record.ID); ok {
-			f.deliver(ctx, run)
+			f.deliver(run)
 		}
 	}
 }
 
-// notify tells the maintainer how a run ended, in the moment it ended.
-func (f *Factory) notify(r *Run) {
+// notifyEnding tells the maintainer how a run ended, in the moment it ended.
+func (f *Factory) notifyEnding(r *Run) {
 	if !f.notifying() || !f.owe(r) {
 		return
 	}
-	// A context of its own, and not the run's: a run that ends because the factory is stopping is
-	// one the maintainer has to hear about, and its own context is cancelled by then.
-	ctx, cancel := context.WithTimeout(context.Background(), notifyTimeout)
-	defer cancel()
-	f.deliver(ctx, r)
+	f.deliver(r)
 }
 
 // notifying says whether this factory notifies at all. Fake mode never does: it claims nothing, its
@@ -98,10 +101,10 @@ func (f *Factory) notifying() bool { return !f.fake && len(f.settings.Notify) > 
 // record is written before the call is made, so an ending is never lost to a host that is cut off
 // while it notifies.
 func (f *Factory) owe(r *Run) bool {
-	if r.Notify != "" || !notifies(*r, holdings(f.runs.list())[r.key()]) {
+	if r.Notified != "" || !notifies(*r, holdings(f.runs.list())[r.key()]) {
 		return false
 	}
-	f.runs.update(r, func() { r.Notify = notifyPending })
+	f.runs.update(r, func() { r.Notified = notifyPending })
 	return true
 }
 
@@ -109,12 +112,17 @@ func (f *Factory) owe(r *Run) bool {
 // notification that failed is a warning on the run and changes nothing else. It is not tried again,
 // because a factory that started again after a week would otherwise comment on endings the
 // maintainer has long since answered; what failed is in the run's warnings and in the journal.
-func (f *Factory) deliver(ctx context.Context, r *Run) {
+//
+// Its deadline is its own and never the factory's: a run that ends because the factory is stopping
+// is the one the maintainer has to hear about, and the factory's own context is cancelled by then.
+func (f *Factory) deliver(r *Run) {
+	ctx, cancel := context.WithTimeout(context.Background(), notifyTimeout)
+	defer cancel()
 	if err := f.deliverTo(ctx, r); err != nil {
 		f.warn(r, "the notification could not be made",
-			fmt.Sprintf("%s was not notified of this run: %v; the run itself is unchanged", strings.Join(f.settings.Notify, ", "), err))
+			fmt.Sprintf("this ending was not notified on GitHub: %v; the run itself is unchanged", err))
 	}
-	f.runs.update(r, func() { r.Notify = notifyDone })
+	f.runs.update(r, func() { r.Notified = notifyDone })
 }
 
 // deliverTo is the notification itself: a review request for a run that ended ready, a comment that
@@ -126,16 +134,24 @@ func (f *Factory) deliverTo(ctx context.Context, r *Run) error {
 			// reason already says. There is nothing to ask for a review of.
 			return fmt.Errorf("this run ended ready and names no pull request")
 		}
-		args := []string{"pr", "edit", r.PullRequest}
+		// One call per login, and not one that names them all: GitHub refuses a whole review
+		// request that carries a login it will not take — somebody who cannot review that
+		// repository, or the author of the pull request, which the factory's own login can be —
+		// and the maintainers it would have taken would then hear nothing of the run.
+		var refused []error
 		for _, who := range f.settings.Notify {
-			args = append(args, "--add-reviewer", who)
+			if _, err := ghWithin(ctx, notifyTimeout, "pr", "edit", r.PullRequest, "--add-reviewer", who); err != nil {
+				refused = append(refused, fmt.Errorf("%s was not asked for a review: %w", who, err))
+			}
 		}
-		_, err := gh(ctx, args...)
-		return err
+		return errors.Join(refused...)
 	}
-	_, err := ghInput(ctx, ghTimeout, notifyBody(*r, f.settings.Notify),
+	_, err := ghInput(ctx, notifyTimeout, notifyBody(*r, f.settings.Notify),
 		"issue", "comment", strconv.Itoa(r.Issue), "--repo", r.Repository, "--body-file", "-")
-	return err
+	if err != nil {
+		return fmt.Errorf("%s was not told of this run: %w", strings.Join(f.settings.Notify, ", "), err)
+	}
+	return nil
 }
 
 // notifyBody is the comment on the issue: who it is for, what became of the run, why, and what the

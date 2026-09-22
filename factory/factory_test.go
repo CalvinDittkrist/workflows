@@ -82,7 +82,7 @@ type apiRun struct {
 	ExitCode   *int     `json:"exitCode"`
 	EventCount int      `json:"eventCount"`
 	Warnings   []string `json:"warnings"`
-	Notify     string   `json:"notify"`
+	Notified   string   `json:"notified"`
 	Versions   struct {
 		Worker     string `json:"worker"`
 		ClaudeCode string `json:"claudeCode"`

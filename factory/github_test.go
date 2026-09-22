@@ -675,25 +675,24 @@ func (g *ghShim) commented(t *testing.T, repository string, issue int) string {
 	return string(raw)
 }
 
-// reviews is the answer to the review request the factory makes on a pull request of a run that
-// ended ready.
+// reviews is the answer to the review requests the factory makes on a pull request of a run that
+// ended ready: one per login, as the factory asks them.
 func (g *ghShim) reviews(t *testing.T, url string, logins ...string) {
 	t.Helper()
-	g.answer(t, reviewCall(url, logins...), url+"\n")
+	for _, login := range logins {
+		g.answer(t, reviewCall(url, login), url+"\n")
+	}
 }
 
 // commentCall and reviewCall are the two calls a notification is: a comment on the issue whose body
-// the factory writes to standard input, and a review request on the pull request.
+// the factory writes to standard input, and a review request on the pull request, which names one
+// login, because GitHub refuses a whole request that carries one login it will not take.
 func commentCall(repository string, issue int) string {
 	return fmt.Sprintf("issue comment %d --repo %s --body-file -", issue, repository)
 }
 
-func reviewCall(url string, logins ...string) string {
-	call := "pr edit " + url
-	for _, login := range logins {
-		call += " --add-reviewer " + login
-	}
-	return call
+func reviewCall(url, login string) string {
+	return "pr edit " + url + " --add-reviewer " + login
 }
 
 // requestName is the file a request's answer and its body lie under, as the shim names them.

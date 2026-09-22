@@ -32,6 +32,22 @@ set -u
 request="$*"
 printf '%s\n' "$request" >> "${GH_SHIM_LOG:-/dev/null}"
 
+named=$(printf '%s' "$request" | tr -c 'A-Za-z0-9' '-')
+
+# A call that reads its body from standard input: it is kept where the test reads it, under the name
+# of the request. It is read here, before any answer is decided, so that gh never leaves a body in a
+# pipe nobody empties — a call that fails or stalls reads it as the one that is answered does.
+case " $request " in
+  *" --body-file - "*)
+    if [ -n "${GH_SHIM_BODIES:-}" ]; then
+      mkdir -p "$GH_SHIM_BODIES"
+      cat >> "$GH_SHIM_BODIES/$named"
+    else
+      cat > /dev/null
+    fi
+    ;;
+esac
+
 failing=$(cat "${GH_SHIM_FAIL:-/nowhere}" 2>/dev/null || true)
 if [ -n "$failing" ]; then
   # shellcheck disable=SC2254  # the variable is the pattern: the test writes it
@@ -99,22 +115,6 @@ if [ "${1:-}" = api ] && [ "${2:-}" = --method ] && [ "${3:-}" = POST ] && [ "$p
   echo "gh: $ref of $repository could not be created (HTTP 422)" >&2
   exit 1
 fi
-
-named=$(printf '%s' "$request" | tr -c 'A-Za-z0-9' '-')
-
-# A call that reads its body from standard input: it is kept where the test reads it, under the name
-# of the request, and the call itself is answered like every other one. The body is read whatever
-# happens to it, so gh never writes into a pipe nobody empties.
-case " $request " in
-  *" --body-file - "*)
-    if [ -n "${GH_SHIM_BODIES:-}" ]; then
-      mkdir -p "$GH_SHIM_BODIES"
-      cat >> "$GH_SHIM_BODIES/$named"
-    else
-      cat > /dev/null
-    fi
-    ;;
-esac
 
 answer="${GH_SHIM_DIR:-/nowhere}/$named"
 [ -f "$answer" ] || { echo "gh: the shim has no answer for: $request" >&2; exit 1; }
