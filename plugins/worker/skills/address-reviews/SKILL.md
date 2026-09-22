@@ -16,3 +16,5 @@ For each thread:
    `"${CLAUDE_PLUGIN_ROOT}/scripts/pr-resolve.sh" <thread-id> --reply "<one or two sentences>"`
 
 Finish with one line: `addressed: <fixed n, declined m>` and then invoke `/worker:ci`.
+
+When this skill was the session's own prompt, no pipeline above you is driving it and no stage follows this one: end the session the way the pipeline ends in manual mode — once the CI stage comes back green, report `ready: <pr-url>` and stop. Do not merge.
