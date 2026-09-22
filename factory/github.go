@@ -110,6 +110,14 @@ func routed(issue ghIssue, routingLabel string) bool {
 		issue.Dependencies.BlockedBy == 0
 }
 
+// ghPull is what the factory reads of a pull request: whether it was merged, and whether it is still
+// open. Both are one decision — the maintainer is done with the issue behind it — and the merge is
+// asked for separately because GitHub calls a merged pull request closed as well.
+type ghPull struct {
+	State  string `json:"state"`
+	Merged bool   `json:"merged"`
+}
+
 // gitHub is the live queue: the routed issues of the connected repositories, asked from GitHub on
 // every poll and never written down, so an issue is in the line exactly as long as GitHub says it is
 // routed ([ADR 0025]).
@@ -154,8 +162,8 @@ type signals struct {
 // queue is the line across all connected repositories. A repository that cannot be read is reported
 // and left out of this poll: one unreachable repository must not empty the line of the others, and
 // the next poll asks again.
-func (g *gitHub) queue(ctx context.Context) poll {
-	result := poll{issues: []Issue{}, unreadable: map[string]string{}}
+func (g *gitHub) queue(ctx context.Context, held []Held) poll {
+	result := poll{issues: []Issue{}, unreadable: map[string]string{}, letGo: map[string]string{}}
 	read, seen := map[string]bool{}, map[string]bool{}
 	for _, connected := range g.repositories {
 		repository := connected.Name
@@ -173,8 +181,100 @@ func (g *gitHub) queue(ctx context.Context) poll {
 		}
 		result.issues = append(result.issues, issues...)
 	}
+	g.readHeld(ctx, held, result.letGo, seen)
 	g.settle(result.unreadable, read, seen)
 	return result
+}
+
+// readHeld asks GitHub about every issue this factory holds and answers with those it is done with.
+// An issue the factory holds is assigned to this host, so it is not in the line above and there is
+// no other reading of it: this is where a maintainer's decision reaches work in progress ([ADR
+// 0023]). It is one request per held issue and one more for a pull request that stands, and the
+// factory holds one issue at a time as long as its work moves, so a poll of a line at rest is the
+// one request per repository it has always been.
+//
+// An issue whose reading fails says nothing at all. A rate limit, a login that expired or a
+// repository nobody can reach must never take a worktree apart ([ADR 0026]), so the factory holds on
+// to what it holds until GitHub answers, and says once that it could not ask.
+//
+// [ADR 0023]: ../docs/adr/0023-github-is-the-only-control-surface-of-the-factory.md
+// [ADR 0026]: ../docs/adr/0026-the-factory-never-deletes-work-on-its-own.md
+func (g *gitHub) readHeld(ctx context.Context, held []Held, letGo map[string]string, seen map[string]bool) {
+	for _, issue := range held {
+		if ctx.Err() != nil {
+			return // the factory is stopping; a cancelled request says nothing about the issue
+		}
+		key := issue.key()
+		decision, err := g.decided(ctx, issue)
+		if err != nil {
+			if ctx.Err() == nil {
+				g.warn(key, "error: %s is held by this factory and could not be read: %v; it stays as it is until GitHub answers", key, err)
+			}
+			continue
+		}
+		// It was read, so it is an issue this poll knows about: what is remembered of it is kept and
+		// the next failure is reported anew.
+		seen[key] = true
+		g.readable(key)
+		if decision != "" {
+			letGo[key] = decision
+		}
+	}
+}
+
+// decided is the decision GitHub carries about one held issue, or nothing. The three gestures are
+// the maintainer's: the routing label taken off the issue, the issue closed, and the pull request of
+// its run merged or closed. They are read in that order, because the first two end a run that is
+// still going and the third is only ever about one that is over.
+//
+// An answer that is not this issue decides nothing: a reading that goes wrong must not be read as a
+// gesture, and neither must a state that is anything other than the closed GitHub spells.
+func (g *gitHub) decided(ctx context.Context, held Held) (string, error) {
+	raw, err := gh(ctx, "api", "repos/"+held.Repository+"/issues/"+strconv.Itoa(held.Number))
+	if err != nil {
+		return "", err
+	}
+	var issue ghIssue
+	if err := json.Unmarshal(raw, &issue); err != nil {
+		return "", fmt.Errorf("the answer is no issue: %w", err)
+	}
+	if issue.Number != held.Number {
+		return "", fmt.Errorf("the answer is issue #%d and not #%d", issue.Number, held.Number)
+	}
+	switch {
+	case issue.State == "closed":
+		return "the issue was closed", nil
+	case !issue.hasLabel(g.label):
+		return "the routing label " + g.label + " was taken off the issue", nil
+	case held.PullRequest == "":
+		return "", nil
+	}
+	return g.decidedOnPull(ctx, held)
+}
+
+// decidedOnPull is what became of the pull request a run of the issue opened. A pull request that is
+// merged or closed is the maintainer's answer to the work, and the issue is done with this factory
+// either way: the worktree it was written in is of no use to anybody after that.
+func (g *gitHub) decidedOnPull(ctx context.Context, held Held) (string, error) {
+	found := pullRequestURL.FindStringSubmatch(held.PullRequest)
+	if found == nil {
+		return "", nil // a record without a pull request URL is nothing to ask about
+	}
+	raw, err := gh(ctx, "api", "repos/"+held.Repository+"/pulls/"+found[2])
+	if err != nil {
+		return "", err
+	}
+	var pull ghPull
+	if err := json.Unmarshal(raw, &pull); err != nil {
+		return "", fmt.Errorf("the answer is no pull request: %w", err)
+	}
+	switch {
+	case pull.Merged:
+		return "the pull request " + held.PullRequest + " was merged", nil
+	case pull.State == "closed":
+		return "the pull request " + held.PullRequest + " was closed", nil
+	}
+	return "", nil
 }
 
 // settle reports what changed with this poll and forgets what the line no longer holds. The report

@@ -68,6 +68,15 @@ type holding struct {
 	last    Run  // the latest run of the issue
 	idle    bool // that run has ended, so another one of this issue may be queued
 	resumes bool // it was interrupted and the one automatic resume is still there to be spent
+	// let is the latest run of the issue this factory let go, and letGo says the issue is out of its
+	// hands: the worktree and the local branch are gone, the branch may still be on the remote, and
+	// the record of that run is what a routing of the issue after that moment takes it back by.
+	let   Run
+	letGo bool
+	// pullRequest is the pull request the runs of this issue opened, the latest one that named one.
+	// An issue let go without one loses the assignee this factory put on it; an issue with one keeps
+	// it, because from then on the work is with a person and the assignee says who did it.
+	pullRequest string
 	// answered is the newest release this issue's runs have already acted on, as GitHub timed the
 	// removal that queued them. A release no newer than this is done with.
 	answered time.Time
@@ -76,28 +85,34 @@ type holding struct {
 // holdings reads the run records, oldest first, into one entry per issue.
 //
 // The automatic resume is a budget of one per issue, spent by the resumed run it pays for and given
-// back by a release: a person who hands a held issue back to the factory has decided, and what
-// follows that decision may be interrupted and resumed once again, exactly as the first claim may.
-// Nothing else gives it back, so a factory that loses power twice over one issue stops after the
-// second time and waits.
+// back by every signal that is a person's decision: a claim carries one, a release hands the issue
+// back with one, and so does the routing of an issue this factory had let go. An interruption is the
+// only signal that spends and never gives, so a factory that loses power twice over one issue stops
+// after the second time and waits.
 func holdings(runs []Run) map[string]holding {
 	out := map[string]holding{}
 	budget := map[string]int{}
 	for _, run := range runs {
 		key := run.key()
-		h, seen := out[key]
-		if !seen {
-			budget[key] = 1 // the claim of an issue carries its one automatic resume
-		}
+		h := out[key]
 		h.last, h.idle = run, run.EndedAt != nil
-		if run.Holding {
-			h.run, h.holds = run, true
+		switch {
+		case run.LetGoAt != nil:
+			// The claim of this run stood and stands no more. What it holds is cleared with it, so a
+			// reader that forgets to ask holds first meets an empty run rather than a worktree that
+			// is not on this host any more.
+			h.run, h.holds, h.let, h.letGo = Run{}, false, run, true
+		case run.Holding:
+			h.run, h.holds, h.letGo = run, true, false
+		}
+		if run.PullRequest != "" {
+			h.pullRequest = run.PullRequest
 		}
 		switch run.Signal {
-		case signalRelease:
-			budget[key] = 1
 		case signalInterruption:
 			budget[key]--
+		default:
+			budget[key] = 1
 		}
 		// Answered stands for the releases this issue is done with, so it only ever moves forward.
 		if at := releaseAt(run); at.After(h.answered) {
@@ -155,9 +170,26 @@ func (f *Factory) resume(ctx context.Context, r *Run, e Entry) (claimed, error) 
 		held.holding = true
 		return held, nil
 	}
+	clone := clonePath(f.settings.DataDir, e.Repository)
+	if held.worktree == "" {
+		held.worktree = worktreePath(clone, held.branch)
+	}
 	if _, err := os.Stat(held.worktree); err != nil {
-		return held, fmt.Errorf("the worktree %s of run %d is not on this host: %w; the branch %s still holds the issue, so put the worktree back or let the issue go",
-			held.worktree, e.resume.ID, err, held.branch)
+		// The worktree of the claim is not on this host: the data directory was moved or lost, or the
+		// issue was let go and routed again. The work itself is on the remote — every worktree this
+		// factory removes is pushed first ([ADR 0026]) — so the worktree is made again from the branch
+		// and the run continues on those commits. The remote is fetched for it, which a resume that
+		// finds its worktree does not do: that one continues on the commits that are there.
+		if _, err := gitWithin(ctx, clone, fetchTimeout, "fetch", "--quiet", "--prune", "origin"); err != nil {
+			return held, fmt.Errorf("the worktree %s of run %d is not on this host and %s could not be fetched to make it again: %w",
+				held.worktree, e.resume.ID, e.Repository, err)
+		}
+		if err := makeWorktree(ctx, clone, held.branch, held.worktree); err != nil {
+			return held, fmt.Errorf("the worktree %s of run %d is not on this host and could not be made again from the branch %s: %w",
+				held.worktree, e.resume.ID, held.branch, err)
+		}
+		f.runs.event(r, Event{Kind: "factory", Title: "worktree made again from " + held.branch,
+			Body: fmt.Sprintf("the worktree %s of run %d was not on this host; it was made again from the branch on the remote", held.worktree, e.resume.ID)})
 	}
 	if e.Signal == signalRelease {
 		login, err := f.login(ctx)

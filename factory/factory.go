@@ -83,6 +83,10 @@ type Factory struct {
 	connecting bool
 	user       string          // the login this host's gh is logged in as, read once and kept
 	held       map[string]bool // repositories this factory claims nothing from, so the log says it once
+	// cancelling is how a poll ends a run that is still going: the cancel of the context that run
+	// works under, by run, put there when the run starts and taken out when it ends or is cancelled.
+	// Only a run of this factory is in it, so a record of an older start can never be signalled here.
+	cancelling map[int]context.CancelCauseFunc
 	// quotaUntil is served empty until the quota check arrives (ADR 0028); the interface carries the
 	// state from the start so the ticket that fills it changes no reader.
 	quotaUntil *time.Time
@@ -90,9 +94,27 @@ type Factory struct {
 
 // source is where the line comes from on every poll: GitHub, or the canned queue of fake mode. It
 // answers with what it could read and reports what it could not, so nothing of it is ever stored.
+// The issues this factory holds are asked about in the same reading, because they are not in the
+// line — an issue the factory holds is assigned to this host, which is what takes it out of it.
 type source interface {
-	queue(ctx context.Context) poll
+	queue(ctx context.Context, held []Held) poll
 }
+
+// Held is one issue this factory holds, as a poll asks the source about it: the issue, the run that
+// holds it, and the pull request a run of it opened if one stands. It is the one reading through
+// which a maintainer's decision reaches work in progress — the routing label taken off, the issue
+// closed, the pull request merged or closed — and GitHub is the only surface those decisions are
+// made on ([ADR 0023]).
+//
+// [ADR 0023]: ../docs/adr/0023-github-is-the-only-control-surface-of-the-factory.md
+type Held struct {
+	Repository  string
+	Number      int
+	Run         int    // the run that holds the issue: the one a cancel ends and the record let go
+	PullRequest string // the pull request a run of this issue opened, or empty
+}
+
+func (h Held) key() string { return Issue{Repository: h.Repository, Number: h.Number}.key() }
 
 // poll is one reading of the line: the routed issues the source could read, and the repositories it
 // could not, with what stood in the way. The factory serves the second beside the first, because a
@@ -101,6 +123,12 @@ type source interface {
 type poll struct {
 	issues     []Issue
 	unreadable map[string]string // repository -> what gh said
+	// letGo is the held issues whose reading says this factory is done with them, with the decision
+	// that says so. An issue whose reading failed is never in it: a rate limit, an expired login or
+	// a repository nobody can reach must not take a worktree apart ([ADR 0026]).
+	//
+	// [ADR 0026]: ../docs/adr/0026-the-factory-never-deletes-work-on-its-own.md
+	letGo map[string]string // issue key -> the decision that ends this factory's part
 }
 
 // New opens the data directory and takes the runs already in it. Nothing here starts a run and
@@ -116,7 +144,7 @@ func New(settings Settings, fake bool) (*Factory, error) {
 		return nil, fmt.Errorf("the factory cannot find its own binary: %w", err)
 	}
 	f := &Factory{settings: settings, fake: fake, runs: runs, started: time.Now(), self: self,
-		wake: make(chan struct{}, 1), held: map[string]bool{}}
+		wake: make(chan struct{}, 1), held: map[string]bool{}, cancelling: map[int]context.CancelCauseFunc{}}
 	f.source = &gitHub{repositories: settings.Repositories, label: settings.Label}
 	if fake {
 		f.source = &canned{repositories: settings.Repositories, started: f.started}
@@ -147,7 +175,8 @@ func (f *Factory) Connect(ctx context.Context) {
 // run ends. It returns when the context is done and the run that was active has ended.
 func (f *Factory) Work(ctx context.Context) {
 	for ctx.Err() == nil {
-		f.refreshQueue(ctx)
+		read := f.refreshQueue(ctx)
+		f.letIssuesGo(ctx, read.letGo)
 		f.dispatch(ctx)
 		select {
 		case <-ctx.Done():
@@ -163,8 +192,8 @@ func (f *Factory) Work(ctx context.Context) {
 // factory ([ADR 0025]).
 //
 // [ADR 0025]: ../docs/adr/0025-one-queue-one-worker-work-in-progress-first.md
-func (f *Factory) refreshQueue(ctx context.Context) {
-	read := f.source.queue(ctx)
+func (f *Factory) refreshQueue(ctx context.Context) poll {
+	read := f.source.queue(ctx, f.heldIssues())
 	queue := read.issues
 	sort.SliceStable(queue, func(a, b int) bool {
 		if !queue[a].RoutedAt.Equal(queue[b].RoutedAt) {
@@ -173,8 +202,76 @@ func (f *Factory) refreshQueue(ctx context.Context) {
 		return queue[a].key() < queue[b].key()
 	})
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.queue, f.unreadable, f.polledAt = queue, read.unreadable, time.Now()
+	f.mu.Unlock()
+	return read
+}
+
+// heldIssues is what the factory holds on GitHub right now, read from its own records: one entry per
+// issue whose claim still stands, with the pull request any run of that issue opened. It is empty
+// for a factory that holds nothing, which is what keeps a poll of a quiet line at the one request
+// per repository it has always been.
+//
+// Only a connected repository is asked about, for the reason its work stays out of the line: a
+// repository the configuration no longer names is one this host is not to work, and nothing of it
+// is touched.
+func (f *Factory) heldIssues() []Held {
+	out := []Held{}
+	for _, h := range holdings(f.runs.list()) {
+		connected, ok := f.connected(h.repository())
+		if !h.holds || !ok {
+			continue
+		}
+		out = append(out, Held{Repository: connected.Name, Number: h.run.Issue, Run: h.run.ID, PullRequest: h.pullRequest})
+	}
+	sort.Slice(out, func(a, b int) bool { return out[a].key() < out[b].key() })
+	return out
+}
+
+// letIssuesGo answers what the poll read of the issues this factory holds. A decision that reaches a
+// run which is still going cancels it: the worker's process group is ended and the run is recorded
+// cancelled. A decision that reaches an issue whose runs are over lets the issue go, which is the
+// one path that removes anything ([ADR 0026]) and the same path a cancelled run is let go by on the
+// poll after it — so nothing is ever taken apart under a worker that is still writing in it.
+//
+// It runs in the working loop rather than beside it: letting an issue go pushes, fetches and removes
+// a worktree of this host's clone, and one place doing that at a time is what keeps two of them off
+// the same clone.
+//
+// [ADR 0026]: ../docs/adr/0026-the-factory-never-deletes-work-on-its-own.md
+func (f *Factory) letIssuesGo(ctx context.Context, letGo map[string]string) {
+	if len(letGo) == 0 || ctx.Err() != nil {
+		return
+	}
+	for key, held := range holdings(f.runs.list()) {
+		decision, ends := letGo[key]
+		if !ends || !held.holds {
+			continue
+		}
+		if !held.idle {
+			f.cancel(held.last, decision)
+			continue
+		}
+		f.letGo(ctx, held, decision)
+	}
+}
+
+// cancel ends the worker of a run that is still going. The cancel is taken out of the map as it is
+// used, so a decision that stands on GitHub for as long as the worker takes to die signals it once;
+// a run this factory is not working has none and nothing happens.
+func (f *Factory) cancel(r Run, decision string) {
+	f.mu.Lock()
+	stop := f.cancelling[r.ID]
+	delete(f.cancelling, r.ID)
+	f.mu.Unlock()
+	if stop == nil {
+		return
+	}
+	log.Printf("run %d (%s#%d) is cancelled: %s", r.ID, r.Repository, r.Issue, decision)
+	if record, ok := f.runs.find(r.ID); ok {
+		f.runs.event(record, Event{Kind: "factory", Title: "cancelled on GitHub", Body: decision + "; the worker's process group is ended and the issue is let go"})
+	}
+	stop(cancelled{decision})
 }
 
 // dispatch starts the head of the queue. One worker at a time: while a run is active, nothing else
@@ -241,10 +338,19 @@ func (f *Factory) hold(repository, reason string) {
 // already holds and resumes, ordered by the time of the signal that queued it, then the routed
 // issues nobody has worked yet, in the order the maintainer routed them ([ADR 0025]).
 //
-// An issue with a run of its own is out of the routed part for good: only the two resume signals put
-// it back in the line, and only for an issue this factory holds. That is what leaves a foreign claim
-// alone — a routed issue whose branch another claimer created is recorded as lost, holds nothing,
-// and is never read as a release.
+// An issue with a run of its own is out of the routed part while a run of it stands: only the two
+// resume signals put it back in the line, and only for an issue this factory holds. That is what
+// leaves a foreign claim alone — a routed issue whose branch another claimer created is recorded as
+// lost, holds nothing, and is never read as a release.
+//
+// An issue the factory has let go comes back into the routed part, and its entry carries the run
+// that held it, so the claim takes that run's branch back rather than claiming the issue anew
+// ([ADR 0026]). Only a routing newer than the moment it was let go does that: the label that was on
+// the issue all along is the one the maintainer's decision was made under — closing a pull request
+// would otherwise start the same work over by itself — and routing the issue again is the gesture
+// that asks for another run. That is the one comparison in the factory between GitHub's clock and
+// this host's, and a host whose clock is minutes ahead answers a routing made inside that drift only
+// after the label is set once more.
 //
 // Only a connected repository is in the line, held work included: a repository the configuration no
 // longer names is one this host is not to work, whatever its records say it once held. Nothing of it
@@ -266,8 +372,9 @@ func (f *Factory) waiting() []Entry {
 		routedNow[issue.key()] = issue
 	}
 
+	kept := holdings(records)
 	out := []Entry{}
-	for key, held := range holdings(records) {
+	for key, held := range kept {
 		connected, ok := f.connected(held.repository())
 		if !ok {
 			continue
@@ -296,8 +403,12 @@ func (f *Factory) waiting() []Entry {
 		return out[a].key() < out[b].key()
 	})
 	for _, issue := range queue {
-		if !worked[issue.key()] {
+		gone := kept[issue.key()]
+		switch {
+		case !worked[issue.key()]:
 			out = append(out, Entry{Issue: issue, Signal: signalRouted, SignalAt: issue.RoutedAt})
+		case gone.letGo && issue.RoutedAt.After(*gone.let.LetGoAt):
+			out = append(out, Entry{Issue: issue, Signal: signalRouted, SignalAt: issue.RoutedAt, resume: gone.let})
 		}
 	}
 	return out
@@ -347,8 +458,22 @@ func (f *Factory) start(ctx context.Context, entry Entry) {
 // stream until the process is gone. The deadline covers the claim as well: a factory that is stopped
 // while it claims leaves the issue rather than starting a worker nobody waits for.
 func (f *Factory) execute(parent context.Context, r *Run, entry Entry) {
-	ctx, cancel := context.WithTimeout(parent, f.settings.Deadline)
-	defer cancel()
+	deadline, done := context.WithTimeout(parent, f.settings.Deadline)
+	defer done()
+	// The run's own end, which a poll reaches for when GitHub says the maintainer is done with the
+	// issue (letIssuesGo). It lies under the deadline and over the worker, so one cancel ends the
+	// claim, the session and every process of its group, and the cause it carries is what the record
+	// says the run ended of.
+	ctx, stop := context.WithCancelCause(deadline)
+	defer stop(nil)
+	f.mu.Lock()
+	f.cancelling[r.ID] = stop
+	f.mu.Unlock()
+	defer func() {
+		f.mu.Lock()
+		delete(f.cancelling, r.ID)
+		f.mu.Unlock()
+	}()
 
 	claim, err := f.take(ctx, r, entry)
 	if err != nil {
@@ -363,6 +488,13 @@ func (f *Factory) execute(parent context.Context, r *Run, entry Entry) {
 			// The factory was stopped while it claimed, so git and gh were ended under it. That is not
 			// a claim that failed, and the record must not name a failure that never happened.
 			f.finish(r, outcomeInterrupted, "the factory stopped while this run was "+taking(claim)+leftBehind(claim), nil)
+			return
+		}
+		if stopped, was := cancelledBy(ctx); was {
+			// The same for a cancel, and the repository is held for nothing either: the issue is one
+			// the maintainer took back, not a host or a GitHub that everything of this repository
+			// would fail on.
+			f.finish(r, outcomeCancelled, stopped.Error()+" while this run was "+taking(claim)+leftBehind(claim), nil)
 			return
 		}
 		if !claim.created {
@@ -383,7 +515,7 @@ func (f *Factory) execute(parent context.Context, r *Run, entry Entry) {
 
 	cmd, err := f.worker(ctx, entry.Issue, claim)
 	if err != nil {
-		f.finish(r, outcomeFailed, "no worker could be started: "+err.Error()+leftBehind(claim), nil)
+		f.abandon(ctx, r, claim, "no worker could be started: "+err.Error())
 		return
 	}
 	// The worker starts subprocesses of its own; the deadline and the stop have to reach all of them,
@@ -397,14 +529,14 @@ func (f *Factory) execute(parent context.Context, r *Run, entry Entry) {
 	// left the group is not, which is why the reading below has an end of its own.
 	stdout, stdoutWriter, err := os.Pipe()
 	if err != nil {
-		f.finish(r, outcomeFailed, "the factory could not open a pipe for the worker: "+err.Error()+leftBehind(claim), nil)
+		f.abandon(ctx, r, claim, "the factory could not open a pipe for the worker: "+err.Error())
 		return
 	}
 	stderr, stderrWriter, err := os.Pipe()
 	if err != nil {
 		stdout.Close()
 		stdoutWriter.Close()
-		f.finish(r, outcomeFailed, "the factory could not open a pipe for the worker: "+err.Error()+leftBehind(claim), nil)
+		f.abandon(ctx, r, claim, "the factory could not open a pipe for the worker: "+err.Error())
 		return
 	}
 	cmd.Stdout, cmd.Stderr = stdoutWriter, stderrWriter
@@ -418,7 +550,7 @@ func (f *Factory) execute(parent context.Context, r *Run, entry Entry) {
 		stdoutWriter.Close()
 		stderr.Close()
 		stderrWriter.Close()
-		f.finish(r, outcomeFailed, "the factory could not take the lock of this run: "+err.Error()+leftBehind(claim), nil)
+		f.abandon(ctx, r, claim, "the factory could not take the lock of this run: "+err.Error())
 		return
 	}
 	cmd.ExtraFiles = []*os.File{lock}
@@ -429,7 +561,7 @@ func (f *Factory) execute(parent context.Context, r *Run, entry Entry) {
 		stdoutWriter.Close()
 		stderr.Close()
 		stderrWriter.Close()
-		f.finish(r, outcomeFailed, "the worker could not be started: "+err.Error()+leftBehind(claim), nil)
+		f.abandon(ctx, r, claim, "the worker could not be started: "+err.Error())
 		return
 	}
 	stdoutWriter.Close() // the worker holds the only writing ends now
@@ -483,9 +615,12 @@ func (f *Factory) execute(parent context.Context, r *Run, entry Entry) {
 	// A worker that ended by itself and reported is read by its report: a stop or a deadline that
 	// arrives in the same moment ended nothing, and its pull request would be lost to the record.
 	reported := waitErr == nil && r.reportOutcome != ""
+	stopped, was := cancelledBy(ctx)
 	switch {
 	case !reported && parent.Err() != nil:
 		f.finish(r, outcomeInterrupted, "the factory stopped while this run was active; its worker was ended", &exitCode)
+	case !reported && was:
+		f.finish(r, outcomeCancelled, stopped.Error()+"; the worker's process group was ended and the issue is let go", &exitCode)
 	case !reported && errors.Is(ctx.Err(), context.DeadlineExceeded):
 		f.finish(r, outcomeTimeout, fmt.Sprintf("the deadline of %s passed; the worker's process group was ended", f.settings.Deadline), &exitCode)
 	case r.reportOutcome == outcomeReady:
@@ -504,6 +639,30 @@ func (f *Factory) execute(parent context.Context, r *Run, entry Entry) {
 	default:
 		f.finish(r, outcomeFailed, "the session ended without a report; a worker ends by reporting ready: or blocked:", &exitCode)
 	}
+}
+
+// abandon ends a run whose worker never started. A cancel that arrives in that moment — the claim
+// stands, the session is a few lines away — ends the run the way every other cancel does, and only
+// what is really this host's trouble is recorded as a failure of it.
+func (f *Factory) abandon(ctx context.Context, r *Run, claim claimed, reason string) {
+	if stopped, was := cancelledBy(ctx); was {
+		f.finish(r, outcomeCancelled, stopped.Error()+"; no worker had been started"+leftBehind(claim), nil)
+		return
+	}
+	f.finish(r, outcomeFailed, reason+leftBehind(claim), nil)
+}
+
+// cancelled is the cause the context of a cancelled run carries: the decision GitHub was read to
+// have taken, so the record names the gesture the run ended on rather than "context canceled".
+type cancelled struct{ decision string }
+
+func (c cancelled) Error() string { return "the maintainer ended this run on GitHub: " + c.decision }
+
+// cancelledBy is the decision a run was cancelled with, and whether it was cancelled at all. A
+// deadline and a stopped factory carry causes of their own and are not this.
+func cancelledBy(ctx context.Context) (cancelled, bool) {
+	var stopped cancelled
+	return stopped, errors.As(context.Cause(ctx), &stopped)
 }
 
 // leftBehind says what a run that did not finish left on the remote, which is what the operator
@@ -550,7 +709,7 @@ func (f *Factory) take(ctx context.Context, r *Run, entry Entry) (claimed, error
 	if f.fake {
 		return claimed{holding: true}, nil
 	}
-	claim, err := f.claim(ctx, r, entry.Issue)
+	claim, err := f.claim(ctx, r, entry)
 	// The branch is recorded whether the claim was won or lost: it is what the claim was, and for a
 	// lost one it names the branch that holds the issue.
 	if claim.branch != "" {

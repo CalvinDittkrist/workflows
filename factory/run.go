@@ -17,9 +17,11 @@ import (
 )
 
 // The outcomes of the vocabulary. A run in fake mode reaches ready, blocked, failed, timeout and
-// interrupted; lost is the race another claimer won ([ADR 0024]), and cancelled and quota arrive
-// with the tickets that add them.
+// interrupted; lost is the race another claimer won ([ADR 0024]), cancelled is a run the maintainer
+// ended by taking the routing label off its issue ([ADR 0023]), and quota arrives with the ticket
+// that adds it.
 //
+// [ADR 0023]: ../docs/adr/0023-github-is-the-only-control-surface-of-the-factory.md
 // [ADR 0024]: ../docs/adr/0024-a-claim-is-the-creation-of-the-branch-through-the-api.md
 const (
 	outcomeReady       = "ready"
@@ -28,6 +30,7 @@ const (
 	outcomeTimeout     = "timeout"
 	outcomeInterrupted = "interrupted"
 	outcomeLost        = "lost"
+	outcomeCancelled   = "cancelled"
 )
 
 // What put a run in the line. routed is an issue taken from the queue of routed issues; the other
@@ -64,6 +67,14 @@ type Run struct {
 	// only such an issue can be released, so a lost claim and a claim that failed half way are left
 	// alone — including the branch of another claimer, which this factory never works.
 	Holding bool `json:"holding"`
+	// LetGoAt is when this factory gave the issue back, and nil for as long as it holds it: the
+	// commits pushed, the worktree and the local branch removed, the assignee taken off unless a
+	// pull request stands, and every record and log of the issue kept. Holding stays as it was — it
+	// is the history that says this factory's claim made that branch, which is what a later routing
+	// of the same issue is read against ([ADR 0026]).
+	//
+	// [ADR 0026]: ../docs/adr/0026-the-factory-never-deletes-work-on-its-own.md
+	LetGoAt *time.Time `json:"letGoAt"`
 	// Signal is what queued this run: routed, interruption or release. SignalAt is when that signal
 	// happened — the routing, the interruption, or the moment the assignee came off. It is the
 	// answer this run is: a signal of an issue is acted on once, and a signal no later than the one

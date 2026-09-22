@@ -50,7 +50,9 @@ type canned struct {
 	started      time.Time
 }
 
-func (c *canned) queue(context.Context) poll {
+// The issues fake mode holds are not asked about: there is no GitHub behind a canned queue, so
+// nothing of it is ever let go and no scripted run is ever cancelled.
+func (c *canned) queue(context.Context, []Held) poll {
 	return poll{issues: cannedQueue(c.repositories, c.started)}
 }
 

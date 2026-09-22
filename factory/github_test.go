@@ -647,6 +647,50 @@ func (g *ghShim) assigns(t *testing.T, repository string, issue int, login strin
 		fmt.Sprintf("https://github.com/%s/issues/%d\n", repository, issue))
 }
 
+// issue is the answer to the reading of one issue, which is the only reading there is of an issue
+// this factory holds: it is assigned to this host, so no line GitHub answers with carries it.
+func (g *ghShim) issue(t *testing.T, repository string, issue issueJSON) {
+	t.Helper()
+	g.answer(t, fmt.Sprintf("api repos/%s/issues/%v", repository, issue["number"]), marshal(t, issue))
+}
+
+// pull is what became of a pull request. Merged is a field of its own because GitHub calls a merged
+// pull request closed as well.
+func (g *ghShim) pull(t *testing.T, repository string, number int, state string, merged bool) {
+	t.Helper()
+	g.answer(t, fmt.Sprintf("api repos/%s/pulls/%d", repository, number),
+		marshal(t, map[string]any{"number": number, "state": state, "merged": merged}))
+}
+
+// unassigns is the answer to the one edit that takes this host off an issue it lets go, so a removal
+// the factory does not make exactly that way is a call the shim has no answer for.
+func (g *ghShim) unassigns(t *testing.T, repository string, issue int, login string) {
+	t.Helper()
+	g.answer(t, fmt.Sprintf("issue edit %d --repo %s --remove-assignee %s", issue, repository, login),
+		fmt.Sprintf("https://github.com/%s/issues/%d\n", repository, issue))
+}
+
+// workerCommits makes the scripted worker write and commit a file in its worktree, which is the work
+// a run leaves behind and the branch carries.
+func (g *ghShim) workerCommits(t *testing.T, file string) {
+	t.Helper()
+	g.env = append(g.env, "CLAUDE_SHIM_COMMIT="+file)
+}
+
+// workerWaits makes the scripted worker sit in its worktree instead of reporting, so a test can act
+// on a run that is still going.
+func (g *ghShim) workerWaits(t *testing.T, how time.Duration) {
+	t.Helper()
+	g.env = append(g.env, fmt.Sprintf("CLAUDE_SHIM_SLEEP=%d", int(how.Seconds())))
+}
+
+// workerReportsBlocked ends the scripted worker's session blocked, which is a run that opened no
+// pull request: the issue is the factory's until somebody decides, and it has nothing to show.
+func (g *ghShim) workerReportsBlocked(t *testing.T, reason string) {
+	t.Helper()
+	g.env = append(g.env, "CLAUDE_SHIM_REPORT=blocked: "+reason)
+}
+
 // workerReports is the pull request the scripted worker of the claude shim ends its session with.
 func (g *ghShim) workerReports(t *testing.T, repository string, issue int) {
 	t.Helper()
@@ -920,6 +964,19 @@ func assigned(login string, at time.Time) map[string]any {
 func unassigned(login string, at time.Time) map[string]any {
 	return map[string]any{"event": "unassigned", "created_at": at.Format(time.RFC3339),
 		"assignee": map[string]any{"login": login}}
+}
+
+// assignedTo is an issue this factory holds: the claim put its login on it, which is what takes the
+// issue out of the line GitHub answers with and leaves this reading as the only one of it.
+func assignedTo(issue issueJSON, login string) issueJSON {
+	issue["assignees"] = []any{map[string]any{"login": login}}
+	return issue
+}
+
+// closedIssue is an issue somebody has closed, which is one decision that ends the factory's part.
+func closedIssue(issue issueJSON) issueJSON {
+	issue["state"] = "closed"
+	return issue
 }
 
 // touched is an issue somebody has changed since it was opened. The factory holds what it remembers

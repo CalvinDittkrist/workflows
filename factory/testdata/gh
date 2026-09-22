@@ -20,7 +20,8 @@
 #
 # The creation of a reference is not canned but done on the local repository the clone came from,
 # with git's own ref lock, because that is the act GitHub refuses the second caller of and the whole
-# claim rests on it being atomic.
+# claim rests on it being atomic. Its removal is done there too, so a test can read back that a
+# branch with work on it is still where the factory found it.
 #
 # A request without an answer fails, so a call the factory makes and the test did not plan for is
 # seen rather than answered with nothing.
@@ -95,6 +96,21 @@ if [ "${1:-}" = api ] && [ "${2:-}" = --method ] && [ "${3:-}" = POST ] && [ "$p
   fi
   echo "gh: $ref of $repository could not be created (HTTP 422)" >&2
   exit 1
+fi
+
+# The removal of a branch: DELETE repos/<owner>/<name>/git/refs/heads/<branch>. It is done on the
+# local repository too, because what the factory must never delete is read back from it afterwards.
+if [ "${1:-}" = api ] && [ "${2:-}" = --method ] && [ "${3:-}" = DELETE ]; then
+  case "$path" in
+    repos/*/git/refs/heads/*)
+      rest=${path#repos/}
+      repository=${rest%%/git/refs/heads/*}
+      ref="refs/heads/${rest#*/git/refs/heads/}"
+      remote="${GH_SHIM_REMOTES:-/nowhere}/${repository%%/*}-${repository#*/}"
+      git -C "$remote" update-ref -d "$ref" 2>/dev/null && exit 0
+      echo "gh: Reference does not exist (HTTP 422)" >&2
+      exit 1 ;;
+  esac
 fi
 
 answer="${GH_SHIM_DIR:-/nowhere}/$(printf '%s' "$request" | tr -c 'A-Za-z0-9' '-')"

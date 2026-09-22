@@ -56,7 +56,8 @@ type claimed struct {
 // assignee and the worktree only after GitHub said this factory owns the issue.
 //
 // [ADR 0024]: ../docs/adr/0024-a-claim-is-the-creation-of-the-branch-through-the-api.md
-func (f *Factory) claim(ctx context.Context, r *Run, issue Issue) (claimed, error) {
+func (f *Factory) claim(ctx context.Context, r *Run, entry Entry) (claimed, error) {
+	issue := entry.Issue
 	connected, ok := f.connected(issue.Repository)
 	if !ok { // a run of a repository nobody connected cannot happen; said rather than assumed
 		return claimed{}, fmt.Errorf("%s is not a connected repository", issue.Repository)
@@ -85,7 +86,14 @@ func (f *Factory) claim(ctx context.Context, r *Run, issue Issue) (claimed, erro
 	// local driver's own rule (wf_remote_branch_for_issue in the orchestrator's lib.sh) asked of the
 	// references this claim has just fetched.
 	if held := remoteBranchForIssue(ctx, clone, issue.Number); held != "" {
-		return claimed{branch: held}, errLost
+		// Unless it is this factory's own branch, made by the run that once held the issue and left
+		// on the remote when the issue was let go. The entry carries that run, so the branch is
+		// recognised by the record and not by its name, and the issue is taken back under it rather
+		// than claimed a second time ([ADR 0026]).
+		if entry.resume.Branch != held {
+			return claimed{branch: held}, errLost
+		}
+		return f.readopt(ctx, r, connected, clone, entry)
 	}
 
 	base := baseBranch(ctx, connected, clone)
@@ -122,14 +130,7 @@ func (f *Factory) claim(ctx context.Context, r *Run, issue Issue) (claimed, erro
 		return won, fmt.Errorf("issue #%d of %s could not be assigned to %s: %w", issue.Number, connected.Name, login, err)
 	}
 
-	// The worktree lies where the local workflow puts its own (wf_create_worktree in the
-	// orchestrator's lib.sh): under .claude/worktrees of the checkout, named after the branch with
-	// every slash turned into a hyphen, and the directory kept out of the clone's status. One
-	// convention for both drivers, so a maintainer who opens this host's clone finds what a Herdr
-	// session would have left. Trust needs no dialog here either way: Claude Code keys it on the
-	// checkout a worktree belongs to, and a print-mode session is never asked
-	// (https://code.claude.com/docs/en/permissions.md, checked 2026-09-22).
-	worktree := filepath.Join(clone, ".claude", "worktrees", strings.ReplaceAll(branch, "/", "-"))
+	worktree := worktreePath(clone, branch)
 	excludeWorktrees(clone)
 	if _, err := git(ctx, clone, "worktree", "add", "--quiet", "-b", branch, worktree, head); err != nil {
 		return won, fmt.Errorf("the worktree for %s could not be created in %s: %w; a run before this one may have left a branch or a worktree of that name in this clone, which nothing here removes", branch, clone, err)
@@ -143,6 +144,91 @@ func (f *Factory) claim(ctx context.Context, r *Run, issue Issue) (claimed, erro
 	won.worktree, won.holding = worktree, true
 	f.runs.update(r, func() { r.Worktree, r.Holding = won.worktree, won.holding })
 	return won, nil
+}
+
+// worktreePath is where the worktree of a branch lies, which is where the local workflow puts its own
+// (wf_create_worktree in the orchestrator's lib.sh): under .claude/worktrees of the checkout, named
+// after the branch with every slash turned into a hyphen, and the directory kept out of the clone's
+// status. One convention for both drivers, so a maintainer who opens this host's clone finds what a
+// Herdr session would have left. Trust needs no dialog here either way: Claude Code keys it on the
+// checkout a worktree belongs to, and a print-mode session is never asked
+// (https://code.claude.com/docs/en/permissions.md, checked 2026-09-22).
+func worktreePath(clone, branch string) string {
+	return filepath.Join(clone, ".claude", "worktrees", strings.ReplaceAll(branch, "/", "-"))
+}
+
+// readopt takes an issue back that this factory once held and let go. The branch of the run that
+// held it is still on the remote and carries its commits, so there is nothing to claim: this host is
+// assigned again and the worktree is made from that branch, which is where the run continues
+// ([ADR 0026]). A branch that is gone from the remote never reaches here — the issue is then claimed
+// anew, as a first run of it.
+//
+// [ADR 0026]: ../docs/adr/0026-the-factory-never-deletes-work-on-its-own.md
+func (f *Factory) readopt(ctx context.Context, r *Run, connected Connected, clone string, entry Entry) (claimed, error) {
+	held := entry.resume
+	back := claimed{branch: held.Branch, base: held.Base, created: true, resumed: true}
+	if back.base == "" {
+		back.base = baseBranch(ctx, connected, clone)
+	}
+	worktree := held.Worktree
+	if worktree == "" {
+		worktree = worktreePath(clone, back.branch)
+	}
+	f.runs.event(r, Event{Kind: "factory", Title: "taking " + back.branch + " back",
+		Body: fmt.Sprintf("run %d let this issue go and it was routed again; its branch is on the remote, so nothing is claimed", held.ID)})
+	login, err := f.login(ctx)
+	if err != nil {
+		return back, err
+	}
+	// The branch is recorded before the issue is assigned, for the reason a claim records it there:
+	// a host that loses power in between is read from this record alone.
+	f.runs.update(r, func() { r.Branch, r.Base = back.branch, back.base })
+	if err := assignSelf(ctx, connected.Name, entry.Number, login); err != nil {
+		return back, fmt.Errorf("issue #%d of %s could not be assigned to %s again: %w", entry.Number, connected.Name, login, err)
+	}
+	if err := makeWorktree(ctx, clone, back.branch, worktree); err != nil {
+		return back, err
+	}
+	back.worktree, back.holding = worktree, true
+	f.runs.update(r, func() { r.Worktree, r.Holding = back.worktree, back.holding })
+	f.runs.event(r, Event{Kind: "factory", Title: "took " + back.branch + " back", Body: "worktree " + worktree})
+	return back, nil
+}
+
+// makeWorktree puts the worktree of a branch this factory holds back into the clone, on the commits
+// the remote carries. It is how a run continues when the worktree of its claim is not there: the
+// issue was let go and routed again, or the data directory was moved or lost. The branch on the
+// remote is the work — everything this factory removes is pushed there first ([ADR 0026]) — so a
+// branch that is gone from the remote is the one case nothing can be made again from.
+//
+// The caller has fetched: what is made here is what the remote holds now, not what this clone last
+// heard of it.
+//
+// [ADR 0026]: ../docs/adr/0026-the-factory-never-deletes-work-on-its-own.md
+func makeWorktree(ctx context.Context, clone, branch, worktree string) error {
+	if branch == "" {
+		return errors.New("the record of the run that holds this issue names no branch")
+	}
+	// A worktree whose directory is gone is still registered in the clone, and git refuses to make
+	// one of the same name while it is.
+	if _, err := git(ctx, clone, "worktree", "prune"); err != nil {
+		return fmt.Errorf("the worktrees of %s could not be pruned: %w", clone, err)
+	}
+	head := "refs/remotes/origin/" + branch
+	if _, err := git(ctx, clone, "rev-parse", "--verify", head); err != nil {
+		return fmt.Errorf("the branch %s is not on the remote: %w; nothing of it is on this host either, so there is nothing to continue", branch, err)
+	}
+	excludeWorktrees(clone)
+	// A local branch of that name is the work of this host, which may be ahead of the remote, so the
+	// worktree is checked out on it; without one it is made from the branch on the remote.
+	add := []string{"worktree", "add", "--quiet", worktree, branch}
+	if _, err := git(ctx, clone, "rev-parse", "--verify", "refs/heads/"+branch); err != nil {
+		add = []string{"worktree", "add", "--quiet", "-b", branch, worktree, head}
+	}
+	if _, err := git(ctx, clone, add...); err != nil {
+		return fmt.Errorf("the worktree %s could not be made from %s in %s: %w", worktree, branch, clone, err)
+	}
+	return nil
 }
 
 // excludeWorktrees keeps the worktrees of a clone out of its own status, the entry wf_create_worktree
