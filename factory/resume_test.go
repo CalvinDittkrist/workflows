@@ -258,6 +258,19 @@ func TestAReleaseResumeThatFailedIsAnsweredAndTheIssueWaitsForAPerson(t *testing
 	if made := gh.made(t, commentCall("acme/edge-sensors", claimedIssue)); made != 1 {
 		t.Errorf("the factory commented on the issue %d times, want once for the one ending", made)
 	}
+	// What they hear is the way back: the claim under the failed run still holds the issue, and an
+	// assignee put on and taken off again is a newer release the factory takes up. A comment that
+	// said nothing could be handed back would leave the issue waiting for good.
+	f.notified(t, 2)
+	said := gh.commented(t, "acme/edge-sensors", claimedIssue)
+	for _, want := range []string{"`failed`", "still holds it by the branch `" + claim.Branch + "`", "assign it to anybody and remove that assignee"} {
+		if !strings.Contains(said, want) {
+			t.Errorf("the comment on the issue is %q, want %q in it", said, want)
+		}
+	}
+	if strings.Contains(said, "hands nothing back") {
+		t.Errorf("the comment says an assignee hands nothing back of an issue the factory still holds:\n%s", said)
+	}
 }
 
 // GitHub answers for either spelling of a repository, so the factory reads one name whatever case it

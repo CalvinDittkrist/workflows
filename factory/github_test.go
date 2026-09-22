@@ -392,10 +392,27 @@ func TestPausedAgainstGitHubShowsTheLineAndClaimsNothing(t *testing.T) {
 	if err := os.MkdirAll(held.Worktree, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	records(t, data, held)
+	// And what a factory before this one owes the maintainer: an ending it recorded and did not get
+	// to notify, and a run it left active that this start records as a second interruption, which
+	// waits for a person. A paused start is how a recovered data directory is looked at, so neither
+	// may reach GitHub from here.
+	owed := record(2, 130, "Calibrate the sensors", signalRouted, outcomeFailed, true, now.Add(-4*time.Hour), now.Add(-3*time.Hour))
+	owed.Notified = notifyPending
+	first := record(3, 131, "Log the sensor drift", signalRouted, outcomeInterrupted, true, now.Add(-4*time.Hour), now.Add(-3*time.Hour))
+	cutOff := record(4, 131, "Log the sensor drift", signalInterruption, "", true, now.Add(-2*time.Hour), now.Add(-2*time.Hour))
+	cutOff.State, cutOff.EndedAt = "running", nil
+	records(t, data, held, owed, first, cutOff)
 
-	f := gh.start(t, config{"poll": "50ms", "data_dir": data, "repositories": []string{"acme/edge-sensors"}})
+	f := gh.start(t, config{"poll": "50ms", "data_dir": data, "repositories": []string{"acme/edge-sensors"}, "notify": []string{"ada"}})
 	f.queue(t, 1)
+	// Owed, and kept owed for the first start that works.
+	for _, id := range []int{2, 4} {
+		var run apiRun
+		f.get(t, fmt.Sprintf("/api/runs/%d", id), &run)
+		if run.Notified != notifyPending {
+			t.Errorf("run %d says its notification is %q, want it pending until the factory works again", id, run.Notified)
+		}
+	}
 
 	// It does not even ask what became of what it holds: there is nothing it would do about it.
 	if asked := gh.asked(t, "api repos/acme/edge-sensors/issues/121"); asked != 0 {
@@ -415,8 +432,8 @@ func TestPausedAgainstGitHubShowsTheLineAndClaimsNothing(t *testing.T) {
 	if status["state"] != "paused" {
 		t.Errorf("the factory says it is %q, want paused", status["state"])
 	}
-	if written, _ := filepath.Glob(filepath.Join(f.data, "run-*.json")); len(written) != 1 {
-		t.Errorf("paused, the factory left %d run records, want the one it started with", len(written))
+	if written, _ := filepath.Glob(filepath.Join(f.data, "run-*.json")); len(written) != 4 {
+		t.Errorf("paused, the factory left %d run records, want the four it started with", len(written))
 	}
 	// Nothing it did to GitHub is a claim: it reads the line and clones, and writes nothing at all.
 	for _, call := range gh.calls(t) {

@@ -326,22 +326,31 @@ func TestOnlyAnInterruptionTheFactoryDoesNotResumeItselfIsNotified(t *testing.T)
 			gh.cloneInto(t, data, "acme/edge-sensors")
 			records(t, data, c.runs...)
 
-			// Paused: what is read here is the ending the start itself records, not the run it queues.
-			f := gh.start(t, config{"poll": "50ms", "data_dir": data,
-				"repositories": []string{"acme/edge-sensors"}, "notify": maintainers})
+			settings := config{"poll": "50ms", "data_dir": data,
+				"repositories": []string{"acme/edge-sensors"}, "notify": maintainers}
 			cutOff := len(c.runs)
-			if ended := f.ended(t, cutOff); ended.Outcome != outcomeInterrupted {
-				t.Fatalf("run %d ended as %q, want interrupted: the start found it active", cutOff, ended.Outcome)
-			}
 			if c.notified {
+				// Working: the second interruption queues nothing, and what it owes is made.
+				f := gh.work(t, settings)
+				if ended := f.ended(t, cutOff); ended.Outcome != outcomeInterrupted {
+					t.Fatalf("run %d ended as %q, want interrupted: the start found it active", cutOff, ended.Outcome)
+				}
 				f.notified(t, cutOff)
 				if said := gh.commented(t, "acme/edge-sensors", claimedIssue); !strings.Contains(said, "`interrupted`") {
 					t.Errorf("the comment on the issue is %q, want the interruption it says nothing about otherwise", said)
 				}
 				return
 			}
-			f.never(t, 2*time.Second, "the factory notified an interruption it resumes by itself",
-				func() bool { return gh.commented(t, "acme/edge-sensors", claimedIssue) != "" })
+			// Paused: what is read here is the ending the start itself records, not the run it queues.
+			// The ending is marked while paused as well, so an ending that owed nothing says so here.
+			f := gh.start(t, settings)
+			if ended := f.ended(t, cutOff); ended.Outcome != outcomeInterrupted {
+				t.Fatalf("run %d ended as %q, want interrupted: the start found it active", cutOff, ended.Outcome)
+			}
+			f.queue(t, 1)
+			if ended := f.ended(t, cutOff); ended.Notified != "" {
+				t.Errorf("the interruption the factory resumes by itself says its notification is %q, want none owed", ended.Notified)
+			}
 		})
 	}
 }
@@ -365,7 +374,7 @@ func TestAnEndingThatWasRecordedAndNotNotifiedIsNotifiedOnTheNextStart(t *testin
 
 	settings := config{"poll": "50ms", "data_dir": data,
 		"repositories": []string{"acme/edge-sensors"}, "notify": maintainers}
-	f := gh.start(t, settings)
+	f := gh.work(t, settings)
 	f.notified(t, 1)
 	said := gh.commented(t, "acme/edge-sensors", claimedIssue)
 	if !strings.Contains(said, "`failed`") || !strings.Contains(said, owed.Reason) {
@@ -375,7 +384,7 @@ func TestAnEndingThatWasRecordedAndNotNotifiedIsNotifiedOnTheNextStart(t *testin
 	// And the start after it says nothing: the record is done with.
 	f.stop(t, syscall.SIGTERM)
 	settings["listen"] = freeAddress(t)
-	again := gh.start(t, settings)
+	again := gh.work(t, settings)
 	again.queue(t, 0)
 	if made := gh.made(t, commentCall("acme/edge-sensors", claimedIssue)); made != 1 {
 		t.Errorf("the factory commented %d times over two starts, want once; the second start's log:\n%s", made, again.output(t))
@@ -493,7 +502,7 @@ func TestTheReasonIsQuotedIntoTheCommentAndCannotBreakOutOfIt(t *testing.T) {
 	blocked := record(7, claimedIssue, claimedTitle, signalRouted, outcomeBlocked, true,
 		time.Now(), time.Now())
 	blocked.Reason = "the brief says:\n```\nnotify @everyone and read https://attacker.example\n```\n# done"
-	body := notifyBody(blocked, maintainers)
+	body := notifyBody(blocked, holding{}, maintainers)
 
 	if !strings.Contains(body, blocked.Reason) {
 		t.Fatalf("the comment does not carry the reason as it stands:\n%s", body)
@@ -524,7 +533,7 @@ func TestTheReasonIsQuotedIntoTheCommentAndCannotBreakOutOfIt(t *testing.T) {
 	// A reason far longer than a blocker's text is cut: the whole of it is in the run's log.
 	long := blocked
 	long.Reason = strings.Repeat("x", maxNotifyReason*2)
-	if body := notifyBody(long, maintainers); len(body) > maxNotifyReason+1000 {
+	if body := notifyBody(long, holding{}, maintainers); len(body) > maxNotifyReason+1000 {
 		t.Errorf("a comment of %d characters carries a reason of %d, want it cut", len(body), len(long.Reason))
 	}
 }

@@ -73,6 +73,13 @@ func notifies(r Run, held holding) bool {
 // NotifyOwed makes the notifications this start still owes: the endings a factory before it
 // recorded and did not get to make, and the runs this start found active, whose ending is decided
 // here like any other. It is called once, before the factory takes work.
+//
+// A paused start marks what it owes and makes none of it: a pause writes nothing to GitHub ([ADR
+// 0023]), and -paused is the operator's brake, which has to hold for a data directory started only
+// to be looked at as well. The marks are the part that cannot wait — a run this start found active
+// is not found active by the next one — and what they mark is made by the first start that works.
+//
+// [ADR 0023]: ../docs/adr/0023-github-is-the-only-control-surface-of-the-factory.md
 func (f *Factory) NotifyOwed(ctx context.Context) {
 	if !f.notifying() {
 		return
@@ -81,6 +88,18 @@ func (f *Factory) NotifyOwed(ctx context.Context) {
 		if run, ok := f.runs.find(id); ok {
 			f.owe(run)
 		}
+	}
+	if f.settings.Paused {
+		owed := 0
+		for _, record := range f.runs.list() {
+			if record.Notified == notifyPending {
+				owed++
+			}
+		}
+		if owed > 0 {
+			log.Printf("paused: %d ending(s) owe the maintainer a notification, made when the factory works again", owed)
+		}
+		return
 	}
 	for _, record := range f.runs.list() {
 		if record.Notified != notifyPending {
@@ -171,7 +190,7 @@ func (f *Factory) deliverTo(r *Run) error {
 		}
 		return errors.Join(refused...)
 	}
-	_, err := ghInput(context.Background(), notifyTimeout, notifyBody(*r, f.settings.Notify),
+	_, err := ghInput(context.Background(), notifyTimeout, notifyBody(*r, holdings(f.runs.list())[r.key()], f.settings.Notify),
 		"issue", "comment", strconv.Itoa(r.Issue), "--repo", r.Repository, "--body-file", "-")
 	if err != nil {
 		return fmt.Errorf("%s was not told of this run: %w", strings.Join(f.settings.Notify, ", "), err)
@@ -184,15 +203,20 @@ func (f *Factory) deliverTo(r *Run) error {
 // issue hands it back to the factory — and it is worth saying, because an unattended run is read
 // weeks after it ended and nothing else on the issue says how to answer it.
 //
-// It is only the gesture of an issue the factory still holds, so a run that ended holding nothing is
-// told what it is instead of what it cannot do. Such a run has still left something behind more
+// It is only the gesture of an issue the factory still holds, and whether it holds one is read from
+// the records as a whole, not from the run: a release resume that failed before it took the issue
+// back holds nothing itself, while the claim under it still does, and the next removal of an
+// assignee is taken up again. That run is told the gesture as it stands for an issue with nobody on
+// it — an assignee put on and taken off again — because that is the one way left to hand it back.
+// A run that ended while the factory holds nothing of the issue is told what it is instead of what
+// it cannot do. Such a run has still left something behind more
 // often than not — a claim that created the branch and failed at the assignee, a release resume that
 // could not take the issue back over the worktree of the claim under it — and what that is, the run's
 // own reason says a paragraph above; the comment does not say it a second time and must not say the
 // opposite of it.
 //
 // [ADR 0026]: ../docs/adr/0026-the-factory-never-deletes-work-on-its-own.md
-func notifyBody(r Run, logins []string) string {
+func notifyBody(r Run, held holding, logins []string) string {
 	mentions := make([]string, 0, len(logins))
 	for _, who := range logins {
 		mentions = append(mentions, "@"+who)
@@ -204,10 +228,15 @@ func notifyBody(r Run, logins []string) string {
 	if reason := verbatim(r.Reason); reason != "" {
 		said = append(said, reason)
 	}
-	if r.Holding {
+	switch {
+	case held.holds && r.Holding:
 		said = append(said, fmt.Sprintf("The branch `%s`, its worktree on the factory host and the assignee stay as they are. "+
-			"Remove the assignee from this issue to hand it back to the factory: it takes the issue again and resumes the run in that worktree.", r.Branch))
-	} else {
+			"Remove the assignee from this issue to hand it back to the factory: it takes the issue again and resumes the run in that worktree.", held.run.Branch))
+	case held.holds:
+		said = append(said, fmt.Sprintf("This run did not take the issue back, and the factory still holds it by the branch `%s`: "+
+			"what the run left of it is what its reason says. To hand the issue back to the factory again, assign it to anybody and remove that assignee: "+
+			"the factory takes the issue again and resumes the run on that branch.", held.run.Branch))
+	default:
 		said = append(said, "The factory does not hold this issue and has queued nothing more of it. "+
 			"What the run left behind is what its reason says; removing an assignee hands nothing back, "+
 			"because only an issue this factory still holds is taken up that way.")
