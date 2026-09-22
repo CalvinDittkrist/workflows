@@ -322,52 +322,80 @@ func TestTheAutomaticResumeIsOnePerIssueAndOnlyAReleaseGivesItBack(t *testing.T)
 	run := func(id int, signal, outcome string, holding bool) Run {
 		return record(id, 104, "Retry the upload", signal, outcome, holding, ended.Add(-time.Hour), ended)
 	}
+	const never = ""
 	for _, c := range []struct {
 		name    string
 		runs    []Run
-		resumes bool
+		resumes string // the signal the factory resumes the issue on by itself
 	}{
 		{"the first interruption of an issue", []Run{
-			run(1, signalRouted, outcomeInterrupted, true)}, true},
+			run(1, signalRouted, outcomeInterrupted, true)}, signalInterruption},
 		{"the second interruption of an issue", []Run{
 			run(1, signalRouted, outcomeInterrupted, true),
-			run(2, signalInterruption, outcomeInterrupted, true)}, false},
+			run(2, signalInterruption, outcomeInterrupted, true)}, never},
 		// The resume is spent by the run it queued, whatever became of that run: a resume that could
 		// not start — a worktree that is not on the host — is not tried again by itself either.
 		{"an automatic resume that ended in something else", []Run{
 			run(1, signalRouted, outcomeInterrupted, true),
-			run(2, signalInterruption, outcomeFailed, true)}, false},
+			run(2, signalInterruption, outcomeFailed, true)}, never},
 		{"an interruption after the automatic resume ended otherwise", []Run{
 			run(1, signalRouted, outcomeInterrupted, true),
 			run(2, signalInterruption, outcomeFailed, true),
-			run(3, signalRelease, outcomeInterrupted, true)}, true},
+			run(3, signalRelease, outcomeInterrupted, true)}, signalInterruption},
 		{"the first interruption after a release", []Run{
 			run(1, signalRouted, outcomeInterrupted, true),
 			run(2, signalInterruption, outcomeInterrupted, true),
-			run(3, signalRelease, outcomeInterrupted, true)}, true},
+			run(3, signalRelease, outcomeInterrupted, true)}, signalInterruption},
 		{"the second interruption after a release", []Run{
 			run(1, signalRouted, outcomeInterrupted, true),
 			run(2, signalInterruption, outcomeInterrupted, true),
 			run(3, signalRelease, outcomeInterrupted, true),
-			run(4, signalInterruption, outcomeInterrupted, true)}, false},
+			run(4, signalInterruption, outcomeInterrupted, true)}, never},
 		{"a run that ended in anything else", []Run{
-			run(1, signalRouted, outcomeFailed, true)}, false},
+			run(1, signalRouted, outcomeFailed, true)}, never},
 		{"a claim another claimer won", []Run{
-			run(1, signalRouted, outcomeLost, false)}, false},
+			run(1, signalRouted, outcomeLost, false)}, never},
 		{"a claim that was interrupted before it held anything", []Run{
-			run(1, signalRouted, outcomeInterrupted, false)}, false},
+			run(1, signalRouted, outcomeInterrupted, false)}, never},
+		// A run that ran out of quota is resumed after the reset, and that resume is no interruption's:
+		// the one automatic resume is still there afterwards ([ADR 0026]). It is one in a row, so an
+		// issue whose every session uses up a window waits for a person after the second.
+		{"a run that ran out of quota", []Run{
+			run(1, signalRouted, outcomeQuota, true)}, signalQuota},
+		{"a run that ran out of quota after the automatic resume was spent", []Run{
+			run(1, signalRouted, outcomeInterrupted, true),
+			run(2, signalInterruption, outcomeQuota, true)}, signalQuota},
+		{"a quota resume that ran out of quota again", []Run{
+			run(1, signalRouted, outcomeQuota, true),
+			run(2, signalQuota, outcomeQuota, true)}, never},
+		{"a run that ran out of quota after a quota resume ended otherwise", []Run{
+			run(1, signalRouted, outcomeQuota, true),
+			run(2, signalQuota, outcomeFailed, true),
+			run(3, signalRelease, outcomeQuota, true)}, signalQuota},
+		{"the first interruption after a quota resume", []Run{
+			run(1, signalRouted, outcomeQuota, true),
+			run(2, signalQuota, outcomeInterrupted, true)}, signalInterruption},
+		{"the second interruption, with a quota resume between the two", []Run{
+			run(1, signalRouted, outcomeInterrupted, true),
+			run(2, signalInterruption, outcomeQuota, true),
+			run(3, signalQuota, outcomeInterrupted, true)}, never},
+		{"a quota resume that ended in something else", []Run{
+			run(1, signalRouted, outcomeQuota, true),
+			run(2, signalQuota, outcomeFailed, true)}, never},
+		{"a claim that ran out of quota before it held anything", []Run{
+			run(1, signalRouted, outcomeQuota, false)}, never},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			held := holdings(c.runs)["acme/edge-sensors#104"]
 			if held.resumes != c.resumes {
-				t.Errorf("the factory resumes this issue by itself: %v, want %v", held.resumes, c.resumes)
+				t.Errorf("the factory resumes this issue by itself on %q, want %q", held.resumes, c.resumes)
 			}
 		})
 	}
 	// A run that is still going is nothing to queue beside, whatever went before it.
 	active := []Run{run(1, signalRouted, outcomeInterrupted, true), run(2, signalInterruption, "", true)}
 	active[1].EndedAt, active[1].State = nil, "running"
-	if held := holdings(active)["acme/edge-sensors#104"]; held.resumes || held.idle {
+	if held := holdings(active)["acme/edge-sensors#104"]; held.resumes != never || held.idle {
 		t.Errorf("an issue whose run is still going is read as idle=%v resumes=%v, want neither", held.idle, held.resumes)
 	}
 }
