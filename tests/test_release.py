@@ -3,6 +3,7 @@ import hashlib
 import os
 import re
 import shutil
+import struct
 import subprocess
 import tempfile
 import unittest
@@ -11,6 +12,25 @@ from pathlib import Path
 from helpers import GIT_ISOLATION, ROOT
 
 WORKFLOW = ROOT / ".github" / "workflows" / "factory-release.yml"
+
+PT_DYNAMIC, PT_INTERP = 2, 3
+
+
+def elf_header(path):
+    """What `file` would say about a little-endian ELF binary, read from its headers so the gate
+    needs no `file` on the host: its class, its machine, and whether it asks for a dynamic loader.
+    Returns (bits, e_machine, static)."""
+    data = path.read_bytes()
+    if data[:4] != b"\x7fELF" or data[5] != 1:
+        return None, None, None
+    bits = {1: 32, 2: 64}[data[4]]
+    if bits != 64:
+        return bits, None, None
+    (e_machine,) = struct.unpack_from("<H", data, 18)
+    (e_phoff,) = struct.unpack_from("<Q", data, 32)
+    e_phentsize, e_phnum = struct.unpack_from("<HH", data, 54)
+    types = {struct.unpack_from("<I", data, e_phoff + i * e_phentsize)[0] for i in range(e_phnum)}
+    return bits, e_machine, not types & {PT_DYNAMIC, PT_INTERP}
 
 
 def step_script(workflow, name):
@@ -235,15 +255,14 @@ class FactoryBinariesTests(unittest.TestCase):
         r = subprocess.run(["bash", "scripts/factory-binaries.sh", out.name],
                            cwd=ROOT, env=os.environ, text=True, capture_output=True)
         self.assertEqual(r.returncode, 0, r.stderr)
-        for arch, machine in (("amd64", "x86-64"), ("arm64", "aarch64")):
+        # e_machine: EM_X86_64 is 62, EM_AARCH64 is 183.
+        for arch, machine in (("amd64", 62), ("arm64", 183)):
             with self.subTest(arch=arch):
-                built = Path(out.name) / f"factory-linux-{arch}"
-                described = subprocess.run(["file", "-b", str(built)], text=True,
-                                           capture_output=True, check=True).stdout
-                self.assertIn("ELF 64-bit", described)
-                self.assertIn(machine, described)
+                bits, e_machine, static = elf_header(Path(out.name) / f"factory-linux-{arch}")
+                self.assertEqual(bits, 64)
+                self.assertEqual(e_machine, machine)
                 # No cgo, so the host it lands on needs no libc of the right version.
-                self.assertIn("statically linked", described)
+                self.assertTrue(static)
 
     def test_the_checksums_are_the_checksums_of_those_binaries(self):
         """What a host verifies its download against. A checksum file that names something else, or
