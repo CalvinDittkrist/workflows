@@ -78,6 +78,28 @@ func TestASessionThatExitsInAnErrorFailsTheRunWhateverItsResultSaid(t *testing.T
 	}
 }
 
+// A result line that says the session ended in an error is an error even when the process exits 0:
+// the run fails and names what the result line called it.
+func TestAnErrorResultFailsTheRunWhateverTheProcessExitedWith(t *testing.T) {
+	t.Parallel()
+	gh := newGhShim(t)
+	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
+	gh.loggedInAs(t, "factory-bot")
+	gh.assigns(t, "acme/edge-sensors", claimedIssue, "factory-bot")
+	data := filepath.Join(t.TempDir(), "data")
+	gh.cloneInto(t, data, "acme/edge-sensors")
+	f := launch(t, config{"poll": "50ms", "deadline": "90s", "data_dir": data, "repositories": []string{"acme/edge-sensors"}},
+		append(gh.env, "CLAUDE_SHIM_ERROR_SUBTYPE=error_max_structured_output_retries"))
+	run := f.ended(t, 1)
+	if run.Outcome != "failed" || !strings.Contains(run.Reason, "error_max_structured_output_retries") {
+		t.Fatalf("the run ended as %q because %q, want failed naming the error of the result line; the factory's log:\n%s",
+			run.Outcome, run.Reason, f.output(t))
+	}
+	if run.ExitCode == nil || *run.ExitCode != 0 {
+		t.Errorf("the run has the exit code %v, want 0: the process itself ended well", run.ExitCode)
+	}
+}
+
 // A session that runs past the timeout of its stage is ended with its whole process group, and the
 // run fails naming the stage. That is not the run's deadline, which is further off here and would
 // have ended it with the outcome timeout.

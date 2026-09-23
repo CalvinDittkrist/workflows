@@ -17,6 +17,8 @@
 #                      test can hand the factory one that does not fit the schema
 #   CLAUDE_SHIM_NO_RESULT when set, the session ends well without printing a result line
 #   CLAUDE_SHIM_EXIT   the code the session exits with after its result line, 0 by default
+#   CLAUDE_SHIM_ERROR_SUBTYPE when set, the result line says the session ended in an error of this
+#                      subtype, with no structured output, as error_max_structured_output_retries does
 #   CLAUDE_SHIM_COMMIT when set, the session writes and commits a file of that name in the worktree,
 #                      which is the work a run leaves behind for the branch to carry
 #   CLAUDE_SHIM_SLEEP  when set, the session waits that many seconds before it reports, so a test can
@@ -112,6 +114,12 @@ fi
 
 if [ -n "${CLAUDE_SHIM_NO_RESULT:-}" ]; then
   exit 0
+fi
+
+if [ -n "${CLAUDE_SHIM_ERROR_SUBTYPE:-}" ]; then
+  printf '{"type":"result","subtype":"%s","is_error":true,"num_turns":12,"total_cost_usd":1.5,"usage":{"input_tokens":900,"cache_creation_input_tokens":1200,"cache_read_input_tokens":40000,"output_tokens":3000}}\n' \
+    "$CLAUDE_SHIM_ERROR_SUBTYPE"
+  exit "${CLAUDE_SHIM_EXIT:-0}"
 fi
 
 # The result text is the output as a JSON string: its quotes and backslashes escaped, which is all a
