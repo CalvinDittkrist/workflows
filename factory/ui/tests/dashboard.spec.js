@@ -4,12 +4,14 @@ import { configuration, paused, working } from './where.js'
 
 // The dashboard read the way the maintainer reads it: in a browser, against the real binary in fake
 // mode. The canned queue is worked before the tests start (tests/factory.js), so the runs below are
-// the scripted ones: 1 ready, 2 blocked, 3 failed, 4 failed, 5 ready with a warning, 6 still running.
+// the scripted ones: 1 ready, 2 blocked, 3 failed, 4 failed, 5 ready with a warning, 6 the follow-up
+// run a review of 5 asked for, ready, 7 still running.
 
 const READY_RUN = 1
 const BLOCKED_RUN = 2
 const WARNED_RUN = 5
-const RUNNING_RUN = 6
+const FOLLOW_UP_RUN = 6
+const RUNNING_RUN = 7
 
 const detail = (page) => page.locator('.detail')
 
@@ -30,13 +32,14 @@ test('the three areas render from the canned data', async ({ page }) => {
   await expect(page.locator('.line .none')).toHaveText('empty')
 
   const done = page.locator('.line button.row:not(.now)')
-  await expect(done).toHaveCount(5)
-  // Newest first, each with how it ended.
+  await expect(done).toHaveCount(6)
+  // Newest first, each with how it ended: the follow-up run of #121 before the run it answered.
   await expect(done.first()).toContainText('#121')
   await expect(done.first()).toContainText('ready')
+  await expect(done.nth(1)).toContainText('#121')
   await expect(done.last()).toContainText('#104')
   await expect(done.last()).toContainText('ready')
-  await expect(done.nth(3)).toContainText('blocked')
+  await expect(done.nth(4)).toContainText('blocked')
 })
 
 test('the whole queue is shown in its order while the factory is paused', async ({ page }) => {
@@ -103,12 +106,12 @@ test('a run is selected through the URL and the selection survives a reload', as
 test('the stage line and the outcome box show the scripted states', async ({ page }) => {
   await page.goto(working(`/#run=${READY_RUN}`))
   const stages = detail(page).locator('.steps li')
-  await expect(stages).toHaveText(['implement', 'review', 'pr', 'ci', 'reviews'])
-  // The ready run went through the stages up to ci, the one the factory ran itself and ended in, and
-  // never reached reviews, which only a follow-up run stands at.
+  await expect(stages).toHaveText(['implement', 'review', 'pr', 'ci', 'address-reviews'])
+  // The ready run went through every stage: in ci the reviewers asked for changes, an address-reviews
+  // session answered them, and the run ended back in ci.
   await expect(stages.nth(0)).toHaveClass('done')
   await expect(stages.nth(3)).toHaveClass(/at/)
-  await expect(stages.nth(4)).not.toHaveClass(/at|done/)
+  await expect(stages.nth(4)).toHaveClass('done')
   await expect(detail(page).locator('.outcome')).toContainText('ready')
   await expect(detail(page).getByRole('link')).toHaveAttribute(
     'href',
@@ -121,6 +124,13 @@ test('the stage line and the outcome box show the scripted states', async ({ pag
   await expect(detail(page).locator('.steps li').nth(2)).toHaveClass('')
   await expect(detail(page).locator('.outcome')).toContainText('blocked')
   await expect(detail(page).locator('.outcome')).toContainText('supersede ADR 0012')
+
+  await page.goto(working(`/#run=${FOLLOW_UP_RUN}`))
+  // The follow-up run started at address-reviews and ended in ci, and never did the work before them.
+  await expect(detail(page).locator('.facts').first()).toContainText('follow-up run')
+  await expect(detail(page).locator('.steps .at')).toHaveText('ci')
+  await expect(detail(page).locator('.steps li').nth(4)).toHaveClass('done')
+  await expect(detail(page).locator('.steps li').nth(0)).toHaveClass('')
 
   await page.goto(working(`/#run=${RUNNING_RUN}`))
   // The run that is still going has no outcome box at all.
@@ -152,9 +162,9 @@ test('the selected run shows what it cost, how full its context came and what it
 test('the live log sets the events of the worker’s subagents in', async ({ page }) => {
   await page.goto(working(`/#run=${READY_RUN}`))
   const log = detail(page).locator('.log')
-  // The ready run had two sessions, its work session and the fix session of its repair round, and
-  // each ended in a result line.
-  await expect(log.locator('.ev-result')).toHaveCount(2)
+  // The ready run had three sessions, its work session, the fix session of one repair round and the
+  // address-reviews session of the other, and each ended in a result line.
+  await expect(log.locator('.ev-result')).toHaveCount(3)
   await expect(log.locator('.ev-result').last()).toContainText('result: success')
   const subagent = log.locator('.ev-sub').first()
   await expect(subagent).toContainText('Read the diff under review')

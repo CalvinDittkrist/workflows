@@ -16,7 +16,7 @@ import (
 
 // The follow-up run. A run that ended ready leaves a pull request, and the maintainer reads it on
 // GitHub: requesting changes there is the gesture that hands the objection back to the factory,
-// which queues a run in the worktree of the claim that starts at the worker's address-reviews stage
+// which queues a run in the worktree of the claim that starts at the factory's address-reviews stage
 // ([ADR 0023]). Nothing else is needed of the maintainer — no checkout, no comment on the issue —
 // and nothing of it is a state of the factory: the review is read from GitHub on every poll and what
 // has been answered is read from the run records, exactly as a release is ([ADR 0025]).
@@ -104,6 +104,7 @@ type ghReview struct {
 	State       string    `json:"state"`
 	SubmittedAt time.Time `json:"submitted_at"`
 	HTMLURL     string    `json:"html_url"` // where a person reads it, which a blocked ci stage names
+	Body        string    `json:"body"`     // what it says, which an address-reviews session is shown
 }
 
 // The review states this factory reads. A review that asks for changes is the maintainer's gesture;

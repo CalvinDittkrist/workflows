@@ -184,10 +184,9 @@ func TestAClaimOfARepositoryWithItsOwnBaseCutsAndWorksFromThatBase(t *testing.T)
 // A host sets the worker knobs of its runs in its configuration, and they reach the session the way
 // a local claim's --env does: in the env block of --settings, where they win over the repository's
 // own settings for that session. The knobs of the ci stage are the factory's own, written under "ci",
-// and reach the session in the worker's names beside them. The one this exists for is a host whose
-// GitHub account no bot reviewer reviews the pull requests of: with no bot reviewer, WF_PR_BOT_REVIEWERS
-// is set to nothing, which is a setting and not an absence. What the run is stays the factory's
-// whatever the file says.
+// and reach no session: the work session stops after the pull request, and the factory counts the
+// repair rounds and answers the reviews itself. What the run is stays the factory's whatever the file
+// says.
 func TestTheHostsWorkerKnobsReachTheSessionBesideWhatTheRunIs(t *testing.T) {
 	t.Parallel()
 	gh := newGhShim(t)
@@ -212,11 +211,10 @@ func TestTheHostsWorkerKnobsReachTheSessionBesideWhatTheRunIs(t *testing.T) {
 		t.Fatalf("the factory started %d workers, want one", len(workers))
 	}
 	env := workers[0].settings(t).Env
-	if bots, set := env["WF_PR_BOT_REVIEWERS"]; !set || bots != "" {
-		t.Errorf("the worker's settings carry WF_PR_BOT_REVIEWERS=%q (set: %v), want the empty value the host configured: its worker would wait the review window for a bot that never reviews this host's pull requests", bots, set)
-	}
-	if wait := env["WF_PR_REVIEW_WAIT"]; wait != "5" {
-		t.Errorf("the worker's settings carry WF_PR_REVIEW_WAIT=%q, want the host's 5 seconds", wait)
+	for _, moved := range []string{"WF_PR_BOT_REVIEWERS", "WF_PR_REVIEW_WAIT", "WF_CI_REPAIR_ROUNDS", "WF_CHECKS_GRACE", "WF_REVIEW_MANDATE"} {
+		if value, set := env[moved]; set {
+			t.Errorf("the worker's settings carry %s=%q; no session runs the worker's ci stage, whose knob that is", moved, value)
+		}
 	}
 	if rounds := env["WF_REVIEW_ROUNDS"]; rounds != "2" {
 		t.Errorf("the worker's settings carry WF_REVIEW_ROUNDS=%q, want the host's 2", rounds)

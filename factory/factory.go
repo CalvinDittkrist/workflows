@@ -67,6 +67,9 @@ type Entry struct {
 	// instead of claiming the issue anew (waiting, readopt). It is empty for every other routing,
 	// which is an issue this factory has never held.
 	resume Run
+	// pull is the pull request a follow-up run answers the review on: the one the claim opened, which
+	// the review was read from.
+	pull string
 }
 
 // Factory is the service: it holds the queue it last derived, the runs it has made, and the one
@@ -135,6 +138,10 @@ type source interface {
 	pullState(ctx context.Context, held Held, bots []string) (pullReading, error)
 	failedLogs(ctx context.Context, repository string, failed []check) string
 	openPull(ctx context.Context, repository, branch string) (string, error)
+	// replyAndResolve and commentOnPull carry what an address-reviews session answered to GitHub: a
+	// reply in one review thread and its resolution, and one comment on the pull request.
+	replyAndResolve(ctx context.Context, id, body string) error
+	commentOnPull(ctx context.Context, repository string, pull int, body string) error
 }
 
 // Held is one issue this factory holds, as a poll asks the source about it: the issue, the run that
@@ -190,7 +197,7 @@ func New(settings Settings, fake bool) (*Factory, error) {
 	f.paused.Store(settings.Paused)
 	f.source = newGitHub(settings.Repositories, settings.Label)
 	if fake {
-		f.source = &canned{repositories: settings.Repositories, started: f.started}
+		f.source = &canned{repositories: settings.Repositories, started: f.started, runs: runs}
 	}
 	f.endSurvivors() // before anything of this start can queue a run of an issue one of them is working
 	return f, nil
@@ -603,7 +610,7 @@ func (f *Factory) waiting() []Entry {
 		case held.resumes != "":
 			out = append(out, Entry{Issue: issue, Signal: held.resumes, SignalAt: held.signalAt(), resume: held.run})
 		case held.changesRequested(requested[key]):
-			out = append(out, Entry{Issue: issue, Signal: signalChangesRequested, SignalAt: requested[key], resume: held.run})
+			out = append(out, Entry{Issue: issue, Signal: signalChangesRequested, SignalAt: requested[key], resume: held.run, pull: held.pullRequest})
 		}
 	}
 	sort.Slice(out, func(a, b int) bool {
@@ -749,11 +756,24 @@ func (f *Factory) execute(parent context.Context, r *Run, entry Entry) {
 		if entry.resume.PullRequest == pull {
 			f.runs.update(r, func() { r.RepairRounds = entry.resume.RepairRounds })
 		}
-		f.ci(parent, ctx, r, entry, claim, pull)
+		f.ci(parent, ctx, r, entry, claim, pull, false)
 		return
 	}
 
-	s := sessionFor(entry.Signal)
+	// A follow-up run answers a review on the pull request the claim opened: it starts at the
+	// address-reviews stage, with a repair count of its own that starts at none, and goes on into the
+	// ci stage. The URL is rebuilt from the repository and the number, as a session's is.
+	if entry.Signal == signalChangesRequested {
+		pull, reason := pullRequest(entry.pull, r.Repository)
+		if pull == "" {
+			f.finish(r, outcomeFailed, "the follow-up run has no pull request to answer the review on: "+reason, nil)
+			return
+		}
+		f.ci(parent, ctx, r, entry, claim, pull, true)
+		return
+	}
+
+	s := workSession.overridden()
 	// The session opens in the skill it is given as its prompt, and that prompt is a slash command and
 	// no Skill call, so nothing in the worker's stream announces it.
 	f.runs.update(r, func() { r.stage(s.stage) })
@@ -774,7 +794,7 @@ func (f *Factory) execute(parent context.Context, r *Run, entry Entry) {
 		f.finish(r, outcomeReady, reason, nil)
 		return
 	}
-	f.ci(parent, ctx, r, entry, claim, url)
+	f.ci(parent, ctx, r, entry, claim, url, false)
 }
 
 // openedAlready is the open pull request of the branch a resumed run continues, which is where it
@@ -1086,27 +1106,16 @@ func workerSettings(env map[string]string) (string, error) {
 // own keys are written over them and stay what this function says, however the accepted names ever
 // change — the order the orchestrator's claim.sh keeps.
 //
-// WF_REVIEW_MANDATE is that for a follow-up run: the driver's word that this session was started to
-// answer a review, which is what the worker's repair.sh takes for the count of repair rounds to
-// start again. The pipeline's own repair loop is bounded by that count, so the session may not read
-// its own prompt for the answer, and every other run carries the variable not at all.
-//
-// It names the review it stands for, the time that review was submitted, which is what this run is
-// queued for and dispatched once for. One review is one new mandate on the pull request: the repair
-// record keeps the mandate its count was started for, so the session that answers the review has the
-// rounds of that review and the rounds its own CI stage then drives cannot hand it more.
-//
 // WF_STOP_AFTER is the stage the session ends after, for the session that stops once the pull request
-// is open ([ADR 0043]). The knobs of the ci stage go in as the worker's own ci stage reads them, for
-// the follow-up session that still runs it.
+// is open ([ADR 0043]). No session runs the worker's own ci stage any more, so neither its knobs nor
+// the review mandate of its repair count reach a session: the factory counts the repair rounds itself.
 //
 // [ADR 0043]: ../docs/adr/0043-the-migration-runs-from-the-last-stage-to-the-first.md
-func workerVariables(entry Entry, claim claimed, knobs map[string]string, s session, wait ciSettings) map[string]string {
+func workerVariables(entry Entry, claim claimed, knobs map[string]string, s session) map[string]string {
 	variables := maps.Clone(knobs)
 	if variables == nil {
 		variables = map[string]string{}
 	}
-	maps.Copy(variables, wait.variables())
 	if s.stopAfter != "" {
 		variables["WF_STOP_AFTER"] = s.stopAfter
 	}
@@ -1117,9 +1126,6 @@ func workerVariables(entry Entry, claim claimed, knobs map[string]string, s sess
 		"CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1",
 		"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE":      compactPercentage,
 	})
-	if entry.Signal == signalChangesRequested {
-		variables["WF_REVIEW_MANDATE"] = entry.SignalAt.UTC().Format(time.RFC3339)
-	}
 	return variables
 }
 

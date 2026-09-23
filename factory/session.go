@@ -16,7 +16,8 @@ import (
 // the agent, the prompt, the settings and the permission mode, the timeout of its stage and the JSON
 // schema of its result ([ADR 0039]). A run starts its first session at the stage its signal names;
 // the stages that follow it up to the pull request run inside that session, as the worker plugin
-// drives them, and the ci stage is the factory's own, which starts a fix session per repair round.
+// drives them, and the ci stage is the factory's own, which starts a fix session per repair round and
+// an address-reviews session per round of review comments.
 //
 // [ADR 0039]: ../docs/adr/0039-every-session-reports-through-a-structured-result.md
 type session struct {
@@ -33,40 +34,36 @@ type session struct {
 	scripted string
 }
 
-// The sessions a run can start. The work session is the one a local claim starts and the one every
-// run of an issue starts with — a first run as well as a resumed one, which derives where the work
-// stands from git and GitHub as any worker does — and it stops once the pull request is open, where
-// the factory's ci stage takes over. The reviews session is the follow-up run's: the maintainer has
-// read the pull request and asked for changes, so the session starts at the stage that reads the
-// review threads, and that stage ends by running the worker's CI stage again.
+// The work session is the one a local claim starts and the one a first and a resumed run of an issue
+// start with, the resumed one when its branch has no pull request open yet: it derives where the work
+// stands from git and GitHub as any worker does, and it stops once the pull request is open, where
+// the factory's ci stage takes over. A follow-up run starts no work session: the maintainer has read
+// the pull request and asked for changes, so it starts at the ci stage's address-reviews session.
 //
 // The timeouts are fixed here and not in the host's configuration. They are a backstop above the
 // run's deadline, which stays the limit an operator sets and which ends a run with the outcome
 // timeout; a session that outruns its own timeout has failed, and the run says in which stage.
-var (
-	workSession    = session{stage: stages["worker:work"], prompt: "/worker:work", timeout: 4 * time.Hour, stopAfter: "pr"}
-	reviewsSession = session{stage: stages["worker:address-reviews"], prompt: "/worker:address-reviews", timeout: 3 * time.Hour}
-)
+var workSession = session{stage: stages["worker:work"], prompt: "/worker:work", timeout: 4 * time.Hour, stopAfter: "pr"}
 
-// fixTimeout is how long one fix session of the ci stage may run.
-const fixTimeout = time.Hour
+// fixTimeout is how long one fix session of the ci stage may run, and addressTimeout one
+// address-reviews session.
+const (
+	fixTimeout     = time.Hour
+	addressTimeout = 2 * time.Hour
+)
 
 // sessionTimeoutOverride replaces the timeout of every session when it is set, as a Go duration. It is
 // set at link time by the tests, which cannot wait out hours, and by nothing a host configures.
 var sessionTimeoutOverride string
 
-// sessionFor is the session a run of that signal starts.
-func sessionFor(signal string) session {
-	s := workSession
-	if signal == signalChangesRequested {
-		s = reviewsSession
-	}
-	return s.overridden()
-}
-
 // fixSession is the session of one repair round of the ci stage, given the brief of that round.
 func fixSession(brief string) session {
 	return session{stage: stageCI, prompt: brief, timeout: fixTimeout, scripted: "fix"}.overridden()
+}
+
+// addressSession is the session that answers what the reviewers ask for, given the brief of its round.
+func addressSession(brief string) session {
+	return session{stage: stageAddressReviews, prompt: brief, timeout: addressTimeout, scripted: "address"}.overridden()
 }
 
 func (s session) overridden() session {
@@ -107,7 +104,7 @@ func (f *Factory) command(ctx context.Context, s session, entry Entry, claim cla
 		args := []string{"scripted-worker", scenario, issue.Repository, strconv.Itoa(issue.Number)}
 		return exec.CommandContext(ctx, f.self, append(args, f.settings.WorkerArgs...)...), nil
 	}
-	variables := workerVariables(entry, claim, f.settings.WorkerEnv, s, f.ciFor(issue.Repository))
+	variables := workerVariables(entry, claim, f.settings.WorkerEnv, s)
 	settings, err := workerSettings(variables)
 	if err != nil {
 		return nil, err
@@ -147,6 +144,10 @@ const (
 // report, and the stage that follows on the factory's side reads them here and not from the worktree's
 // records. A session that ran the whole pipeline leaves them out.
 //
+// The replies, the answer and the lists of what was fixed and declined are what an address-reviews
+// session reports: the factory posts the replies and the answer itself (postAnswers), so a session
+// writes nothing to GitHub. Every other session leaves them out.
+//
 // [ADR 0043]: ../docs/adr/0043-the-migration-runs-from-the-last-stage-to-the-first.md
 const resultSchema = `{"type":"object","additionalProperties":false,"required":["outcome","summary"],"properties":{` +
 	`"outcome":{"type":"string","enum":["complete","blocked"],"description":"complete when the final report opens with ready:, blocked when it opens with blocked:"},` +
@@ -154,6 +155,13 @@ const resultSchema = `{"type":"object","additionalProperties":false,"required":[
 	`"panelSummary":{"type":"string","description":"the panel_summary_block of the final report, its lines as written; empty when the report has none"},` +
 	`"gateResult":{"type":"string","description":"the gate_result line of the final report, as written; empty when the report has none"},` +
 	`"commits":{"type":"array","items":{"type":"string"},"description":"the lines under commits: in the final report, each a short hash and a subject, as written; empty when the report lists none"},` +
+	`"replies":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["thread","body"],"properties":{` +
+	`"thread":{"type":"string","description":"the id of a thread the brief lists"},` +
+	`"body":{"type":"string","description":"one or two sentences: what changed, or why not"}}},` +
+	`"description":"an address-reviews session's reply to each thread its brief lists, which the factory posts before it resolves the thread; empty for every other session"},` +
+	`"answer":{"type":"string","description":"an address-reviews session's answer to the review summaries its brief lists, point by point, which the factory posts as one comment; empty when there are none and for every other session"},` +
+	`"fixed":{"type":"array","items":{"type":"string"},"description":"an address-reviews session's points it fixed, one line each; empty for every other session"},` +
+	`"declined":{"type":"array","items":{"type":"string"},"description":"an address-reviews session's points it declined, one line each with the reason; empty for every other session"},` +
 	`"summary":{"type":"string","description":"the final report after its first word: for blocked, what the session needs from a person and why, as written"}}}`
 
 // result is a session's structured result as the factory reads it.
@@ -163,7 +171,17 @@ type result struct {
 	PanelSummary string   `json:"panelSummary"`
 	GateResult   string   `json:"gateResult"`
 	Commits      []string `json:"commits"`
+	Replies      []reply  `json:"replies"`
+	Answer       string   `json:"answer"`
+	Fixed        []string `json:"fixed"`
+	Declined     []string `json:"declined"`
 	Summary      string   `json:"summary"`
+}
+
+// reply is an address-reviews session's reply to one review thread, named by its id.
+type reply struct {
+	Thread string `json:"thread"`
+	Body   string `json:"body"`
 }
 
 // readResult reads the structured output of a result line against the schema. Claude Code holds the

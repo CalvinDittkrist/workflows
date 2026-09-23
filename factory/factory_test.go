@@ -148,7 +148,7 @@ func TestFakeModeWorksTheCannedQueueOneRunAtATime(t *testing.T) {
 	f.eventually(t, 60*time.Second, "the whole canned queue to be done", func() bool {
 		line = apiLine{}
 		f.get(t, "/api/line", &line)
-		return len(line.Queue) == 0 && len(line.Now) == 0 && len(line.Done) == len(cannedIssues)
+		return len(line.Queue) == 0 && len(line.Now) == 0 && len(line.Done) == cannedRuns
 	})
 
 	// The order of the queue is the order the routing label was set in, oldest first, and the entries
@@ -157,8 +157,9 @@ func TestFakeModeWorksTheCannedQueueOneRunAtATime(t *testing.T) {
 	for _, run := range line.Done {
 		worked = append(worked, fmt.Sprintf("%s#%d", run.Repository, run.Issue))
 	}
+	// The follow-up run of the review on #121's pull request stands before #118: held work first.
 	want := []string{"acme/edge-sensors#104", "acme/backtest#109", "acme/edge-sensors#112",
-		"acme/edge-sensors#115", "acme/edge-sensors#121", "acme/backtest#118"}
+		"acme/edge-sensors#115", "acme/edge-sensors#121", "acme/edge-sensors#121", "acme/backtest#118"}
 	if strings.Join(worked, " ") != strings.Join(want, " ") {
 		t.Errorf("the queue was worked as %v, want %v", worked, want)
 	}
@@ -173,26 +174,31 @@ func TestFakeModeWorksTheCannedQueueOneRunAtATime(t *testing.T) {
 	}
 
 	ready, blocked, failed := line.Done[0], line.Done[1], line.Done[2]
-	silent, detached, timeout := line.Done[3], line.Done[4], line.Done[5]
+	silent, detached, followUp, timeout := line.Done[3], line.Done[4], line.Done[5], line.Done[6]
 
 	// ready: the pull request comes from the structured result, the stages from the skill calls, and
 	// the totals from the result line.
 	if ready.Outcome != "ready" || ready.PullRequest != "https://github.com/acme/edge-sensors/pull/204" {
 		t.Errorf("run 1 ended %q with the pull request %q, want ready with the pull request of the result", ready.Outcome, ready.PullRequest)
 	}
-	if got := strings.Join(ready.Stages, " "); got != "implement review pr ci" {
-		t.Errorf("run 1 went through the stages %q, want %q", got, "implement review pr ci")
+	if got, want := strings.Join(ready.Stages, " "), "implement review pr ci address-reviews ci"; got != want {
+		t.Errorf("run 1 went through the stages %q, want %q", got, want)
 	}
 	// Its session stopped after the pull request, and the factory waited on CI: the checks pending, then
-	// failed, one repair round with a fix session given the failed log, then green.
+	// failed, one repair round with a fix session given the failed log, then review comments answered by
+	// an address-reviews session in a second round, then green.
 	var readyLog apiRun
 	f.get(t, "/api/runs/1", &readyLog)
-	if got := factoryTitles(readyLog, "ci: ", "repair round", "worker started"); strings.Join(got, " | ") !=
-		"worker started | ci: waiting | ci: checks-failed | repair round 1 of 3 | worker started | ci: green" {
-		t.Errorf("run 1 logged the ci stage as %q, want it to wait, repair the failed checks once with a fix session and end green", got)
+	if got := factoryTitles(readyLog, "ci: ", "repair round", "worker started", "replied", "answered"); strings.Join(got, " | ") !=
+		"worker started | ci: waiting | ci: checks-failed | repair round 1 of 3 | worker started | ci: review-comments | repair round 2 of 3 | "+
+			"worker started | replied to the thread on upload/retry.go:42 and resolved it | answered the review summaries on https://github.com/acme/edge-sensors/pull/204 | ci: green" {
+		t.Errorf("run 1 logged the ci stage as %q, want it to wait, repair the failed checks with a fix session, answer the review comments with an address-reviews session and end green", got)
 	}
 	if !strings.Contains(fmt.Sprint(readyLog.Events), "--- FAIL: TestCalibrationFileAge") {
 		t.Errorf("run 1 never gave its fix session the failed log")
+	}
+	if ready.RepairRounds != 2 {
+		t.Errorf("run 1 took %d repair rounds, want 2: the fix of the checks and the answer to the review comments", ready.RepairRounds)
 	}
 	// The context peak is the fullest one message of the worker itself came. The scripted session
 	// hands the pull request to a fresh context halfway through, so the peak stands at the message
@@ -203,9 +209,9 @@ func TestFakeModeWorksTheCannedQueueOneRunAtATime(t *testing.T) {
 		t.Errorf("run 1 peaked at %d tokens of context, want %d: the fullest message of the worker itself, taken before the handover dropped it and never from the %d a subagent reported",
 			ready.ContextPeak, readyPeak, subagentContext)
 	}
-	// Two sessions, each of which reported its own totals: the run's are their sum.
-	if ready.Turns != 2*23 || math.Abs(ready.CostUSD-2*4.18) > 1e-9 || ready.Tokens.Output != 2*24800 || ready.Tokens.CacheRead != 2*1204000 || ready.Totals != "worker" {
-		t.Errorf("run 1 has turns %d, cost %v and tokens %+v from %q, want the sum of the result lines of its two sessions, from the worker",
+	// Three sessions, each of which reported its own totals: the run's are their sum.
+	if ready.Turns != 3*23 || math.Abs(ready.CostUSD-3*4.18) > 1e-9 || ready.Tokens.Output != 3*24800 || ready.Tokens.CacheRead != 3*1204000 || ready.Totals != "worker" {
+		t.Errorf("run 1 has turns %d, cost %v and tokens %+v from %q, want the sum of the result lines of its three sessions, from the worker",
 			ready.Turns, ready.CostUSD, ready.Tokens, ready.Totals)
 	}
 	// A scripted run is this binary and no Claude Code at all: there is no plugin in it to update and
@@ -315,15 +321,34 @@ func TestFakeModeWorksTheCannedQueueOneRunAtATime(t *testing.T) {
 		t.Errorf("run 5 never gave its fix session the conflicted file")
 	}
 
+	// follow-up: the maintainer asked for changes on run 5's pull request after it ended, and the
+	// follow-up run answered that review in the address-reviews stage, with a repair count started
+	// again, then waited on CI until green.
+	if followUp.Issue != 121 || followUp.Kind != "follow-up" || followUp.Outcome != "ready" || followUp.PullRequest != detached.PullRequest {
+		t.Errorf("run 6 is a %q run of #%d that ended %q with %q (%s), want a ready follow-up run of #121 on %s",
+			followUp.Kind, followUp.Issue, followUp.Outcome, followUp.PullRequest, followUp.Reason, detached.PullRequest)
+	}
+	if got := strings.Join(followUp.Stages, " "); got != "address-reviews ci" || followUp.RepairRounds != 0 {
+		t.Errorf("run 6 went through the stages %q with %d repair rounds, want %q with none: the review is a new mandate, not a round of the loop",
+			got, followUp.RepairRounds, "address-reviews ci")
+	}
+	var followLog apiRun
+	f.get(t, "/api/runs/6", &followLog)
+	if got := factoryTitles(followLog, "answering", "briefed", "replied", "answered", "ci: "); strings.Join(got, " | ") !=
+		"answering the review on https://github.com/acme/edge-sensors/pull/221 | briefed an address-reviews session | "+
+			"replied to the thread on upload/retry.go:42 and resolved it | answered the review summaries on https://github.com/acme/edge-sensors/pull/221 | ci: green" {
+		t.Errorf("run 6 logged %q, want the review answered by an address-reviews session and then the ci stage", got)
+	}
+
 	// timeout: the deadline passed and the whole process group was ended.
 	if timeout.Outcome != "timeout" || !strings.Contains(timeout.Reason, "deadline of 15s") {
-		t.Errorf("run 6 ended %q because %q, want timeout on the deadline", timeout.Outcome, timeout.Reason)
+		t.Errorf("run 7 ended %q because %q, want timeout on the deadline", timeout.Outcome, timeout.Reason)
 	}
 	full = apiRun{} // a field the interface omits would keep the value of the run read before
-	f.get(t, "/api/runs/6", &full)
+	f.get(t, "/api/runs/7", &full)
 	pids := workerPids(t, full)
 	if len(pids) != 2 {
-		t.Fatalf("the scripted worker of run 6 logged %d processes, want the worker and its child", len(pids))
+		t.Fatalf("the scripted worker of run 7 logged %d processes, want the worker and its child", len(pids))
 	}
 	for _, pid := range pids {
 		if survived(pid) {
@@ -348,16 +373,16 @@ func TestFakeModeWorksTheCannedQueueOneRunAtATime(t *testing.T) {
 	tokens := timeout.Tokens
 	if timeout.Totals != "factory" || timeout.Turns != turns || tokens.Input != 400*messages || tokens.CacheCreation != 1200*messages ||
 		tokens.Output != 250*messages || tokens.CacheRead != cacheRead+subagentContext {
-		t.Errorf("run 6 has turns %d and tokens %+v from %q, want the %d turns of its stream and the tokens of its %d messages, counted by the factory",
+		t.Errorf("run 7 has turns %d and tokens %+v from %q, want the %d turns of its stream and the tokens of its %d messages, counted by the factory",
 			timeout.Turns, tokens, timeout.Totals, turns, messages)
 	}
 	perMessage := 400*5 + 400*5*1.25 + 800*5*2 + 250*25 // input, the two cache writes, output, at $5 and $25 per million
 	if want := (float64(turns)*perMessage + float64(cacheRead)*0.5) / 1e6; math.Abs(timeout.CostUSD-want) > 1e-9 {
-		t.Errorf("run 6 cost %v, want %v: the worker's messages at the list price of %s, and nothing for the subagent's on %s",
+		t.Errorf("run 7 cost %v, want %v: the worker's messages at the list price of %s, and nothing for the subagent's on %s",
 			timeout.CostUSD, want, scriptedModel, unpricedModel)
 	}
 	if len(timeout.Warnings) != 1 || !strings.Contains(timeout.Warnings[0], "no price for "+unpricedModel) {
-		t.Errorf("run 6 has the warnings %q, want the one that says its cost leaves %s out", timeout.Warnings, unpricedModel)
+		t.Errorf("run 7 has the warnings %q, want the one that says its cost leaves %s out", timeout.Warnings, unpricedModel)
 	}
 
 	// The run is one JSON record and one append-only JSONL event log in the data directory.
@@ -373,7 +398,7 @@ func TestFakeModeWorksTheCannedQueueOneRunAtATime(t *testing.T) {
 	}
 	// Nothing else is written there: one record, one event log and one worker lock per run, beside
 	// the lock the factory holds the directory with while it runs.
-	if entries, _ := filepath.Glob(filepath.Join(f.data, "*")); len(entries) != 3*len(cannedIssues)+1 {
+	if entries, _ := filepath.Glob(filepath.Join(f.data, "*")); len(entries) != 3*cannedRuns+1 {
 		t.Errorf("the data directory holds %d files, want a record, an event log and a lock per run, and the directory's lock", len(entries))
 	}
 	if _, err := os.Stat(filepath.Join(f.data, lockFile)); err != nil {
@@ -871,7 +896,7 @@ func TestASecondFactoryOnTheSameDataDirectoryStartsNothing(t *testing.T) {
 func TestStoppingEndsTheWorkerAndTheRunIsInterrupted(t *testing.T) {
 	t.Parallel()
 	f := start(t, config{"deadline": "5m", "poll": "50ms"})
-	pids := f.waitForTheHangingWorker(t, len(cannedIssues))
+	pids := f.waitForTheHangingWorker(t, cannedRuns)
 
 	f.stop(t, syscall.SIGTERM)
 	for _, pid := range pids {
@@ -880,7 +905,7 @@ func TestStoppingEndsTheWorkerAndTheRunIsInterrupted(t *testing.T) {
 		}
 	}
 	record := map[string]any{}
-	read(t, filepath.Join(f.data, fmt.Sprintf("run-%d.json", len(cannedIssues))), &record)
+	read(t, filepath.Join(f.data, fmt.Sprintf("run-%d.json", cannedRuns)), &record)
 	if record["outcome"] != "interrupted" || record["state"] != "ended" {
 		t.Errorf("the run that was active is recorded as %v/%v, want ended/interrupted", record["state"], record["outcome"])
 	}
@@ -889,7 +914,7 @@ func TestStoppingEndsTheWorkerAndTheRunIsInterrupted(t *testing.T) {
 func TestARestartKeepsTheRunsAndInterruptsWhatWasActive(t *testing.T) {
 	t.Parallel()
 	f := start(t, config{"deadline": "5m", "poll": "50ms"})
-	pids := f.waitForTheHangingWorker(t, len(cannedIssues))
+	pids := f.waitForTheHangingWorker(t, cannedRuns)
 	// A power cut, not a stop: the factory is gone without ending anything.
 	f.stop(t, syscall.SIGKILL)
 	t.Cleanup(func() {
@@ -898,7 +923,7 @@ func TestARestartKeepsTheRunsAndInterruptsWhatWasActive(t *testing.T) {
 		}
 	})
 	record := map[string]any{}
-	read(t, filepath.Join(f.data, fmt.Sprintf("run-%d.json", len(cannedIssues))), &record)
+	read(t, filepath.Join(f.data, fmt.Sprintf("run-%d.json", cannedRuns)), &record)
 	if record["state"] != "running" {
 		t.Fatalf("the record of the active run says %v, want running before the restart", record["state"])
 	}
@@ -911,19 +936,19 @@ func TestARestartKeepsTheRunsAndInterruptsWhatWasActive(t *testing.T) {
 	again.eventually(t, 10*time.Second, "the runs of the first factory", func() bool {
 		line = apiLine{}
 		again.get(t, "/api/line", &line)
-		return len(line.Done) == len(cannedIssues)
+		return len(line.Done) == cannedRuns
 	})
 	if len(line.Now) != 0 {
 		t.Errorf("the restarted factory shows %d runs as running, want none: their processes are gone", len(line.Now))
 	}
-	if last := line.Done[len(line.Done)-1]; last.ID != len(cannedIssues) || last.Outcome != "interrupted" {
-		t.Errorf("the run that was active is run %d with the outcome %q, want run %d interrupted", last.ID, last.Outcome, len(cannedIssues))
+	if last := line.Done[len(line.Done)-1]; last.ID != cannedRuns || last.Outcome != "interrupted" {
+		t.Errorf("the run that was active is run %d with the outcome %q, want run %d interrupted", last.ID, last.Outcome, cannedRuns)
 	}
 	// The log of the run that was active reads to its end: it says how the run ended. What the start
 	// writes after that is what it did with the worker the killed factory left behind, which is the
 	// test below this one.
 	var interrupted apiRun
-	again.get(t, fmt.Sprintf("/api/runs/%d", len(cannedIssues)), &interrupted)
+	again.get(t, fmt.Sprintf("/api/runs/%d", cannedRuns), &interrupted)
 	ended := false
 	for _, e := range interrupted.Events {
 		ended = ended || e.Title == "interrupted"
@@ -953,7 +978,7 @@ func TestARestartKeepsTheRunsAndInterruptsWhatWasActive(t *testing.T) {
 func TestARestartEndsTheWorkerThatOutlivedTheFactory(t *testing.T) {
 	t.Parallel()
 	first := start(t, config{"deadline": "5m", "poll": "50ms"})
-	left := first.waitForTheHangingWorker(t, len(cannedIssues))
+	left := first.waitForTheHangingWorker(t, cannedRuns)
 	first.stop(t, syscall.SIGKILL) // a kill of the factory alone, not of the host
 	t.Cleanup(func() {
 		for _, pid := range left {
@@ -980,13 +1005,13 @@ func TestARestartEndsTheWorkerThatOutlivedTheFactory(t *testing.T) {
 		}
 	}
 	var interrupted apiRun
-	again.get(t, fmt.Sprintf("/api/runs/%d", len(cannedIssues)), &interrupted)
+	again.get(t, fmt.Sprintf("/api/runs/%d", cannedRuns), &interrupted)
 	if n := len(interrupted.Events); n == 0 || !strings.Contains(interrupted.Events[n-1].Title, "worker ended") {
 		t.Errorf("the log of the interrupted run ends on %v, want the start saying it ended the worker that outlived the factory", interrupted.Events[n-1:])
 	}
 
 	// And the issue is resumed after that, in a session that is alone in the worktree.
-	resumed := len(cannedIssues) + 1
+	resumed := cannedRuns + 1
 	working := again.waitForTheHangingWorker(t, resumed)
 	for _, pid := range working {
 		for _, old := range left {
@@ -1008,7 +1033,7 @@ func TestAnInterruptedIssueIsResumedOnceByItselfAndASecondInterruptionWaitsForAP
 		return start(t, config{"deadline": "5m", "poll": "50ms", "data_dir": data, "listen": freeAddress(t)})
 	}
 	first := start(t, config{"deadline": "5m", "poll": "50ms"})
-	pids := first.waitForTheHangingWorker(t, len(cannedIssues))
+	pids := first.waitForTheHangingWorker(t, cannedRuns)
 	first.stop(t, syscall.SIGTERM)
 	for _, pid := range pids {
 		if survived(pid) {
@@ -1018,7 +1043,7 @@ func TestAnInterruptedIssueIsResumedOnceByItselfAndASecondInterruptionWaitsForAP
 
 	// The restart resumes that issue by itself: a new run, in a new worker session, on the same
 	// issue, which the first factory never got to finish.
-	resumed := len(cannedIssues) + 1
+	resumed := cannedRuns + 1
 	again := restart(first.data)
 	again.waitForTheHangingWorker(t, resumed)
 	var run apiRun
@@ -1276,6 +1301,11 @@ func (f *factory) ended(t *testing.T, id int) apiRun {
 	})
 	return run
 }
+
+// cannedRuns is how many runs fake mode makes of its canned queue: one per entry, and the follow-up
+// run of the review its maintainer asks for on the detached worker's pull request, which stands in the
+// line before the last entry. The last run is the hanging one.
+var cannedRuns = len(cannedIssues) + 1
 
 // hangingIssue is the canned entry whose scripted worker hangs, which is the issue every test that
 // stops a factory mid-run works with. It is read from the scenario rather than from a position in

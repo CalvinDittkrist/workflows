@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -245,39 +246,191 @@ func TestAFixSessionThatIsBlockedBlocksTheRun(t *testing.T) {
 	}
 }
 
-// Review comments are not the factory's to answer yet: a writer's review that asks for changes, with
-// or without a thread, and an unresolved thread block the run, named.
-func TestReviewCommentsBlockTheRunNamingThem(t *testing.T) {
+// objectionOf is a writer's review that asks for changes on the pull request of the claim, with the
+// words it asks with.
+func objectionOf(t *testing.T, gh *ghShim, id int, login, body string) map[string]any {
+	t.Helper()
+	gh.mayWrite(t, "acme/edge-sensors", login, true)
+	objection := review(id, login, "CHANGES_REQUESTED", time.Now().UTC())
+	objection["html_url"] = fmt.Sprintf("%s#pullrequestreview-%d", pullOfTheClaim, id)
+	objection["body"] = body
+	return objection
+}
+
+// openThread is an unresolved review thread on the pull request of the claim, opened by login.
+func openThread(id, path string, line int, login, body string) map[string]any {
+	return map[string]any{"id": id, "isResolved": false, "path": path, "line": line, "comments": map[string]any{"nodes": []map[string]any{
+		{"author": map[string]any{"login": login}, "url": pullOfTheClaim + "#discussion_" + id, "body": body}}}}
+}
+
+// wrote is what the factory wrote to GitHub on the calls of one request, all of them in order, and an
+// empty string when it made none.
+func (g *ghShim) wrote(t *testing.T, request string) string {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(g.bodies, requestName(request)))
+	if os.IsNotExist(err) {
+		return ""
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(raw)
+}
+
+// The calls that answer review comments on the pull request of the claim.
+var (
+	graphqlCall   = "api graphql --input -"
+	pullCommented = fmt.Sprintf("pr comment %d --repo acme/edge-sensors --body-file -", claimedIssue)
+)
+
+// addressBriefs is the prompts of the address-reviews sessions of a run, as its log carries them.
+func addressBriefs(run apiRun) []string {
+	out := []string{}
+	for _, e := range run.Events {
+		if e.Kind == "factory" && e.Title == "briefed an address-reviews session" {
+			out = append(out, e.Body)
+		}
+	}
+	return out
+}
+
+// Review comments are a repair round: an address-reviews session in the run's worktree, briefed with
+// what a writer's review and the unresolved threads ask for, fixes or declines each point and pushes.
+// Its replies reach GitHub through the factory: a reply and a resolution for each thread its brief
+// listed and nowhere else, and one comment on the pull request for the review summaries. The review
+// itself stands on GitHub until its author approves, and once answered it asks for nothing more, so
+// the run ends ready once the push reached the pull request.
+func TestReviewCommentsAreAnsweredByAnAddressReviewsSessionWhoseRepliesTheFactoryPosts(t *testing.T) {
 	t.Parallel()
 	gh, data := ciClaim(t)
-	objection := review(9001, "maintainer", "CHANGES_REQUESTED", time.Now().UTC())
-	objection["html_url"] = pullOfTheClaim + "#pullrequestreview-9001"
-	gh.mayWrite(t, "acme/edge-sensors", "maintainer", true)
+	objection := objectionOf(t, gh, 9001, "maintainer", "Back off between the retries.")
 	gh.ciReads(t, "acme/edge-sensors", claimedIssue, ciPull{
 		reviews: []map[string]any{objection},
 		threads: []map[string]any{
-			{"isResolved": true, "path": "a.go", "line": 1, "comments": map[string]any{"nodes": []map[string]any{}}},
-			{"isResolved": false, "path": "upload.go", "line": 42, "comments": map[string]any{"nodes": []map[string]any{
-				{"author": map[string]any{"login": "chatgpt-codex-connector"}, "url": pullOfTheClaim + "#discussion_r7"}}}},
+			{"id": "PRRT_done", "isResolved": true, "path": "a.go", "line": 1, "comments": map[string]any{"nodes": []map[string]any{}}},
+			openThread("PRRT_7", "upload.go", 42, "chatgpt-codex-connector", "The retry never gives up."),
 		}})
+	gh.answer(t, pullCommented, pullOfTheClaim+"#issuecomment-5\n")
+	gh.env = append(gh.env, `CLAUDE_SHIM_THEN_RESULT={"outcome":"complete","summary":"one fixed, one declined",`+
+		`"replies":[{"thread":"PRRT_7","body":"It gives up after five tries now."},{"thread":"PRRT_elsewhere","body":"a reply nobody listed"}],`+
+		`"answer":"The backoff is declined: the broker paces the retries itself.","fixed":["the retry gives up"],"declined":["backoff: the broker paces it"]}`)
 
 	f := gh.work(t, ciConfig(data, nil))
+	f.saw(t, "answered the review summaries")
+	gh.ciReads(t, "acme/edge-sensors", claimedIssue, ciPull{head: gh.head(t, "acme/edge-sensors", claimedBranch),
+		reviews: []map[string]any{objection}})
+	run := f.ended(t, 1)
+
+	if run.Outcome != outcomeReady || run.RepairRounds != 1 {
+		t.Fatalf("the run ended as %q after %d repair rounds (%s), want ready after one; the factory's log:\n%s", run.Outcome, run.RepairRounds, run.Reason, f.output(t))
+	}
+	wantTitles := []string{"ci: review-comments", "repair round 1 of 3", "replied to the thread on upload.go:42 and resolved it",
+		"answered the review summaries on " + pullOfTheClaim, "ci: green"}
+	if titles := factoryTitles(run, "ci: review-comments", "repair round", "replied to", "answered the review", "ci: green"); !equal(titles, wantTitles) {
+		t.Errorf("the ci stage said %v, want %v", titles, wantTitles)
+	}
+	if !equal(run.Stages, []string{"implement", "ci", "address-reviews", "ci"}) {
+		t.Errorf("the run went through the stages %v, want the round in the address-reviews stage between two of ci", run.Stages)
+	}
+	workers := gh.workers(t)
+	if len(workers) != 2 {
+		t.Fatalf("the factory started %d sessions, want the work session and one address-reviews session", len(workers))
+	}
+	if workers[1].cwd != workers[0].cwd || workers[1].branch != claimedBranch {
+		t.Errorf("the address-reviews session ran in %s on %s, want the run's worktree %s on %s", workers[1].cwd, workers[1].branch, workers[0].cwd, claimedBranch)
+	}
+	brief := strings.Join(addressBriefs(run), "\n")
+	for _, want := range []string{"Back off between the retries.", pullOfTheClaim + "#pullrequestreview-9001",
+		"PRRT_7 on upload.go:42", "The retry never gives up."} {
+		if !strings.Contains(brief, want) {
+			t.Errorf("the address-reviews session's brief does not carry %q:\n%s", want, brief)
+		}
+	}
+	if strings.Contains(brief, "PRRT_done") {
+		t.Errorf("the address-reviews session's brief lists a resolved thread:\n%s", brief)
+	}
+
+	// The thread the brief listed got the session's reply and was resolved; the one it did not list got
+	// nothing, and the factory says so.
+	graphql := gh.wrote(t, graphqlCall)
+	for _, want := range []string{"addPullRequestReviewThreadReply", "resolveReviewThread", `"id":"PRRT_7"`, "It gives up after five tries now."} {
+		if !strings.Contains(graphql, want) {
+			t.Errorf("the factory's GraphQL calls do not carry %q:\n%s", want, graphql)
+		}
+	}
+	if strings.Contains(graphql, "PRRT_elsewhere") || strings.Contains(graphql, "a reply nobody listed") {
+		t.Errorf("the factory posted a reply to a thread the brief did not list:\n%s", graphql)
+	}
+	if len(run.Warnings) != 1 || !strings.Contains(run.Warnings[0], `"PRRT_elsewhere", which its brief did not list`) {
+		t.Errorf("the run warns %v, want the one warning about the reply to an unlisted thread", run.Warnings)
+	}
+	if said := gh.wrote(t, pullCommented); said != "The backoff is declined: the broker paces the retries itself." {
+		t.Errorf("the factory answered the review summaries with %q, want the session's answer", said)
+	}
+	// A review is answered, never dismissed.
+	if asked := gh.asked(t, "api --method PUT"); asked != 0 || strings.Contains(graphql, "dismiss") {
+		t.Errorf("the factory dismissed a review")
+	}
+}
+
+// An address-reviews session that cannot settle a point without a person reports blocked, and the run
+// is blocked on its words, with the notification of every blocked run; nothing is posted for it.
+func TestAnAddressReviewsSessionThatIsBlockedBlocksTheRunAndTellsTheMaintainers(t *testing.T) {
+	t.Parallel()
+	const point = "the maintainer asks for a second control surface, which ADR 0023 rules out"
+	gh, data := ciClaim(t)
+	gh.ciReads(t, "acme/edge-sensors", claimedIssue, ciPull{
+		reviews: []map[string]any{objectionOf(t, gh, 9001, "maintainer", "Add a web form that starts runs.")}})
+	gh.comments(t, "acme/edge-sensors", claimedIssue)
+	gh.env = append(gh.env, `CLAUDE_SHIM_THEN_RESULT={"outcome":"blocked","summary":"`+point+`"}`)
+
+	c := ciConfig(data, nil)
+	c["notify"] = maintainers
+	f := gh.work(t, c)
+	run := f.ended(t, 1)
+	if run.Outcome != outcomeBlocked || run.Reason != point {
+		t.Fatalf("the run ended as %q (%s), want blocked on the session's words; the factory's log:\n%s", run.Outcome, run.Reason, f.output(t))
+	}
+	f.notified(t, 1)
+	if said := gh.commented(t, "acme/edge-sensors", claimedIssue); !strings.Contains(said, point) || !strings.Contains(said, "`blocked`") {
+		t.Errorf("the comment on the issue is %q, want the blocked run and its point in it", said)
+	}
+	if said := gh.wrote(t, pullCommented) + gh.wrote(t, graphqlCall); strings.Contains(said, "mutation") || gh.made(t, pullCommented) != 0 {
+		t.Errorf("the factory answered the review for a session that reported blocked:\n%s", said)
+	}
+}
+
+// An answered review does not ask again, but every round counts: a thread opened on the round's push
+// is a round of its own, and once the budget is spent the run is blocked naming what still stands,
+// which is the new thread and not the review answered before it.
+func TestReviewCommentsOverTheRepairBudgetBlockTheRunNamingThem(t *testing.T) {
+	t.Parallel()
+	gh, data := ciClaim(t)
+	objection := objectionOf(t, gh, 9001, "maintainer", "Back off between the retries.")
+	gh.ciReads(t, "acme/edge-sensors", claimedIssue, ciPull{reviews: []map[string]any{objection}})
+	gh.answer(t, pullCommented, pullOfTheClaim+"#issuecomment-5\n")
+	gh.env = append(gh.env, `CLAUDE_SHIM_THEN_RESULT={"outcome":"complete","summary":"fixed","answer":"Backoff added.","fixed":["backoff"]}`)
+
+	f := gh.work(t, ciConfig(data, map[string]any{"repair_rounds": 1}))
+	f.saw(t, "answered the review summaries")
+	gh.ciReads(t, "acme/edge-sensors", claimedIssue, ciPull{head: gh.head(t, "acme/edge-sensors", claimedBranch),
+		reviews: []map[string]any{objection},
+		threads: []map[string]any{openThread("PRRT_8", "upload.go", 50, "chatgpt-codex-connector", "The backoff overflows.")}})
 	run := f.ended(t, 1)
 
 	if run.Outcome != outcomeBlocked {
 		t.Fatalf("the run ended as %q (%s), want blocked; the factory's log:\n%s", run.Outcome, run.Reason, f.output(t))
 	}
-	for _, want := range []string{"maintainer asked for changes: " + pullOfTheClaim + "#pullrequestreview-9001",
-		"unresolved thread on upload.go:42 by chatgpt-codex-connector: " + pullOfTheClaim + "#discussion_r7"} {
+	for _, want := range []string{"1 of 1 repair rounds", "unresolved thread on upload.go:50 by chatgpt-codex-connector: " + pullOfTheClaim + "#discussion_PRRT_8"} {
 		if !strings.Contains(run.Reason, want) {
 			t.Errorf("the blocked run gives the reason %q, want %q in it", run.Reason, want)
 		}
 	}
-	if strings.Contains(run.Reason, "a.go") {
-		t.Errorf("the blocked run names a resolved thread: %q", run.Reason)
+	if strings.Contains(run.Reason, "pullrequestreview-9001") {
+		t.Errorf("the blocked run names the review its round answered: %q", run.Reason)
 	}
-	if workers := gh.workers(t); len(workers) != 1 {
-		t.Errorf("the factory started %d sessions, want none after the work session: review comments are no repair round", len(workers))
+	if workers := gh.workers(t); len(workers) != 2 {
+		t.Errorf("the factory started %d sessions, want the work session and the one address-reviews session the budget allows", len(workers))
 	}
 }
 

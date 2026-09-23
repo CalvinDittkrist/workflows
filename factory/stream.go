@@ -96,7 +96,7 @@ var stages = map[string]string{
 	"worker:review":          "review",
 	"worker:pr":              "pr",
 	"worker:ci":              stageCI,
-	"worker:address-reviews": "reviews",
+	"worker:address-reviews": stageAddressReviews,
 }
 
 // ingest reads one line of the worker's stream into the run: its events, its stage, the totals the
