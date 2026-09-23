@@ -61,12 +61,16 @@ slice=$(wf_wait_slice)
 # reboot or a kill.
 started_at() { ps -p "$1" -o lstart= 2>/dev/null; }
 
-# The worker a call belongs to: the parent of the call's process group. Claude Code runs every Bash call in
-# a process group of its own, led by the shell of the call, so the gate is in no group of the worker's and
-# a signal to the worker's group does not reach it. Empty when the call has no such parent.
+# The worker a call belongs to: the parent of the shell that leads the call. Claude Code runs every Bash call
+# in a session and process group of its own, led by the shell of the call, and the script may run in a
+# process group of its own under that shell (the factory's Linux host does), so the session is what names
+# the call: its leader's parent is the worker. Where ps knows no session (macOS), the call's shell leads
+# the process group instead. The gate is in no group of the worker's, so a signal to the worker's group does
+# not reach it. Empty when the call has no such parent.
 call_owner() {
   local leader owner
-  leader=$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ')
+  leader=$(ps -o sid= -p $$ 2>/dev/null | tr -d ' ')
+  [ -n "$leader" ] && [ "$leader" != 0 ] || leader=$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ')
   owner=$(ps -o ppid= -p "$leader" 2>/dev/null | tr -d ' ')
   [ -n "$owner" ] && [ "$owner" != 1 ] && printf '%s' "$owner"
 }

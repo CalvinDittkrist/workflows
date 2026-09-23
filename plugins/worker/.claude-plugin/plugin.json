@@ -1,6 +1,6 @@
 {
   "name": "worker",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "Issue worker pipeline: implement, independent reviewer panel in fresh contexts, PR authored in a fresh context, CI and review-comment loop, optional self-merge.",
   "author": {
     "name": "Calvin Dittkrist",
