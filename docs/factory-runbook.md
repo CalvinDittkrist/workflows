@@ -145,10 +145,11 @@ The factory is configured by one JSON file and nothing else: no environment vari
 | `poll` | `60s` | How often GitHub is asked for the line, as a Go duration. |
 | `data_dir` | none, required | Where the clones, the run records and the locks live ([The data directory](#the-data-directory)). |
 | `worker_args` | `[]` | Arguments added to the worker's `claude` command line, such as `["--model", "opus"]`. `--settings`, `--agent`, `--permission-mode`, `--output-format`, `-p` and `--print` are refused: the factory sets them. A `--plugin-dir` here loads the worker from that directory instead of the installed plugin; no run then records a worker version and every one carries a warning. |
-| `worker_env` | `{}` | Worker knobs every run of this host is given, by name and value: the variables of the [README's table](../README.md#configuration) that a worker session reads itself, the same names a local claim takes with `--env` (`WF_REVIEWERS`, `WF_REVIEW_ROUNDS`, `WF_CI_REPAIR_ROUNDS`, `WF_PR_BOT_REVIEWERS`, `WF_PR_REVIEW_WAIT`, `WF_HANDOFF_TOKENS`, `WF_CONTEXT_MAX_AGE`, `WF_HANDOFF_SESSION_MS`, `WF_HANDOFF_POLL_SECONDS`, `WF_DOCS_TIMEOUT`); any other name is refused. They ride in the `env` block of the worker's `--settings`, so they win over the same variable in a repository's `.claude/settings.json` for that session, and an empty value is a setting of its own. `{"WF_PR_BOT_REVIEWERS": ""}` is the one for a host whose machine user no bot reviews the pull requests of: Codex reviews automatically only what a connected account opens, and without it every run waits the whole `WF_PR_REVIEW_WAIT` for a review that never comes. |
+| `worker_env` | `{}` | Worker knobs every run of this host is given, by name and value: the variables of the [README's table](../README.md#configuration) that a worker session reads itself, the same names a local claim takes with `--env` (`WF_REVIEWERS`, `WF_REVIEW_ROUNDS`, `WF_HANDOFF_TOKENS`, `WF_CONTEXT_MAX_AGE`, `WF_HANDOFF_SESSION_MS`, `WF_HANDOFF_POLL_SECONDS`, `WF_DOCS_TIMEOUT`); any other name is refused, and so are `WF_CI_REPAIR_ROUNDS`, `WF_PR_BOT_REVIEWERS` and `WF_PR_REVIEW_WAIT`, which are knobs of the ci stage the factory runs itself and are written under `ci`. They ride in the `env` block of the worker's `--settings`, so they win over the same variable in a repository's `.claude/settings.json` for that session, and an empty value is a setting of its own. |
+| `ci` | see the right column | The knobs of the ci stage ([The ci stage](#the-ci-stage)): `repair_rounds` (default `3`), the repair rounds one pull request may take; `bot_reviewers` (default `["chatgpt-codex-connector"]`), the bot logins whose review is waited for once the checks pass; `review_wait` (default `20m`), how long, as a Go duration; `checks_grace` (default `10m`), how long after a push an empty check list of a repository with GitHub workflows is waited out as checks GitHub has not registered yet. `"bot_reviewers": []` is the one for a host whose machine user no bot reviews the pull requests of: Codex reviews automatically only what a connected account opens, and without it every run waits the whole `review_wait` for a review that never comes. A repository may set any of them for itself (see `repositories`); an unknown knob is refused. The worker session is given them in the worker's own names. |
 | `paused` | `true` | A paused factory shows the line and claims, resumes and writes nothing. A file that does not name `paused` is paused, so an unattended line is always something you wrote down. The one field read again on every poll, so it takes no restart ([Pausing](#pausing)). |
 | `notify` | `[]` | GitHub logins, without the `@`, that are asked for a review when a run ends `ready` and mentioned in a comment on the issue when it waits for a person. Empty: nobody is notified, and the log says so on start. |
-| `repositories` | none, at least one | The connected repositories, each `"owner/name"` or `{"name": "owner/name", "base": "dev"}` when this host branches off something other than the base the repository names (its `WF_BASE_BRANCH`, else its default branch). |
+| `repositories` | none, at least one | The connected repositories, each `"owner/name"` or `{"name": "owner/name", "base": "dev"}` when this host branches off something other than the base the repository names (its `WF_BASE_BRANCH`, else its default branch). The object may also carry `"ci"` with any of the ci knobs, which then stand for that repository over the host's. |
 | `quota_axi` | none: the check is off | The absolute path of the quota-axi installed above. |
 | `quota_minimum` | `12` | The percentage of the all-models scope or the worker's model scope below which no run starts; `0` never waits. |
 
@@ -164,14 +165,15 @@ A complete configuration, written to `/etc/factory/factory.json` (root owns it, 
   "poll": "60s",
   "data_dir": "/var/lib/factory",
   "worker_args": [],
-  "worker_env": {"WF_PR_BOT_REVIEWERS": ""},
+  "worker_env": {},
+  "ci": {"repair_rounds": 3, "bot_reviewers": [], "review_wait": "20m", "checks_grace": "10m"},
   "paused": false,
   "notify": ["yourname"],
   "quota_axi": "/usr/bin/quota-axi",
   "quota_minimum": 12,
   "repositories": [
     "yourname/service",
-    {"name": "yourname/app", "base": "dev"}
+    {"name": "yourname/app", "base": "dev", "ci": {"repair_rounds": 2}}
   ]
 }
 ```
@@ -242,6 +244,19 @@ The factory is steered on GitHub alone; its interface never writes ([ADR 0023](a
 | **Merge** | Merge the pull request yourself: the factory never merges. Merged or closed, it lets the issue go the same way as a cancel. |
 
 The logins in `notify` are asked for a review when a run ends `ready`, and mentioned on the issue when a run waits for a person.
+
+### The ci stage
+A run's worker session stops once it has opened its pull request (`WF_STOP_AFTER=pr`), and the factory waits on that pull request itself, reading it every `poll` ([ADR 0043](adr/0043-the-migration-runs-from-the-last-stage-to-the-first.md)). It reads mergeability first, then the checks, then the review of a configured bot, then the reviews and unresolved threads of the pull request, and acts on the first that decides:
+
+| The pull request | The factory |
+| --- | --- |
+| conflicts with the base | merges the base into the branch in the run's worktree (a merge commit, never a rebase). A clean merge is pushed as it is; a conflicting one is left in progress and a fix session is started in the worktree with the conflicted files, which resolves, commits and pushes. |
+| has failed checks | starts a fix session with the failed checks and the tail of their failed logs from GitHub Actions, which fixes, commits and pushes. |
+| has checks pending, or no bot review yet within `review_wait` | waits; the run's stage reads `ci`. |
+| has a writer's review that asks for changes, or an unresolved thread | ends the run `blocked`, naming them: the factory does not answer review comments yet. |
+| is green | ends the run `ready` and asks `notify` for a review. |
+
+Every merge and every fix session is one repair round, counted against `repair_rounds`; a run whose budget is spent while the pull request still conflicts or fails is `blocked`, and its reason names what stands. After a repair the factory reads the pull request again only once GitHub shows the commit it pushed. A fix session that reports `blocked` blocks the run on its words. The ci stage runs inside the run's `deadline`, a cancel ends a fix session like any session, and a run resumed while its pull request is open starts at the ci stage with the rounds of the run before still counted; nothing before it is done again. The host's git needs an identity (`user.name`, `user.email`) for the merge commit, as its worker sessions do for theirs.
 
 ## Upkeep
 
