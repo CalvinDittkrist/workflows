@@ -92,11 +92,12 @@ func TestAClaimCutsTheBranchFromTheFreshlyFetchedBaseAndRunsTheWorkerInItsWorktr
 	}
 
 	// How it was started: the worker agent, the work skill as its prompt, the stream on its output,
-	// the auto permission mode and the configured extra arguments.
+	// the auto permission mode, the schema of its result and the configured extra arguments.
 	for _, want := range [][]string{
 		{"--agent", "worker"},
 		{"--output-format", "stream-json"},
 		{"--permission-mode", "auto"},
+		{"--json-schema", resultSchema},
 		{"--model", "opus"},
 		{"-p", "/worker:work"},
 	} {

@@ -130,7 +130,7 @@ type ghPull struct {
 }
 
 // ghHead is what a pull request is of: the branch and the repository it was opened from. It is read
-// because the URL in the record came out of a worker's report, and a report is written by a model
+// because the URL in the record came out of a session's result, and a result is written by a model
 // from text a person or an issue wrote: what it names is checked against what this factory holds
 // before anything is decided by it. SHA is the commit the branch was at when the pull request was
 // merged or closed, which GitHub keeps after that.
@@ -295,7 +295,7 @@ func (g *gitHub) readHeld(ctx context.Context, held []Held, letGo map[string]str
 //
 // A pull request merged while the run that opened it still waits in ci ends that run as cancelled,
 // not ready. The merge closes the issue, which is read first, and the run's pull request is not on
-// its record until its report names it, so what the factory hears is the issue closed. Ready would
+// its record until its result names it, so what the factory hears is the issue closed. Ready would
 // also ask the maintainer for a review of work already merged. The reason the record carries says
 // what happened, and the totals the factory counted say what it cost.
 //
@@ -335,7 +335,7 @@ func (g *gitHub) decided(ctx context.Context, held Held) (string, error) {
 // either way: the worktree it was written in is of no use to anybody after that.
 //
 // Which pull request that is, is asked of GitHub and not of the record. The URL there was read out
-// of a worker's ready report, and the report of a session that works from text a stranger wrote may
+// of a session's complete result, and the result of a session that works from text a stranger wrote may
 // name any pull request of the repository ([ADR 0023]); one that is not of the branch this factory
 // holds the issue by decides nothing about it, because closing somebody else's would otherwise
 // cancel this worker and take its worktree apart. A pull request from a fork is none of it either:

@@ -11,7 +11,7 @@ One file per decision, numbered, never edited after acceptance (supersede instea
 | [0005](0005-sandboxing-strategy.md) | Sandboxing strategy: layered, Docker Sandboxes opt-in | accepted |
 | [0006](0006-planner-session-writes-issues-not-code.md) | Planning is its own session that writes issues, not code | accepted |
 | [0007](0007-agents-md-is-the-instruction-source.md) | AGENTS.md is the instruction source and CLAUDE.md imports it | accepted |
-| [0008](0008-make-check-is-the-single-gate.md) | make check is the single gate and check the single required status check | accepted |
+| [0008](0008-make-check-is-the-single-gate.md) | make check is the single gate and check the single required status check | accepted; amended by [0041](0041-a-change-class-decides-the-gate-and-the-reviewers-before-the-pull-request.md): the factory's gate before the pull request is its change class's |
 | [0009](0009-profile-derived-from-github-with-two-branch-models.md) | The profile is derived from GitHub, with exactly two branch models | accepted |
 | [0010](0010-standardisation-audits-read-only-and-backs-up-before-deleting.md) | Standardisation audits read-only, deletes through a pull request and backs up with a protected tag | accepted |
 | [0011](0011-github-workspace-configured-by-an-idempotent-script.md) | The GitHub workspace is configured by an idempotent script with rulesets and no bypass | accepted |
@@ -25,7 +25,7 @@ One file per decision, numbered, never edited after acceptance (supersede instea
 | [0019](0019-the-gate-runs-once-per-review-round.md) | The gate runs once per review, and its result is a fact in the brief | accepted; amended 2026-09-22: once per review, not per round, and CI gates the repair pushes |
 | [0020](0020-the-pane-measures-the-context-and-the-worktree-carries-the-value.md) | The pane's status line measures a worker's context, and the worktree carries the value | accepted |
 | [0021](0021-routing-is-decided-in-the-planner-and-never-stands-alone.md) | Routing is decided in the planner, and the routing label never stands alone | accepted |
-| [0022](0022-the-factory-is-a-second-driver-over-the-worker-pipeline.md) | The factory is a second driver over the worker pipeline | accepted |
+| [0022](0022-the-factory-is-a-second-driver-over-the-worker-pipeline.md) | The factory is a second driver over the worker pipeline | superseded by [0040](0040-the-factory-owns-the-delivery-lifecycle-in-go.md) |
 | [0023](0023-github-is-the-only-control-surface-of-the-factory.md) | GitHub is the only control surface of the factory | accepted |
 | [0024](0024-a-claim-is-the-creation-of-the-branch-through-the-api.md) | A claim is the creation of the branch through the GitHub API | accepted |
 | [0025](0025-one-queue-one-worker-work-in-progress-first.md) | One queue, one worker, and work in progress before new work | accepted |
@@ -39,5 +39,11 @@ One file per decision, numbered, never edited after acceptance (supersede instea
 | [0033](0033-the-dashboard-is-built-into-the-factory-binary.md) | The dashboard is built into the factory binary | accepted |
 | [0034](0034-the-compact-trigger-is-raised-through-the-window.md) | The compact trigger is 200 000, and the window is what raises it | accepted |
 | [0035](0035-every-category-the-apply-phase-scaffolds-is-answerable.md) | Every category the apply phase scaffolds is answerable | accepted |
-| [0036](0036-the-factory-updates-the-worker-plugin-and-nothing-else.md) | The factory updates the worker plugin and nothing else | accepted |
+| [0036](0036-the-factory-updates-the-worker-plugin-and-nothing-else.md) | The factory updates the worker plugin and nothing else | superseded by [0042](0042-the-factory-carries-its-own-prompts-and-updates-no-plugin.md) |
 | [0037](0037-the-quota-check-waits-below-12-percent-of-the-workers-scope.md) | The quota check waits below 12 % of the worker's scope | accepted |
+| [0038](0038-the-local-workflow-and-the-factory-are-peers.md) | The local workflow and the factory are peers | accepted |
+| [0039](0039-every-session-reports-through-a-structured-result.md) | Every session reports through a structured result and never through prose | accepted |
+| [0040](0040-the-factory-owns-the-delivery-lifecycle-in-go.md) | The factory owns the delivery lifecycle in Go and starts one fresh session per stage | accepted |
+| [0041](0041-a-change-class-decides-the-gate-and-the-reviewers-before-the-pull-request.md) | A change class decides the gate and the reviewers before the pull request, and CI remains the full gate | accepted |
+| [0042](0042-the-factory-carries-its-own-prompts-and-updates-no-plugin.md) | The factory carries its own prompts and updates no plugin | accepted |
+| [0043](0043-the-migration-runs-from-the-last-stage-to-the-first.md) | The migration runs from the last stage to the first, through a temporary stop-after knob | accepted |

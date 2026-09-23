@@ -6,12 +6,15 @@ import (
 	"strings"
 )
 
-// The worker reports nothing to the factory. Everything the factory knows about a run it reads from
-// the stream `claude -p --output-format stream-json --verbose` prints, one JSON object per line
-// (recorded from a real headless worker on 2026-09-21 with Claude Code 2.1.278).
+// The one thing a session reports to the factory is its structured result on the result line
+// ([ADR 0039]); everything else the factory knows about a run it reads from the stream
+// `claude -p --output-format stream-json --verbose` prints, one JSON object per line (recorded from a real headless worker on 2026-09-21 with Claude Code 2.1.278; the result line's
+// structured_output from a real session run with --json-schema on 2026-09-23 with Claude Code 2.1.280).
 //
 // Message is an object on an assistant or user line and a string on a permission_denied line, so it
 // is read once the type of the line is known.
+//
+// [ADR 0039]: ../docs/adr/0039-every-session-reports-through-a-structured-result.md
 type streamLine struct {
 	Type               string          `json:"type"`
 	Subtype            string          `json:"subtype"`
@@ -26,6 +29,7 @@ type streamLine struct {
 	IsError            bool            `json:"is_error"`
 	TerminalReason     string          `json:"terminal_reason"`
 	Result             any             `json:"result"`
+	StructuredOutput   json.RawMessage `json:"structured_output"`
 	Usage              usage           `json:"usage"`
 	ToolName           string          `json:"tool_name"`
 	DecisionReason     string          `json:"decision_reason"`
@@ -150,11 +154,9 @@ func (f *Factory) ingest(r *Run, line []byte) {
 		}
 	case m.Type == "result":
 		final := text(m.Result)
-		outcome, detail := report(final)
 		f.runs.update(r, func() {
 			r.Turns, r.CostUSD, r.Totals = m.NumTurns, m.TotalCostUSD, totalsWorker
 			r.Tokens = Tokens{Input: m.Usage.Input, Output: m.Usage.Output, CacheCreation: m.Usage.CacheCreation, CacheRead: m.Usage.CacheRead}
-			r.reportOutcome, r.reportDetail = outcome, detail
 		})
 		event := Event{Kind: "result", Title: "result: " + m.Subtype, Body: final}
 		if m.TerminalReason != "" {
@@ -165,76 +167,51 @@ func (f *Factory) ingest(r *Run, line []byte) {
 			// lines before it. So it is the reason of last resort and never overwrites one of them.
 			event.Kind = "error"
 			f.runs.update(r, func() { r.resultSummary = event.Title })
+			f.runs.event(r, event)
+			return
+		}
+		// The outcome, the pull request and the summary are the structured result's and never the
+		// report's words ([ADR 0039]).
+		//
+		// [ADR 0039]: ../docs/adr/0039-every-session-reports-through-a-structured-result.md
+		got, err := readResult(m.StructuredOutput)
+		f.runs.update(r, func() {
+			if err != nil {
+				r.result, r.misfit = nil, err.Error()
+				return
+			}
+			r.result, r.misfit = &got, ""
+		})
+		if err != nil {
+			event.Kind = "error"
+			event.Body = strings.TrimSpace(err.Error() + "\n" + final)
 		}
 		f.runs.event(r, event)
 	}
 }
 
-// report reads the worker's final report. It is markdown written for a person, so the line that
-// carries the outcome may be bold, quoted, a heading or a list item: `**ready: <url>**`, or bold on the word alone: `**blocked:** <reason>`. The first
-// line that says ready or blocked decides. For ready the detail is the rest of that line, which
-// names the pull request; for blocked it is the reason, which runs to the end of the report because
-// a blocker takes more than one line. Only the line that says blocked is stripped of its markdown:
-// the lines after it are the worker's text as written, bold, bullets and code included, because
-// the dashboard shows the reason as text and the issue comment quotes it verbatim.
-func report(final string) (outcome, detail string) {
-	lines := strings.Split(final, "\n")
-	for i, line := range lines {
-		bare := undecorate(line)
-		for _, want := range []string{outcomeReady, outcomeBlocked} {
-			if !strings.HasPrefix(strings.ToLower(bare), want+":") {
-				continue
-			}
-			rest := strings.TrimSpace(unclose(bare[len(want)+1:]))
-			if want == outcomeReady {
-				return outcomeReady, rest
-			}
-			reason := append([]string{rest}, lines[i+1:]...)
-			return outcomeBlocked, strings.TrimSpace(strings.Join(reason, "\n"))
-		}
-	}
-	return "", ""
-}
-
-// A pull request as a report names it. GitHub spells a repository as its owner did and takes any
+// A pull request as a result names it. GitHub spells a repository as its owner did and takes any
 // case, so the repository is compared without it.
 var pullRequestURL = regexp.MustCompile(`(?i)https://github\.com/([a-z0-9._-]+/[a-z0-9._-]+)/pull/([0-9]+)`)
 
-// pullRequest is the pull request a ready report names, as the record may carry it. The report is
+// pullRequest is the pull request a complete result names, as the record may carry it. The result is
 // written by a model and read by a browser later, and the text of an issue can steer what a worker
-// writes, so nothing of the report itself reaches the record: the line is searched for a pull
-// request of the repository this run is for — a model ends a sentence after it, or writes it as a
-// link — and the URL is built from that repository and the number found. A line without one is
-// given back as the reason nothing was taken.
+// writes, so nothing of the field itself reaches the record: it is searched for a pull request of the
+// repository this run is for, and the URL is built from that repository and the number found. A field
+// without one is given back as the reason nothing was taken.
 func pullRequest(detail, repository string) (url, reason string) {
 	for _, match := range pullRequestURL.FindAllStringSubmatch(detail, -1) {
 		if strings.EqualFold(match[1], repository) {
 			return "https://github.com/" + repository + "/pull/" + match[2], ""
 		}
 	}
-	return "", "the report says ready but names no pull request of " + repository + ": " + firstLine(detail)
-}
-
-// undecorate strips the markdown around a line, so the text of the line can be read as text.
-func undecorate(line string) string {
-	return strings.TrimSpace(strings.Trim(strings.TrimSpace(line), "*_`#>- \t"))
+	return "", "the result says complete but names no pull request of " + repository + ": " + firstLine(detail)
 }
 
 func body(raw json.RawMessage) message {
 	var parsed message
 	_ = json.Unmarshal(raw, &parsed) // a line without a message object has no content and no usage
 	return parsed
-}
-
-// unclose strips the marker that closes right after the colon of `**blocked:** <reason>`: a run of
-// emphasis or code markers followed by a space or the end of the line closes the word before it. A
-// marker that opens a word of the detail, as in "`make check` fails", is kept.
-func unclose(detail string) string {
-	after := strings.TrimLeft(detail, "*_`")
-	if after == detail || (after != "" && after[0] != ' ' && after[0] != '\t') {
-		return detail
-	}
-	return after
 }
 
 func blocks(raw json.RawMessage) []block {

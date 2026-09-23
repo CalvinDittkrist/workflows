@@ -816,18 +816,24 @@ func (g *ghShim) workerWaits(t *testing.T, how time.Duration) {
 // blocker's text is what the factory's notification carries.
 func (g *ghShim) workerReportsBlocked(t *testing.T, reason string) {
 	t.Helper()
-	g.env = append(g.env, "CLAUDE_SHIM_REPORT=blocked: "+reason)
+	g.workerResults(t, map[string]any{"outcome": "blocked", "summary": reason})
 }
 
-// workerEndsWith is the whole final report of the scripted worker, markdown and lines as a worker
-// writes them. The shim puts it into a JSON string as it stands, so it goes there escaped.
-func (g *ghShim) workerEndsWith(t *testing.T, report string) {
+// workerResults is the structured result the scripted worker ends its session with, as a session
+// prints it on its result line, whether or not it fits the schema.
+func (g *ghShim) workerResults(t *testing.T, output any) {
 	t.Helper()
-	escaped, err := json.Marshal(report)
+	raw, err := json.Marshal(output)
 	if err != nil {
 		t.Fatal(err)
 	}
-	g.env = append(g.env, "CLAUDE_SHIM_REPORT="+string(escaped[1:len(escaped)-1])) // without the quotes around it
+	g.env = append(g.env, "CLAUDE_SHIM_RESULT="+string(raw))
+}
+
+// workerPrintsNoResult ends the scripted worker's session well and without a result line.
+func (g *ghShim) workerPrintsNoResult(t *testing.T) {
+	t.Helper()
+	g.env = append(g.env, "CLAUDE_SHIM_NO_RESULT=1")
 }
 
 // workerReports is the pull request the scripted worker of the claude shim ends its session with.
@@ -836,11 +842,11 @@ func (g *ghShim) workerReports(t *testing.T, repository string, issue int) {
 	g.env = append(g.env, fmt.Sprintf("CLAUDE_SHIM_PR=https://github.com/%s/pull/%d", repository, issue))
 }
 
-// workerReportsReadyWithout is the ready report of a worker that named no pull request of the
-// repository the run is for, which is a run that ends ready with nothing to ask a review of.
-func (g *ghShim) workerReportsReadyWithout(t *testing.T, said string) {
+// workerReportsCompleteWith is the complete result of a worker that names that pull request, which
+// the factory takes only when it is one of the repository the run is for.
+func (g *ghShim) workerReportsCompleteWith(t *testing.T, pullRequest string) {
 	t.Helper()
-	g.env = append(g.env, "CLAUDE_SHIM_REPORT=ready: "+said)
+	g.workerResults(t, map[string]any{"outcome": "complete", "pullRequest": pullRequest, "summary": "the work is done and pushed"})
 }
 
 // installs is what the claude shim answers about this host: the version of the worker plugin its

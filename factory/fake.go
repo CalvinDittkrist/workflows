@@ -15,7 +15,9 @@ import (
 
 // Fake mode: a canned queue and a scripted worker, so the factory can be watched from start to end
 // without tokens, git or GitHub. The scripted worker is this binary again (`scripted-worker`), which
-// prints the stream a real headless worker printed, recorded on 2026-09-21 with Claude Code 2.1.278.
+// prints the stream a real headless worker printed, recorded on 2026-09-21 with Claude Code 2.1.278,
+// and ends it with the structured result on the result line, as a session run with --json-schema
+// printed it on 2026-09-23 with Claude Code 2.1.280.
 
 // daemonLifetime is how long the process a detached scripted worker leaves behind lives: far longer
 // than its run may take, and short enough that the ones the tests leave behind go away by themselves.
@@ -136,12 +138,12 @@ func scriptedWorker(args []string, stdout, stderr io.Writer) int {
 	case "failed":
 		s.say("Reproducing the behaviour end to end first.")
 		fmt.Fprintln(stderr, `API Error: 529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}`)
-		s.result("error_during_execution", "", true, "api_error")
+		s.result("error_during_execution", "", true, "api_error", nil)
 		return 1
 	case "silent":
-		// A session that ends by itself without reporting. The error output of this one is on the
-		// worker's own stream — a tool that failed and a line that is not the stream format at all —
-		// which the factory logs without it changing how the run ended.
+		// A session that ends by itself with a result that carries no structured output. The error
+		// output of this one is on the worker's own stream — a tool that failed and a line that is not
+		// the stream format at all — which the factory logs without it changing how the run ended.
 		s.failingTool("Bash", map[string]any{"command": "make check", "description": "Run the gate"}, "make: *** [check] Error 1")
 		fmt.Fprintln(stdout, "npm warn: a line of the worker's output that is not the stream format")
 		// Lines that are the stream format all the same: a tool call the auto mode classifier denied,
@@ -155,7 +157,7 @@ func scriptedWorker(args []string, stdout, stderr io.Writer) int {
 		// here and after a restart.
 		s.tool("Write", map[string]any{"file_path": "docs/report.html", "content": strings.Repeat(`<a href="x">&amp;</a>`, 1000)},
 			"File created successfully.")
-		s.result("success", "I have pushed the branch and stopped here.", false, "completed")
+		s.result("success", "I have pushed the branch and stopped here.", false, "completed", nil)
 		return 0
 	}
 
@@ -182,9 +184,9 @@ func scriptedWorker(args []string, stdout, stderr io.Writer) int {
 
 	if scenario == "blocked" {
 		s.say("The senior reviewer is right: the brief contradicts ADR 0012.")
-		s.result("success", fmt.Sprintf(
-			"**blocked: the brief asks the worker to tag the release itself, and ADR 0012 keeps releases manual.**\n\n"+
-				"decision needed: drop the tagging step from issue #%d, or supersede ADR 0012.", issue), false, "completed")
+		summary := fmt.Sprintf("the brief asks the worker to tag the release itself, and ADR 0012 keeps releases manual.\n\n"+
+			"decision needed: drop the tagging step from issue #%d, or supersede ADR 0012.", issue)
+		s.result("success", "", false, "completed", map[string]any{"outcome": resultBlocked, "summary": summary})
 		return 0
 	}
 
@@ -200,7 +202,8 @@ func scriptedWorker(args []string, stdout, stderr io.Writer) int {
 		"checks: pass\nreviewers: codex commented\nthreads: 1 unresolved")
 	s.skill("worker:address-reviews")
 	s.tool("Bash", map[string]any{"command": "plugins/worker/scripts/pr-resolve.sh 1", "description": "Reply to and resolve the review thread"}, "resolved: 1")
-	s.result("success", fmt.Sprintf("**ready: %s**\n\nReview: 5/5 PASS after one round. CI green. One Codex thread fixed and resolved.", pullRequest), false, "completed")
+	s.result("success", "", false, "completed", map[string]any{"outcome": resultComplete, "pullRequest": pullRequest,
+		"summary": "Review: 5/5 PASS after one round. CI green. One Codex thread fixed and resolved."})
 	return 0
 }
 
@@ -343,12 +346,23 @@ func (s *script) subagent(kind, description, report string) {
 	s.message("user", "", []map[string]any{{"type": "tool_result", "tool_use_id": id, "content": report, "is_error": false}})
 }
 
-// result is the last line of a session: the only line with the totals of the whole run.
-func (s *script) result(subtype, report string, isError bool, terminalReason string) {
-	s.emit(map[string]any{
+// result is the last line of a session: the only line with the totals of the whole run, and the one
+// that carries the structured result. A session run with a schema prints that result as its result
+// text as well, so the text is the output's JSON when the report is empty; nil leaves the structured
+// output out, as a session without a schema, or one that ended in an error, leaves it out.
+func (s *script) result(subtype, report string, isError bool, terminalReason string, output map[string]any) {
+	line := map[string]any{
 		"type": "result", "subtype": subtype, "is_error": isError, "terminal_reason": terminalReason,
 		"num_turns": 23, "total_cost_usd": 4.18, "result": report,
 		"usage": map[string]any{"input_tokens": 1240, "cache_creation_input_tokens": 98300,
 			"cache_read_input_tokens": 1204000, "output_tokens": 24800},
-	})
+	}
+	if output != nil {
+		line["structured_output"] = output
+		if report == "" {
+			raw, _ := json.Marshal(output)
+			line["result"] = string(raw)
+		}
+	}
+	s.emit(line)
 }
