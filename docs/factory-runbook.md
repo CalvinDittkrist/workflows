@@ -33,7 +33,7 @@ Run the following as root unless it says otherwise.
    install -d -m 0755 /etc/factory
    ```
 
-2. **The gate's tools.** A worker runs each connected repository's `make check`, so the host needs the tools that gate runs, at the versions the repository's CI pins. Read them from its CI workflow (for this repository `.github/workflows/ci.yml`) and from the error lines of its `Makefile`, not from the distribution: a distribution's version finds other things than CI's, and the gate then fails on the host on files the change never touched, which no worker can fix. For this repository that is shellcheck 0.11.0, Go 1.26, Node 22 and staticcheck 2026.2.1; Python is the distribution's `python3`, which CI does not pin.
+2. **The gate's tools.** A worker runs each connected repository's `make check`, so the host needs the tools that gate runs, at the versions the repository's CI pins. Read them from its CI workflow (for this repository `.github/workflows/ci.yml`) and from the error lines of its `Makefile`, not from the distribution: a distribution's version finds other things than CI's, and the gate then fails on the host on files the change never touched, which no worker can fix. For this repository that is shellcheck 0.11.0, Go 1.26, Node 22 and staticcheck 2026.2.1; Python is the distribution's `python3`, which CI does not pin. The gate's tests call two more tools that a minimal Debian image lacks and CI's runner has: a C compiler (`build-essential`), because `go test -race` builds with cgo, and `file`, with which the release test checks that the factory's binaries are static.
 
    ```sh
    cd "$(mktemp -d)"
@@ -50,7 +50,7 @@ Run the following as root unless it says otherwise.
    /usr/local/go/bin/go version   # go version go1.26.<patch> linux/<arch>
 
    curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
-   apt-get install -y nodejs python3
+   apt-get install -y nodejs python3 build-essential file
    node --version                 # v22.<minor>.<patch>
    ```
 
