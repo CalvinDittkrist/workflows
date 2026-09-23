@@ -183,9 +183,9 @@ func factoryOwns(arg string) string {
 // workerKnobs are the names worker_env may set: the variables the worker plugin's scripts read for
 // themselves, which is the list the orchestrator's claim.sh accepts for --env (env_accepted), and a
 // drift test holds the two together. An empty value is a setting of its own, as it is on a claim.
-// What a run is stays out of the list: WF_MODE,
-// WF_ISSUE, WF_BASE_BRANCH and WF_REVIEW_MANDATE are the factory's (workerVariables), and a
-// variable of the host's shell is not a setting of the workflow.
+// What a run is stays out of the list: WF_MODE, WF_ISSUE, WF_BASE_BRANCH and WF_REVIEW_MANDATE are
+// the factory's (workerVariables), and a variable of the host's shell is not a setting of the
+// workflow.
 //
 // The knobs of the wait for CI are the factory's own since it runs the ci stage itself, so worker_env
 // refuses them and names the ci knob each one moved to (movedKnobs).

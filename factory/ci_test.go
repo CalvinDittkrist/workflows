@@ -88,6 +88,13 @@ func TestFailedChecksRunAFixSessionWithTheirLogsAndTheRunEndsReadyOnceGreen(t *t
 
 	f := gh.work(t, ciConfig(data, nil))
 	f.saw(t, "pushed ")
+	// Until GitHub shows the push, the pull request still reads failed at the commit the round was
+	// spent on, which is no reason for a second round.
+	f.never(t, time.Second, "the factory spent a second round on the head the first was spent on", func() bool {
+		var going apiRun
+		f.get(t, "/api/runs/1", &going)
+		return going.RepairRounds > 1 || going.State == "ended"
+	})
 	// The push reached the pull request, and the checks of the new head passed.
 	gh.ciReads(t, "acme/edge-sensors", claimedIssue, ciPull{head: gh.head(t, "acme/edge-sensors", claimedBranch)})
 	run := f.ended(t, 1)
@@ -174,7 +181,8 @@ func TestAConflictingMergeBriefsAFixSessionWithTheConflictedFiles(t *testing.T) 
 	gh.git(t, other, "push", "-q", "origin", "HEAD:refs/heads/main")
 	gh.ciReads(t, "acme/edge-sensors", claimedIssue, ciPull{mergeable: "CONFLICTING"})
 	f.saw(t, "pushed ")
-	gh.ciReads(t, "acme/edge-sensors", claimedIssue, ciPull{head: gh.head(t, "acme/edge-sensors", claimedBranch)})
+	// Somebody pushed on top of the merge before GitHub showed it: the new head is judged all the same.
+	gh.ciReads(t, "acme/edge-sensors", claimedIssue, ciPull{head: "somebody-elses-push"})
 	run := f.ended(t, 1)
 
 	if run.Outcome != outcomeReady || run.RepairRounds != 1 {
