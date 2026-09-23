@@ -421,8 +421,8 @@ func (f *Factory) mergeBase(ctx context.Context, entry Entry, claim claimed) ([]
 }
 
 // pushed pushes what the worktree holds to the branch, which a fix session has done already when it
-// did what it was told, and answers with the commit the pull request has to show next. what names what
-// is pushed, the repair or the branch, for the record of a push that failed. The push is never forced.
+// did what it was told, and answers with the commit the pull request has to show next. The argument
+// what names what is pushed, the repair or the branch, for the record of a push that failed. The push is never forced.
 // Fake mode pushes nothing and waits for no commit.
 func (f *Factory) pushed(parent, ctx context.Context, r *Run, claim claimed, what string) (string, bool) {
 	if f.fake {

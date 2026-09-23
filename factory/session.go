@@ -34,9 +34,10 @@ type session struct {
 	// scripted is the scripted worker fake mode starts for this session, and empty for the one the
 	// issue's canned entry names.
 	scripted string
-	// readOnly is a session that may read the worktree and nothing else: it is started without the
-	// worker agent, with the plugins off and with the built-in tools cut down to Read, Grep and Glob
-	// (--tools), which is what makes it read-only, and it is held to schema rather than to resultSchema.
+	// readOnly is a session that can read files and do nothing else: it is started without the worker
+	// agent, with the workflow plugins off and with the built-in tools cut down to Read, Grep and Glob
+	// (--tools), which is what makes it read-only; the tools limit what it can do, not which files it
+	// reads, and it is held to schema rather than to resultSchema.
 	readOnly bool
 	schema   string
 	// read reads the session's structured output, readResult when it is nil.
@@ -267,8 +268,8 @@ func readResult(raw json.RawMessage) (result, error) {
 
 // authorSchema is the result of the session that writes the pull request: its title and its body, and
 // nothing else. The descriptions are its instructions on the form; readAuthored holds it to them.
-const authorSchema = `{"type":"object","additionalProperties":false,"required":["title","body"],"properties":{` +
-	`"title":{"type":"string","description":"the pull request's title in conventional-commit style, type(scope): subject, one line of at most 100 characters"},` +
+var authorSchema = `{"type":"object","additionalProperties":false,"required":["title","body"],"properties":{` +
+	`"title":{"type":"string","description":"the pull request's title in conventional-commit style, type(scope): subject, one line of at most ` + strconv.Itoa(maxTitle) + ` characters"},` +
 	`"body":{"type":"string","description":"the pull request's body in Markdown: the closing reference Closes #<issue> on a line of its own, what changed and why, and the known limits; no verification section, which the factory appends"}}}`
 
 // conventionalTitle is a conventional-commit subject line: a type, an optional scope, an optional !

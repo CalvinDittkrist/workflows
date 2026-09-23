@@ -193,7 +193,6 @@ func TestAnIdleHeldIssueIsLetGoOnTheDecisionGitHubCarries(t *testing.T) {
 			gh.workerCommits(t, "worked.md")
 			if one.blocked {
 				gh.workerReportsBlocked(t, "the repository has no test for this")
-			} else {
 			}
 
 			data := filepath.Join(t.TempDir(), "data")

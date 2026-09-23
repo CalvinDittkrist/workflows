@@ -1117,8 +1117,8 @@ func workerSettings(env map[string]string) (string, error) {
 // record keeps the mandate its count was started for, so the session that answers the review has the
 // rounds of that review and the rounds its own CI stage then drives cannot hand it more.
 //
-// WF_STOP_AFTER is the stage the session ends after, for the session that stops once the pull request
-// is open ([ADR 0043]). The knobs of the ci stage go in as the worker's own ci stage reads them, for
+// WF_STOP_AFTER is the stage the session ends after, for the session that stops once the review has
+// recorded its panel summary ([ADR 0043]). The knobs of the ci stage go in as the worker's own ci stage reads them, for
 // the follow-up session that still runs it.
 //
 // [ADR 0043]: ../docs/adr/0043-the-migration-runs-from-the-last-stage-to-the-first.md
