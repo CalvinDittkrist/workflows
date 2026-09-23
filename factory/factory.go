@@ -135,6 +135,10 @@ type source interface {
 	pullState(ctx context.Context, held Held, bots []string) (pullReading, error)
 	failedLogs(ctx context.Context, repository string, failed []check) string
 	openPull(ctx context.Context, repository, branch string) (string, error)
+	// issueText is the title and the body of an issue, and createPull opens a pull request and answers
+	// with its URL: the two calls of the pr stage (pr.go).
+	issueText(ctx context.Context, repository string, number int) (string, string, error)
+	createPull(ctx context.Context, repository string, p newPull) (string, error)
 }
 
 // Held is one issue this factory holds, as a poll asks the source about it: the issue, the run that
@@ -745,12 +749,21 @@ func (f *Factory) execute(parent context.Context, r *Run, entry Entry) {
 
 	// A resumed run whose branch has a pull request open is past the stages that open one: it starts at
 	// the ci stage, with the repair rounds its pull request has had, and nothing before it is done again.
-	if pull := f.openedAlready(ctx, r, entry, claim); pull != "" {
+	// One without a pull request whose branch is where the run before it recorded the review starts at
+	// the pr stage.
+	pull, known := f.openedAlready(ctx, r, entry, claim)
+	if pull != "" {
 		if entry.resume.PullRequest == pull {
 			f.runs.update(r, func() { r.RepairRounds = entry.resume.RepairRounds })
 		}
 		f.ci(parent, ctx, r, entry, claim, pull)
 		return
+	}
+	if known {
+		if review, ok := f.reviewedAlready(ctx, r, entry, claim); ok {
+			f.pr(parent, ctx, r, entry, claim, review)
+			return
+		}
 	}
 
 	s := sessionFor(entry.Signal)
@@ -766,36 +779,44 @@ func (f *Factory) execute(parent context.Context, r *Run, entry Entry) {
 		f.finish(r, outcomeBlocked, "", nil)
 		return
 	}
-	url, reason := pullRequest(got.PullRequest, r.Repository)
-	if url == "" || s.stopAfter == "" {
-		// A session that ran the pipeline to its end has waited on CI itself, and one that names no
-		// pull request has nothing to wait on: the run is ready, and the reason says what it lacks.
+	if s.stopAfter == "" {
+		// A session that ran the pipeline to its end has waited on CI itself: the run is ready, and the
+		// reason says what it lacks when it names no pull request.
+		url, reason := pullRequest(got.PullRequest, r.Repository)
 		f.runs.update(r, func() { r.PullRequest = url })
 		f.finish(r, outcomeReady, reason, nil)
 		return
 	}
-	f.ci(parent, ctx, r, entry, claim, url)
+	review, err := f.reviewOf(ctx, claim, got)
+	if err != nil {
+		if !f.halted(parent, ctx, r, "read the reviewed commit") {
+			f.finish(r, outcomeFailed, "the commit the review ended at could not be read: "+err.Error()+leftBehind(claim), nil)
+		}
+		return
+	}
+	f.pr(parent, ctx, r, entry, claim, review)
 }
 
 // openedAlready is the open pull request of the branch a resumed run continues, which is where it
-// starts. A first run has opened none, and a follow-up run answers a review on its own; a reading that
-// fails starts the run at its first stage, whose session finds the pull request itself and stops at it.
-func (f *Factory) openedAlready(ctx context.Context, r *Run, entry Entry, claim claimed) string {
+// starts, and whether GitHub said so. A first run has opened none, and a follow-up run answers a review
+// on its own; a reading that fails starts the run at its first stage, whose session finds the pull
+// request itself.
+func (f *Factory) openedAlready(ctx context.Context, r *Run, entry Entry, claim claimed) (string, bool) {
 	if kindOf(entry.Signal) != kindResumed || claim.branch == "" {
-		return ""
+		return "", false
 	}
 	pull, err := f.source.openPull(ctx, entry.Repository, claim.branch)
 	if err != nil {
 		if ctx.Err() == nil {
 			f.warn(r, "pull request not read", "whether "+claim.branch+" has a pull request open could not be read, so the run starts at its first stage: "+err.Error())
 		}
-		return ""
+		return "", false
 	}
 	if pull != "" {
 		f.runs.event(r, Event{Kind: "factory", Title: "resuming at the ci stage of " + pull,
 			Body: "the branch " + claim.branch + " has this pull request open, so the stages that open it are done"})
 	}
-	return pull
+	return pull, true
 }
 
 // session starts one session and reads it to its end. It answers with the session's result when the
@@ -873,7 +894,7 @@ func (f *Factory) session(parent, ctx context.Context, r *Run, s session, entry 
 	readers.Add(2)
 	go func() {
 		defer readers.Done()
-		f.read(r, "the worker's output", stdout, func(line []byte) { f.ingest(r, line) })
+		f.read(r, "the worker's output", stdout, func(line []byte) { f.ingest(r, line, s.read) })
 	}()
 	go func() {
 		defer readers.Done()

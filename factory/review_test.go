@@ -29,7 +29,6 @@ func TestAReviewThatAsksForChangesRunsTheWorkerOnItInTheSameWorktree(t *testing.
 	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
 	gh.loggedInAs(t, "factory-bot")
 	gh.assigns(t, "acme/edge-sensors", claimedIssue, "factory-bot")
-	gh.workerReports(t, "acme/edge-sensors", claimedIssue)
 	// The pull request that run is going to open, with nobody having reviewed it yet.
 	gh.pullRequestIs(t, "acme/edge-sensors", claimedIssue, "open")
 	gh.reviews(t, "acme/edge-sensors", claimedIssue)
@@ -73,8 +72,8 @@ func TestAReviewThatAsksForChangesRunsTheWorkerOnItInTheSameWorktree(t *testing.
 	// The stage it opens in is its prompt, which no Skill call in the stream announces: a follow-up
 	// run stands at the reviews stage from its first moment, where a first run stands at implement
 	// and ends in the ci stage the factory runs.
-	if !equal(first.Stages, []string{"implement", "ci"}) || !equal(second.Stages, []string{"reviews"}) {
-		t.Errorf("the two runs went through the stages %v and %v, want [implement ci] and [reviews]", first.Stages, second.Stages)
+	if !equal(first.Stages, []string{"implement", "pr", "ci"}) || !equal(second.Stages, []string{"reviews"}) {
+		t.Errorf("the two runs went through the stages %v and %v, want [implement pr ci] and [reviews]", first.Stages, second.Stages)
 	}
 	if !second.SignalAt.Equal(requestedAt) {
 		t.Errorf("the follow-up run stands for a review submitted at %s, want the one at %s", second.SignalAt, requestedAt)

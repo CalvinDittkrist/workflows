@@ -126,7 +126,6 @@ func TestASessionThatExitsInAnErrorFailsTheRunWhateverItsResultSaid(t *testing.T
 	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
 	gh.loggedInAs(t, "factory-bot")
 	gh.assigns(t, "acme/edge-sensors", claimedIssue, "factory-bot")
-	gh.workerReports(t, "acme/edge-sensors", claimedIssue)
 	data := filepath.Join(t.TempDir(), "data")
 	gh.cloneInto(t, data, "acme/edge-sensors")
 	f := launch(t, config{"poll": "50ms", "deadline": "90s", "data_dir": data, "repositories": []string{"acme/edge-sensors"}},

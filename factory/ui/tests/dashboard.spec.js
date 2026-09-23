@@ -152,9 +152,9 @@ test('the selected run shows what it cost, how full its context came and what it
 test('the live log sets the events of the worker’s subagents in', async ({ page }) => {
   await page.goto(working(`/#run=${READY_RUN}`))
   const log = detail(page).locator('.log')
-  // The ready run had two sessions, its work session and the fix session of its repair round, and
-  // each ended in a result line.
-  await expect(log.locator('.ev-result')).toHaveCount(2)
+  // The ready run had three sessions, its work session, the author session of its pr stage and the
+  // fix session of its repair round, and each ended in a result line.
+  await expect(log.locator('.ev-result')).toHaveCount(3)
   await expect(log.locator('.ev-result').last()).toContainText('result: success')
   const subagent = log.locator('.ev-sub').first()
   await expect(subagent).toContainText('Read the diff under review')

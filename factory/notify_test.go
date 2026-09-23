@@ -25,7 +25,6 @@ func TestARunThatEndsReadyAsksTheMaintainersForAReviewOfItsPullRequest(t *testin
 	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
 	gh.loggedInAs(t, "factory-bot")
 	gh.assigns(t, "acme/edge-sensors", claimedIssue, "factory-bot")
-	gh.workerReports(t, "acme/edge-sensors", claimedIssue)
 	pullRequest := fmt.Sprintf("https://github.com/acme/edge-sensors/pull/%d", claimedIssue)
 	gh.reviewRequests(t, pullRequest, maintainers...)
 
@@ -70,7 +69,6 @@ func TestAReviewRequestOneLoginIsRefusedStillReachesTheOthers(t *testing.T) {
 	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
 	gh.loggedInAs(t, "factory-bot")
 	gh.assigns(t, "acme/edge-sensors", claimedIssue, "factory-bot")
-	gh.workerReports(t, "acme/edge-sensors", claimedIssue)
 	pullRequest := fmt.Sprintf("https://github.com/acme/edge-sensors/pull/%d", claimedIssue)
 	gh.reviewRequests(t, pullRequest, maintainers...)
 	gh.fail(t, "pr edit * --add-reviewer ada") // the one login GitHub will not take
@@ -102,7 +100,6 @@ func TestAReviewRequestThatStallsStillReachesTheLoginsBehindIt(t *testing.T) {
 	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
 	gh.loggedInAs(t, "factory-bot")
 	gh.assigns(t, "acme/edge-sensors", claimedIssue, "factory-bot")
-	gh.workerReports(t, "acme/edge-sensors", claimedIssue)
 	pullRequest := fmt.Sprintf("https://github.com/acme/edge-sensors/pull/%d", claimedIssue)
 	gh.reviewRequests(t, pullRequest, maintainers...)
 	gh.stall(t, "pr edit * --add-reviewer ada") // the first login's call is taken and never answered
@@ -122,26 +119,42 @@ func TestAReviewRequestThatStallsStillReachesTheLoginsBehindIt(t *testing.T) {
 
 // A run that ends ready and names no pull request has nothing to ask a review of, and is an issue
 // the factory still holds and is done with: the maintainer hears of it on the issue, like every
-// other ending that waits for a person.
+// other ending that waits for a person. Such a run is a follow-up run whose session runs the rest of
+// the pipeline itself and names a pull request of another repository, which the factory does not take.
 func TestAReadyRunThatNamesNoPullRequestIsSaidOnTheIssue(t *testing.T) {
 	t.Parallel()
 	gh := newGhShim(t)
-	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
+	gh.remote(t, "acme/edge-sensors")
 	gh.loggedInAs(t, "factory-bot")
-	gh.assigns(t, "acme/edge-sensors", claimedIssue, "factory-bot")
+	data := filepath.Join(t.TempDir(), "data")
+	clone := gh.cloneInto(t, data, "acme/edge-sensors")
+	gh.branchAt(t, "acme/edge-sensors", claimedBranch, gh.head(t, "acme/edge-sensors", "main"))
+
+	began := time.Now().UTC().Add(-2 * time.Hour)
+	ended := began.Add(30 * time.Minute)
+	held := record(1, claimedIssue, claimedTitle, signalRouted, outcomeReady, true, began, ended)
+	held.Branch, held.Worktree = claimedBranch, filepath.Join(clone, ".claude", "worktrees", claimedWorktree)
+	held.PullRequest = pullOfTheClaim
+	records(t, data, held)
+	gh.issues(t, "acme/edge-sensors")
+	gh.issue(t, "acme/edge-sensors", assignedTo(openIssue(claimedIssue, claimedTitle, began.Add(-72*time.Hour)), "factory-bot"))
+	gh.pullRequestIs(t, "acme/edge-sensors", claimedIssue, "open")
+	gh.mayWrite(t, "acme/edge-sensors", "maintainer", true)
+	gh.reviews(t, "acme/edge-sensors", claimedIssue, review(1, "maintainer", "CHANGES_REQUESTED", ended.Add(10*time.Minute).Truncate(time.Second)))
 	gh.workerReportsCompleteWith(t, "https://github.com/someone/edge-sensors-fork/pull/3")
 	gh.comments(t, "acme/edge-sensors", claimedIssue)
 
-	data := filepath.Join(t.TempDir(), "data")
-	gh.cloneInto(t, data, "acme/edge-sensors")
 	f := gh.work(t, config{"poll": "50ms", "deadline": "90s", "data_dir": data,
 		"repositories": []string{"acme/edge-sensors"}, "notify": maintainers})
-	run := f.ended(t, 1)
+	run := f.ended(t, 2)
+	if run.Signal != signalChangesRequested {
+		t.Fatalf("run 2 ran on the signal %q, want the review that asks for changes; the factory's log:\n%s", run.Signal, f.output(t))
+	}
 	if run.Outcome != "ready" || run.PullRequest != "" {
 		t.Fatalf("the run ended as %q with the pull request %q, want ready with none; the factory's log:\n%s",
 			run.Outcome, run.PullRequest, f.output(t))
 	}
-	f.notified(t, 1)
+	f.notified(t, 2)
 
 	said := gh.commented(t, "acme/edge-sensors", claimedIssue)
 	for _, want := range []string{
@@ -501,7 +514,6 @@ func TestWithoutLoginsToNotifyTheFactoryNotifiesNobodyAndSaysSoAtItsStart(t *tes
 	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
 	gh.loggedInAs(t, "factory-bot")
 	gh.assigns(t, "acme/edge-sensors", claimedIssue, "factory-bot")
-	gh.workerReports(t, "acme/edge-sensors", claimedIssue)
 
 	data := filepath.Join(t.TempDir(), "data")
 	gh.cloneInto(t, data, "acme/edge-sensors")

@@ -7,16 +7,19 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // A session is one print-mode call of Claude Code, and this is the one place such a call is built:
 // the agent, the prompt, the settings and the permission mode, the timeout of its stage and the JSON
 // schema of its result ([ADR 0039]). A run starts its first session at the stage its signal names;
-// the stages that follow it up to the pull request run inside that session, as the worker plugin
-// drives them, and the ci stage is the factory's own, which starts a fix session per repair round.
+// the stages that follow it up to the review run inside that session, as the worker plugin drives
+// them, and the pr and ci stages are the factory's own: the pr stage starts a read-only session that
+// writes the pull request's title and body, the ci stage a fix session per repair round.
 //
 // [ADR 0039]: ../docs/adr/0039-every-session-reports-through-a-structured-result.md
 type session struct {
@@ -31,12 +34,19 @@ type session struct {
 	// scripted is the scripted worker fake mode starts for this session, and empty for the one the
 	// issue's canned entry names.
 	scripted string
+	// readOnly is a session that may read the worktree and nothing else: it is started without the
+	// worker agent, with the plugins off and with the built-in tools cut down to Read, Grep and Glob
+	// (--tools), which is what makes it read-only, and it is held to schema rather than to resultSchema.
+	readOnly bool
+	schema   string
+	// read reads the session's structured output, readResult when it is nil.
+	read func(json.RawMessage) (result, error)
 }
 
 // The sessions a run can start. The work session is the one a local claim starts and the one every
 // run of an issue starts with — a first run as well as a resumed one, which derives where the work
-// stands from git and GitHub as any worker does — and it stops once the pull request is open, where
-// the factory's ci stage takes over. The reviews session is the follow-up run's: the maintainer has
+// stands from git and GitHub as any worker does — and it stops once the review has recorded its panel
+// summary, where the factory's pr stage takes over. The reviews session is the follow-up run's: the maintainer has
 // read the pull request and asked for changes, so the session starts at the stage that reads the
 // review threads, and that stage ends by running the worker's CI stage again.
 //
@@ -44,12 +54,16 @@ type session struct {
 // run's deadline, which stays the limit an operator sets and which ends a run with the outcome
 // timeout; a session that outruns its own timeout has failed, and the run says in which stage.
 var (
-	workSession    = session{stage: stages["worker:work"], prompt: "/worker:work", timeout: 4 * time.Hour, stopAfter: "pr"}
+	workSession    = session{stage: stages["worker:work"], prompt: "/worker:work", timeout: 4 * time.Hour, stopAfter: stageReview}
 	reviewsSession = session{stage: stages["worker:address-reviews"], prompt: "/worker:address-reviews", timeout: 3 * time.Hour}
 )
 
-// fixTimeout is how long one fix session of the ci stage may run.
-const fixTimeout = time.Hour
+// fixTimeout is how long one fix session of the ci stage may run, and authorTimeout how long the
+// session that writes the pull request's title and body may.
+const (
+	fixTimeout    = time.Hour
+	authorTimeout = 30 * time.Minute
+)
 
 // sessionTimeoutOverride replaces the timeout of every session when it is set, as a Go duration. It is
 // set at link time by the tests, which cannot wait out hours, and by nothing a host configures.
@@ -68,6 +82,19 @@ func sessionFor(signal string) session {
 func fixSession(brief string) session {
 	return session{stage: stageCI, prompt: brief, timeout: fixTimeout, scripted: "fix"}.overridden()
 }
+
+// authorSession is the session of the pr stage, given its brief: read-only, held to authorSchema and
+// read against the issue whose closing reference its body has to carry.
+func authorSession(brief string, issue int) session {
+	return session{stage: stagePR, prompt: brief, timeout: authorTimeout, scripted: "author",
+		readOnly: true, schema: authorSchema, read: func(raw json.RawMessage) (result, error) { return readAuthored(raw, issue) }}.overridden()
+}
+
+// readTools is the built-in tools a read-only session has (https://code.claude.com/docs/en/cli-reference.md,
+// checked on 2026-09-23: --tools restricts the built-in tools, and a tool it does not list is not there).
+// No MCP server is configured for it either (--strict-mcp-config), so it can read the worktree and nothing
+// else: no shell, no edit, no skill and no subagent.
+const readTools = "Read,Grep,Glob"
 
 func (s session) overridden() session {
 	if d, err := time.ParseDuration(sessionTimeoutOverride); err == nil && d > 0 {
@@ -107,6 +134,9 @@ func (f *Factory) command(ctx context.Context, s session, entry Entry, claim cla
 		args := []string{"scripted-worker", scenario, issue.Repository, strconv.Itoa(issue.Number)}
 		return exec.CommandContext(ctx, f.self, append(args, f.settings.WorkerArgs...)...), nil
 	}
+	if s.readOnly {
+		return f.readOnlyCommand(ctx, s, claim)
+	}
 	variables := workerVariables(entry, claim, f.settings.WorkerEnv, s, f.ciFor(issue.Repository))
 	settings, err := workerSettings(variables)
 	if err != nil {
@@ -119,6 +149,39 @@ func (f *Factory) command(ctx context.Context, s session, entry Entry, claim cla
 		"--strict-mcp-config",
 		"--settings", settings,
 		"--json-schema", resultSchema,
+	}
+	args = append(args, f.settings.WorkerArgs...)
+	args = append(args, "-p", s.prompt)
+	cmd := exec.CommandContext(ctx, "claude", args...)
+	cmd.Dir = claim.worktree
+	cmd.Env = workerEnv(os.Environ(), variables)
+	return cmd, nil
+}
+
+// readOnlyCommand is the process of a read-only session: no worker agent and no plugin, so no skill,
+// hook or workflow variable of the worker reaches it, the tools cut down to readTools, and its own
+// schema. It keeps what every session keeps: the compact pin, no background tasks, the auto permission
+// mode, the configured worker arguments and the worktree as its directory, which it reads.
+func (f *Factory) readOnlyCommand(ctx context.Context, s session, claim claimed) (*exec.Cmd, error) {
+	variables := map[string]string{
+		"CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1",
+		"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE":      compactPercentage,
+	}
+	settings, err := json.Marshal(map[string]any{
+		"env":               variables,
+		"enabledPlugins":    map[string]bool{workerPlugin: false, "planner@" + marketplace: false, "orchestrator@" + marketplace: false},
+		"autoCompactWindow": compactWindow,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("the settings of a read-only session could not be written: %w", err)
+	}
+	args := []string{
+		"--output-format", "stream-json", "--verbose",
+		"--permission-mode", "auto",
+		"--strict-mcp-config",
+		"--tools", readTools,
+		"--settings", string(settings),
+		"--json-schema", s.schema,
 	}
 	args = append(args, f.settings.WorkerArgs...)
 	args = append(args, "-p", s.prompt)
@@ -164,6 +227,10 @@ type result struct {
 	GateResult   string   `json:"gateResult"`
 	Commits      []string `json:"commits"`
 	Summary      string   `json:"summary"`
+	// Title and Body are the pull request an author session wrote, read by readAuthored; the work
+	// session's schema has neither, so its reader refuses them as fields it does not know.
+	Title string `json:"-"`
+	Body  string `json:"-"`
 }
 
 // readResult reads the structured output of a result line against the schema. Claude Code holds the
@@ -196,4 +263,55 @@ func readResult(raw json.RawMessage) (result, error) {
 		return result{}, fmt.Errorf("the structured output reports blocked with an empty summary, which leaves the person it waits for no reason")
 	}
 	return got, nil
+}
+
+// authorSchema is the result of the session that writes the pull request: its title and its body, and
+// nothing else. The descriptions are its instructions on the form; readAuthored holds it to them.
+const authorSchema = `{"type":"object","additionalProperties":false,"required":["title","body"],"properties":{` +
+	`"title":{"type":"string","description":"the pull request's title in conventional-commit style, type(scope): subject, one line of at most 100 characters"},` +
+	`"body":{"type":"string","description":"the pull request's body in Markdown: the closing reference Closes #<issue> on a line of its own, what changed and why, and the known limits; no verification section, which the factory appends"}}}`
+
+// conventionalTitle is a conventional-commit subject line: a type, an optional scope, an optional !
+// and a subject after the colon.
+var conventionalTitle = regexp.MustCompile(`^[a-z]+(\([^()\s]+\))?!?: \S`)
+
+// maxTitle is the longest title the factory takes: GitHub takes 256 characters, a reader far fewer.
+const maxTitle = 100
+
+// readAuthored reads the result of an author session: a title in conventional-commit style and a body
+// that closes the issue. A result that is not of that shape does not fit, and the run fails on it: the
+// body is used as it is written, so the factory does not mend one that misses its closing reference.
+func readAuthored(raw json.RawMessage, issue int) (result, error) {
+	if len(bytes.TrimSpace(raw)) == 0 || string(bytes.TrimSpace(raw)) == "null" {
+		return result{}, fmt.Errorf("the result line carries no structured output")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	var read struct {
+		Title *string `json:"title"`
+		Body  *string `json:"body"`
+	}
+	if err := decoder.Decode(&read); err != nil {
+		return result{}, fmt.Errorf("the structured output is not an object of the author's schema: %v", err)
+	}
+	if read.Title == nil || read.Body == nil {
+		return result{}, fmt.Errorf("the structured output lacks the title or the body")
+	}
+	title, body := strings.TrimSpace(*read.Title), strings.TrimSpace(*read.Body)
+	switch {
+	case strings.ContainsAny(title, "\r\n"):
+		return result{}, fmt.Errorf("the title %q is more than one line", firstLine(title))
+	case !conventionalTitle.MatchString(title):
+		return result{}, fmt.Errorf("the title %q is not in conventional-commit style, type(scope): subject", title)
+	case utf8.RuneCountInString(title) > maxTitle:
+		return result{}, fmt.Errorf("the title is %d characters long, more than %d", utf8.RuneCountInString(title), maxTitle)
+	case !closes(body, issue):
+		return result{}, fmt.Errorf("the body carries no closing reference to #%d, such as Closes #%d", issue, issue)
+	}
+	return result{Outcome: resultComplete, Title: title, Body: body}, nil
+}
+
+// closes says whether a body carries a keyword GitHub closes an issue by, followed by that issue.
+func closes(body string, issue int) bool {
+	return regexp.MustCompile(`(?i)\b(close[sd]?|fix(e[sd])?|resolve[sd]?):? #` + strconv.Itoa(issue) + `\b`).MatchString(body)
 }

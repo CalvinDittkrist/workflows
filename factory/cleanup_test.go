@@ -194,7 +194,6 @@ func TestAnIdleHeldIssueIsLetGoOnTheDecisionGitHubCarries(t *testing.T) {
 			if one.blocked {
 				gh.workerReportsBlocked(t, "the repository has no test for this")
 			} else {
-				gh.workerReports(t, "acme/edge-sensors", claimedIssue)
 			}
 
 			data := filepath.Join(t.TempDir(), "data")
@@ -421,7 +420,6 @@ func TestARoutedIssueIsNotCancelledByThePullRequestOfTheRunBeforeIt(t *testing.T
 	gh.assigns(t, "acme/edge-sensors", claimedIssue, "factory-bot")
 	gh.unassigns(t, "acme/edge-sensors", claimedIssue, "factory-bot")
 	gh.workerCommits(t, "worked.md")
-	gh.workerReports(t, "acme/edge-sensors", claimedIssue)
 	// Both runs take their time, so the second one is still going while the polls of its first
 	// seconds read what the factory holds.
 	gh.workerWaits(t, 3*time.Second)
@@ -445,7 +443,10 @@ func TestARoutedIssueIsNotCancelledByThePullRequestOfTheRunBeforeIt(t *testing.T
 		f.get(t, "/api/runs/1", &let)
 		return let.LetGoAt != nil
 	})
-	// And routes the issue again, which asks for another run of work that starts where it stopped.
+	// And routes the issue again, which asks for another run of work that starts where it stopped. That
+	// run opens a pull request of its own, which GitHub numbers anew.
+	gh.opensPull(t, "acme/edge-sensors", claimedIssue+100)
+	gh.ciReads(t, "acme/edge-sensors", claimedIssue+100, ciPull{})
 	again := let.LetGoAt.Add(time.Second)
 	gh.issue(t, "acme/edge-sensors", openIssue(claimedIssue, claimedTitle, again))
 	gh.issues(t, "acme/edge-sensors", touched(openIssue(claimedIssue, claimedTitle, again), again))
@@ -885,7 +886,6 @@ func TestAPullRequestOfAnotherBranchIsNoDecisionAboutTheIssue(t *testing.T) {
 	gh.assigns(t, "acme/edge-sensors", claimedIssue, "factory-bot")
 	gh.unassigns(t, "acme/edge-sensors", claimedIssue, "factory-bot")
 	gh.workerCommits(t, "worked.md")
-	gh.workerReports(t, "acme/edge-sensors", claimedIssue)
 
 	data := filepath.Join(t.TempDir(), "data")
 	clone := gh.cloneInto(t, data, "acme/edge-sensors")

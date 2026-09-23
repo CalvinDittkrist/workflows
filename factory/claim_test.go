@@ -34,7 +34,6 @@ func TestAClaimCutsTheBranchFromTheFreshlyFetchedBaseAndRunsTheWorkerInItsWorktr
 	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
 	gh.loggedInAs(t, "factory-bot")
 	gh.assigns(t, "acme/edge-sensors", claimedIssue, "factory-bot")
-	gh.workerReports(t, "acme/edge-sensors", claimedIssue)
 
 	data := filepath.Join(t.TempDir(), "data")
 	clone := gh.cloneInto(t, data, "acme/edge-sensors")
@@ -151,7 +150,6 @@ func TestAClaimOfARepositoryWithItsOwnBaseCutsAndWorksFromThatBase(t *testing.T)
 	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
 	gh.loggedInAs(t, "factory-bot")
 	gh.assigns(t, "acme/edge-sensors", claimedIssue, "factory-bot")
-	gh.workerReports(t, "acme/edge-sensors", claimedIssue)
 	// dev is a line of its own on the remote, ahead of main, and the clone's origin/HEAD still names
 	// main: nothing but the configuration says dev.
 	gh.branchAt(t, "acme/edge-sensors", "dev", gh.head(t, "acme/edge-sensors", "main"))
@@ -194,7 +192,6 @@ func TestTheHostsWorkerKnobsReachTheSessionBesideWhatTheRunIs(t *testing.T) {
 	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
 	gh.loggedInAs(t, "factory-bot")
 	gh.assigns(t, "acme/edge-sensors", claimedIssue, "factory-bot")
-	gh.workerReports(t, "acme/edge-sensors", claimedIssue)
 
 	data := filepath.Join(t.TempDir(), "data")
 	gh.cloneInto(t, data, "acme/edge-sensors")
@@ -253,7 +250,6 @@ func TestAClaimReadsTheBaseTheRepositoryDeclaresNowAndNotTheOneItsCloneWasWritte
 	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
 	gh.loggedInAs(t, "factory-bot")
 	gh.assigns(t, "acme/edge-sensors", claimedIssue, "factory-bot")
-	gh.workerReports(t, "acme/edge-sensors", claimedIssue)
 
 	data := filepath.Join(t.TempDir(), "data")
 	clone := gh.cloneInto(t, data, "acme/edge-sensors")
@@ -297,7 +293,6 @@ func TestAClaimFollowsTheRemoteWhenItMovesItsDefaultBranch(t *testing.T) {
 	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
 	gh.loggedInAs(t, "factory-bot")
 	gh.assigns(t, "acme/edge-sensors", claimedIssue, "factory-bot")
-	gh.workerReports(t, "acme/edge-sensors", claimedIssue)
 
 	data := filepath.Join(t.TempDir(), "data")
 	gh.cloneInto(t, data, "acme/edge-sensors") // cloned while the remote's head was main
@@ -477,7 +472,6 @@ func TestAnIssueOfARepositoryWithoutACloneKeepsItsPlaceInTheLine(t *testing.T) {
 	gh.timeline(t, "acme/backtest", 118, labeled("factory", now.Add(-5*time.Hour)))
 	gh.loggedInAs(t, "factory-bot")
 	gh.assigns(t, "acme/backtest", 118, "factory-bot")
-	gh.workerReports(t, "acme/backtest", 118)
 
 	data := filepath.Join(t.TempDir(), "data")
 	gh.cloneInto(t, data, "acme/backtest")
@@ -704,7 +698,6 @@ func TestTwoClaimersRacingForOneIssueLeaveExactlyOneWinner(t *testing.T) {
 	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
 	gh.loggedInAs(t, "factory-bot")
 	gh.assigns(t, "acme/edge-sensors", claimedIssue, "factory-bot")
-	gh.workerReports(t, "acme/edge-sensors", claimedIssue)
 	gh.holdClaims(t)
 	base := gh.head(t, "acme/edge-sensors", "main")
 
@@ -755,7 +748,6 @@ func TestTheWorkerRunsWithNoHerdrAndNoWorkflowVariableOfTheFactorysOwnEnvironmen
 	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
 	gh.loggedInAs(t, "factory-bot")
 	gh.assigns(t, "acme/edge-sensors", claimedIssue, "factory-bot")
-	gh.workerReports(t, "acme/edge-sensors", claimedIssue)
 	gh.env = append(gh.env, "HERDR_ENV=1", "HERDR_SESSION_ID=7", "HERDR_PANE_ID=%3",
 		"WF_MODE=yolo", "WF_BASE_BRANCH=release", "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=99")
 
@@ -1150,7 +1142,19 @@ func (w workerStart) settings(t *testing.T) sessionSettings {
 // workers is every start of the scripted worker, in the order they happened.
 func (g *ghShim) workers(t *testing.T) []workerStart {
 	t.Helper()
-	raw, err := os.ReadFile(g.worker)
+	return sessionsIn(t, g.worker)
+}
+
+// authorSessions is every author session of the pr stage the claude shim was started as, in order.
+func (g *ghShim) authorSessions(t *testing.T) []workerStart {
+	t.Helper()
+	return sessionsIn(t, g.authors)
+}
+
+// sessionsIn reads one log of the claude shim, a record per session.
+func sessionsIn(t *testing.T, log string) []workerStart {
+	t.Helper()
+	raw, err := os.ReadFile(log)
 	if os.IsNotExist(err) {
 		return nil
 	}

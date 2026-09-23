@@ -17,8 +17,8 @@ import (
 	"unicode/utf8"
 )
 
-// The ci stage, which the factory runs itself ([ADR 0043], step 2): the worker session stops once it
-// has opened the pull request, and the factory waits for GitHub the way the worker's pr-wait.sh does.
+// The ci stage, which the factory runs itself ([ADR 0043], step 2): once the pr stage has opened the
+// pull request (pr.go), the factory waits for GitHub the way the worker's pr-wait.sh does.
 // Mergeability is read first, because GitHub runs no workflow for a branch that does not merge and an
 // empty rollup would read as green; then the checks, the bot reviews the configuration lists, the
 // reviews of writers that ask for changes and the unresolved threads. A conflict is answered by a
@@ -245,7 +245,7 @@ func named(checks []check) string {
 	return strings.Join(lines, "\n")
 }
 
-// ci is the ci stage of one run: it waits on the pull request the session opened, repairs what
+// ci is the ci stage of one run: it waits on the pull request the pr stage opened, repairs what
 // the budget allows and ends the run. Every way out of it ends the run.
 func (f *Factory) ci(parent, ctx context.Context, r *Run, entry Entry, claim claimed, pull string) {
 	f.runs.update(r, func() {
@@ -356,7 +356,7 @@ func (f *Factory) repair(parent, ctx context.Context, r *Run, entry Entry, claim
 			return "", false
 		case len(conflicted) == 0:
 			f.runs.event(r, Event{Kind: "factory", Title: "merged " + claim.base + " cleanly"})
-			return f.pushed(parent, ctx, r, claim)
+			return f.pushed(parent, ctx, r, claim, "the repair")
 		}
 		f.runs.event(r, Event{Kind: "factory", Title: "the merge of " + claim.base + " conflicts", Body: strings.Join(conflicted, "\n")})
 		brief = fmt.Sprintf("Merging origin/%s into the branch conflicted in these files, and the merge is still in progress in this worktree:\n%s\n\n"+
@@ -380,7 +380,7 @@ func (f *Factory) repair(parent, ctx context.Context, r *Run, entry Entry, claim
 		f.finish(r, outcomeBlocked, "", nil)
 		return "", false
 	}
-	return f.pushed(parent, ctx, r, claim)
+	return f.pushed(parent, ctx, r, claim, "the repair")
 }
 
 // fixBrief is the prompt of a fix session: the facts of the round and the one thing it is there for.
@@ -421,9 +421,10 @@ func (f *Factory) mergeBase(ctx context.Context, entry Entry, claim claimed) ([]
 }
 
 // pushed pushes what the worktree holds to the branch, which a fix session has done already when it
-// did what it was told, and answers with the commit the pull request has to show next. The push is
-// never forced. Fake mode pushes nothing and waits for no commit.
-func (f *Factory) pushed(parent, ctx context.Context, r *Run, claim claimed) (string, bool) {
+// did what it was told, and answers with the commit the pull request has to show next. what names what
+// is pushed, the repair or the branch, for the record of a push that failed. The push is never forced.
+// Fake mode pushes nothing and waits for no commit.
+func (f *Factory) pushed(parent, ctx context.Context, r *Run, claim claimed, what string) (string, bool) {
 	if f.fake {
 		return "", true
 	}
@@ -432,8 +433,8 @@ func (f *Factory) pushed(parent, ctx context.Context, r *Run, claim claimed) (st
 		_, err = gitWithin(ctx, claim.worktree, fetchTimeout, "push", "--quiet", "origin", "HEAD:refs/heads/"+claim.branch)
 	}
 	if err != nil {
-		if !f.halted(parent, ctx, r, "pushed a repair") {
-			f.finish(r, outcomeFailed, "the repair could not be pushed to "+claim.branch+": "+err.Error(), nil)
+		if !f.halted(parent, ctx, r, "pushed "+what) {
+			f.finish(r, outcomeFailed, what+" could not be pushed to "+claim.branch+": "+err.Error(), nil)
 		}
 		return "", false
 	}

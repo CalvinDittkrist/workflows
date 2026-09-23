@@ -69,7 +69,6 @@ func claimsWithQuota(t *testing.T, q *quotaShim, c config, env ...string) (*fact
 	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
 	gh.loggedInAs(t, "factory-bot")
 	gh.assigns(t, "acme/edge-sensors", claimedIssue, "factory-bot")
-	gh.workerReports(t, "acme/edge-sensors", claimedIssue)
 	data := filepath.Join(t.TempDir(), "data")
 	gh.cloneInto(t, data, "acme/edge-sensors")
 	c["poll"], c["deadline"], c["data_dir"], c["repositories"] = "50ms", "90s", data, []string{"acme/edge-sensors"}

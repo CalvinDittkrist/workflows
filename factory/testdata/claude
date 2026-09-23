@@ -9,14 +9,12 @@
 #                      directory is on, the process and its group, every argument, and every
 #                      environment variable name (values are not written: only whether a name is
 #                      there is ever asked)
-#   CLAUDE_SHIM_PR     the pull request the session reports, by default the one of o/r that the
-#                      issue in the branch name gives; the factory reads it out of the result
 #   CLAUDE_SHIM_FAIL   when set, the session ends with this on its error output and exit 1
 #   CLAUDE_SHIM_RESULT the structured result of the session as one line of JSON, by default a
-#                      complete one with the pull request above; it is printed as it stands, so a
-#                      test can hand the factory one that does not fit the schema, or one with any
-#                      of the schema's fields: the pull request, the panel summary, the gate result
-#                      and the commits a session that stopped early reports
+#                      complete one of a session that stopped after the review, with a panel that
+#                      passed and a gate that passed; it is printed as it stands, so a test can hand
+#                      the factory one that does not fit the schema, or one with any of the schema's
+#                      fields: the pull request, the panel summary, the gate result and the commits
 #   CLAUDE_SHIM_NO_RESULT when set, the session ends well without printing a result line
 #   CLAUDE_SHIM_EXIT   the code the session exits with after its result line, 0 by default
 #   CLAUDE_SHIM_ERROR_SUBTYPE when set, the result line says the session ended in an error of this
@@ -29,6 +27,13 @@
 #                      what every session after the first one CLAUDE_SHIM_LOG records does instead of
 #                      CLAUDE_SHIM_SLEEP and CLAUDE_SHIM_RESULT, so a test can have the fix session of
 #                      a repair round wait or block while the work session before it reported
+#
+# The author session of the pr stage, the one started with --tools, is none of those: it is logged to
+# CLAUDE_SHIM_AUTHOR_LOG instead, counts as no call above, and reads only these two:
+#
+#   CLAUDE_SHIM_AUTHOR_RESULT  its structured result as one line of JSON, by default a title and a
+#                              body that closes the issue in the branch name
+#   CLAUDE_SHIM_AUTHOR_FAIL    when set, it ends with this on its error output and exit 1
 #
 # The structured result is the one thing a session owes the factory (ADR 0039).
 #
@@ -80,6 +85,11 @@ case "${1:-}" in
 esac
 
 log="${CLAUDE_SHIM_LOG:-/dev/null}"
+# The author session of the pr stage is the one started with --tools: it is logged apart and answers
+# apart, so the worker log and every variable above stay about the sessions that work the branch.
+author=""
+for argument in "$@"; do [ "$argument" = --tools ] && author=1; done
+[ -z "$author" ] || log="${CLAUDE_SHIM_AUTHOR_LOG:-/dev/null}"
 {
   echo "call"
   printf 'cwd %s\n' "$(pwd -P)"
@@ -90,6 +100,22 @@ log="${CLAUDE_SHIM_LOG:-/dev/null}"
   for argument in "$@"; do printf 'arg %s\n' "$argument"; done
   env | while IFS= read -r entry; do printf 'env %s\n' "${entry%%=*}"; done
 } >> "$log"
+
+issue=$(git rev-parse --abbrev-ref HEAD 2>/dev/null | sed -n 's#^[a-z][a-z]*/\([0-9][0-9]*\)-.*#\1#p')
+
+if [ -n "$author" ]; then
+  printf '%s\n' '{"type":"system","subtype":"init","model":"claude-opus-5","permissionMode":"auto","session_id":"9a1c3e70-2b4d-4f6e-8a0b-1c2d3e4f5a6b"}'
+  if [ -n "${CLAUDE_SHIM_AUTHOR_FAIL:-}" ]; then
+    echo "$CLAUDE_SHIM_AUTHOR_FAIL" >&2
+    exit 1
+  fi
+  output="${CLAUDE_SHIM_AUTHOR_RESULT:-}"
+  [ -n "$output" ] || output=$(printf '{"title":"feat: the work of issue %s","body":"Closes #%s\\n\\nWhat the branch changes."}' "${issue:-0}" "${issue:-0}")
+  text=$(printf '%s' "$output" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')
+  printf '{"type":"result","subtype":"success","is_error":false,"terminal_reason":"completed","num_turns":3,"total_cost_usd":0.25,"result":"%s","structured_output":%s,"usage":{"input_tokens":300,"cache_creation_input_tokens":400,"cache_read_input_tokens":9000,"output_tokens":600}}\n' \
+    "$text" "$output"
+  exit 0
+fi
 
 calls=$(grep -c '^call$' "$log" 2>/dev/null)
 if [ "${calls:-0}" -gt 1 ]; then
@@ -102,12 +128,9 @@ if [ -n "${CLAUDE_SHIM_FAIL:-}" ]; then
   exit 1
 fi
 
-issue=$(git rev-parse --abbrev-ref HEAD 2>/dev/null | sed -n 's#^[a-z][a-z]*/\([0-9][0-9]*\)-.*#\1#p')
-
 output="${CLAUDE_SHIM_RESULT:-}"
 if [ -z "$output" ]; then
-  output=$(printf '{"outcome":"complete","pullRequest":"%s","summary":"Panel: five PASS."}' \
-    "${CLAUDE_SHIM_PR:-https://github.com/o/r/pull/${issue:-0}}")
+  output='{"outcome":"complete","panelSummary":"review_rounds: 1\npanel: code=PASS security=PASS docs=PASS tests=PASS senior=PASS\nfixed: 0 (S1 0, S2 0, S3 0)\ndisputed: none","gateResult":"gate_result: pass (exit 0) at c0ffee0","summary":"stopped after review"}'
 fi
 
 printf '%s\n' '{"type":"system","subtype":"init","model":"claude-opus-5","permissionMode":"auto","session_id":"5f2d8c11-0b9e-4a3f-9d21-7c6e4b0a1f33"}'

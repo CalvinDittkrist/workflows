@@ -93,16 +93,16 @@ type block struct {
 // The worker never reports a stage; the skill it invokes is the stage.
 var stages = map[string]string{
 	"worker:work":            "implement",
-	"worker:review":          "review",
-	"worker:pr":              "pr",
+	"worker:review":          stageReview,
+	"worker:pr":              stagePR,
 	"worker:ci":              stageCI,
 	"worker:address-reviews": "reviews",
 }
 
 // ingest reads one line of the worker's stream into the run: its events, its stage, the totals the
 // factory counts from the assistant lines, and on the result line the worker's own totals, which
-// replace them.
-func (f *Factory) ingest(r *Run, line []byte) {
+// replace them. read is the reader of the session's structured output, readResult when it is nil.
+func (f *Factory) ingest(r *Run, line []byte, read func(json.RawMessage) (result, error)) {
 	var m streamLine
 	if json.Unmarshal(line, &m) != nil || m.Type == "" {
 		f.runs.event(r, Event{Kind: "error", Title: "the worker printed a line that is not the stream format", Body: string(line)})
@@ -174,7 +174,10 @@ func (f *Factory) ingest(r *Run, line []byte) {
 		// report's words ([ADR 0039]).
 		//
 		// [ADR 0039]: ../docs/adr/0039-every-session-reports-through-a-structured-result.md
-		got, err := readResult(m.StructuredOutput)
+		if read == nil {
+			read = readResult
+		}
+		got, err := read(m.StructuredOutput)
 		f.runs.update(r, func() {
 			if err != nil {
 				r.result, r.misfit = nil, err.Error()

@@ -17,14 +17,14 @@ import (
 // [ADR 0043]: ../docs/adr/0043-the-migration-runs-from-the-last-stage-to-the-first.md
 
 // ciClaim is the fixture every test of the ci stage starts from: #104 routed on acme/edge-sensors,
-// claimed by factory-bot, whose work session commits and reports its pull request.
+// claimed by factory-bot, whose work session commits and stops after the review; the pr stage opens
+// its pull request.
 func ciClaim(t *testing.T) (*ghShim, string) {
 	t.Helper()
 	gh := newGhShim(t)
 	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
 	gh.loggedInAs(t, "factory-bot")
 	gh.assigns(t, "acme/edge-sensors", claimedIssue, "factory-bot")
-	gh.workerReports(t, "acme/edge-sensors", claimedIssue)
 	gh.workerCommits(t, "worked.md")
 	// A host whose sessions commit has a git identity, which the merge of a conflict round commits as.
 	gh.env = append(gh.env, "GIT_AUTHOR_NAME=factory", "GIT_AUTHOR_EMAIL=factory@example.com",
@@ -43,7 +43,7 @@ func ciConfig(data string, knobs map[string]any) config {
 	return c
 }
 
-// pullOfTheClaim is the pull request the work session of ciClaim reports.
+// pullOfTheClaim is the pull request the pr stage opens for the claim of ciClaim.
 var pullOfTheClaim = fmt.Sprintf("https://github.com/acme/edge-sensors/pull/%d", claimedIssue)
 
 // saw waits until run 1 has an event of the factory whose title starts with that prefix.
@@ -63,6 +63,27 @@ func (f *factory) sawIn(t *testing.T, id int, prefix string) {
 			return false
 		}
 		return len(factoryTitles(run, prefix)) > 0
+	})
+}
+
+// repairPushed waits until a run has pushed the repair of a round: an event of the factory that starts
+// with "pushed " after one that starts a repair round, since the pr stage pushes the branch as well.
+func (f *factory) repairPushed(t *testing.T, id int) {
+	t.Helper()
+	f.eventually(t, 60*time.Second, fmt.Sprintf("the push of a repair round of run %d", id), func() bool {
+		var run apiRun
+		response := f.do(t, "GET", fmt.Sprintf("/api/runs/%d", id))
+		defer response.Body.Close()
+		if response.StatusCode != 200 || json.NewDecoder(response.Body).Decode(&run) != nil {
+			return false
+		}
+		titles := factoryTitles(run, "repair round", "pushed ")
+		for i := 1; i < len(titles); i++ {
+			if strings.HasPrefix(titles[i-1], "repair round") && strings.HasPrefix(titles[i], "pushed ") {
+				return true
+			}
+		}
+		return false
 	})
 }
 
@@ -87,7 +108,7 @@ func TestFailedChecksRunAFixSessionWithTheirLogsAndTheRunEndsReadyOnceGreen(t *t
 	gh.answer(t, "run view 4242 --repo acme/edge-sensors --log-failed", "test\tFAIL: TestUploadRetries (0.01s)\n")
 
 	f := gh.work(t, ciConfig(data, nil))
-	f.saw(t, "pushed ")
+	f.repairPushed(t, 1)
 	// Until GitHub shows the push, the pull request still reads failed at the commit the round was
 	// spent on, which is no reason for a second round.
 	f.never(t, time.Second, "the factory spent a second round on the head the first was spent on", func() bool {
@@ -126,9 +147,9 @@ func TestFailedChecksRunAFixSessionWithTheirLogsAndTheRunEndsReadyOnceGreen(t *t
 	if strings.Contains(brief, "- lint") {
 		t.Errorf("the fix session's brief names the check that passed:\n%s", brief)
 	}
-	// The work session stopped after its pull request: the ci stage is the factory's.
-	if stop := workers[0].settings(t).Env["WF_STOP_AFTER"]; stop != "pr" {
-		t.Errorf("the work session ran with WF_STOP_AFTER=%q, want pr", stop)
+	// The work session stopped after the review: the pr and ci stages are the factory's.
+	if stop := workers[0].settings(t).Env["WF_STOP_AFTER"]; stop != "review" {
+		t.Errorf("the work session ran with WF_STOP_AFTER=%q, want review", stop)
 	}
 }
 
@@ -143,7 +164,7 @@ func TestAConflictThatMergesCleanlyIsPushedWithoutASession(t *testing.T) {
 	f.saw(t, "ci: waiting")
 	moved := gh.commitOn(t, "acme/edge-sensors", "main")
 	gh.ciReads(t, "acme/edge-sensors", claimedIssue, ciPull{mergeable: "CONFLICTING"})
-	f.saw(t, "pushed ")
+	f.repairPushed(t, 1)
 	head := gh.head(t, "acme/edge-sensors", claimedBranch)
 	gh.ciReads(t, "acme/edge-sensors", claimedIssue, ciPull{head: head})
 	run := f.ended(t, 1)
@@ -180,7 +201,7 @@ func TestAConflictingMergeBriefsAFixSessionWithTheConflictedFiles(t *testing.T) 
 	gh.git(t, other, "commit", "-q", "-m", "docs: worked.md")
 	gh.git(t, other, "push", "-q", "origin", "HEAD:refs/heads/main")
 	gh.ciReads(t, "acme/edge-sensors", claimedIssue, ciPull{mergeable: "CONFLICTING"})
-	f.saw(t, "pushed ")
+	f.repairPushed(t, 1)
 	// Somebody pushed on top of the merge before GitHub showed it: the new head is judged all the same.
 	gh.ciReads(t, "acme/edge-sensors", claimedIssue, ciPull{head: "somebody-elses-push"})
 	run := f.ended(t, 1)
@@ -212,7 +233,7 @@ func TestARunOverItsRepairBudgetIsBlockedNamingTheFailingChecks(t *testing.T) {
 	gh.answer(t, "run view 4242 --repo acme/edge-sensors --log-failed", "FAIL: TestUploadRetries\n")
 
 	f := gh.work(t, ciConfig(data, map[string]any{"repair_rounds": 1}))
-	f.saw(t, "pushed ")
+	f.repairPushed(t, 1)
 	gh.ciReads(t, "acme/edge-sensors", claimedIssue, ciPull{head: gh.head(t, "acme/edge-sensors", claimedBranch),
 		checks: []map[string]any{failed("test", 4243)}})
 	run := f.ended(t, 1)
@@ -337,7 +358,7 @@ func TestAResumeWithAnOpenPullRequestStartsAtTheCIStage(t *testing.T) {
 	gh.ciReads(t, "acme/edge-sensors", claimedIssue, ciPull{checks: []map[string]any{failed("test", 4242)}})
 
 	f := gh.work(t, ciConfig(data, nil))
-	f.sawIn(t, 2, "pushed ")
+	f.repairPushed(t, 2)
 	gh.ciReads(t, "acme/edge-sensors", claimedIssue, ciPull{head: gh.head(t, "acme/edge-sensors", claimedBranch),
 		checks: []map[string]any{failed("test", 4242)}})
 	resumed := f.ended(t, 2)

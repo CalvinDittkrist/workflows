@@ -123,15 +123,19 @@ type Run struct {
 	// RepairRounds is how many repair rounds the ci stage has spent on that pull request, which the
 	// budget is held against (ci.repair_rounds). A resumed run on the same pull request carries the
 	// count on.
-	RepairRounds int        `json:"repairRounds"`
-	Reason       string     `json:"reason"`
-	Model        string     `json:"model"`
-	SessionID    string     `json:"sessionId"`
-	StartedAt    time.Time  `json:"startedAt"`
-	EndedAt      *time.Time `json:"endedAt"`
-	Turns        int        `json:"turns"`
-	CostUSD      float64    `json:"costUsd"`
-	Tokens       Tokens     `json:"tokens"`
+	RepairRounds int `json:"repairRounds"`
+	// Review is what the review stage handed on to the pr stage: the panel summary and the gate result
+	// the work session reported, and the commit the branch was at when it did. A resumed run whose
+	// branch is still at that commit and has no pull request open starts at the pr stage with it.
+	Review    *Review    `json:"review,omitempty"`
+	Reason    string     `json:"reason"`
+	Model     string     `json:"model"`
+	SessionID string     `json:"sessionId"`
+	StartedAt time.Time  `json:"startedAt"`
+	EndedAt   *time.Time `json:"endedAt"`
+	Turns     int        `json:"turns"`
+	CostUSD   float64    `json:"costUsd"`
+	Tokens    Tokens     `json:"tokens"`
 	// Totals says where turns, cost and tokens come from: worker when the session's result line
 	// reported them, factory while the factory counts them from the assistant lines — during the run,
 	// and at its end when the session ended without a result line, as it does whenever the factory
