@@ -71,9 +71,10 @@ func TestAReviewThatAsksForChangesRunsTheWorkerOnItInTheSameWorktree(t *testing.
 		t.Errorf("the follow-up run ended as %q (%s), want ready again", second.Outcome, second.Reason)
 	}
 	// The stage it opens in is its prompt, which no Skill call in the stream announces: a follow-up
-	// run stands at the reviews stage from its first moment, where a first run stands at implement.
-	if !equal(first.Stages, []string{"implement"}) || !equal(second.Stages, []string{"reviews"}) {
-		t.Errorf("the two runs went through the stages %v and %v, want [implement] and [reviews]", first.Stages, second.Stages)
+	// run stands at the reviews stage from its first moment, where a first run stands at implement
+	// and ends in the ci stage the factory runs.
+	if !equal(first.Stages, []string{"implement", "ci"}) || !equal(second.Stages, []string{"reviews"}) {
+		t.Errorf("the two runs went through the stages %v and %v, want [implement ci] and [reviews]", first.Stages, second.Stages)
 	}
 	if !second.SignalAt.Equal(requestedAt) {
 		t.Errorf("the follow-up run stands for a review submitted at %s, want the one at %s", second.SignalAt, requestedAt)

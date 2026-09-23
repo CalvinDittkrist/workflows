@@ -14,29 +14,42 @@ import (
 
 // A session is one print-mode call of Claude Code, and this is the one place such a call is built:
 // the agent, the prompt, the settings and the permission mode, the timeout of its stage and the JSON
-// schema of its result ([ADR 0039]). A run starts one session today, at the stage its signal names;
-// the stages that follow it in the pipeline run inside that session, as the worker plugin drives them.
+// schema of its result ([ADR 0039]). A run starts its first session at the stage its signal names;
+// the stages that follow it up to the pull request run inside that session, as the worker plugin
+// drives them, and the ci stage is the factory's own, which starts a fix session per repair round.
 //
 // [ADR 0039]: ../docs/adr/0039-every-session-reports-through-a-structured-result.md
 type session struct {
 	stage   string        // the stage the session is started at, as the run records it
-	prompt  string        // the slash command the session is given
+	prompt  string        // the slash command or the brief the session is given
 	timeout time.Duration // how long the session may run before its process group is ended
+	// stopAfter is the stage of the worker pipeline the session ends after (WF_STOP_AFTER), and empty
+	// for a session that runs the pipeline to its end ([ADR 0043]).
+	//
+	// [ADR 0043]: ../docs/adr/0043-the-migration-runs-from-the-last-stage-to-the-first.md
+	stopAfter string
+	// scripted is the scripted worker fake mode starts for this session, and empty for the one the
+	// issue's canned entry names.
+	scripted string
 }
 
 // The sessions a run can start. The work session is the one a local claim starts and the one every
 // run of an issue starts with — a first run as well as a resumed one, which derives where the work
-// stands from git and GitHub as any worker does. The reviews session is the follow-up run's: the
-// maintainer has read the pull request and asked for changes, so the session starts at the stage that
-// reads the review threads, and that stage ends by running the CI stage again.
+// stands from git and GitHub as any worker does — and it stops once the pull request is open, where
+// the factory's ci stage takes over. The reviews session is the follow-up run's: the maintainer has
+// read the pull request and asked for changes, so the session starts at the stage that reads the
+// review threads, and that stage ends by running the worker's CI stage again.
 //
 // The timeouts are fixed here and not in the host's configuration. They are a backstop above the
 // run's deadline, which stays the limit an operator sets and which ends a run with the outcome
 // timeout; a session that outruns its own timeout has failed, and the run says in which stage.
 var (
-	workSession    = session{stage: stages["worker:work"], prompt: "/worker:work", timeout: 4 * time.Hour}
+	workSession    = session{stage: stages["worker:work"], prompt: "/worker:work", timeout: 4 * time.Hour, stopAfter: "pr"}
 	reviewsSession = session{stage: stages["worker:address-reviews"], prompt: "/worker:address-reviews", timeout: 3 * time.Hour}
 )
+
+// fixTimeout is how long one fix session of the ci stage may run.
+const fixTimeout = time.Hour
 
 // sessionTimeoutOverride replaces the timeout of every session when it is set, as a Go duration. It is
 // set at link time by the tests, which cannot wait out hours, and by nothing a host configures.
@@ -48,6 +61,15 @@ func sessionFor(signal string) session {
 	if signal == signalChangesRequested {
 		s = reviewsSession
 	}
+	return s.overridden()
+}
+
+// fixSession is the session of one repair round of the ci stage, given the brief of that round.
+func fixSession(brief string) session {
+	return session{stage: stageCI, prompt: brief, timeout: fixTimeout, scripted: "fix"}.overridden()
+}
+
+func (s session) overridden() session {
 	if d, err := time.ParseDuration(sessionTimeoutOverride); err == nil && d > 0 {
 		s.timeout = d
 	}
@@ -78,10 +100,14 @@ func (o overran) Error() string {
 func (f *Factory) command(ctx context.Context, s session, entry Entry, claim claimed) (*exec.Cmd, error) {
 	issue := entry.Issue
 	if f.fake {
-		args := []string{"scripted-worker", issue.scenario, issue.Repository, strconv.Itoa(issue.Number)}
+		scenario := issue.scenario
+		if s.scripted != "" {
+			scenario = s.scripted
+		}
+		args := []string{"scripted-worker", scenario, issue.Repository, strconv.Itoa(issue.Number)}
 		return exec.CommandContext(ctx, f.self, append(args, f.settings.WorkerArgs...)...), nil
 	}
-	variables := workerVariables(entry, claim, f.settings.WorkerEnv)
+	variables := workerVariables(entry, claim, f.settings.WorkerEnv, s, f.ciFor(issue.Repository))
 	settings, err := workerSettings(variables)
 	if err != nil {
 		return nil, err

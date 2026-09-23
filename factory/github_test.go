@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -680,6 +681,82 @@ func newGhShim(t *testing.T) *ghShim {
 		"GH_SHIM_FAIL="+g.failing, "GH_SHIM_STALL="+g.stalling, "GH_SHIM_HANG="+g.hanging,
 		"CLAUDE_SHIM_LOG="+g.worker, "CLAUDE_SHIM_PLUGIN_LOG="+g.plugins)
 	return g
+}
+
+// ciPull is what a pull request is to the ci stage: how it merges, its checks and its reviews. Its
+// zero value is a mergeable pull request of the claimed branch whose one check passed long ago, with
+// no review and no thread.
+type ciPull struct {
+	mergeable string           // MERGEABLE when empty
+	branch    string           // claimedBranch when empty
+	head      string           // the head commit, "c0ffee" when empty
+	checks    []map[string]any // one passed check when nil
+	reviews   []map[string]any
+	threads   []map[string]any
+}
+
+// ciReads is the answer to the three reads the ci stage makes of a pull request each time it looks:
+// the pull request with its rollup, its reviews and its review threads. A later call replaces them,
+// which is how a test moves a pull request on while the factory waits on it.
+func (g *ghShim) ciReads(t *testing.T, repository string, number int, p ciPull) {
+	t.Helper()
+	if p.mergeable == "" {
+		p.mergeable = "MERGEABLE"
+	}
+	if p.branch == "" {
+		p.branch = claimedBranch
+	}
+	if p.head == "" {
+		p.head = "c0ffee"
+	}
+	if p.checks == nil {
+		p.checks = []map[string]any{passed("gate")}
+	}
+	if p.reviews == nil {
+		p.reviews = []map[string]any{}
+	}
+	if p.threads == nil {
+		p.threads = []map[string]any{}
+	}
+	g.answer(t, pullViewCall(repository, number), marshal(t, map[string]any{
+		"mergeable": p.mergeable, "headRefName": p.branch, "headRefOid": p.head, "isCrossRepository": false,
+		"commits": []map[string]any{{"committedDate": "2026-01-01T00:00:00Z"}}, "statusCheckRollup": p.checks}))
+	g.answer(t, "api --paginate "+reviewsRequest(repository, number), marshal(t, p.reviews))
+	g.answer(t, "api graphql --input -", marshal(t, map[string]any{"data": map[string]any{"repository": map[string]any{
+		"pullRequest": map[string]any{"reviewThreads": map[string]any{"nodes": p.threads}}}}}))
+}
+
+// pullViewCall is the read of a pull request the ci stage judges.
+func pullViewCall(repository string, number int) string {
+	return fmt.Sprintf("pr view %d --repo %s --json mergeable,headRefName,headRefOid,isCrossRepository,commits,statusCheckRollup", number, repository)
+}
+
+// passed, failed and pending are checks of the rollup as GitHub Actions reports them.
+func passed(name string) map[string]any {
+	return map[string]any{"name": name, "status": "COMPLETED", "conclusion": "SUCCESS", "completedAt": "2026-01-01T00:00:00Z",
+		"detailsUrl": "https://github.com/o/r/actions/runs/7/job/1"}
+}
+
+func failed(name string, run int) map[string]any {
+	return map[string]any{"name": name, "status": "COMPLETED", "conclusion": "FAILURE", "completedAt": "2026-01-01T00:00:00Z",
+		"detailsUrl": fmt.Sprintf("https://github.com/o/r/actions/runs/%d/job/1", run)}
+}
+
+func pending(name string) map[string]any {
+	return map[string]any{"name": name, "status": "IN_PROGRESS", "conclusion": "",
+		"detailsUrl": "https://github.com/o/r/actions/runs/9/job/1"}
+}
+
+// openPullsListed is the answer to the one read a resumed run makes before it decides where to start: the
+// open pull requests of the branch it holds, which are the ones given.
+func (g *ghShim) openPullsListed(t *testing.T, repository, branch string, numbers ...int) {
+	t.Helper()
+	pulls := []map[string]any{}
+	for _, n := range numbers {
+		pulls = append(pulls, map[string]any{"number": n, "head": map[string]any{"ref": branch, "repo": map[string]any{"full_name": repository}}})
+	}
+	owner, _, _ := strings.Cut(repository, "/")
+	g.answer(t, "api repos/"+repository+"/pulls?state=open&head="+url.QueryEscape(owner+":"+branch)+"&per_page=10", marshal(t, pulls))
 }
 
 // start runs the real binary against this shim, paused: it reads the line and claims nothing.
