@@ -27,7 +27,7 @@ Run the following as root unless it says otherwise.
 1. **The user and its directories.**
 
    ```sh
-   apt-get install -y git gh jq make curl
+   apt-get install -y git gh jq make curl xz-utils
    useradd --create-home --shell /bin/bash factory
    install -d -o factory -g factory -m 0700 /var/lib/factory
    install -d -m 0755 /etc/factory
@@ -40,16 +40,16 @@ Run the following as root unless it says otherwise.
    arch=aarch64   # or x86_64: uname -m
    sum=12b331c1d2db6b9eb13cfca64306b1b157a86eb69db83023e261eaa7e7c14588   # x86_64: 8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198
    curl -fsSLO "https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.$arch.tar.xz"
-   echo "$sum  shellcheck-v0.11.0.linux.$arch.tar.xz" | sha256sum --check
-   tar -xJf "shellcheck-v0.11.0.linux.$arch.tar.xz"
-   install -m 0755 shellcheck-v0.11.0/shellcheck /usr/local/bin/shellcheck
+   echo "$sum  shellcheck-v0.11.0.linux.$arch.tar.xz" | sha256sum --check &&
+     tar -xJf "shellcheck-v0.11.0.linux.$arch.tar.xz" &&
+     install -m 0755 shellcheck-v0.11.0/shellcheck /usr/local/bin/shellcheck
    shellcheck --version           # version: 0.11.0
 
    goarch=arm64   # or amd64: dpkg --print-architecture
    go=$(curl -fsSL 'https://go.dev/dl/?mode=json' | jq -r '[.[].version | select(startswith("go1.26."))][0]')
    curl -fsSLO "https://go.dev/dl/$go.linux-$goarch.tar.gz"
-   curl -fsSL 'https://go.dev/dl/?mode=json' | jq -r --arg f "$go.linux-$goarch.tar.gz" '.[].files[] | select(.filename == $f) | "\(.sha256)  \(.filename)"' | sha256sum --check
-   rm -rf /usr/local/go && tar -xzf "$go.linux-$goarch.tar.gz" -C /usr/local
+   curl -fsSL 'https://go.dev/dl/?mode=json' | jq -r --arg f "$go.linux-$goarch.tar.gz" '.[].files[] | select(.filename == $f) | "\(.sha256)  \(.filename)"' | sha256sum --check &&
+     rm -rf /usr/local/go && tar -xzf "$go.linux-$goarch.tar.gz" -C /usr/local
    /usr/local/go/bin/go version   # go version go1.26.<patch> linux/<arch>
 
    curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
@@ -57,7 +57,7 @@ Run the following as root unless it says otherwise.
    node --version                 # v22.<minor>.<patch>
    ```
 
-   Pasted into a shell, a failed `sha256sum --check` does not stop the lines after it: install nothing that `sha256sum` did not answer `OK` for. `/usr/local/go/bin` is not on a login's `PATH`, so the service puts it there (see [Service](#service)). staticcheck is built with that Go as the user `factory`, into `~/go/bin`, where the `Makefile` looks for it:
+   Each archive is unpacked and installed only when `sha256sum --check` answers `OK`, which is why those lines are chained with `&&`; a pasted block runs on past a failed line. `/usr/local/go/bin` is not on a login's `PATH`, so the service puts it there (see [Service](#service)). staticcheck is built with that Go as the user `factory`, into `~/go/bin`, where the `Makefile` looks for it:
 
    ```sh
    sudo -iu factory /usr/local/go/bin/go install honnef.co/go/tools/cmd/staticcheck@2026.2.1
@@ -71,7 +71,7 @@ Run the following as root unless it says otherwise.
 
    Run it only where no parent directory is writable by anyone but root: npx runs the `node_modules/playwright` of the nearest parent that has one, and the workers write to `/tmp` and to the clones under `/var/lib/factory`, so from there root would run what a worker left. When CI moves a pin, move the host's in the same way before the next run.
 
-   The gate's length is what tells you whether a host is fast enough. A worker runs it twice per issue, and on a Raspberry Pi 4 this repository's full gate takes an estimated 12 to 15 minutes: in run 4 of #106 (2026-09-22) the first four targets alone took 559 s, and the next attempt was cut off at 600 s in `go test -race`. That is longer than the 600 s ceiling of one Bash tool call, which is why that run could not reach `ready`. The worker now runs the gate detached from the call and waits for it in 540 s slices ([ADR 0019](adr/0019-the-gate-runs-once-per-review-round.md)), so a slow host costs time and no longer blocks a run. To judge a host, time `make check` in a clone of each connected repository as the user `factory`.
+   The gate's length is what tells you whether a host is fast enough. A worker runs it twice per issue, and on a Raspberry Pi 4 this repository's full gate takes an estimated 12 to 15 minutes: in run 4 of #106 (2026-09-22) the first four targets alone took 559 s, and the next attempt was cut off at 600 s in `go test -race`. That is longer than the 600 s ceiling of one Bash tool call, which is why that run could not reach `ready`. The worker now runs the gate detached from the call and waits for it in 540 s slices ([ADR 0019](adr/0019-the-gate-runs-once-per-review-round.md)), so a slow host costs time and no longer blocks a run. To judge a host, time the gate in a clone of each connected repository as the user `factory`, with the `PATH` the service gives it: `time env PATH="/usr/local/go/bin:$PATH" make check`.
 3. **Claude Code**, as the user `factory` (`sudo -iu factory`), with the native installer, which needs no Node and puts `claude` in `~/.local/bin` ([setup](https://code.claude.com/docs/en/setup.md)):
 
    ```sh
