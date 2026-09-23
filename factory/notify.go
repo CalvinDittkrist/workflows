@@ -77,7 +77,8 @@ func notifies(r Run, held holding) bool {
 // A paused start marks what it owes and makes none of it: a pause writes nothing to GitHub ([ADR
 // 0023]), and -paused is the operator's brake, which has to hold for a data directory started only
 // to be looked at as well. The marks are the part that cannot wait — a run this start found active
-// is not found active by the next one — and what they mark is made by the first start that works.
+// is not found active by the next one — and what they mark is made once the factory works: by the
+// poll that reads the pause gone from the configuration, or by the first start that works.
 //
 // [ADR 0023]: ../docs/adr/0023-github-is-the-only-control-surface-of-the-factory.md
 func (f *Factory) NotifyOwed(ctx context.Context) {
@@ -89,7 +90,7 @@ func (f *Factory) NotifyOwed(ctx context.Context) {
 			f.owe(run)
 		}
 	}
-	if f.settings.Paused {
+	if f.Paused() {
 		owed := 0
 		for _, record := range f.runs.list() {
 			if record.Notified == notifyPending {
@@ -99,6 +100,16 @@ func (f *Factory) NotifyOwed(ctx context.Context) {
 		if owed > 0 {
 			log.Printf("paused: %d ending(s) owe the maintainer a notification, made when the factory works again", owed)
 		}
+		return
+	}
+	f.deliverOwed(ctx)
+}
+
+// deliverOwed makes every notification that is marked owed and not yet made. It is called by a start
+// that works and by the poll that finds the configuration no longer pausing a factory that started
+// paused, which is when "made when the factory works again" comes due.
+func (f *Factory) deliverOwed(ctx context.Context) {
+	if !f.notifying() {
 		return
 	}
 	for _, record := range f.runs.list() {

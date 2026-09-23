@@ -75,7 +75,7 @@ func (f *Factory) status(w http.ResponseWriter, _ *http.Request) {
 	switch {
 	case connecting: // the clones of the connected repositories are being made; nothing is polled yet
 		state = "connecting"
-	case f.settings.Paused:
+	case f.Paused():
 		state = "paused"
 	case quotaUntil != nil:
 		state = "waiting-for-quota"

@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -80,6 +81,15 @@ type Factory struct {
 	self     string        // this binary, which fake mode starts again as the scripted worker
 	wake     chan struct{} // a run ended: the next entry need not wait for the next poll
 	active   sync.WaitGroup
+
+	// paused is the one setting taken over while the factory runs: the configuration file is read
+	// again on every poll for it (followPause), so a pause needs no restart, and the restart's SIGTERM
+	// no longer interrupts the run that is going. brake is -paused, which no configuration undoes, and
+	// unread the error the last reading of the file failed with, so the log says it once.
+	paused atomic.Bool
+	config string
+	brake  bool
+	unread string
 
 	mu    sync.Mutex
 	queue []Issue
@@ -169,6 +179,7 @@ func New(settings Settings, fake bool) (*Factory, error) {
 	f := &Factory{settings: settings, fake: fake, runs: runs, started: time.Now(), self: self,
 		wake: make(chan struct{}, 1), held: map[string]bool{}, cancelling: map[int]context.CancelCauseFunc{},
 		askedHeld: map[string]time.Time{}}
+	f.paused.Store(settings.Paused)
 	f.source = newGitHub(settings.Repositories, settings.Label)
 	if fake {
 		f.source = &canned{repositories: settings.Repositories, started: f.started}
@@ -199,6 +210,7 @@ func (f *Factory) Connect(ctx context.Context) {
 // run ends. It returns when the context is done and the run that was active has ended.
 func (f *Factory) Work(ctx context.Context) {
 	for ctx.Err() == nil {
+		f.followPause(ctx)
 		read := f.refreshQueue(ctx)
 		f.letIssuesGo(ctx, read.letGo)
 		f.refreshRequested(ctx)
@@ -216,6 +228,46 @@ func (f *Factory) Work(ctx context.Context) {
 		}
 	}
 	f.active.Wait()
+}
+
+// Follow has the factory read paused from its configuration file again on every poll, with -paused
+// as the brake that holds whatever the file says. Without it the pause is what the factory started
+// with.
+func (f *Factory) Follow(config string, brake bool) {
+	f.config, f.brake = config, brake
+}
+
+// Paused says whether the factory is paused now. A pause holds everything this host does by itself:
+// nothing is claimed, resumed, followed up or let go, and a run that is going finishes.
+func (f *Factory) Paused() bool { return f.paused.Load() }
+
+// followPause reads the configuration file again and takes paused from it; every other setting stays
+// the one the factory started with and needs a restart (docs/factory-runbook.md). A file that cannot
+// be read or is refused changes nothing: the factory goes on as it is and says so once, until the file
+// reads again. Only the working loop calls it, so config and unread are its own.
+func (f *Factory) followPause(ctx context.Context) {
+	if f.config == "" {
+		return
+	}
+	read, err := Load(f.config)
+	if err != nil {
+		if said := err.Error(); said != f.unread {
+			f.unread = said
+			log.Printf("error: %v; the factory goes on with the settings it runs with (paused=%v) and reads the file again on the next poll", err, f.Paused())
+		}
+		return
+	}
+	f.unread = ""
+	paused := read.Paused || f.brake
+	if f.paused.Swap(paused) == paused {
+		return
+	}
+	if paused {
+		log.Printf("paused by the configuration: a run that is going finishes, and nothing else is started or let go")
+		return
+	}
+	log.Printf("working again: the configuration no longer pauses the factory")
+	f.deliverOwed(ctx)
 }
 
 // refreshQueue derives the line of routed issues of all connected repositories. It is asked from the
@@ -276,7 +328,7 @@ const heldPolls = 10
 // [ADR 0023]: ../docs/adr/0023-github-is-the-only-control-surface-of-the-factory.md
 func (f *Factory) heldIssuesDue() []Held {
 	out := []Held{}
-	if f.settings.Paused {
+	if f.Paused() {
 		return out
 	}
 	held := holdings(f.runs.list())
@@ -333,7 +385,7 @@ func (f *Factory) heldIssuesDue() []Held {
 //
 // [ADR 0026]: ../docs/adr/0026-the-factory-never-deletes-work-on-its-own.md
 func (f *Factory) letIssuesGo(ctx context.Context, letGo map[string]string) {
-	if len(letGo) == 0 || f.settings.Paused || ctx.Err() != nil {
+	if len(letGo) == 0 || f.Paused() || ctx.Err() != nil {
 		return
 	}
 	held := holdings(f.runs.list())
@@ -408,7 +460,7 @@ func (f *Factory) warn(r *Run, title, warning string) {
 // reset nothing starts either. The quota is checked when there is a run to start and not otherwise:
 // an idle line asks nothing of the provider.
 func (f *Factory) dispatch(ctx context.Context) {
-	if f.settings.Paused || ctx.Err() != nil {
+	if f.Paused() || ctx.Err() != nil {
 		return
 	}
 	for _, r := range f.runs.list() {
