@@ -798,7 +798,7 @@ func (c ghRollup) check() check {
 // threadsQuery reads the review threads of one pull request: the id a reply names each by, whether it
 // is resolved, where it is, and who opened it with what.
 const threadsQuery = `query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){` +
-	`reviewThreads(first:100){nodes{id isResolved path line comments(first:1){nodes{author{login} url body}}}}}}}`
+	`reviewThreads(first:100){nodes{id isResolved path line comments(first:1){nodes{author{__typename login} url body}}}}}}}`
 
 // replyMutation and resolveMutation are the two calls that answer one thread: a reply in it, and its
 // resolution, which is what the worker's pr-resolve.sh makes.
@@ -820,6 +820,7 @@ type ghThreads struct {
 						Comments   struct {
 							Nodes []struct {
 								Author struct {
+									Type  string `json:"__typename"`
 									Login string `json:"login"`
 								} `json:"author"`
 								URL  string `json:"url"`
@@ -882,14 +883,17 @@ func (g *gitHub) pullState(ctx context.Context, held Held, bots []string) (pullR
 			continue
 		}
 		open := thread{ID: t.ID, Path: t.Path, Line: t.Line}
+		bot := false
 		if len(t.Comments.Nodes) > 0 {
 			first := t.Comments.Nodes[0]
 			open.Login, open.URL, open.Body = first.Author.Login, first.URL, first.Body
+			bot = first.Author.Type == "Bot"
 		}
 		// Anybody may comment on a pull request of a public repository, and what a thread says becomes
 		// the brief of a session that pushes: only a thread a writer or a bot the host waits for opened
-		// asks for anything.
-		asks := slices.Contains(bots, open.Login)
+		// asks for anything. GraphQL gives a bot's login without [bot], so the account's type is what
+		// tells the bot from a user of the same name.
+		asks := bot && slices.Contains(bots, open.Login)
 		if !asks && open.Login != "" {
 			if asks, err = g.mayPush(ctx, held.Repository, open.Login, "thread "+open.ID); err != nil {
 				return pullReading{}, err
