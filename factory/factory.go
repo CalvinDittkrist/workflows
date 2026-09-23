@@ -492,6 +492,13 @@ func (f *Factory) hold(repository, reason string) {
 // and a host whose clock is minutes ahead answers a routing made inside that drift only after the
 // label is set once more.
 //
+// A lost claim lets nothing go, because it held nothing, and it stands in the way of the routing it
+// answered and of no later one: the issue whose latest run ended lost comes back into the routed
+// part when the label is set again after that run's signal, and the claim then finds the branch
+// name free, or finds this factory's own branch (orphaned), or loses once more. The label that was
+// on the issue when the claim was lost is answered by that run, so a foreign claim is still met
+// once per routing and never on every poll.
+//
 // Only a connected repository is in the line, held work included: a repository the configuration no
 // longer names is one this host is not to work, whatever its records say it once held. Nothing of it
 // is touched or deleted — the branch, the worktree and the assignee stay — and connecting it again
@@ -551,6 +558,8 @@ func (f *Factory) waiting() []Entry {
 			out = append(out, Entry{Issue: issue, Signal: signalRouted, SignalAt: issue.RoutedAt})
 		case gone.letGo && issue.RoutedAt.After(*gone.let.LetGoAt) && issue.RoutedAt.After(gone.last.SignalAt):
 			out = append(out, Entry{Issue: issue, Signal: signalRouted, SignalAt: issue.RoutedAt, resume: gone.let})
+		case !gone.holds && gone.idle && gone.last.Outcome == outcomeLost && issue.RoutedAt.After(gone.last.SignalAt):
+			out = append(out, Entry{Issue: issue, Signal: signalRouted, SignalAt: issue.RoutedAt})
 		}
 	}
 	return out
@@ -626,7 +635,7 @@ func (f *Factory) execute(parent context.Context, r *Run, entry Entry) {
 		if errors.Is(err, errLost) {
 			// Another claimer created the branch first. Nothing here was touched: no assignee, no
 			// worktree, no worker ([ADR 0024]). The run is the record that this factory will not try
-			// the issue again.
+			// the issue again until it is routed again (waiting).
 			f.finish(r, outcomeLost, "another claimer holds "+claim.branch+" on the remote; this run touched nothing else", nil)
 			return
 		}

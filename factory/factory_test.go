@@ -969,6 +969,10 @@ func TestTheReportIsReadFromMarkdown(t *testing.T) {
 		{"a heading over a summary", "## ready: https://github.com/a/b/pull/7\n\nCI green.", "ready", "https://github.com/a/b/pull/7"},
 		{"a list item after a preamble", "Here is where I got to.\n\n- `blocked: the issue needs Herdr`", "blocked", "the issue needs Herdr"},
 		{"a reason over several lines", "blocked: the brief contradicts ADR 0012.\n\ndecision needed: drop the step.", "blocked", "the brief contradicts ADR 0012.\n\ndecision needed: drop the step."},
+		{"a bold word before the pull request", "**ready:** https://github.com/a/b/pull/7", "ready", "https://github.com/a/b/pull/7"},
+		{"a bold word before the reason", "**Blocked:** Go's race detector can't run on this host.\n\nIt needs cgo.", "blocked", "Go's race detector can't run on this host.\n\nIt needs cgo."},
+		{"a code word before the reason", "`blocked:` the issue needs Herdr", "blocked", "the issue needs Herdr"},
+		{"a reason that opens with code", "blocked: `make check` fails on this host", "blocked", "`make check` fails on this host"},
 		{"no report at all", "I have pushed the branch.", "", ""},
 		{"the word in a sentence", "The run is ready: nothing is left to do.", "", ""},
 	} {
