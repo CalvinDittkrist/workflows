@@ -44,8 +44,8 @@ const handoverTimeout = 2 * time.Minute
 var errHandoverCut = errors.New("letting the issue go took longer than " + handoverTimeout.String())
 
 // letGo gives one issue back, in the order that keeps the work: push, then the worktree and the
-// local branch, then the branch on the remote if it holds nothing or was merged, then the assignee if no pull
-// request came of the issue. The record is marked last and only when the worktree is gone and this
+// local branch, then the branch on the remote if it holds nothing or was merged, then the assignee
+// if no pull request came of the issue. The record is marked last and only when the worktree is gone and this
 // host is off the issue, because the mark is what says the issue is out of this factory's hands: a
 // run marked while its worktree is still there would leave that directory on the host for good, and
 // one marked while GitHub still names this host as the assignee would leave an issue nobody — no

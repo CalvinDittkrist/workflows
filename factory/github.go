@@ -339,7 +339,9 @@ func (g *gitHub) decided(ctx context.Context, held Held) (string, error) {
 func (g *gitHub) decidedOnPull(ctx context.Context, held Held) (string, error) {
 	pull, named, err := readPull(ctx, held.Repository, held.PullRequest)
 	if err != nil || !named {
-		return "", err // a record without a pull request URL is nothing to ask about
+		// A pull request that could not be read is an error to say; a record without a pull request
+		// URL is nothing to ask about.
+		return "", err
 	}
 	if !pull.of(held.Repository, held.Branch) {
 		g.refuse(held.key(), held.PullRequest,
@@ -359,11 +361,11 @@ func (g *gitHub) decidedOnPull(ctx context.Context, held Held) (string, error) {
 // readPull asks GitHub for the pull request a record names, and answers false for a record whose
 // link is no pull request URL at all.
 func readPull(ctx context.Context, repository, link string) (ghPull, bool, error) {
-	found := pullRequestURL.FindStringSubmatch(link)
-	if found == nil {
+	number, ok := pullNumber(link)
+	if !ok {
 		return ghPull{}, false, nil
 	}
-	raw, err := gh(ctx, "api", "repos/"+repository+"/pulls/"+found[2])
+	raw, err := gh(ctx, "api", pullRequestRequest(repository, number))
 	if err != nil {
 		return ghPull{}, true, err
 	}
