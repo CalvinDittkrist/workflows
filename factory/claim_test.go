@@ -526,9 +526,10 @@ func TestAClaimAnotherClaimerWonIsRecordedAsLostAndTouchesNothingElse(t *testing
 	// And it does not try the issue again while the branch is there: the run is that record. The
 	// issue stays routed and unassigned, which is also what a released issue looks like — and it was
 	// unassigned after this run began, so the one thing that keeps this factory away from a claim
-	// that is not its own is that it holds nothing here.
+	// that is not its own is that it holds nothing here. The label is the one the lost run answered;
+	// only setting it again would queue the issue once more.
 	gh.timeline(t, "acme/edge-sensors", claimedIssue,
-		labeled("factory", run.StartedAt.Add(-6*time.Hour)), unassigned("somebody", run.StartedAt.Add(time.Minute)))
+		labeled("factory", run.SignalAt), unassigned("somebody", run.StartedAt.Add(time.Minute)))
 	gh.issues(t, "acme/edge-sensors", touched(openIssue(claimedIssue, claimedTitle, run.StartedAt.Add(-72*time.Hour)), run.StartedAt.Add(time.Minute)))
 	asked := "api " + issuesRequest("acme/edge-sensors", "factory")
 	f.eventually(t, 20*time.Second, "several more polls", func() bool { return gh.made(t, asked) >= 8 })
