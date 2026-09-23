@@ -119,10 +119,10 @@ Run the following as root unless it says otherwise.
    ```
 
    Install nothing that `sha256sum` did not answer `OK` for.
-7. **quota-axi** in a pinned version. The factory reads the output of quota-axi 0.1.50 ([ADR 0037](adr/0037-the-quota-check-waits-below-12-percent-of-the-workers-scope.md)), which needs Node 22.19 or later (`engines` of the package). Node 22 from NodeSource, installed with the gate's tools, is that; then, as root:
+7. **quota-axi** in a pinned version. The factory reads the output of quota-axi 0.1.49 ([ADR 0037](adr/0037-the-quota-check-waits-below-12-percent-of-the-workers-scope.md)), which needs Node 22.19 or later (`engines` of the package). Node 22 from NodeSource, installed with the gate's tools, is that. Do not move the pin to 0.1.50: that version reads the `utilization` of Claude's usage endpoint, which is the percentage used, as the percentage remaining, so the check waits while the window is fresh and starts runs when it is nearly used up. As root:
 
    ```sh
-   npm install -g quota-axi@0.1.50
+   npm install -g quota-axi@0.1.49
    command -v quota-axi   # /usr/bin/quota-axi, the path for quota_axi below
    ```
 
@@ -246,7 +246,7 @@ The factory updates the `workflows` marketplace and the `worker` plugin before e
 
 - **Claude Code**, as the user `factory`: `claude update`, then `claude --version`. Every run records the version it was made with.
 - **The factory binary**: download and check it as in [Installation](#installation), then `systemctl stop factory`, `install -m 0755 factory-linux-$arch /usr/local/bin/factory`, `systemctl start factory`, and look for the new version in the journal's first line.
-- **quota-axi**: the factory reads the output of the pinned version, so move the pin only after reading the new version's changelog: `npm install -g quota-axi@<version>`, restart nothing. If the factory cannot read its answer, every run carries a warning that the check could not answer and starts regardless ([ADR 0028](adr/0028-the-quota-check-is-a-courtesy-not-a-guard.md)); install the pinned version again.
+- **quota-axi**: the factory reads the output of the pinned version, so move the pin only after reading the new version's changelog and comparing its Claude percentages with Claude Code's `/usage` (0.1.50 reports the used percentage as remaining): `npm install -g quota-axi@<version>`, restart nothing. If the factory cannot read its answer, every run carries a warning that the check could not answer and starts regardless ([ADR 0028](adr/0028-the-quota-check-is-a-courtesy-not-a-guard.md)); install the pinned version again.
 
 ### Pausing
 Set `"paused": true` in the configuration and save it; the factory reads it at its next poll, with no restart. A run that is going finishes with its own outcome, notified like any ending. After it the paused factory shows the line, polls GitHub and writes nothing there: it claims, resumes, follows up, notifies and lets go of nothing, and the dashboard says it is paused. Set `"paused": false` to unpause it the same way; the next poll claims again, and the endings a paused start owed are notified then.
