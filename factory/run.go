@@ -379,7 +379,9 @@ func (s *Store) count(r *Run, msg message, sub bool) {
 }
 
 // unpriced is the models whose messages the cost a run ends with leaves out, sorted: none when the
-// worker reported its own totals, which are what Claude Code billed.
+// worker reported its own totals, which are what Claude Code billed. The list lives in memory only:
+// a run a later start finds cut off keeps the cost counted until then and says nothing of a model it
+// left out, which understates a record the host lost anyway.
 func (s *Store) unpriced(r *Run) []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
