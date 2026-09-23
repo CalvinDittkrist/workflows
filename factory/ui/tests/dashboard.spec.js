@@ -104,9 +104,11 @@ test('the stage line and the outcome box show the scripted states', async ({ pag
   await page.goto(working(`/#run=${READY_RUN}`))
   const stages = detail(page).locator('.steps li')
   await expect(stages).toHaveText(['implement', 'review', 'pr', 'ci', 'reviews'])
-  // The ready run went through every stage and stopped in the last one it invoked.
+  // The ready run went through the stages up to ci, the one the factory ran itself and ended in, and
+  // never reached reviews, which only a follow-up run stands at.
   await expect(stages.nth(0)).toHaveClass('done')
-  await expect(stages.nth(4)).toHaveClass(/at/)
+  await expect(stages.nth(3)).toHaveClass(/at/)
+  await expect(stages.nth(4)).not.toHaveClass(/at|done/)
   await expect(detail(page).locator('.outcome')).toContainText('ready')
   await expect(detail(page).getByRole('link')).toHaveAttribute(
     'href',
@@ -131,8 +133,9 @@ test('the selected run shows what it cost, how full its context came and what it
   page,
 }) => {
   await page.goto(working(`/#run=${WARNED_RUN}`))
-  await expect(detail(page).locator('.facts').first()).toContainText('$4.18')
-  await expect(detail(page).locator('.facts').first()).toContainText('23 turns')
+  // Its two sessions, the work session and the fix session of its conflict, are summed.
+  await expect(detail(page).locator('.facts').first()).toContainText('$8.36')
+  await expect(detail(page).locator('.facts').first()).toContainText('46 turns')
   await expect(detail(page).locator('.facts').first()).not.toContainText('counted')
   await expect(detail(page).locator('.facts').first()).toContainText(/\d+\.\dk context peak/)
   await expect(detail(page).locator('.warnings li')).toContainText('left a process behind')
@@ -149,7 +152,10 @@ test('the selected run shows what it cost, how full its context came and what it
 test('the live log sets the events of the worker’s subagents in', async ({ page }) => {
   await page.goto(working(`/#run=${READY_RUN}`))
   const log = detail(page).locator('.log')
-  await expect(log.locator('.ev-result')).toContainText('result: success')
+  // The ready run had two sessions, its work session and the fix session of its repair round, and
+  // each ended in a result line.
+  await expect(log.locator('.ev-result')).toHaveCount(2)
+  await expect(log.locator('.ev-result').last()).toContainText('result: success')
   const subagent = log.locator('.ev-sub').first()
   await expect(subagent).toContainText('Read the diff under review')
   // Set in: what a subagent did stands further right than what the worker itself did.
@@ -257,7 +263,7 @@ test('a run that is over is read once, and a run that is not there too', async (
   // Both of these are written once and never again, so the page stops asking after the first answer.
   // Counting starts once that answer stands: what is counted here is what a poll would have added.
   for (const [run, shown] of [
-    [READY_RUN, detail(page).locator('.ev-result')],
+    [READY_RUN, detail(page).locator('.ev-result').last()],
     [999, detail(page).locator('.none')],
   ]) {
     await page.goto(working(`/#run=${run}`))
@@ -326,7 +332,7 @@ const twice = (page, endpoint) => {
 
 test('the layout holds', async ({ page }) => {
   await page.goto(working(`/#run=${READY_RUN}`))
-  await expect(detail(page).locator('.ev-result')).toBeVisible()
+  await expect(detail(page).locator('.ev-result').last()).toBeVisible()
 
   // The three areas stand next to each other, each in its place, whatever the content is.
   const [repos, line, run] = await Promise.all(
@@ -345,6 +351,12 @@ test('the layout holds', async ({ page }) => {
   // count up and the clock times in the log. The rest is compared to the screenshot approved for
   // this operating system, once the fonts it is written in have arrived.
   await page.evaluate(() => document.fonts.ready)
+  // The log follows its end, and the ready run's is longer than the pane. It is read from its start:
+  // a mask covers a tick where it lies, and the ticks scrolled up out of the log would cover the
+  // header above it.
+  await detail(page).locator('.log').evaluate((log) => {
+    log.scrollTop = 0
+  })
 
   // The tolerance leaves room for a machine that rasterises the same glyphs a little differently,
   // and for nothing more: one changed number on the page moves 291 pixels, measured. The per-pixel

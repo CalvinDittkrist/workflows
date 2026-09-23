@@ -25,6 +25,10 @@
 #                      which is the work a run leaves behind for the branch to carry
 #   CLAUDE_SHIM_SLEEP  when set, the session waits that many seconds before it reports, so a test can
 #                      reach a worker that is still going
+#   CLAUDE_SHIM_THEN_SLEEP, CLAUDE_SHIM_THEN_RESULT
+#                      what every session after the first one CLAUDE_SHIM_LOG records does instead of
+#                      CLAUDE_SHIM_SLEEP and CLAUDE_SHIM_RESULT, so a test can have the fix session of
+#                      a repair round wait or block while the work session before it reported
 #
 # The structured result is the one thing a session owes the factory (ADR 0039).
 #
@@ -86,6 +90,12 @@ log="${CLAUDE_SHIM_LOG:-/dev/null}"
   for argument in "$@"; do printf 'arg %s\n' "$argument"; done
   env | while IFS= read -r entry; do printf 'env %s\n' "${entry%%=*}"; done
 } >> "$log"
+
+calls=$(grep -c '^call$' "$log" 2>/dev/null)
+if [ "${calls:-0}" -gt 1 ]; then
+  [ -n "${CLAUDE_SHIM_THEN_SLEEP:-}" ] && CLAUDE_SHIM_SLEEP=$CLAUDE_SHIM_THEN_SLEEP
+  [ -n "${CLAUDE_SHIM_THEN_RESULT:-}" ] && CLAUDE_SHIM_RESULT=$CLAUDE_SHIM_THEN_RESULT
+fi
 
 if [ -n "${CLAUDE_SHIM_FAIL:-}" ]; then
   echo "$CLAUDE_SHIM_FAIL" >&2

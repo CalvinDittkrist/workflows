@@ -45,6 +45,9 @@ type Config struct {
 	// [ADR 0028]: ../docs/adr/0028-the-quota-check-is-a-courtesy-not-a-guard.md
 	QuotaAxi     string `json:"quota_axi"`
 	QuotaMinimum *int   `json:"quota_minimum"`
+	// CI is the knobs of the ci stage for every connected repository, and a repository's own ci
+	// object overrides them one knob at a time (ciKnobs).
+	CI *ciKnobs `json:"ci"`
 }
 
 // Connected is one repository the factory works: its name on GitHub and, optionally, the branch a
@@ -54,8 +57,12 @@ type Config struct {
 //
 // [ADR 0022]: ../docs/adr/0022-the-factory-is-a-second-driver-over-the-worker-pipeline.md
 type Connected struct {
-	Name string `json:"name"`
-	Base string `json:"base"`
+	Name string   `json:"name"`
+	Base string   `json:"base"`
+	CI   *ciKnobs `json:"ci"`
+	// wait is the ci stage's knobs for this repository: the host's, with what the repository's own
+	// ci object names written over them. Load fills it in.
+	wait ciSettings
 }
 
 // UnmarshalJSON takes a connected repository as the name alone or as an object with its settings, so
@@ -75,7 +82,7 @@ func (c *Connected) UnmarshalJSON(raw []byte) error {
 	decoder.DisallowUnknownFields()
 	var read settings
 	if err := decoder.Decode(&read); err != nil {
-		return fmt.Errorf(`%w; a repository is "owner/name" or {"name": "owner/name", "base": "dev"}`, err)
+		return fmt.Errorf(`%w; a repository is "owner/name" or {"name": "owner/name", "base": "dev", "ci": {"repair_rounds": 2}}`, err)
 	}
 	*c = Connected(read)
 	return nil
@@ -96,6 +103,9 @@ type Settings struct {
 	Repositories []Connected
 	QuotaAxi     string // empty: the quota check is off
 	QuotaMinimum int
+	// CI is the host's knobs of the ci stage, and each connected repository carries its own, resolved
+	// against them.
+	CI ciSettings
 	// WorkerModel is the model the worker runs on, the one whose quota scope the check reads: the
 	// worker agent's own unless worker_args names another with --model.
 	WorkerModel string
@@ -108,7 +118,7 @@ const (
 	defaultPoll         = 60 * time.Second
 	defaultQuotaMinimum = 12
 
-	configFields = "listen, label, deadline, poll, data_dir, worker_args, worker_env, paused, notify, repositories, quota_axi, quota_minimum"
+	configFields = "listen, label, deadline, poll, data_dir, worker_args, worker_env, paused, notify, repositories, quota_axi, quota_minimum, ci"
 )
 
 // A repository is named as owner/name; the factory never takes a URL or a local path, because the
@@ -177,6 +187,9 @@ func factoryOwns(arg string) string {
 // is a setting of its own, as it is on a claim. What a run is stays out of the list: WF_MODE,
 // WF_ISSUE, WF_BASE_BRANCH and WF_REVIEW_MANDATE are the factory's (workerVariables), and a
 // variable of the host's shell is not a setting of the workflow.
+//
+// The knobs of the wait for CI are the factory's own since it runs the ci stage itself, so worker_env
+// refuses them and names the ci knob each one moved to (movedKnobs).
 var workerKnobs = []string{"WF_REVIEWERS", "WF_REVIEW_ROUNDS", "WF_CI_REPAIR_ROUNDS", "WF_PR_BOT_REVIEWERS", "WF_PR_REVIEW_WAIT", "WF_HANDOFF_TOKENS", "WF_CONTEXT_MAX_AGE", "WF_HANDOFF_SESSION_MS", "WF_HANDOFF_POLL_SECONDS", "WF_DOCS_TIMEOUT"}
 
 // modelOf is the model a worker started with these arguments runs on: the last --model among them, as
@@ -273,6 +286,9 @@ func Load(path string) (Settings, error) {
 	}
 	// The names are read in order, so the one the error names is the same on every start.
 	for _, name := range slices.Sorted(maps.Keys(c.WorkerEnv)) {
+		if moved, ok := movedKnobs[name]; ok {
+			return bad("worker_env carries %s, which is a knob of the ci stage the factory runs itself; write it as \"ci\": {\"%s\": ...} at the top of the file or on the repository", name, moved)
+		}
 		if !slices.Contains(workerKnobs, name) {
 			return bad("worker_env carries %s, which is not a worker knob; the names are %s, and an empty value is a setting of its own (\"WF_PR_BOT_REVIEWERS\": \"\" waits for no bot review)", name, strings.Join(workerKnobs, ", "))
 		}
@@ -308,6 +324,11 @@ func Load(path string) (Settings, error) {
 		}
 		s.QuotaMinimum = *c.QuotaMinimum
 	}
+	host, err := defaultCI.over(c.CI)
+	if err != nil {
+		return bad("ci: %v", err)
+	}
+	s.CI = host
 	if strings.TrimSpace(c.DataDir) == "" {
 		return bad("data_dir is missing; name the directory the runs are written to, such as \"/var/lib/factory\"")
 	}
@@ -337,6 +358,9 @@ func Load(path string) (Settings, error) {
 			return bad("repository %q is named twice; remove the duplicate", r.Name)
 		}
 		seen[strings.ToLower(r.Name)] = true
+		if r.wait, err = host.over(r.CI); err != nil {
+			return bad("the ci of %s: %v", r.Name, err)
+		}
 		s.Repositories = append(s.Repositories, r)
 	}
 	return s, nil

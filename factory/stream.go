@@ -95,7 +95,7 @@ var stages = map[string]string{
 	"worker:work":            "implement",
 	"worker:review":          "review",
 	"worker:pr":              "pr",
-	"worker:ci":              "ci",
+	"worker:ci":              stageCI,
 	"worker:address-reviews": "reviews",
 }
 
@@ -155,8 +155,8 @@ func (f *Factory) ingest(r *Run, line []byte) {
 	case m.Type == "result":
 		final := text(m.Result)
 		f.runs.update(r, func() {
-			r.Turns, r.CostUSD, r.Totals = m.NumTurns, m.TotalCostUSD, totalsWorker
-			r.Tokens = Tokens{Input: m.Usage.Input, Output: m.Usage.Output, CacheCreation: m.Usage.CacheCreation, CacheRead: m.Usage.CacheRead}
+			r.report(m.NumTurns, m.TotalCostUSD,
+				Tokens{Input: m.Usage.Input, Output: m.Usage.Output, CacheCreation: m.Usage.CacheCreation, CacheRead: m.Usage.CacheRead})
 		})
 		event := Event{Kind: "result", Title: "result: " + m.Subtype, Body: final}
 		if m.TerminalReason != "" {

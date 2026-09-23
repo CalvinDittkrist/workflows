@@ -129,6 +129,12 @@ type source interface {
 	// opened, submitted by somebody who may write to the repository, and the zero time when there is
 	// none, when the pull request is no longer open and when GitHub could not be read.
 	changesRequested(ctx context.Context, repository string, pull int) time.Time
+	// pullState is one reading of the pull request a run waits on in the ci stage (ci.go), with the
+	// reviews of the bots named; failedLogs the failed logs of the checks a fix session is given; and
+	// openPull the open pull request of a held branch, which a resumed run starts its ci stage on.
+	pullState(ctx context.Context, held Held, bots []string) (pullReading, error)
+	failedLogs(ctx context.Context, repository string, failed []check) string
+	openPull(ctx context.Context, repository, branch string) (string, error)
 }
 
 // Held is one issue this factory holds, as a poll asks the source about it: the issue, the run that
@@ -676,6 +682,7 @@ func (f *Factory) execute(parent context.Context, r *Run, entry Entry) {
 	// says the run ended of.
 	ctx, stop := context.WithCancelCause(deadline)
 	defer stop(nil)
+	defer f.runs.update(r, r.release)
 	f.mu.Lock()
 	f.cancelling[r.ID] = stop
 	f.mu.Unlock()
@@ -733,15 +740,69 @@ func (f *Factory) execute(parent context.Context, r *Run, entry Entry) {
 		return
 	}
 
-	s := sessionFor(entry.Signal)
-	f.runs.update(r, func() {
-		// What the claim or the resume ended up holding, before a worker is started on it.
-		r.Worktree, r.Holding = claim.worktree, claim.holding
-		// The session opens in the skill it is given as its prompt, and that prompt is a slash command
-		// and no Skill call, so nothing in the worker's stream announces it.
-		r.stage(s.stage)
-	})
+	// What the claim or the resume ended up holding, before a worker is started on it.
+	f.runs.update(r, func() { r.Worktree, r.Holding = claim.worktree, claim.holding })
 
+	// A resumed run whose branch has a pull request open is past the stages that open one: it starts at
+	// the ci stage, with the repair rounds its pull request has had, and nothing before it is done again.
+	if pull := f.openedAlready(ctx, r, entry, claim); pull != "" {
+		if entry.resume.PullRequest == pull {
+			f.runs.update(r, func() { r.RepairRounds = entry.resume.RepairRounds })
+		}
+		f.ci(parent, ctx, r, entry, claim, pull)
+		return
+	}
+
+	s := sessionFor(entry.Signal)
+	// The session opens in the skill it is given as its prompt, and that prompt is a slash command and
+	// no Skill call, so nothing in the worker's stream announces it.
+	f.runs.update(r, func() { r.stage(s.stage) })
+	got, ok := f.session(parent, ctx, r, s, entry, claim)
+	if !ok {
+		return
+	}
+	if got.Outcome == resultBlocked {
+		f.runs.update(r, func() { r.Reason = got.Summary })
+		f.finish(r, outcomeBlocked, "", nil)
+		return
+	}
+	url, reason := pullRequest(got.PullRequest, r.Repository)
+	if url == "" || s.stopAfter == "" {
+		// A session that ran the pipeline to its end has waited on CI itself, and one that names no
+		// pull request has nothing to wait on: the run is ready, and the reason says what it lacks.
+		f.runs.update(r, func() { r.PullRequest = url })
+		f.finish(r, outcomeReady, reason, nil)
+		return
+	}
+	f.ci(parent, ctx, r, entry, claim, url)
+}
+
+// openedAlready is the open pull request of the branch a resumed run continues, which is where it
+// starts. A first run has opened none, and a follow-up run answers a review on its own; a reading that
+// fails starts the run at its first stage, whose session finds the pull request itself and stops at it.
+func (f *Factory) openedAlready(ctx context.Context, r *Run, entry Entry, claim claimed) string {
+	if kindOf(entry.Signal) != kindResumed || claim.branch == "" {
+		return ""
+	}
+	pull, err := f.source.openPull(ctx, entry.Repository, claim.branch)
+	if err != nil {
+		if ctx.Err() == nil {
+			f.warn(r, "pull request not read", "whether "+claim.branch+" has a pull request open could not be read, so the run starts at its first stage: "+err.Error())
+		}
+		return ""
+	}
+	if pull != "" {
+		f.runs.event(r, Event{Kind: "factory", Title: "resuming at the ci stage of " + pull,
+			Body: "the branch " + claim.branch + " has this pull request open, so the stages that open it are done"})
+	}
+	return pull
+}
+
+// session starts one session and reads it to its end. It answers with the session's result when the
+// session ended by itself with a result that fits, and otherwise ends the run the way the session
+// ended and answers false.
+func (f *Factory) session(parent, ctx context.Context, r *Run, s session, entry Entry, claim claimed) (result, bool) {
+	f.runs.update(r, r.nextSession)
 	// The session's context is derived from the run's, so the run's deadline and the session's own
 	// timeout both end it: whichever passes first, and the cause the context carries says which one did.
 	sessionCtx, endSession := context.WithTimeoutCause(ctx, s.timeout, overran{s})
@@ -749,7 +810,7 @@ func (f *Factory) execute(parent context.Context, r *Run, entry Entry) {
 	cmd, err := f.command(sessionCtx, s, entry, claim)
 	if err != nil {
 		f.abandon(ctx, r, claim, "no worker could be started: "+err.Error())
-		return
+		return result{}, false
 	}
 	// The worker starts subprocesses of its own; the deadline and the stop have to reach all of them,
 	// so it gets a process group of its own and the group is what is ended.
@@ -763,39 +824,43 @@ func (f *Factory) execute(parent context.Context, r *Run, entry Entry) {
 	stdout, stdoutWriter, err := os.Pipe()
 	if err != nil {
 		f.abandon(ctx, r, claim, "the factory could not open a pipe for the worker: "+err.Error())
-		return
+		return result{}, false
 	}
 	stderr, stderrWriter, err := os.Pipe()
 	if err != nil {
 		stdout.Close()
 		stdoutWriter.Close()
 		f.abandon(ctx, r, claim, "the factory could not open a pipe for the worker: "+err.Error())
-		return
+		return result{}, false
 	}
 	cmd.Stdout, cmd.Stderr = stdoutWriter, stderrWriter
-	// The run's lock goes into the worker's process group and nowhere else: the factory opens it,
-	// hands it over and lets go of it, so what holds it from here is that group alone and the kernel
-	// gives it back when the last process of it is gone. A factory the host killed ends nothing, and
-	// this is what the next start reads to find the worker that outlived it (endSurvivors).
-	lock, err := f.runs.lock(r.ID)
-	if err != nil {
-		stdout.Close()
-		stdoutWriter.Close()
-		stderr.Close()
-		stderrWriter.Close()
-		f.abandon(ctx, r, claim, "the factory could not take the lock of this run: "+err.Error())
-		return
+	// The run's lock goes into the process group of every session of the run: the factory takes it
+	// before the first one and keeps it until the run ends (release), so a process an earlier session
+	// left behind cannot keep the next one from starting, and the kernel gives it back when the factory
+	// and the last process of those groups are gone. A factory the host killed ends nothing and holds
+	// nothing any more, and this is what the next start reads to find the worker that outlived it
+	// (endSurvivors).
+	if r.lock == nil {
+		lock, err := f.runs.lock(r.ID)
+		if err != nil {
+			stdout.Close()
+			stdoutWriter.Close()
+			stderr.Close()
+			stderrWriter.Close()
+			f.abandon(ctx, r, claim, "the factory could not take the lock of this run: "+err.Error())
+			return result{}, false
+		}
+		f.runs.update(r, func() { r.lock = lock })
 	}
-	cmd.ExtraFiles = []*os.File{lock}
+	cmd.ExtraFiles = []*os.File{r.lock}
 	err = cmd.Start()
-	lock.Close() // the worker's group holds it now, and a worker that never started holds nothing
 	if err != nil {
 		stdout.Close()
 		stdoutWriter.Close()
 		stderr.Close()
 		stderrWriter.Close()
 		f.abandon(ctx, r, claim, "the worker could not be started: "+err.Error())
-		return
+		return result{}, false
 	}
 	stdoutWriter.Close() // the worker holds the only writing ends now
 	stderrWriter.Close()
@@ -844,6 +909,7 @@ func (f *Factory) execute(parent context.Context, r *Run, entry Entry) {
 	stderr.Close()
 
 	exitCode := cmd.ProcessState.ExitCode()
+	f.runs.update(r, func() { r.ExitCode = &exitCode })
 	// The process and the result are read apart. A session that ended by itself with a result that
 	// fits is read by that result: a stop or a deadline that arrives in the same moment ended nothing,
 	// and its pull request would be lost to the record. A process that failed is a failed run whatever
@@ -867,18 +933,14 @@ func (f *Factory) execute(parent context.Context, r *Run, entry Entry) {
 			cause = r.resultSummary
 		}
 		f.endInError(parent, r, strings.TrimSpace(fmt.Sprintf("the session ended in an error (exit %d): %s", exitCode, cause)), &exitCode)
-	case r.result != nil && r.result.Outcome == resultComplete:
-		url, reason := pullRequest(r.result.PullRequest, r.Repository)
-		f.runs.update(r, func() { r.PullRequest = url })
-		f.finish(r, outcomeReady, reason, &exitCode)
 	case r.result != nil:
-		f.runs.update(r, func() { r.Reason = r.result.Summary })
-		f.finish(r, outcomeBlocked, "", &exitCode)
+		return *r.result, true
 	case r.misfit != "":
 		f.finish(r, outcomeFailed, "the session's result does not fit the schema: "+r.misfit, &exitCode)
 	default:
 		f.endInError(parent, r, "the session ended without a result line; a session ends by printing its structured result", &exitCode)
 	}
+	return result{}, false
 }
 
 // abandon ends a run whose worker never started. A cancel that arrives in that moment — the claim
@@ -973,7 +1035,7 @@ func (f *Factory) take(ctx context.Context, r *Run, entry Entry) (claimed, error
 		return f.resume(ctx, r, entry)
 	}
 	if f.fake {
-		return claimed{holding: true}, nil
+		return claimed{holding: true, base: "main"}, nil // the base its canned conflicts are with
 	}
 	claim, err := f.claim(ctx, r, entry)
 	// The branch is recorded whether the claim was won or lost: it is what the claim was, and for a
@@ -1033,10 +1095,20 @@ func workerSettings(env map[string]string) (string, error) {
 // queued for and dispatched once for. One review is one new mandate on the pull request: the repair
 // record keeps the mandate its count was started for, so the session that answers the review has the
 // rounds of that review and the rounds its own CI stage then drives cannot hand it more.
-func workerVariables(entry Entry, claim claimed, knobs map[string]string) map[string]string {
+//
+// WF_STOP_AFTER is the stage the session ends after, for the session that stops once the pull request
+// is open ([ADR 0043]). The knobs of the ci stage go in as the worker's own ci stage reads them, for
+// the follow-up session that still runs it.
+//
+// [ADR 0043]: ../docs/adr/0043-the-migration-runs-from-the-last-stage-to-the-first.md
+func workerVariables(entry Entry, claim claimed, knobs map[string]string, s session, wait ciSettings) map[string]string {
 	variables := maps.Clone(knobs)
 	if variables == nil {
 		variables = map[string]string{}
+	}
+	maps.Copy(variables, wait.variables())
+	if s.stopAfter != "" {
+		variables["WF_STOP_AFTER"] = s.stopAfter
 	}
 	maps.Copy(variables, map[string]string{
 		"WF_MODE":                              "manual",
