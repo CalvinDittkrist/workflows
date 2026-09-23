@@ -46,7 +46,7 @@ Run the following as root unless it says otherwise.
    gh --version                   # gh version 2.<minor>.<patch>, newer than 2.46.0
    ```
 
-2. **The gate's tools.** A worker runs each connected repository's `make check`, so the host needs the tools that gate runs, at the versions the repository's CI pins. Read them from its CI workflow (for this repository `.github/workflows/ci.yml`) and from the error lines of its `Makefile`, not from the distribution: a distribution's version finds other things than CI's, and the gate then fails on the host on files the change never touched, which no worker can fix. For this repository that is shellcheck 0.11.0, Go 1.26, Node 22 and staticcheck 2026.2.1; Python is the distribution's `python3`, which CI does not pin. The gate's tests call two more tools that a minimal Debian image lacks and CI's runner has: a C compiler (`build-essential`), because `go test -race` builds with cgo, and `file`, with which the release test checks that the factory's binaries are static.
+2. **The gate's tools.** A worker runs each connected repository's `make check`, so the host needs the tools that gate runs, at the versions the repository's CI pins. Read them from its CI workflow (for this repository `.github/workflows/ci.yml`) and from the error lines of its `Makefile`, not from the distribution: a distribution's version finds other things than CI's, and the gate then fails on the host on files the change never touched, which no worker can fix. For this repository that is shellcheck 0.11.0, Go 1.26, Node 24 and staticcheck 2026.2.1; Python is the distribution's `python3`, which CI does not pin. One host has one version of each tool, so when two connected repositories pin different versions of one, the host runs the newest pin and the repository that is behind moves its CI to it. The gate's tests call two more tools that a minimal Debian image lacks and CI's runner has: a C compiler (`build-essential`), because `go test -race` builds with cgo, and `file`, with which the release test checks that the factory's binaries are static.
 
    ```sh
    cd "$(mktemp -d)"
@@ -65,12 +65,16 @@ Run the following as root unless it says otherwise.
      rm -rf /usr/local/go && tar -xzf "$go.linux-$goarch.tar.gz" -C /usr/local
    /usr/local/go/bin/go version   # go version go1.26.<patch> linux/<arch>
 
-   curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
-   apt-get install -y nodejs python3 build-essential file
-   node --version                 # v22.<minor>.<patch>
+   key=/etc/apt/keyrings/nodesource.asc
+   curl -fsSLO https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key
+   echo "b42e0321dabdc24e892115da705cf061167eac12a317f23d329862d0aa0a271d  nodesource-repo.gpg.key" | sha256sum --check &&
+     install -D -m 0644 nodesource-repo.gpg.key "$key" &&
+     echo "deb [arch=$(dpkg --print-architecture) signed-by=$key] https://deb.nodesource.com/node_24.x nodistro main" > /etc/apt/sources.list.d/nodesource.list &&
+     apt-get update && apt-get install -y nodejs python3 build-essential file
+   node --version                 # v24.<minor>.<patch>
    ```
 
-   Each archive is unpacked and installed only when `sha256sum --check` answers `OK`, which is why those lines are chained with `&&`; a pasted block runs on past a failed line. `/usr/local/go/bin` is not on a login's `PATH`, so the service puts it there (see [Service](#service)). staticcheck is built with that Go as the user `factory`, into `~/go/bin`, where the `Makefile` looks for it:
+   Each archive and the NodeSource key are installed only when `sha256sum --check` answers `OK`, which is why those lines are chained with `&&`; a pasted block runs on past a failed line. Node comes from NodeSource's apt repository for the major version CI pins, `node_24.x`, the way `gh` comes from GitHub's, and apt upgrades it within that major version; moving to another major version is a new source line. `/usr/local/go/bin` is not on a login's `PATH`, so the service puts it there (see [Service](#service)). staticcheck is built with that Go as the user `factory`, into `~/go/bin`, where the `Makefile` looks for it:
 
    ```sh
    sudo -iu factory /usr/local/go/bin/go install honnef.co/go/tools/cmd/staticcheck@2026.2.1
@@ -119,7 +123,7 @@ Run the following as root unless it says otherwise.
    ```
 
    Install nothing that `sha256sum` did not answer `OK` for.
-7. **quota-axi** in a pinned version. The factory reads the output of quota-axi 0.1.49 ([ADR 0037](adr/0037-the-quota-check-waits-below-12-percent-of-the-workers-scope.md)), which needs Node 22.19 or later (`engines` of the package). Node 22 from NodeSource, installed with the gate's tools, is that. Do not move the pin to 0.1.50: that version reads the `utilization` of Claude's usage endpoint, which is the percentage used, as the percentage remaining, so the check waits while the window is fresh and starts runs when it is nearly used up. As root:
+7. **quota-axi** in a pinned version. The factory reads the output of quota-axi 0.1.49 ([ADR 0037](adr/0037-the-quota-check-waits-below-12-percent-of-the-workers-scope.md)), which needs Node 22.19 or later (`engines` of the package). Node 24 from NodeSource, installed with the gate's tools, is that. Do not move the pin to 0.1.50: that version reads the `utilization` of Claude's usage endpoint, which is the percentage used, as the percentage remaining, so the check waits while the window is fresh and starts runs when it is nearly used up. As root:
 
    ```sh
    npm install -g quota-axi@0.1.49
