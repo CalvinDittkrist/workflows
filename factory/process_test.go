@@ -38,7 +38,7 @@ func factoryCommandContext(ctx context.Context, bin string, args ...string) *exe
 // A start of the binary that does not go through factoryCommand is one the kernel does not end with
 // the test process, so it is refused here by its spelling: the binaries of the tests are named
 // binary, hurried or bin wherever they are started.
-func TestEveryTestStartsTheBinaryThroughOneHelper(t *testing.T) {
+func TestNoTestSpellsAStartOfTheBinaryOutsideTheHelper(t *testing.T) {
 	t.Parallel()
 	direct := regexp.MustCompile(`exec\.Command(Context\([^,]+,)?\(?\s*(binary|hurried|bin)\b`)
 	sources, err := filepath.Glob("*_test.go")
