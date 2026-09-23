@@ -380,6 +380,19 @@ class CleanupTests(MessyRepositoryCase):
         self.assertIn("untouched: files, agent-config (rejected)\n", out)
         self.assertTrue((wt / "docs/architecture.md").exists(), "docs is still scaffolded")
 
+    def test_a_rejected_directory_target_keeps_what_another_category_put_inside_it(self):
+        """A rejected finding on docs/ takes back nothing the unanswered docs category scaffolded there, nor the
+        agent's edits to it."""
+        self.audit("finding: files | docs | delete | old notes | low\n", "files=reject")
+        self.step(BACKUP)
+        self.step(CLEANUP, "prepare")
+        wt = self.repo / WT
+        (wt / "docs/architecture.md").write_text("# Architecture\nfilled in\n")
+        out = self.step(CLEANUP, "prepare").stdout
+        self.assertEqual((wt / "docs/architecture.md").read_text(), "# Architecture\nfilled in\n")
+        self.assertTrue((wt / "docs/glossary.md").exists())
+        self.assertNotIn("restored:", out)
+
     def test_a_deletion_rejected_after_a_prepare_is_undone(self):
         self.assertEqual(self.run_script(APPROVE, "files=approve").returncode, 0)
         self.step(BACKUP)

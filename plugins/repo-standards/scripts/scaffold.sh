@@ -22,7 +22,7 @@ while [ $# -gt 0 ]; do
       skip="$skip$2 "; shift ;;
     --paths) paths=1 ;;
     --name|--default) [ $# -ge 2 ] || die "$1 needs a value"; if [ "$1" = --name ]; then repo=$2; else default=$2; fi; shift ;;
-    -*) die "unknown argument $1; usage: scaffold.sh [--skip <category>]... [--name <repo>] [--default <branch>] [<repo-root>]" ;;
+    -*) die "unknown argument $1; usage: scaffold.sh [--skip <category>]... [--name <repo>] [--default <branch>] [<repo-root>] | scaffold.sh --paths" ;;
     *) root=$1 ;;
   esac
   shift
@@ -60,6 +60,7 @@ put docs glossary.md docs/glossary.md
 put docs PULL_REQUEST_TEMPLATE.md .github/PULL_REQUEST_TEMPLATE.md .github/pull_request_template.md
 put workspace dependabot.yml .github/dependabot.yml .github/dependabot.yaml
 # The CI job named check, unless a workflow already has one.
+# --paths ends here: a file written below this line must be listed on it too, or cleanup.sh stops reconciling it.
 [ -z "$paths" ] || { put tests-ci check.yml .github/workflows/check.yml; printf 'agent-config\t.claude/settings.json\n'; exit 0; }
 if ! skipped tests-ci; then
   gate=$(ci_check_workflow "$root")

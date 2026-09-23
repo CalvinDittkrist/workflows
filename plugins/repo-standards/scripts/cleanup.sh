@@ -69,18 +69,24 @@ if [ "$step" = prepare ]; then
 
   # Reconcile what an earlier prepare put on the branch with the answers now, since a later answer replaces an
   # earlier one: every file scaffold.sh writes for a rejected category and every target of a rejected finding goes
-  # back to how the default branch has it where the branch forked, unless an approved finding names it too. On a
-  # new worktree from the default branch this finds nothing.
+  # back to how the default branch has it where the branch forked, file by file. A file stays as it is when it is,
+  # or lies under, the target of an approved finding or a file scaffold.sh writes for a category not rejected, so a
+  # rejected directory target never takes back what an approved or unanswered category put inside it. On a new
+  # worktree from the default branch this finds nothing.
   fork=$(base)
   g add -A
-  approved=$(for a in delete replace create; do approved_findings "$answers" "$a"; done | cut -f2)
+  kept=$({ for a in delete replace create; do approved_findings "$answers" "$a"; done | cut -f2
+    bash "$here/scaffold.sh" --paths | awk -F'\t' -v r=" $rejected " '!index(r, " " $1 " ") { print $2 }'; })
   while IFS= read -r t; do
     [ -n "$t" ] || continue
-    printf '%s\n' "$approved" | grep -qxF -- "$t" && continue
-    g diff --cached --quiet "$fork" -- ":(literal)$t" && continue
-    g rm -r -q -f --ignore-unmatch -- ":(literal)$t"
-    [ -z "$(g ls-tree "$fork" -- ":(literal)$t")" ] || g checkout "$fork" -- ":(literal)$t"
-    printf 'restored: %s (rejected)\n' "$t"
+    n=0
+    while IFS= read -r -d '' f; do
+      printf '%s\n' "$kept" | P=$f awk '{ p = ENVIRON["P"] } $0 != "" && (p == $0 || index(p, $0 "/") == 1) { f = 1 } END { exit !f }' && continue
+      g rm -q -f --ignore-unmatch -- ":(literal)$f"
+      [ -z "$(g ls-tree "$fork" -- ":(literal)$f")" ] || g checkout "$fork" -- ":(literal)$f"
+      n=1
+    done < <(g diff --cached --name-only --no-renames -z "$fork" -- ":(literal)$t")
+    [ "$n" = 0 ] || printf 'restored: %s (rejected)\n' "$t"
   done < <({ bash "$here/scaffold.sh" --paths; cut -f1-3 "$(state_dir)/findings" | awk -F'\t' '$3 == "delete" || $3 == "replace" || $3 == "create"'; } \
     | awk -F'\t' -v r=" $rejected " 'index(r, " " $1 " ") { print $2 }' | awk '!seen[$0]++')
 
