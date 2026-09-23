@@ -21,6 +21,11 @@ branch=$(wf_branch)
 conflicted() { git diff --name-only --diff-filter=U | sed 's/^/  - /'; }
 
 blocked() {
+  if [ -z "$(git diff --name-only --diff-filter=U)" ]; then
+    wf_kv base_sync "the merge of $1 into $branch is resolved but not committed"
+    printf 'blocked: the merge of %s into %s is resolved but not committed; review it, commit it and run /worker:work again.\n' "$1" "$branch"
+    exit 2
+  fi
   wf_kv base_sync "conflicts merging $1 into $branch"
   printf 'conflicted_files:\n'; conflicted
   printf 'blocked: the merge of %s into %s conflicts; resolve the files above, commit the merge and run /worker:work again. The worktree is left in the merge state; git merge --abort undoes it.\n' "$1" "$branch"
@@ -50,7 +55,7 @@ if [ "$behind" -eq 0 ]; then
   exit 0
 fi
 
-if ! out=$(git merge --no-ff --no-edit -m "Merge $ref into $branch" "$ref" 2>&1); then
+if ! out=$(git merge --no-ff -m "Merge $ref into $branch" "$ref" 2>&1); then
   git rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1 && blocked "$ref"
   # No merge in progress: git refused before it began (an untracked file it would overwrite, a hook).
   wf_die "git refused to merge $ref: $(printf '%s' "$out" | tail -n 5); fix that and run base-sync.sh again"

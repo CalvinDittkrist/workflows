@@ -2089,6 +2089,13 @@ class BaseSyncTests(PanelRecordCalls, ShimTest):
         self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
         self.assertIn("  - README.md", r.stdout)
         self.assertIn("blocked: ", r.stdout)
+        # Resolved and staged but not committed is still a merge for the person to finish, and said so.
+        (self.repo / "README.md").write_text("both lines\n")
+        self.git("add", "README.md")
+        r = self.sync()
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn("resolved but not committed", r.stdout)
+        self.assertEqual(self.head(), before)
 
     def test_a_dirty_tree_is_refused_before_anything_is_merged(self):
         self.advance_base()
