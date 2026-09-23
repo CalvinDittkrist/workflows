@@ -300,10 +300,11 @@ class WorkerKnobTests(ShimTest):
     gains and the claim does not cannot be set per session, and one the claim gains alone is undocumented."""
 
     README = ROOT / "README.md"
-    # The four variables of the table a worker reads that a claim does not take: it sets the session's mode
-    # and issue itself, the base branch is what --base is for, and the review mandate is the word of the
-    # driver that starts a session to answer a review — a claim starts a session at the work stage.
-    CLAIM_OWNED = ("WF_MODE", "WF_ISSUE", "WF_BASE_BRANCH", "WF_REVIEW_MANDATE")
+    # The five variables of the table a worker reads that a claim does not take: it sets the session's mode
+    # and issue itself, the base branch is what --base is for, the review mandate is the word of the
+    # driver that starts a session to answer a review — a claim starts a session at the work stage — and
+    # the stop-after knob is the factory's alone while it takes the pipeline over (ADR 0043).
+    CLAIM_OWNED = ("WF_MODE", "WF_ISSUE", "WF_BASE_BRANCH", "WF_REVIEW_MANDATE", "WF_STOP_AFTER")
     maxDiff = None
 
     def accepted_names(self):

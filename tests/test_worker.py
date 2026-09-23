@@ -2383,5 +2383,103 @@ class ReviewAnswerTests(ShimTest):
         self.assertIn("no open PR", r.stderr)
 
 
+class StopAfterTests(PanelRecordCalls, ShimTest):
+    """The factory's transitional knob (issue #143, ADR 0043): a session given WF_STOP_AFTER ends its pipeline
+    after that stage with a report of what it reached, and a session without it runs the whole pipeline."""
+
+    def setUp(self):
+        super().setUp()
+        self.git("checkout", "-qb", "feat/12-x")
+
+    def facts(self, **env):
+        return self.run_script(WORKER / "facts.sh", WF_BASE_BRANCH="main", **env)
+
+    def stop(self, stage, **env):
+        return self.run_script(WORKER / "stop.sh", WF_BASE_BRANCH="main", WF_STOP_AFTER=stage, **env)
+
+    def test_the_facts_name_the_stage_only_when_the_session_carries_the_knob(self):
+        for stage in ("implement", "gate", "review", "pr"):
+            with self.subTest(stage=stage):
+                r = self.facts(WF_STOP_AFTER=stage)
+                self.assertEqual(r.returncode, 0, r.stderr)
+                self.assertIn(f"\nstop_after: {stage}\n", r.stdout)
+        for env in ({}, {"WF_STOP_AFTER": ""}):
+            r = self.facts(**env)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertNotIn("stop_after", r.stdout, "a local session's facts are what they were")
+
+    def test_a_value_that_is_no_stage_is_refused_with_the_fix(self):
+        for value in ("ci", "PR", "gate review", "finish"):
+            with self.subTest(value=value):
+                r = self.facts(WF_STOP_AFTER=value)
+                self.assertEqual(r.returncode, 1, r.stdout)
+                self.assertNotIn("stop_after:", r.stdout, "no stage is printed that nobody can stop after")
+                self.assertIn(f"error: WF_STOP_AFTER='{value}' is no stage", r.stderr)
+                self.assertIn("implement, gate, review, pr", r.stderr)
+                self.assertIn(self.stop(value).stderr, r.stderr, "and stop.sh refuses it the same way")
+
+    def test_without_the_knob_no_stage_is_a_stop_and_the_pipeline_runs_on(self):
+        self.commit("a.txt")
+        r = self.run_script(WORKER / "stop.sh", WF_BASE_BRANCH="main")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertEqual(r.stdout, "")
+        self.assertIn("WF_STOP_AFTER is not set", r.stderr)
+
+    def test_after_implement_it_reports_the_commits_once_they_are_committed(self):
+        r = self.stop("implement")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("no commits beyond main", r.stderr)
+        self.commit("a.txt")
+        self.commit("b.txt")
+        (self.repo / "c.txt").write_text("c")
+        r = self.stop("implement")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("uncommitted changes", r.stderr)
+        self.git("add", "."); self.git("commit", "-qm", "feat: c.txt")
+        r = self.stop("implement")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        subjects = self.git("log", "--reverse", "--format=%h %s", "main..HEAD").splitlines()
+        self.assertEqual(r.stdout.splitlines(), ["ready: stopped after implement", "commits:",
+                                                 *(f"  {s}" for s in subjects)])
+
+    def test_after_the_gate_it_reports_the_recorded_pass_and_nothing_before_it(self):
+        (self.repo / "Makefile").write_text(FAILING_GATE)
+        self.git("add", "."); self.git("commit", "-qm", "chore: gate")
+        self.run_script(WORKER / "gate.sh", "run")
+        r = self.stop("gate")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("no pass recorded for this head", r.stderr)
+        (self.repo / "Makefile").write_text(PASSING_GATE)
+        self.git("add", "."); self.git("commit", "-qm", "fix: gate")
+        self.passing_gate()
+        r = self.stop("gate")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        head = self.git("rev-parse", "--short", "HEAD").strip()
+        self.assertTrue(r.stdout.startswith("ready: stopped after gate\n"), r.stdout)
+        self.assertIn(f"gate_result: pass (exit 0) at {head}", r.stdout)
+
+    def test_after_the_review_it_reports_the_panel_summary_and_the_gate_result(self):
+        self.record_rounds(ROUND_ONE, ROUND_TWO)
+        r = self.stop("review")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("no panel summary is recorded", r.stderr)
+        self.assertEqual(self.record().returncode, 0)
+        r = self.stop("review")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        head = self.git("rev-parse", "--short", "HEAD").strip()
+        self.assertTrue(r.stdout.startswith("ready: stopped after review\n"), r.stdout)
+        self.assertIn("panel_verdict: ready", r.stdout)
+        self.assertIn(SUMMARY, r.stdout)
+        self.assertIn(f"gate_result: pass (exit 0) at {head}", r.stdout)
+
+    def test_after_the_pull_request_it_reports_the_pull_request(self):
+        r = self.stop("pr", SHIM_PR_FOR_BRANCH="")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("has no open pull request", r.stderr)
+        r = self.stop("pr")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stdout, "ready: https://github.com/o/r/pull/7\n")
+
+
 if __name__ == "__main__":
     unittest.main()
