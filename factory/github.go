@@ -295,7 +295,7 @@ func (g *gitHub) readHeld(ctx context.Context, held []Held, letGo map[string]str
 //
 // A pull request merged while the run that opened it still waits in ci ends that run as cancelled,
 // not ready. The merge closes the issue, which is read first, and the run's pull request is not on
-// its record until its report names it, so what the factory hears is the issue closed. Ready would
+// its record until its result names it, so what the factory hears is the issue closed. Ready would
 // also ask the maintainer for a review of work already merged. The reason the record carries says
 // what happened, and the totals the factory counted say what it cost.
 //

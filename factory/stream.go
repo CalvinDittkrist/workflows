@@ -6,13 +6,15 @@ import (
 	"strings"
 )
 
-// The worker reports nothing to the factory. Everything the factory knows about a run it reads from
-// the stream `claude -p --output-format stream-json --verbose` prints, one JSON object per line
+// The one thing a session reports to the factory is its structured result on the result line
+// ([ADR 0039]); everything else the factory knows about a run it reads from the stream `claude -p --output-format stream-json --verbose` prints, one JSON object per line
 // (recorded from a real headless worker on 2026-09-21 with Claude Code 2.1.278; the result line's
 // structured_output from a real session run with --json-schema on 2026-09-23 with Claude Code 2.1.280).
 //
 // Message is an object on an assistant or user line and a string on a permission_denied line, so it
 // is read once the type of the line is known.
+//
+// [ADR 0039]: ../docs/adr/0039-every-session-reports-through-a-structured-result.md
 type streamLine struct {
 	Type               string          `json:"type"`
 	Subtype            string          `json:"subtype"`
