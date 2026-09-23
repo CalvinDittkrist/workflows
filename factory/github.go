@@ -130,7 +130,7 @@ type ghPull struct {
 }
 
 // ghHead is what a pull request is of: the branch and the repository it was opened from. It is read
-// because the URL in the record came out of a worker's report, and a report is written by a model
+// because the URL in the record came out of a session's result, and a result is written by a model
 // from text a person or an issue wrote: what it names is checked against what this factory holds
 // before anything is decided by it. SHA is the commit the branch was at when the pull request was
 // merged or closed, which GitHub keeps after that.
@@ -335,7 +335,7 @@ func (g *gitHub) decided(ctx context.Context, held Held) (string, error) {
 // either way: the worktree it was written in is of no use to anybody after that.
 //
 // Which pull request that is, is asked of GitHub and not of the record. The URL there was read out
-// of a worker's ready report, and the report of a session that works from text a stranger wrote may
+// of a session's complete result, and the result of a session that works from text a stranger wrote may
 // name any pull request of the repository ([ADR 0023]); one that is not of the branch this factory
 // holds the issue by decides nothing about it, because closing somebody else's would otherwise
 // cancel this worker and take its worktree apart. A pull request from a fork is none of it either:

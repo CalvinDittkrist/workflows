@@ -25,14 +25,17 @@ import (
 // The tests start the real binary and watch it from outside: through its HTTP interface, through the
 // files in its data directory and through the processes it leaves or does not leave on the machine.
 // They read the interface as a reader of it does, by its field names, not through the Go types.
-// TestTheReportIsReadFromMarkdown is the one exception: the markdown a worker's final report can be
-// written in has more shapes than a scripted worker can end in, and they are cheapest to pin here.
 //
 // Every test declares itself parallel: each has its own port, temporary directory and gh shim, and
 // the binary is built once. A test that changes state of the whole test process — its environment,
 // the package logger — cannot, says which state in a comment, and runs alone before the others.
 
-var binary string
+// binary is the factory as a host runs it; hurried is the same factory linked with a session timeout
+// of seconds, which a test of that timeout cannot wait out otherwise.
+var binary, hurried string
+
+// hurriedTimeout is the session timeout the hurried binary is linked with.
+const hurriedTimeout = "2s"
 
 func TestMain(m *testing.M) {
 	dir, err := os.MkdirTemp("", "factory-binary-")
@@ -45,11 +48,16 @@ func TestMain(m *testing.M) {
 	if raceEnabled {
 		args = append(args, "-race")
 	}
-	build := exec.Command("go", append(args, "-o", binary, ".")...)
-	build.Stdout, build.Stderr = os.Stdout, os.Stderr
-	if err := build.Run(); err != nil {
-		fmt.Fprintln(os.Stderr, "error: the factory could not be built:", err)
-		os.Exit(1)
+	hurried = filepath.Join(dir, "factory-hurried")
+	for _, build := range []*exec.Cmd{
+		exec.Command("go", append(args, "-o", binary, ".")...),
+		exec.Command("go", append(args, "-ldflags", "-X main.sessionTimeoutOverride="+hurriedTimeout, "-o", hurried, ".")...),
+	} {
+		build.Stdout, build.Stderr = os.Stdout, os.Stderr
+		if err := build.Run(); err != nil {
+			fmt.Fprintln(os.Stderr, "error: the factory could not be built:", err)
+			os.Exit(1)
+		}
 	}
 	code := m.Run()
 	_ = os.RemoveAll(dir)
@@ -160,10 +168,10 @@ func TestFakeModeWorksTheCannedQueueOneRunAtATime(t *testing.T) {
 	ready, blocked, failed := line.Done[0], line.Done[1], line.Done[2]
 	silent, detached, timeout := line.Done[3], line.Done[4], line.Done[5]
 
-	// ready: the pull request comes from a final report written as markdown, the stages from the
-	// skill calls, and the totals from the result line.
+	// ready: the pull request comes from the structured result, the stages from the skill calls, and
+	// the totals from the result line.
 	if ready.Outcome != "ready" || ready.PullRequest != "https://github.com/acme/edge-sensors/pull/204" {
-		t.Errorf("run 1 ended %q with the pull request %q, want ready with the pull request of the report", ready.Outcome, ready.PullRequest)
+		t.Errorf("run 1 ended %q with the pull request %q, want ready with the pull request of the result", ready.Outcome, ready.PullRequest)
 	}
 	if got := strings.Join(ready.Stages, " "); got != "implement review pr ci reviews" {
 		t.Errorf("run 1 went through the stages %q, want %q", got, "implement review pr ci reviews")
@@ -192,9 +200,9 @@ func TestFakeModeWorksTheCannedQueueOneRunAtATime(t *testing.T) {
 		t.Errorf("run 1 records the factory version %q, want %q, the version in factory/VERSION", ready.Versions.Factory, versionFileSays(t))
 	}
 
-	// blocked: the reason is the report, to its end.
+	// blocked: the reason is the result's summary, to its end.
 	if blocked.Outcome != "blocked" || !strings.Contains(blocked.Reason, "ADR 0012") || !strings.Contains(blocked.Reason, "decision needed:") {
-		t.Errorf("run 2 ended %q because %q, want blocked with the whole reason of the report", blocked.Outcome, blocked.Reason)
+		t.Errorf("run 2 ended %q because %q, want blocked with the whole summary of the result", blocked.Outcome, blocked.Reason)
 	}
 	if blocked.PullRequest != "" {
 		t.Errorf("run 2 names the pull request %q, want none", blocked.PullRequest)
@@ -208,9 +216,11 @@ func TestFakeModeWorksTheCannedQueueOneRunAtATime(t *testing.T) {
 		t.Errorf("run 3 failed because %q, want the error the session printed", failed.Reason)
 	}
 
-	// silent: a session that ended by itself without reporting is failed, and says so.
-	if silent.Outcome != "failed" || !strings.Contains(silent.Reason, "without a report") {
-		t.Errorf("run 4 ended %q because %q, want failed because it reported nothing", silent.Outcome, silent.Reason)
+	// silent: a session that ended by itself with a result line and no structured result in it is
+	// failed, and says so, whatever its text said.
+	if silent.Outcome != "failed" || !strings.Contains(silent.Reason, "does not fit the schema") ||
+		!strings.Contains(silent.Reason, "no structured output") {
+		t.Errorf("run 4 ended %q because %q, want failed because its result carries no structured output", silent.Outcome, silent.Reason)
 	}
 	if silent.ExitCode == nil || *silent.ExitCode != 0 {
 		t.Errorf("run 4 has the exit code %v, want 0: the session itself ended well", silent.ExitCode)
@@ -258,7 +268,7 @@ func TestFakeModeWorksTheCannedQueueOneRunAtATime(t *testing.T) {
 
 	// detached: the worker reported and left a process behind that has a session of its own, so the
 	// process group does not reach it, and that still holds the worker's output. The run ends by its
-	// report all the same, long before that process does, and says what it left behind.
+	// result all the same, long before that process does, and says what it left behind.
 	var full apiRun
 	f.get(t, "/api/runs/5", &full)
 	for _, e := range full.Events {
@@ -268,7 +278,7 @@ func TestFakeModeWorksTheCannedQueueOneRunAtATime(t *testing.T) {
 		}
 	}
 	if detached.Outcome != "ready" || detached.PullRequest != "https://github.com/acme/edge-sensors/pull/221" {
-		t.Errorf("run 5 ended %q with the pull request %q, want ready by its report", detached.Outcome, detached.PullRequest)
+		t.Errorf("run 5 ended %q with the pull request %q, want ready by its result", detached.Outcome, detached.PullRequest)
 	}
 	if took := detached.EndedAt.Sub(detached.StartedAt); took > daemonLifetime/4 {
 		t.Errorf("run 5 took %s, want it to end without waiting for the process its worker left behind", took)
@@ -1005,7 +1015,7 @@ func TestAnInterruptedIssueIsResumedOnceByItselfAndASecondInterruptionWaitsForAP
 	}
 }
 
-func TestOnlyThePullRequestOfTheRunIsTakenFromAReport(t *testing.T) {
+func TestOnlyThePullRequestOfTheRunIsTakenFromAResult(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
 		name, detail, url string
@@ -1027,10 +1037,10 @@ func TestOnlyThePullRequestOfTheRunIsTakenFromAReport(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			url, reason := pullRequest(c.detail, "acme/edge-sensors")
 			if url != c.url {
-				t.Errorf("the report %q gives the pull request %q, want %q", c.detail, url, c.url)
+				t.Errorf("the result %q gives the pull request %q, want %q", c.detail, url, c.url)
 			}
 			if (reason == "") != (c.url != "") {
-				t.Errorf("the report %q gives the reason %q, want one exactly when there is no pull request", c.detail, reason)
+				t.Errorf("the result %q gives the reason %q, want one exactly when there is no pull request", c.detail, reason)
 			}
 		})
 	}
@@ -1055,38 +1065,6 @@ func TestTheStagesAreTheSkillsOfTheWorkerPlugin(t *testing.T) {
 	// as the one that talks to GitHub.
 	if len(stages) != 5 {
 		t.Errorf("the factory knows %d stages, want the five the worker pipeline has", len(stages))
-	}
-}
-
-func TestTheReportIsReadFromMarkdown(t *testing.T) {
-	t.Parallel()
-	for _, c := range []struct {
-		name            string
-		report          string
-		outcome, detail string
-	}{
-		{"bold", "**ready: https://github.com/a/b/pull/7**\n\nReview: 5/5 PASS.", "ready", "https://github.com/a/b/pull/7"},
-		{"plain", "ready: https://github.com/a/b/pull/7", "ready", "https://github.com/a/b/pull/7"},
-		{"a sentence around the pull request", "ready: the pull request is https://github.com/a/b/pull/7.", "ready", "the pull request is https://github.com/a/b/pull/7."},
-		{"a heading over a summary", "## ready: https://github.com/a/b/pull/7\n\nCI green.", "ready", "https://github.com/a/b/pull/7"},
-		{"a list item after a preamble", "Here is where I got to.\n\n- `blocked: the issue needs Herdr`", "blocked", "the issue needs Herdr"},
-		{"a reason over several lines", "blocked: the brief contradicts ADR 0012.\n\ndecision needed: drop the step.", "blocked", "the brief contradicts ADR 0012.\n\ndecision needed: drop the step."},
-		{"a bold word before the pull request", "**ready:** https://github.com/a/b/pull/7", "ready", "https://github.com/a/b/pull/7"},
-		{"a bold word before the reason", "**Blocked:** Go's race detector can't run on this host.\n\nIt needs cgo.", "blocked", "Go's race detector can't run on this host.\n\nIt needs cgo."},
-		{"markdown in the lines after the first", "**blocked:** the host has no quota-axi.\n\n**What's done.** One commit\n- The runbook now pins it\n- `make check` passes", "blocked", "the host has no quota-axi.\n\n**What's done.** One commit\n- The runbook now pins it\n- `make check` passes"},
-		{"a plain first line over markdown", "blocked: the host has no quota-axi.\n\n**What's done.** One commit", "blocked", "the host has no quota-axi.\n\n**What's done.** One commit"},
-		{"a bold capital first line over markdown", "**Blocked:** the host has no quota-axi.\n\n**What's done.** One commit", "blocked", "the host has no quota-axi.\n\n**What's done.** One commit"},
-		{"a code word before the reason", "`blocked:` the issue needs Herdr", "blocked", "the issue needs Herdr"},
-		{"a reason that opens with code", "blocked: `make check` fails on this host", "blocked", "`make check` fails on this host"},
-		{"no report at all", "I have pushed the branch.", "", ""},
-		{"the word in a sentence", "The run is ready: nothing is left to do.", "", ""},
-	} {
-		t.Run(c.name, func(t *testing.T) {
-			outcome, detail := report(c.report)
-			if outcome != c.outcome || detail != c.detail {
-				t.Errorf("the report %q reads as %q/%q, want %q/%q", c.report, outcome, detail, c.outcome, c.detail)
-			}
-		})
 	}
 }
 
@@ -1159,6 +1137,12 @@ func start(t *testing.T, c config) *factory {
 // environment is the test process's, so a shim on PATH is added by the caller.
 func launch(t *testing.T, c config, env []string, args ...string) *factory {
 	t.Helper()
+	return launchBinary(t, binary, c, env, args...)
+}
+
+// launchBinary is launch with a binary of the caller's choosing.
+func launchBinary(t *testing.T, bin string, c config, env []string, args ...string) *factory {
+	t.Helper()
 	if _, ok := c["listen"]; !ok {
 		c["listen"] = freeAddress(t)
 	}
@@ -1185,7 +1169,7 @@ func launch(t *testing.T, c config, env []string, args ...string) *factory {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.cmd = exec.Command(binary, append([]string{"-config", path}, args...)...)
+	f.cmd = exec.Command(bin, append([]string{"-config", path}, args...)...)
 	f.cmd.Stdout, f.cmd.Stderr = output, output
 	if env != nil {
 		f.cmd.Env = env

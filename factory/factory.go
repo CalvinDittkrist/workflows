@@ -10,7 +10,6 @@ import (
 	"log"
 	"maps"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -734,15 +733,20 @@ func (f *Factory) execute(parent context.Context, r *Run, entry Entry) {
 		return
 	}
 
+	s := sessionFor(entry.Signal)
 	f.runs.update(r, func() {
 		// What the claim or the resume ended up holding, before a worker is started on it.
 		r.Worktree, r.Holding = claim.worktree, claim.holding
 		// The session opens in the skill it is given as its prompt, and that prompt is a slash command
 		// and no Skill call, so nothing in the worker's stream announces it.
-		r.stage(firstStage(entry.Signal))
+		r.stage(s.stage)
 	})
 
-	cmd, err := f.worker(ctx, entry, claim)
+	// The session's own timeout lies under the run's deadline: whichever passes first ends it, and the
+	// cause the context carries says which one did.
+	sessionCtx, endSession := context.WithTimeoutCause(ctx, s.timeout, overran{s})
+	defer endSession()
+	cmd, err := f.command(sessionCtx, s, entry, claim)
 	if err != nil {
 		f.abandon(ctx, r, claim, "no worker could be started: "+err.Error())
 		return
@@ -840,32 +844,39 @@ func (f *Factory) execute(parent context.Context, r *Run, entry Entry) {
 	stderr.Close()
 
 	exitCode := cmd.ProcessState.ExitCode()
-	// A worker that ended by itself and reported is read by its report: a stop or a deadline that
-	// arrives in the same moment ended nothing, and its pull request would be lost to the record.
-	reported := waitErr == nil && r.reportOutcome != ""
+	// The process and the result are read apart. A session that ended by itself with a result that
+	// fits is read by that result: a stop or a deadline that arrives in the same moment ended nothing,
+	// and its pull request would be lost to the record. A process that failed is a failed run whatever
+	// its result said, and a session that ended well without a result that fits is one as well.
+	fitted := waitErr == nil && r.result != nil
 	stopped, was := cancelledBy(ctx)
+	var over overran
 	switch {
-	case !reported && parent.Err() != nil:
+	case !fitted && parent.Err() != nil:
 		f.finish(r, outcomeInterrupted, "the factory stopped while this run was active; its worker was ended", &exitCode)
-	case !reported && was:
+	case !fitted && was:
 		f.finish(r, outcomeCancelled, stopped.Error()+"; the worker's process group was ended and the issue is let go", &exitCode)
-	case !reported && errors.Is(ctx.Err(), context.DeadlineExceeded):
+	case !fitted && errors.Is(ctx.Err(), context.DeadlineExceeded):
 		f.finish(r, outcomeTimeout, fmt.Sprintf("the deadline of %s passed; the worker's process group was ended", f.settings.Deadline), &exitCode)
-	case r.reportOutcome == outcomeReady:
-		url, reason := pullRequest(r.reportDetail, r.Repository)
-		f.runs.update(r, func() { r.PullRequest = url })
-		f.finish(r, outcomeReady, reason, &exitCode)
-	case r.reportOutcome == outcomeBlocked:
-		f.runs.update(r, func() { r.Reason = r.reportDetail })
-		f.finish(r, outcomeBlocked, "", &exitCode)
+	case !fitted && errors.As(context.Cause(sessionCtx), &over):
+		f.finish(r, outcomeFailed, over.Error()+"; the worker's process group was ended", &exitCode)
 	case waitErr != nil:
 		cause := r.lastError
 		if cause == "" {
 			cause = r.resultSummary
 		}
 		f.endInError(parent, r, strings.TrimSpace(fmt.Sprintf("the session ended in an error (exit %d): %s", exitCode, cause)), &exitCode)
+	case r.result != nil && r.result.Outcome == resultComplete:
+		url, reason := pullRequest(r.result.PullRequest, r.Repository)
+		f.runs.update(r, func() { r.PullRequest = url })
+		f.finish(r, outcomeReady, reason, &exitCode)
+	case r.result != nil:
+		f.runs.update(r, func() { r.Reason = r.result.Summary })
+		f.finish(r, outcomeBlocked, "", &exitCode)
+	case r.misfit != "":
+		f.finish(r, outcomeFailed, "the session's result does not fit the schema: "+r.misfit, &exitCode)
 	default:
-		f.endInError(parent, r, "the session ended without a report; a worker ends by reporting ready: or blocked:", &exitCode)
+		f.finish(r, outcomeFailed, "the session ended without a result line; a session ends by printing its structured result", &exitCode)
 	}
 }
 
@@ -970,67 +981,6 @@ func (f *Factory) take(ctx context.Context, r *Run, entry Entry) (claimed, error
 		f.runs.update(r, func() { r.Branch, r.Base = claim.branch, claim.base })
 	}
 	return claim, err
-}
-
-// worker is the command of one run: the session a local claim starts, in print mode with the stream
-// of events on its output, run in the worktree the claim made ([ADR 0022]). In fake mode it is this
-// binary again, printing the stream of a scripted worker: no tokens, no git, no GitHub. The
-// configured worker arguments go to the worker command whichever it is; the scripted worker ignores
-// them.
-//
-// [ADR 0022]: ../docs/adr/0022-the-factory-is-a-second-driver-over-the-worker-pipeline.md
-func (f *Factory) worker(ctx context.Context, entry Entry, claim claimed) (*exec.Cmd, error) {
-	issue := entry.Issue
-	if f.fake {
-		args := []string{"scripted-worker", issue.scenario, issue.Repository, strconv.Itoa(issue.Number)}
-		return exec.CommandContext(ctx, f.self, append(args, f.settings.WorkerArgs...)...), nil
-	}
-	variables := workerVariables(entry, claim, f.settings.WorkerEnv)
-	settings, err := workerSettings(variables)
-	if err != nil {
-		return nil, err
-	}
-	// The mode is manual: the factory never merges what it built. A finished run waits for the
-	// maintainer on GitHub, which is the only surface the factory is steered from ([ADR 0023]).
-	// Foreground subagents are the same setting a local claim makes ([ADR 0017]), and the auto
-	// permission mode is what being unattended costs: no prompt has anybody to ask ([ADR 0027]).
-	args := []string{
-		"--agent", "worker",
-		"--output-format", "stream-json", "--verbose",
-		"--permission-mode", "auto",
-		"--strict-mcp-config",
-		"--settings", settings,
-	}
-	args = append(args, f.settings.WorkerArgs...)
-	args = append(args, "-p", prompt(entry.Signal))
-	cmd := exec.CommandContext(ctx, "claude", args...)
-	cmd.Dir = claim.worktree
-	cmd.Env = workerEnv(os.Environ(), variables)
-	return cmd, nil
-}
-
-// The prompt a worker session starts with. workSkill is the one a local claim gives it and the one
-// every run of an issue starts with — a first run as well as a resumed one, which derives where the
-// work stands from git and GitHub as any worker does. reviewSkill is the follow-up run's: the
-// maintainer has read the pull request and asked for changes, so the session starts at the stage
-// that reads the review threads, and that stage ends by running the CI stage again ([ADR 0022]).
-//
-// [ADR 0022]: ../docs/adr/0022-the-factory-is-a-second-driver-over-the-worker-pipeline.md
-const (
-	workSkill   = "/worker:work"
-	reviewSkill = "/worker:address-reviews"
-)
-
-func prompt(signal string) string {
-	if signal == signalChangesRequested {
-		return reviewSkill
-	}
-	return workSkill
-}
-
-// firstStage is that prompt read as a stage, which is the stage the run opens in.
-func firstStage(signal string) string {
-	return stages[strings.TrimPrefix(prompt(signal), "/")]
 }
 
 // workerSettings is the session-scoped configuration a worker is started with, as JSON for

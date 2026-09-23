@@ -151,8 +151,8 @@ type Run struct {
 	Notified string `json:"notified,omitempty"`
 
 	// What the stream said, kept for the moment the run ends. Not part of the record.
-	reportOutcome  string           // ready or blocked, as the worker's final report gave it
-	reportDetail   string           // the pull request for ready, the reason for blocked
+	result         *result          // the session's structured result, when its result line carried one that fits
+	misfit         string           // why the result line's structured output does not fit the schema
 	lastError      string           // the last error the session printed, which is why a failed run failed
 	resultSummary  string           // what the result line called an error, when the session printed no cause
 	counted        map[string]usage // the usage the factory counted per message id

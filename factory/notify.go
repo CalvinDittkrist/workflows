@@ -194,9 +194,9 @@ func (f *Factory) deliver(r *Run) {
 // deliverTo is the notification itself: a review request for a run that ended ready on a pull
 // request, a comment that mentions the logins for every other ending that owes a word.
 //
-// A ready run whose report named no pull request of this repository is commented on like an ending
+// A ready run whose result named no pull request of this repository is commented on like an ending
 // that waits, and not passed over: there is nothing to ask a review of, but the issue is still held
-// by a factory that is done with it, and the run's reason — which says that the report named none —
+// by a factory that is done with it, and the run's reason — which says that the result named none —
 // is what tells the maintainer where to look.
 func (f *Factory) deliverTo(r *Run) error {
 	if r.Outcome == outcomeReady && r.PullRequest != "" {

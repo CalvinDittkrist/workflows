@@ -1,25 +1,28 @@
 #!/usr/bin/env bash
 # Test shim for claude, used by the factory's Go tests: it records how the worker was started and
 # prints the stream of a session that ends in a pull request, so the real binary starts a real
-# command in a real worktree and no tokens are spent.
+# command in a real worktree and no tokens are spent. Its result line is shaped as the one a session
+# run with --json-schema printed on 2026-09-23 with Claude Code 2.1.280: the structured result in
+# structured_output, and the same object as JSON text in result.
 #
 #   CLAUDE_SHIM_LOG    one record per call: the directory it ran in, the branch and commit that
 #                      directory is on, the process and its group, every argument, and every
 #                      environment variable name (values are not written: only whether a name is
 #                      there is ever asked)
 #   CLAUDE_SHIM_PR     the pull request the session reports, by default the one of o/r that the
-#                      issue in the branch name gives; the factory reads it out of the report
+#                      issue in the branch name gives; the factory reads it out of the result
 #   CLAUDE_SHIM_FAIL   when set, the session ends with this on its error output and exit 1
-#   CLAUDE_SHIM_REPORT the final report of the session, by default the ready one above; it is put
-#                      into the stream's JSON string as it stands, so it is escaped for one:
-#                      a line break is \n
+#   CLAUDE_SHIM_RESULT the structured result of the session as one line of JSON, by default a
+#                      complete one with the pull request above; it is printed as it stands, so a
+#                      test can hand the factory one that does not fit the schema
+#   CLAUDE_SHIM_NO_RESULT when set, the session ends well without printing a result line
+#   CLAUDE_SHIM_EXIT   the code the session exits with after its result line, 0 by default
 #   CLAUDE_SHIM_COMMIT when set, the session writes and commits a file of that name in the worktree,
 #                      which is the work a run leaves behind for the branch to carry
 #   CLAUDE_SHIM_SLEEP  when set, the session waits that many seconds before it reports, so a test can
 #                      reach a worker that is still going
 #
-# The report is the one thing the pipeline owes the factory: a final report that says ready: with
-# the pull request (ADR 0022).
+# The structured result is the one thing a session owes the factory (ADR 0039).
 #
 # Before a session the factory asks this same command for the plugin update and for the versions it
 # records. Those calls are answered here and logged apart from the sessions, because the worker log
@@ -87,7 +90,11 @@ fi
 
 issue=$(git rev-parse --abbrev-ref HEAD 2>/dev/null | sed -n 's#^[a-z][a-z]*/\([0-9][0-9]*\)-.*#\1#p')
 
-report="${CLAUDE_SHIM_REPORT:-**ready: ${CLAUDE_SHIM_PR:-https://github.com/o/r/pull/${issue:-0}}**\\n\\nPanel: five PASS.}"
+output="${CLAUDE_SHIM_RESULT:-}"
+if [ -z "$output" ]; then
+  output=$(printf '{"outcome":"complete","pullRequest":"%s","summary":"Panel: five PASS."}' \
+    "${CLAUDE_SHIM_PR:-https://github.com/o/r/pull/${issue:-0}}")
+fi
 
 printf '%s\n' '{"type":"system","subtype":"init","model":"claude-opus-5","permissionMode":"auto","session_id":"5f2d8c11-0b9e-4a3f-9d21-7c6e4b0a1f33"}'
 
@@ -103,5 +110,13 @@ if [ -n "${CLAUDE_SHIM_SLEEP:-}" ]; then
   wait
 fi
 
-printf '{"type":"result","subtype":"success","is_error":false,"terminal_reason":"completed","num_turns":12,"total_cost_usd":1.5,"result":"%s","usage":{"input_tokens":900,"cache_creation_input_tokens":1200,"cache_read_input_tokens":40000,"output_tokens":3000}}\n' \
-  "$report"
+if [ -n "${CLAUDE_SHIM_NO_RESULT:-}" ]; then
+  exit 0
+fi
+
+# The result text is the output as a JSON string: its quotes and backslashes escaped, which is all a
+# line of JSON can carry.
+text=$(printf '%s' "$output" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')
+printf '{"type":"result","subtype":"success","is_error":false,"terminal_reason":"completed","num_turns":12,"total_cost_usd":1.5,"result":"%s","structured_output":%s,"usage":{"input_tokens":900,"cache_creation_input_tokens":1200,"cache_read_input_tokens":40000,"output_tokens":3000}}\n' \
+  "$text" "$output"
+exit "${CLAUDE_SHIM_EXIT:-0}"

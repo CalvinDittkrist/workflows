@@ -129,7 +129,7 @@ func TestAReadyRunThatNamesNoPullRequestIsSaidOnTheIssue(t *testing.T) {
 	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
 	gh.loggedInAs(t, "factory-bot")
 	gh.assigns(t, "acme/edge-sensors", claimedIssue, "factory-bot")
-	gh.workerReportsReadyWithout(t, "the work is done and pushed; the pull request is on the fork")
+	gh.workerReportsCompleteWith(t, "https://github.com/someone/edge-sensors-fork/pull/3")
 	gh.comments(t, "acme/edge-sensors", claimedIssue)
 
 	data := filepath.Join(t.TempDir(), "data")
@@ -202,10 +202,10 @@ func TestARunThatWaitsForAPersonCommentsOnTheIssueWithTheReasonAndTheReleaseGest
 	}
 }
 
-// A blocker is written in markdown for a person. The line that says blocked is read through its
-// markdown, and the lines after it are the worker's own text: the run records them unchanged and the
-// comment on the issue quotes them unchanged, bold, bullets and code included.
-func TestTheLinesOfABlockedReasonAfterTheFirstAreKeptAsTheWorkerWroteThem(t *testing.T) {
+// A blocker is written in markdown for a person. The summary of a blocked result is the worker's own
+// text: the run records it unchanged and the comment on the issue quotes it unchanged, bold, bullets
+// and code included.
+func TestABlockedSummaryIsKeptAsTheWorkerWroteIt(t *testing.T) {
 	t.Parallel()
 	const later = "**What's done.** One commit on the branch.\n\n" +
 		"- The runbook, ADR 0037 and README now pin quota-axi 0.1.49\n" +
@@ -214,7 +214,7 @@ func TestTheLinesOfABlockedReasonAfterTheFirstAreKeptAsTheWorkerWroteThem(t *tes
 	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
 	gh.loggedInAs(t, "factory-bot")
 	gh.assigns(t, "acme/edge-sensors", claimedIssue, "factory-bot")
-	gh.workerEndsWith(t, "**blocked:** the host has no quota-axi to test against.\n\n"+later)
+	gh.workerReportsBlocked(t, "the host has no quota-axi to test against.\n\n"+later)
 	gh.comments(t, "acme/edge-sensors", claimedIssue)
 
 	data := filepath.Join(t.TempDir(), "data")
