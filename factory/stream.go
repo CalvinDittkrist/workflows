@@ -34,6 +34,14 @@ type streamLine struct {
 	Message            json.RawMessage `json:"message"`
 }
 
+// Who denied a tool call, by the decision_reason_type of its permission_denied line.
+var deniers = map[string]string{
+	"classifier": "the classifier",
+	"rule":       "a permission rule",
+	"mode":       "the permission mode",
+	"asyncAgent": "the background agent's permissions",
+}
+
 // message is what an assistant or user line carries in its message.
 type message struct {
 	Content json.RawMessage `json:"content"`
@@ -96,12 +104,12 @@ func (f *Factory) ingest(r *Run, line []byte) {
 		f.runs.update(r, func() { r.Model, r.SessionID = m.Model, m.SessionID })
 		f.runs.event(r, Event{Kind: "init", Title: "session " + m.Model + ", permission mode " + m.PermissionMode, Body: m.SessionID})
 	case m.Type == "system" && m.Subtype == "permission_denied":
-		// The session goes on after a denial, which the model is told of in the tool result, so it is
-		// logged as an error without becoming the reason the run ends. A denial in a subagent names
-		// the agent rather than the Agent call it runs under.
-		denier := "the classifier"
-		if m.DecisionReasonType != "classifier" {
-			denier = strings.TrimSpace("a permission " + m.DecisionReasonType)
+		// The session goes on after a denial, which the model is told of in the tool result, so the
+		// denial is logged as an error event and not taken as the reason the run ended. A denial in a
+		// subagent names the agent rather than the Agent call it runs under.
+		denier, ok := deniers[m.DecisionReasonType]
+		if !ok {
+			denier = "a permission check"
 		}
 		f.runs.event(r, Event{Kind: "error", Title: denier + " denied " + m.ToolName,
 			Body: strings.TrimSpace(m.DecisionReason + "\n" + blockText(m.Message)), Sub: sub || m.AgentID != ""})
