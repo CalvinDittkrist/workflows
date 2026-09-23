@@ -119,7 +119,7 @@ Run the following as root unless it says otherwise.
    ```
 
    Install nothing that `sha256sum` did not answer `OK` for.
-7. **quota-axi** in a pinned version. The factory reads the output of quota-axi 0.1.49 ([ADR 0037](adr/0037-the-quota-check-waits-below-12-percent-of-the-workers-scope.md)), which needs Node 22.19 or later (`engines` of the package). Do not move the pin to 0.1.50: that version reads the `utilization` of Claude's usage endpoint, which is the percentage used, as the percentage remaining, so the check waits while the window is fresh and starts runs when it is nearly used up. Node 22 from NodeSource, installed with the gate's tools, is that; then, as root:
+7. **quota-axi** in a pinned version. The factory reads the output of quota-axi 0.1.49 ([ADR 0037](adr/0037-the-quota-check-waits-below-12-percent-of-the-workers-scope.md)), which needs Node 22.19 or later (`engines` of the package). Node 22 from NodeSource, installed with the gate's tools, is that. Do not move the pin to 0.1.50: that version reads the `utilization` of Claude's usage endpoint, which is the percentage used, as the percentage remaining, so the check waits while the window is fresh and starts runs when it is nearly used up. As root:
 
    ```sh
    npm install -g quota-axi@0.1.49
