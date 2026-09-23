@@ -19,8 +19,11 @@ import (
 // and ends it with the structured result on the result line, as a session run with --json-schema
 // printed it on 2026-09-23 with Claude Code 2.1.280.
 
-// daemonLifetime is how long the process a detached scripted worker leaves behind lives: far longer
-// than its run may take, and short enough that the ones the tests leave behind go away by themselves.
+// daemonLifetime is how long the processes of a scripted worker that outlive their factory live: the
+// child of a hanging worker, which a factory that was killed leaves behind, and the process a detached
+// worker leaves. It is far longer than a run of the tests may take, and short enough that the ones a
+// test process that was killed leaves behind go away by themselves: they have no parent that is the
+// test process, so its death does not end them.
 const daemonLifetime = 2 * time.Minute
 
 // cannedIssue is one entry of the canned queue with the scripted worker that works it: between them
@@ -100,7 +103,7 @@ func scriptedWorker(args []string, stdout, stderr io.Writer) int {
 	if scenario == "child" {
 		s.messages = 1 << 20 // its message is one of its own, not the worker's first one again
 		s.say(fmt.Sprintf("worker child process %d", os.Getpid()))
-		time.Sleep(time.Hour)
+		time.Sleep(daemonLifetime)
 		return 0
 	}
 

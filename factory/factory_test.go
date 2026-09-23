@@ -38,6 +38,12 @@ var binary, hurried string
 const hurriedTimeout = "2s"
 
 func TestMain(m *testing.M) {
+	// A test that runs this test binary again hands it the factory it built, which stays the
+	// caller's to remove (TestNoFactoryOutlivesTheTestProcess).
+	if dir := os.Getenv(builtBinaries); dir != "" {
+		binary, hurried = filepath.Join(dir, "factory"), filepath.Join(dir, "factory-hurried")
+		os.Exit(m.Run())
+	}
 	dir, err := os.MkdirTemp("", "factory-binary-")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "error: no temporary directory for the build:", err)
@@ -384,7 +390,7 @@ func TestFakeModeWorksTheCannedQueueOneRunAtATime(t *testing.T) {
 // it records carry the same version (TestFakeModeWorksTheCannedQueueOneRunAtATime).
 func TestTheBinaryReportsTheVersionOfTheVersionFile(t *testing.T) {
 	t.Parallel()
-	output, err := exec.Command(binary, "-version").CombinedOutput()
+	output, err := factoryCommand(binary, "-version").CombinedOutput()
 	if err != nil {
 		t.Fatalf("factory -version failed: %v, %s", err, output)
 	}
@@ -622,7 +628,7 @@ func TestASecondFactoryOnTheSameAddressStartsNothing(t *testing.T) {
 	path := writeConfig(t, config{"listen": first.address, "data_dir": data, "paused": true,
 		"repositories": []string{"acme/edge-sensors"}})
 
-	second := exec.Command(binary, "-config", path, "-fake")
+	second := factoryCommand(binary, "-config", path, "-fake")
 	output, err := second.CombinedOutput()
 	if err == nil {
 		t.Fatalf("the second factory started; it must fail on the address the first one holds")
@@ -704,7 +710,7 @@ func TestAnInvalidConfigurationIsRefusedWithTheFix(t *testing.T) {
 			if err := os.WriteFile(path, []byte(c.config), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			output, err := exec.Command(binary, "-config", path, "-fake").CombinedOutput()
+			output, err := factoryCommand(binary, "-config", path, "-fake").CombinedOutput()
 			if err == nil {
 				t.Fatalf("the factory started on %s, want a refusal", c.config)
 			}
@@ -724,7 +730,7 @@ func TestAnInvalidConfigurationIsRefusedWithTheFix(t *testing.T) {
 		if err := os.WriteFile(path, []byte(config), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		output, err := exec.Command(binary, "-config", path, "-fake").CombinedOutput()
+		output, err := factoryCommand(binary, "-config", path, "-fake").CombinedOutput()
 		if err == nil {
 			t.Fatalf("the factory started with a data directory it cannot write, want a refusal")
 		}
@@ -733,7 +739,7 @@ func TestAnInvalidConfigurationIsRefusedWithTheFix(t *testing.T) {
 		}
 	})
 	t.Run("missing file", func(t *testing.T) {
-		output, _ := exec.Command(binary, "-config", filepath.Join(t.TempDir(), "gone.json"), "-fake").CombinedOutput()
+		output, _ := factoryCommand(binary, "-config", filepath.Join(t.TempDir(), "gone.json"), "-fake").CombinedOutput()
 		if !strings.Contains(string(output), "copy factory/factory.example.json") {
 			t.Errorf("the factory said %q, want the fix for a missing configuration", strings.TrimSpace(string(output)))
 		}
@@ -817,7 +823,7 @@ func TestASecondFactoryOnTheSameDataDirectoryStartsNothing(t *testing.T) {
 	// rather than as a test that hangs until the suite's own timeout.
 	refused, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	output, err := exec.CommandContext(refused, binary, "-config", path, "-fake").CombinedOutput()
+	output, err := factoryCommandContext(refused, binary, "-config", path, "-fake").CombinedOutput()
 	if err == nil || refused.Err() != nil {
 		t.Fatalf("a second factory started on the data directory the first one holds (%s); it said %q",
 			first.data, strings.TrimSpace(string(output)))
@@ -1169,7 +1175,7 @@ func launchBinary(t *testing.T, bin string, c config, env []string, args ...stri
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.cmd = exec.Command(bin, append([]string{"-config", path}, args...)...)
+	f.cmd = factoryCommand(bin, append([]string{"-config", path}, args...)...)
 	f.cmd.Stdout, f.cmd.Stderr = output, output
 	if env != nil {
 		f.cmd.Env = env
