@@ -446,7 +446,13 @@ class SlowGateTests(ShimTest):
         return (self.repo / "starts.log").read_text().count("started")
 
     def kill_tree(self, pid):
-        """End a process and every descendant it has now, children first, the way a kill of a call walks it."""
+        """End a process and every descendant it has now, children first, the way a kill of a call walks it.
+        Each process is stopped before its children die, so none of them lives to see a child end and act
+        on it, such as recording the exit of the make it waited for."""
+        try:
+            os.kill(pid, signal.SIGSTOP)
+        except ProcessLookupError:
+            return
         children = subprocess.run(["pgrep", "-P", str(pid)], capture_output=True, text=True).stdout.split()
         for child in children:
             self.kill_tree(int(child))
