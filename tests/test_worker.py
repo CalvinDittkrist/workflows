@@ -255,7 +255,7 @@ class GateRecordTests(ShimTest):
         # A passing gate answers with its record, not with its output: this runs in the worker's context.
         self.assertNotIn("Ran 3 tests", r.stdout)
         self.assertEqual(len(r.stdout.splitlines()), 2, r.stdout)
-        self.assertIn(f"gate_result: pass (exit 0) at {head}", r.stdout)
+        self.assertIn(f"gate_recorded: pass (exit 0) at {head}", r.stdout)
         self.assertIn("(the full output)", r.stdout)
         brief = self.brief()
         self.assertIn(f"gate_result: pass (exit 0) at {head}", brief)
