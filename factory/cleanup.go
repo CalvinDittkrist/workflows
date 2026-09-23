@@ -15,8 +15,8 @@ import (
 // runs merged or closed. It is the only path in the factory that removes anything, and it removes
 // nothing that is work ([ADR 0026]): the commits of the worktree go to the remote before the
 // worktree does, a push that fails keeps the worktree where it is, the branch on the remote is
-// deleted only when it holds nothing beyond the base it was cut from, and no record and no log of
-// any run is ever touched.
+// deleted only when it holds nothing beyond the base it was cut from or its pull request was merged,
+// and no record and no log of any run is ever touched.
 //
 // What is not a commit is not kept: a worker that was cancelled in the middle of an edit leaves
 // changes in the worktree that were never committed, and those go with it. The pipeline commits
@@ -44,7 +44,7 @@ const handoverTimeout = 2 * time.Minute
 var errHandoverCut = errors.New("letting the issue go took longer than " + handoverTimeout.String())
 
 // letGo gives one issue back, in the order that keeps the work: push, then the worktree and the
-// local branch, then the branch on the remote if it holds nothing, then the assignee if no pull
+// local branch, then the branch on the remote if it holds nothing or was merged, then the assignee if no pull
 // request came of the issue. The record is marked last and only when the worktree is gone and this
 // host is off the issue, because the mark is what says the issue is out of this factory's hands: a
 // run marked while its worktree is still there would leave that directory on the host for good, and
@@ -76,7 +76,7 @@ func (f *Factory) letGo(ctx context.Context, h holding, decision string) {
 	if !f.removeWorktree(ctx, record, clone, held) {
 		return
 	}
-	f.removeRemoteBranch(ctx, record, clone, connected, held)
+	f.removeRemoteBranch(ctx, record, clone, connected, held, h.pullRequest)
 	if !f.removeAssignee(ctx, record, connected, held, h.pullRequest) {
 		return
 	}
@@ -160,17 +160,19 @@ func (f *Factory) removeWorktree(ctx context.Context, record *Run, clone string,
 	return true
 }
 
-// removeRemoteBranch deletes the branch on the remote, and only when it holds nothing beyond the
-// base it was cut from: a branch with a commit on it is work, and work is never deleted
-// ([ADR 0026]). So a claim that produced nothing leaves nothing behind, and everything else stays
-// for the person the issue is with now — the pull request is under that branch, and a run of the
-// issue after this one continues on it.
+// removeRemoteBranch deletes the branch on the remote when it holds no work the base does not have
+// ([ADR 0026]), which is one of two readings. The first is a branch with no commit beyond the base
+// it was cut from, so a claim that produced nothing leaves nothing behind. The second is a branch
+// whose pull request GitHub reports as merged: its work is in the base whatever the merge method, and
+// a squash or a rebase leaves commits on the branch that the base does not have by their names.
+// Everything else stays for the person the issue is with now — a closed pull request that was not
+// merged is still under that branch, and a run of the issue after this one continues on it.
 //
 // The remote is fetched first, because what the branch holds is decided against what the remote has
 // now and not against what this clone last heard. A branch that cannot be read is left alone.
 //
 // [ADR 0026]: ../docs/adr/0026-the-factory-never-deletes-work-on-its-own.md
-func (f *Factory) removeRemoteBranch(ctx context.Context, record *Run, clone string, connected Connected, held Run) {
+func (f *Factory) removeRemoteBranch(ctx context.Context, record *Run, clone string, connected Connected, held Run, pull string) {
 	if held.Branch == "" || held.Base == "" {
 		return
 	}
@@ -179,15 +181,38 @@ func (f *Factory) removeRemoteBranch(ctx context.Context, record *Run, clone str
 		return
 	}
 	carries, err := carriesWork(ctx, clone, held.Branch, held.Base)
-	if err != nil || carries {
-		return // it carries commits, it is gone from the remote already, or it cannot be read: it stays
+	if err != nil {
+		return // it is gone from the remote already, or it cannot be read: it stays
+	}
+	reason := "it held no commit beyond " + held.Base + ", so nothing of it was work"
+	if carries {
+		if !mergedAtTip(ctx, clone, connected.Name, held.Branch, pull) {
+			return // it carries commits no merged pull request stands for: it stays
+		}
+		reason = "its pull request " + pull + " was merged, so its work is in " + held.Base
 	}
 	if _, err := gh(ctx, "api", "--method", "DELETE", "repos/"+connected.Name+"/git/refs/heads/"+held.Branch); err != nil {
-		f.heldUp(ctx, record, fmt.Sprintf("the branch %s of %s holds nothing beyond %s and could not be removed from the remote: %v; remove it by hand or leave it", held.Branch, connected.Name, held.Base, err))
+		f.heldUp(ctx, record, fmt.Sprintf("the branch %s of %s holds no work beyond %s and could not be removed from the remote: %v; remove it by hand or leave it", held.Branch, connected.Name, held.Base, err))
 		return
 	}
-	f.runs.event(record, Event{Kind: "factory", Title: "removed " + held.Branch + " from the remote",
-		Body: "it held no commit beyond " + held.Base + ", so nothing of it was work"})
+	f.runs.event(record, Event{Kind: "factory", Title: "removed " + held.Branch + " from the remote", Body: reason})
+}
+
+// mergedAtTip says whether the pull request the claim opened is merged, is of this branch of the
+// repository itself, and was merged at the commit the branch is at on the remote now. The last one is
+// what keeps a commit somebody pushed to the branch after the merge — or a cancelled worker's that
+// the push above put there — from going with it: only the commits the merge took are in the base. A
+// pull request that cannot be read is no answer, so the branch stays.
+func mergedAtTip(ctx context.Context, clone, repository, branch, link string) bool {
+	if link == "" {
+		return false
+	}
+	pull, named, err := readPull(ctx, repository, link)
+	if err != nil || !named || !pull.Merged || !pull.of(repository, branch) || pull.Head.SHA == "" {
+		return false
+	}
+	tip, err := git(ctx, clone, "rev-parse", "--verify", "refs/remotes/origin/"+branch)
+	return err == nil && tip == pull.Head.SHA
 }
 
 // removeAssignee takes this host off the issue, which is what says on GitHub that the factory holds
