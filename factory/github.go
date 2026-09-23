@@ -132,9 +132,11 @@ type ghPull struct {
 // ghHead is what a pull request is of: the branch and the repository it was opened from. It is read
 // because the URL in the record came out of a worker's report, and a report is written by a model
 // from text a person or an issue wrote: what it names is checked against what this factory holds
-// before anything is decided by it.
+// before anything is decided by it. SHA is the commit the branch was at when the pull request was
+// merged or closed, which GitHub keeps after that.
 type ghHead struct {
 	Ref  string `json:"ref"`
+	SHA  string `json:"sha"`
 	Repo struct {
 		FullName string `json:"full_name"`
 	} `json:"repo"`
@@ -341,19 +343,13 @@ func (g *gitHub) decided(ctx context.Context, held Held) (string, error) {
 //
 // [ADR 0023]: ../docs/adr/0023-github-is-the-only-control-surface-of-the-factory.md
 func (g *gitHub) decidedOnPull(ctx context.Context, held Held) (string, error) {
-	found := pullRequestURL.FindStringSubmatch(held.PullRequest)
-	if found == nil {
-		return "", nil // a record without a pull request URL is nothing to ask about
-	}
-	raw, err := gh(ctx, "api", "repos/"+held.Repository+"/pulls/"+found[2])
-	if err != nil {
+	pull, named, err := readPull(ctx, held.Repository, held.PullRequest)
+	if err != nil || !named {
+		// A pull request that could not be read is an error to say; a record without a pull request
+		// URL is nothing to ask about.
 		return "", err
 	}
-	var pull ghPull
-	if err := json.Unmarshal(raw, &pull); err != nil {
-		return "", fmt.Errorf("the answer is no pull request: %w", err)
-	}
-	if held.Branch == "" || pull.Head.Ref != held.Branch || !strings.EqualFold(pull.Head.Repo.FullName, held.Repository) {
+	if !pull.of(held.Repository, held.Branch) {
 		g.refuse(held.key(), held.PullRequest,
 			"error: the pull request %s of %s is of %s:%s and not of %s, the branch this factory holds that issue by; what becomes of it decides nothing about the issue, and the record that names it is worth a look",
 			held.PullRequest, held.key(), pull.Head.Repo.FullName, pull.Head.Ref, held.Branch)
@@ -366,6 +362,30 @@ func (g *gitHub) decidedOnPull(ctx context.Context, held Held) (string, error) {
 		return "the pull request " + held.PullRequest + " was closed", nil
 	}
 	return "", nil
+}
+
+// readPull asks GitHub for the pull request a record names, and answers false for a record whose
+// link is no pull request URL at all.
+func readPull(ctx context.Context, repository, link string) (ghPull, bool, error) {
+	number, ok := pullNumber(link)
+	if !ok {
+		return ghPull{}, false, nil
+	}
+	raw, err := gh(ctx, "api", pullRequestRequest(repository, number))
+	if err != nil {
+		return ghPull{}, true, err
+	}
+	var pull ghPull
+	if err := json.Unmarshal(raw, &pull); err != nil {
+		return ghPull{}, true, fmt.Errorf("the answer is no pull request: %w", err)
+	}
+	return pull, true, nil
+}
+
+// of says whether the pull request was opened from the branch of the repository itself, which is
+// the only one whose fate says anything about the claim that holds that branch.
+func (p ghPull) of(repository, branch string) bool {
+	return branch != "" && p.Head.Ref == branch && strings.EqualFold(p.Head.Repo.FullName, repository)
 }
 
 // settle reports what changed with this poll and forgets what the line no longer holds. The report

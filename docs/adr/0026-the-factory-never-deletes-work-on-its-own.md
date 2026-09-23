@@ -21,6 +21,8 @@ Cleanup is tied to a decision somebody made on GitHub: the worktree and the loca
 
 Run records and event logs are never deleted automatically.
 
+Amended 2026-09-23: a branch whose pull request GitHub reports as merged is deleted too. A squash or a rebase merge leaves the branch holding commits the base does not have by their names, and the rule above kept every such branch: this repository merges by squash, and after four merged runs on the verification host (issue #120) the remote carried four merged branches with 2 to 9 commits beyond `main`. The merge puts the branch's work in the base whatever the merge method, so the factory deletes such a branch when the pull request its run opened is merged, is of that branch of the repository itself, and was merged at the commit the branch is at on the remote now. A commit pushed after the merge keeps the branch. So does a pull request that was closed without a merge, and a branch without one. GitHub's automatic deletion of head branches is no alternative, because the let-go pushes the worktree first and would create the branch again. The let-go event says which of the two reasons removed a branch.
+
 ## Consequences
 A power cut, a timeout after 100 minutes or a misunderstood issue costs time, never work. Every state a run can stop in has exactly one way out that a person chose, and the factory has no loop that can spend money by itself.
 
