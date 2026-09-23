@@ -174,7 +174,9 @@ func (f *Factory) ingest(r *Run, line []byte) {
 // carries the outcome may be bold, quoted, a heading or a list item: `**ready: <url>**`, or bold on the word alone: `**blocked:** <reason>`. The first
 // line that says ready or blocked decides. For ready the detail is the rest of that line, which
 // names the pull request; for blocked it is the reason, which runs to the end of the report because
-// a blocker takes more than one line.
+// a blocker takes more than one line. Only the line that says blocked is stripped of its markdown:
+// the lines after it are the worker's text as written, bold, bullets and code included, because
+// the dashboard shows the reason as text and the issue comment quotes it verbatim.
 func report(final string) (outcome, detail string) {
 	lines := strings.Split(final, "\n")
 	for i, line := range lines {
@@ -187,10 +189,7 @@ func report(final string) (outcome, detail string) {
 			if want == outcomeReady {
 				return outcomeReady, rest
 			}
-			reason := []string{rest}
-			for _, more := range lines[i+1:] {
-				reason = append(reason, undecorate(more))
-			}
+			reason := append([]string{rest}, lines[i+1:]...)
 			return outcomeBlocked, strings.TrimSpace(strings.Join(reason, "\n"))
 		}
 	}
