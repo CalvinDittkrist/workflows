@@ -18,3 +18,5 @@ const factories = () => JSON.parse(readFileSync(file, 'utf8'))
 // The factory working the canned queue, and the one that is paused.
 export const working = (path = '') => factories().working + path
 export const paused = (path = '') => factories().paused + path
+// The configuration file a factory reads, which a test rewrites to pause it while it runs.
+export const configuration = (name) => factories().configurations[name]

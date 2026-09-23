@@ -37,7 +37,11 @@ export default async function start() {
       state(ports.working, 'its canned queue to be worked', (line) => line.done.length === CANNED_DONE && line.now.length === 1),
       state(ports.paused, 'its queue to be derived', (line) => line.queue.length === CANNED_QUEUE && line.now.length === 0),
     ])
-    remember({ working: url(ports.working), paused: url(ports.paused) })
+    remember({
+      working: url(ports.working),
+      paused: url(ports.paused),
+      configurations: { working: working.config, paused: paused.config },
+    })
     return async () => {
       stopAll()
       await Promise.all([working.ended, paused.ended])
@@ -118,6 +122,7 @@ function run(binary, dir, name, on, flags) {
   )
   const factory = spawn(binary, ['-config', config, '-fake', ...flags], { stdio: 'inherit' })
   return {
+    config,
     // SIGTERM is how the factory ends the worker it is running; killing it outright would leave the
     // scripted worker's process group on the machine.
     stop: () => {

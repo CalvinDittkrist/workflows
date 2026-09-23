@@ -93,6 +93,7 @@ func run(config string, fake, paused bool) error {
 	if err != nil {
 		return err
 	}
+	factory.Follow(config, paused)
 	server := &http.Server{Handler: factory.Handler(), ReadHeaderTimeout: 10 * time.Second}
 	go func() {
 		if err := server.Serve(listener); err != nil && err != http.ErrServerClosed {

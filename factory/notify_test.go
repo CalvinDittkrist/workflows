@@ -400,6 +400,37 @@ func TestAnEndingThatWasRecordedAndNotNotifiedIsNotifiedOnTheNextStart(t *testin
 	}
 }
 
+// A factory that starts paused owes its endings until it works, and it works once the configuration
+// says so: the poll that reads the pause gone makes them, without a restart.
+func TestWhatAPausedStartOwesIsNotifiedWhenTheConfigurationUnpausesIt(t *testing.T) {
+	t.Parallel()
+	gh := newGhShim(t)
+	gh.remote(t, "acme/edge-sensors")
+	gh.loggedInAs(t, "factory-bot")
+	gh.issues(t, "acme/edge-sensors")
+	gh.comments(t, "acme/edge-sensors", claimedIssue)
+	data := filepath.Join(t.TempDir(), "data")
+	gh.cloneInto(t, data, "acme/edge-sensors")
+
+	began := time.Now().UTC().Add(-2 * time.Hour)
+	owed := record(1, claimedIssue, claimedTitle, signalRouted, outcomeFailed, true, began, began.Add(time.Minute))
+	owed.Notified = notifyPending
+	records(t, data, owed)
+
+	f := gh.work(t, config{"poll": "50ms", "data_dir": data, "paused": true,
+		"repositories": []string{"acme/edge-sensors"}, "notify": maintainers})
+	f.queue(t, 0) // the failed run holds its issue for a person, so nothing is claimed either way
+	if made := gh.made(t, commentCall("acme/edge-sensors", claimedIssue)); made != 0 {
+		t.Fatalf("the paused factory commented %d times, want none while it is paused", made)
+	}
+
+	f.configure(t, config{"paused": false})
+	f.notified(t, 1)
+	if said := gh.commented(t, "acme/edge-sensors", claimedIssue); !strings.Contains(said, "`failed`") {
+		t.Errorf("the comment on the issue is %q, want the ending the paused start owed", said)
+	}
+}
+
 // A factory that is stopped before it has worked through what it owes keeps the rest of it: the
 // endings stay pending and the next start makes them. A stop must not burn the notification
 // somebody is waiting on, which is what the pending mark is there for.

@@ -1,5 +1,6 @@
+import { readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { expect, test } from '@playwright/test'
-import { paused, working } from './where.js'
+import { configuration, paused, working } from './where.js'
 
 // The dashboard read the way the maintainer reads it: in a browser, against the real binary in fake
 // mode. The canned queue is worked before the tests start (tests/factory.js), so the runs below are
@@ -59,6 +60,31 @@ test('the whole queue is shown in its order while the factory is paused', async 
   await expect(queue.first()).toContainText('interruption')
   await expect(queue.nth(1)).not.toContainText('interruption')
   await expect(page.locator('.line .none').first()).toHaveText('paused')
+})
+
+test('a pause written into the configuration is shown without a restart, and the run keeps going', async ({
+  page,
+}) => {
+  // The working factory is paused and unpaused through its configuration file, the way an operator
+  // does it on the host; the tests after this one read it working again.
+  const file = configuration('working')
+  const was = readFileSync(file, 'utf8')
+  // Written beside the file and renamed over it, so a poll never reads half of it.
+  const save = (body) => {
+    writeFileSync(`${file}.next`, body)
+    renameSync(`${file}.next`, file)
+  }
+  await page.goto(working('/'))
+  await expect(page.locator('.mode')).toHaveText('working')
+  try {
+    save(JSON.stringify({ ...JSON.parse(was), paused: true }))
+    await expect(page.locator('.mode')).toHaveText('paused')
+    // A pause ends nothing: the run that was going still stands as the one running.
+    await expect(page.locator('.row.now')).toContainText('#118')
+  } finally {
+    save(was)
+  }
+  await expect(page.locator('.mode')).toHaveText('working')
 })
 
 test('a run is selected through the URL and the selection survives a reload', async ({ page }) => {

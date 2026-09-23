@@ -19,6 +19,8 @@ GitHub is the only thing the factory host and a developer's machine share, and t
 - **Ask for changes**: a "changes requested" review on the factory's pull request queues a follow-up run.
 - **Merge**: on GitHub, by a person. The factory has no yolo mode.
 
+The pause is the one thing steered on the host, and through its configuration file rather than the interface: `"paused"` is read again on every poll, it holds the whole factory rather than one issue, and it is the operator's, who has a shell on the host, not the maintainer's.
+
 Its notifications go the same way: a review request on the pull request when a run ends `ready`, a comment that mentions the maintainer when it ends `blocked`, `failed`, `timeout` or is interrupted a second time. There is no other channel.
 
 The factory's own HTTP interface is read-only. It has no endpoint that writes anything, and a request with a writing method is refused with 405, whatever the path, so an endpoint that writes cannot appear by accident. It binds to one address and refuses a wildcard one, so an unauthenticated interface cannot end up on every network the host is on; by default that address is the loopback, and reaching it from elsewhere is the tailnet's job, so the factory carries no login of its own.
