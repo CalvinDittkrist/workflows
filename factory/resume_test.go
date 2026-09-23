@@ -222,6 +222,7 @@ func TestAReleaseThatWasCutOffBeforeTheTakeBackIsStillAnswered(t *testing.T) {
 // long as it stands, with a run record and a notification on the issue every few seconds. The issue
 // waits for a person instead, like every other ending that cannot go on.
 func TestAReleaseResumeThatFailedIsAnsweredAndTheIssueWaitsForAPerson(t *testing.T) {
+	t.Parallel()
 	gh := newGhShim(t)
 	gh.remote(t, "acme/edge-sensors")
 	gh.loggedInAs(t, "factory-bot")
