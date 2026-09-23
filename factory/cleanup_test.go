@@ -902,16 +902,19 @@ func TestAPullRequestOfAnotherBranchIsNoDecisionAboutTheIssue(t *testing.T) {
 	gh.pullOf(t, "acme/edge-sensors", claimedIssue, "closed", false, "acme/edge-sensors", "feat/900-another-issue-entirely")
 	gh.issue(t, "acme/edge-sensors", assignedTo(
 		openIssue(claimedIssue, claimedTitle, time.Now().UTC().Add(-72*time.Hour)), "factory-bot"))
-	f.never(t, 3*time.Second, "the issue was let go by a pull request of another branch", func() bool {
+	// The line is waited for rather than read after a fixed window: it is the proof that the factory
+	// read the pull request at all, and on a host busy with the rest of the gate one pass can take
+	// longer than such a window, which then failed a factory that had simply not got there yet.
+	f.eventually(t, 30*time.Second, "the factory to say the pull request is not of the branch it holds", func() bool {
+		return strings.Contains(f.output(t), "not of "+claimedBranch)
+	})
+	f.never(t, time.Second, "the issue was let go by a pull request of another branch", func() bool {
 		var let apiRun
 		f.get(t, "/api/runs/1", &let)
 		return let.LetGoAt != nil
 	})
 	if _, err := os.Stat(worktree); err != nil {
 		t.Errorf("the worktree %s is gone: %v; a pull request of another branch decides nothing about this issue", worktree, err)
-	}
-	if said := f.output(t); !strings.Contains(said, "not of "+claimedBranch) {
-		t.Errorf("the factory says nothing about the pull request that is not of the branch it holds; its log:\n%s", said)
 	}
 	// The gestures that are about this issue still reach it: the routing label comes off.
 	gh.issue(t, "acme/edge-sensors", assignedTo(

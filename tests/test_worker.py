@@ -2015,6 +2015,114 @@ class FinishTests(PanelRecordCalls, ShimTest):
         self.assertFalse([c for c in self.calls() if "pr merge" in c])
 
 
+class BaseSyncTests(PanelRecordCalls, ShimTest):
+    """The work stage brings a branch made days earlier up to its base before the first gate, so the gate does
+    not fail on what the base has fixed since (issue #128). The base lives in a real remote, as on a host."""
+
+    def setUp(self):
+        super().setUp()
+        self.origin = self.base / "origin.git"
+        self.git("clone", "-q", "--bare", str(self.repo), str(self.origin), cwd=self.base)
+        self.git("remote", "add", "origin", str(self.origin))
+        self.git("fetch", "-q", "origin")
+        self.git("remote", "set-head", "origin", "main")
+        self.git("checkout", "-qb", "feat/12-x")
+        self.commit("work.txt")
+
+    def advance_base(self, name="fix.txt", text="fixed on main\n"):
+        """A commit that lands on the remote base after the branch was made, the way another pull request does."""
+        other = self.base / "other"
+        self.git("clone", "-q", str(self.origin), str(other), cwd=self.base)
+        self.git("config", "user.email", "t@example.com", cwd=other)
+        self.git("config", "user.name", "t", cwd=other)
+        (other / name).write_text(text)
+        self.git("add", ".", cwd=other); self.git("commit", "-qm", f"fix: {name}", cwd=other)
+        self.git("push", "-q", "origin", "main", cwd=other)
+        return self.git("rev-parse", "HEAD", cwd=other).strip()
+
+    def sync(self):
+        return self.run_script(WORKER / "base-sync.sh")
+
+    def head(self):
+        return self.git("rev-parse", "HEAD").strip()
+
+    def test_a_branch_behind_its_base_gets_a_merge_commit_and_one_that_carries_it_is_left_alone(self):
+        before, fix = self.head(), self.advance_base()
+        r = self.sync()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        merge = self.head()
+        self.assertEqual(self.git("rev-list", "--parents", "-n", "1", "HEAD").split(), [merge, before, fix],
+                         "a merge commit whose first parent is the branch as it was: history kept, nothing rebased")
+        self.assertTrue((self.repo / "fix.txt").exists(), "the base's fix is in the tree the gate will run on")
+        self.assertIn(f"merged origin/main into feat/12-x at {merge[:7]}", r.stdout)
+        self.assertIn("1 commit(s) of the base", r.stdout)
+        # Run again, it finds the base carried and makes no empty merge commit.
+        r = self.sync()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("base_sync: current: feat/12-x carries origin/main, nothing merged", r.stdout)
+        self.assertEqual(self.head(), merge)
+
+    def test_a_branch_that_carries_its_base_is_not_touched(self):
+        before = self.head()
+        r = self.sync()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("nothing merged", r.stdout)
+        self.assertEqual(self.head(), before)
+        self.assertEqual(self.git("status", "--porcelain"), "")
+
+    def test_a_conflict_stops_for_a_person_with_the_files_and_the_merge_left_in_place(self):
+        (self.repo / "README.md").write_text("the branch's line\n")
+        self.git("add", "."); self.git("commit", "-qm", "docs: branch")
+        before = self.head()
+        self.advance_base("README.md", "the base's line\n")
+        r = self.sync()
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn("conflicted_files:\n  - README.md\n", r.stdout)
+        blocked = [l for l in r.stdout.splitlines() if l.startswith("blocked: ")]
+        self.assertEqual(len(blocked), 1, r.stdout)
+        self.assertIn("origin/main", blocked[0])
+        self.assertEqual(self.head(), before, "nothing is committed over the conflict")
+        self.git("rev-parse", "--verify", "MERGE_HEAD")  # the merge state is the person's to finish
+        self.assertIn("UU README.md", self.git("status", "--porcelain"))
+        # A second call stops at the unfinished merge instead of starting another over it.
+        r = self.sync()
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn("  - README.md", r.stdout)
+        self.assertIn("blocked: ", r.stdout)
+        # Resolved and staged but not committed is still a merge for the person to finish, and said so.
+        (self.repo / "README.md").write_text("both lines\n")
+        self.git("add", "README.md")
+        r = self.sync()
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn("resolved but not committed", r.stdout)
+        self.assertEqual(self.head(), before)
+
+    def test_a_dirty_tree_is_refused_before_anything_is_merged(self):
+        self.advance_base()
+        before = self.head()
+        (self.repo / "work.txt").write_text("unsaved")
+        r = self.sync()
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("work.txt", r.stderr)
+        self.assertEqual(self.head(), before)
+
+    def test_the_gate_and_panel_records_of_an_earlier_head_are_still_read_after_the_merge(self):
+        self.record_rounds("panel: code=PASS security=PASS docs=PASS tests=PASS senior=PASS\n"
+                           "fixed: 0 (S1 0, S2 0, S3 0)\ndisputed: none")
+        r = self.record()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        recorded = self.head()[:7]
+        self.advance_base()
+        r = self.sync()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        gate = self.run_script(WORKER / "gate.sh", "print").stdout
+        self.assertIn(f"gate_result: pass (exit 0) at {recorded}, 2 commit(s) since", gate)
+        panel = self.print_brief().stdout
+        self.assertIn(f"panel_summary: recorded at {recorded}", panel)
+        self.assertIn("commits since the summary was recorded, which it does not describe: 2", panel)
+        self.assertIn("panel_summary_block:\nreview_rounds: 1\n", panel, "the recorded rounds are still read")
+
+
 class PrWaitTests(ShimTest):
     def wait(self, **env):
         # A wait that ends does so on its first reading, so the slice is only spent by one that reports
