@@ -274,7 +274,7 @@ func Load(path string) (Settings, error) {
 		// operator installed and pinned, not whatever answers to quota-axi on this host today. Nothing
 		// is fetched from npm, which is why npx is no way to name it either.
 		if !filepath.IsAbs(c.QuotaAxi) {
-			return bad("quota_axi %q is not an absolute path; name the quota-axi installed on this host, such as \"/usr/local/bin/quota-axi\", or leave it out to switch the quota check off", c.QuotaAxi)
+			return bad("quota_axi %q is not an absolute path; name the quota-axi installed on this host, such as \"/usr/bin/quota-axi\", or leave it out to switch the quota check off", c.QuotaAxi)
 		}
 		s.QuotaAxi = c.QuotaAxi
 	}

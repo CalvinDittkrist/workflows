@@ -27,16 +27,52 @@ Run the following as root unless it says otherwise.
 1. **The user and its directories.**
 
    ```sh
-   apt-get install -y git gh jq make curl
+   apt-get install -y git gh jq make curl xz-utils
    useradd --create-home --shell /bin/bash factory
    install -d -o factory -g factory -m 0700 /var/lib/factory
    install -d -m 0755 /etc/factory
    ```
 
-   A worker runs each connected repository's `make check`, so install the toolchain those gates need as well (for this repository: shellcheck, Go, Node, Python).
+2. **The gate's tools.** A worker runs each connected repository's `make check`, so the host needs the tools that gate runs, at the versions the repository's CI pins. Read them from its CI workflow (for this repository `.github/workflows/ci.yml`) and from the error lines of its `Makefile`, not from the distribution: a distribution's version finds other things than CI's, and the gate then fails on the host on files the change never touched, which no worker can fix. For this repository that is shellcheck 0.11.0, Go 1.26, Node 22 and staticcheck 2026.2.1; Python is the distribution's `python3`, which CI does not pin. The gate's tests call two more tools that a minimal Debian image lacks and CI's runner has: a C compiler (`build-essential`), because `go test -race` builds with cgo, and `file`, with which the release test checks that the factory's binaries are static.
 
-   The gate's length is what tells you whether a host is fast enough. A worker runs it twice per issue, and on a Raspberry Pi 4 this repository's full gate takes an estimated 12 to 15 minutes: in run 4 of #106 (2026-09-22) the first four targets alone took 559 s, and the next attempt was cut off at 600 s in `go test -race`. That is longer than the 600 s ceiling of one Bash tool call, which is why that run could not reach `ready`. The worker now runs the gate detached from the call and waits for it in 540 s slices ([ADR 0019](adr/0019-the-gate-runs-once-per-review-round.md)), so a slow host costs time and no longer blocks a run. To judge a host, time `make check` in a clone of each connected repository as the user `factory`.
-2. **Claude Code**, as the user `factory` (`sudo -iu factory`), with the native installer, which needs no Node and puts `claude` in `~/.local/bin` ([setup](https://code.claude.com/docs/en/setup.md)):
+   ```sh
+   cd "$(mktemp -d)"
+   arch=aarch64   # or x86_64: uname -m
+   sum=12b331c1d2db6b9eb13cfca64306b1b157a86eb69db83023e261eaa7e7c14588   # x86_64: 8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198
+   curl -fsSLO "https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.$arch.tar.xz"
+   echo "$sum  shellcheck-v0.11.0.linux.$arch.tar.xz" | sha256sum --check &&
+     tar -xJf "shellcheck-v0.11.0.linux.$arch.tar.xz" &&
+     install -m 0755 shellcheck-v0.11.0/shellcheck /usr/local/bin/shellcheck
+   shellcheck --version           # version: 0.11.0
+
+   goarch=arm64   # or amd64: dpkg --print-architecture
+   go=$(curl -fsSL 'https://go.dev/dl/?mode=json' | jq -r '[.[].version | select(startswith("go1.26."))][0]')
+   curl -fsSLO "https://go.dev/dl/$go.linux-$goarch.tar.gz"
+   curl -fsSL 'https://go.dev/dl/?mode=json' | jq -r --arg f "$go.linux-$goarch.tar.gz" '.[].files[] | select(.filename == $f) | "\(.sha256)  \(.filename)"' | sha256sum --check &&
+     rm -rf /usr/local/go && tar -xzf "$go.linux-$goarch.tar.gz" -C /usr/local
+   /usr/local/go/bin/go version   # go version go1.26.<patch> linux/<arch>
+
+   curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+   apt-get install -y nodejs python3 build-essential file
+   node --version                 # v22.<minor>.<patch>
+   ```
+
+   Each archive is unpacked and installed only when `sha256sum --check` answers `OK`, which is why those lines are chained with `&&`; a pasted block runs on past a failed line. `/usr/local/go/bin` is not on a login's `PATH`, so the service puts it there (see [Service](#service)). staticcheck is built with that Go as the user `factory`, into `~/go/bin`, where the `Makefile` looks for it:
+
+   ```sh
+   sudo -iu factory /usr/local/go/bin/go install honnef.co/go/tools/cmd/staticcheck@2026.2.1
+   ```
+
+   The dashboard's browser test installs its own Chromium on the first `make check`; the system libraries that browser needs are installed once as root, with the Playwright version that `factory/ui/package-lock.json` names, from a directory of root's own:
+
+   ```sh
+   cd "$(mktemp -d -p /root)" && npx --yes playwright@1.63.0 install-deps chromium
+   ```
+
+   Run it only where no parent directory is writable by anyone but root: npx runs the `node_modules/playwright` of the nearest parent that has one, and the workers write to `/tmp` and to the clones under `/var/lib/factory`, so from there root would run what a worker left. When CI moves a pin, move the host's in the same way before the next run.
+
+   The gate's length is what tells you whether a host is fast enough. A worker runs it twice per issue, and on a Raspberry Pi 4 this repository's full gate takes an estimated 12 to 15 minutes: in run 4 of #106 (2026-09-22) the first four targets alone took 559 s, and the next attempt was cut off at 600 s in `go test -race`. That is longer than the 600 s ceiling of one Bash tool call, which is why that run could not reach `ready`. The worker now runs the gate detached from the call and waits for it in 540 s slices ([ADR 0019](adr/0019-the-gate-runs-once-per-review-round.md)), so a slow host costs time and no longer blocks a run. To judge a host, time the gate in a clone of each connected repository as the user `factory`, with the `PATH` the service gives it: `time env PATH="/usr/local/go/bin:$PATH" make check`.
+3. **Claude Code**, as the user `factory` (`sudo -iu factory`), with the native installer, which needs no Node and puts `claude` in `~/.local/bin` ([setup](https://code.claude.com/docs/en/setup.md)):
 
    ```sh
    curl -fsSL https://claude.ai/install.sh | bash
@@ -48,8 +84,8 @@ Run the following as root unless it says otherwise.
    { "env": { "DISABLE_AUTOUPDATER": "1" } }
    ```
 
-3. **The headless login**, as the user `factory`: run `claude`, type `/login` and sign in with the subscription the workers run on. Over SSH the browser cannot reach the host, so Claude Code shows a URL to open on another machine and a code to paste back ([authentication](https://code.claude.com/docs/en/authentication.md)). The credential lands in `~/.claude/.credentials.json`, mode 0600, where the worker sessions refresh it and the quota check reads it. `claude setup-token` with `CLAUDE_CODE_OAUTH_TOKEN` also runs a worker, but it writes no credentials file, so quota-axi has nothing to read and every run carries a warning that the check could not answer.
-4. **The marketplace and the worker plugin**, as the user `factory`, in the user scope ([discover plugins](https://code.claude.com/docs/en/discover-plugins.md)):
+4. **The headless login**, as the user `factory`: run `claude`, type `/login` and sign in with the subscription the workers run on. Over SSH the browser cannot reach the host, so Claude Code shows a URL to open on another machine and a code to paste back ([authentication](https://code.claude.com/docs/en/authentication.md)). The credential lands in `~/.claude/.credentials.json`, mode 0600, where the worker sessions refresh it and the quota check reads it. `claude setup-token` with `CLAUDE_CODE_OAUTH_TOKEN` also runs a worker, but it writes no credentials file, so quota-axi has nothing to read and every run carries a warning that the check could not answer.
+5. **The marketplace and the worker plugin**, as the user `factory`, in the user scope ([discover plugins](https://code.claude.com/docs/en/discover-plugins.md)):
 
    ```sh
    claude plugin marketplace add CalvinDittkrist/workflows
@@ -57,7 +93,7 @@ Run the following as root unless it says otherwise.
    ```
 
    The factory updates both before every run and records the version a run was made with; install nothing else — the planner and the orchestrator are switched off in every worker session.
-5. **The factory binary** from a release. The tag `factory/v<version>` carries `factory-linux-amd64`, `factory-linux-arm64` and `checksums.txt`: static binaries with the dashboard inside them, so the host needs no Go, no Node and no checkout for the factory itself.
+6. **The factory binary** from a release. The tag `factory/v<version>` carries `factory-linux-amd64`, `factory-linux-arm64` and `checksums.txt`: static binaries with the dashboard inside them, so the host needs no Go, no Node and no checkout for the factory itself.
 
    ```sh
    version=0.1.0
@@ -70,12 +106,14 @@ Run the following as root unless it says otherwise.
    ```
 
    Install nothing that `sha256sum` did not answer `OK` for.
-6. **quota-axi** in a pinned version. The factory reads the output of quota-axi 0.1.50 ([ADR 0037](adr/0037-the-quota-check-waits-below-12-percent-of-the-workers-scope.md)), which needs Node 22.19 or later (`engines` of the package). Install Node 22 from your distribution or NodeSource, check `node --version`, then:
+7. **quota-axi** in a pinned version. The factory reads the output of quota-axi 0.1.50 ([ADR 0037](adr/0037-the-quota-check-waits-below-12-percent-of-the-workers-scope.md)), which needs Node 22.19 or later (`engines` of the package). Node 22 from NodeSource, installed with the gate's tools, is that; then, as root:
 
    ```sh
    npm install -g quota-axi@0.1.50
-   command -v quota-axi   # /usr/local/bin/quota-axi, the path for quota_axi below
+   command -v quota-axi   # /usr/bin/quota-axi, the path for quota_axi below
    ```
+
+   NodeSource's npm has the prefix `/usr` (`npm prefix -g`), so its global packages land in `/usr/lib/node_modules` with their commands in `/usr/bin`, and the path for `quota_axi` is `/usr/bin/quota-axi`. A Node with the prefix `/usr/local`, such as one from the tarball on nodejs.org, puts it in `/usr/local/bin/quota-axi` instead; configure the path `command -v` printed.
 
    The factory runs it by that absolute path and never through `npx`, so nothing is fetched from npm at run time. The script starts with `#!/usr/bin/env node`, so `node` has to be on the service's `PATH` (see [Service](#service)).
 
@@ -110,7 +148,7 @@ A complete configuration, written to `/etc/factory/factory.json` (root owns it, 
   "worker_args": [],
   "paused": false,
   "notify": ["yourname"],
-  "quota_axi": "/usr/local/bin/quota-axi",
+  "quota_axi": "/usr/bin/quota-axi",
   "quota_minimum": 12,
   "repositories": [
     "yourname/service",
@@ -135,8 +173,8 @@ Type=simple
 User=factory
 Group=factory
 WorkingDirectory=/var/lib/factory
-# claude lives in ~/.local/bin; node has to be here for quota-axi.
-Environment=PATH=/home/factory/.local/bin:/usr/local/bin:/usr/bin:/bin
+# claude lives in ~/.local/bin; node has to be here for quota-axi, go and gofmt for the gate.
+Environment=PATH=/home/factory/.local/bin:/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin
 ExecStart=/usr/local/bin/factory -config /etc/factory/factory.json
 Restart=on-failure
 RestartSec=30s
@@ -168,6 +206,8 @@ The interface binds to `127.0.0.1` and has no login, so it is published to the t
 ```sh
 tailscale serve --bg 7341
 ```
+
+The first time, the command prints a link to enable Serve for the tailnet and waits until that is done: open the link on another machine, signed in as an admin of the tailnet, and the command goes on by itself.
 
 The dashboard is then at `https://<host>.<tailnet>.ts.net/` for the devices of your tailnet. Never use `tailscale funnel` for it, which publishes to the internet, and never set `listen` to an address other networks reach. The interface is read-only — `/api/status`, `/api/repositories`, `/api/line`, `/api/runs/{id}` and the dashboard under `/` — but it shows issue titles, repository names and a worker's tool calls, with the content of private repositories in them ([security](security.md#the-factory)).
 
