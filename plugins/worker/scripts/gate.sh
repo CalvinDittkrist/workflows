@@ -89,20 +89,27 @@ end_tree() {
 # when that worker is gone, without a record: the factory ends a worker at its deadline or on a stop, and
 # a gate must not run on unattended in a worktree the factory is about to remove.
 detached_run() {
-  local id=$1 commit=$2 dirty=$3 started=$4 owner=$5 owner_start=$6 begin status gate
+  local id=$1 commit=$2 dirty=$3 started=$4 owner=$5 owner_start=$6 begin status gate watcher=""
   begin=$(date +%s)
   ( cd "$(git rev-parse --show-toplevel)" && exec "${gate_cmd[@]}" ) < /dev/null > "$log.tmp" 2>&1 &
   gate=$!
-  while kill -0 "$gate" 2>/dev/null; do
-    if [ -n "$owner" ] && [ "$(started_at "$owner")" != "$owner_start" ]; then
-      end_tree "$gate"; rm -f "$log.tmp"; exit 1
-    fi
-    sleep 2
-  done
+  # The worker is watched beside the gate, not between waits on it, so the record is written the moment
+  # the gate ends instead of at the next look.
+  if [ -n "$owner" ]; then
+    ( while kill -0 "$gate" 2>/dev/null; do
+        if [ "$(started_at "$owner")" != "$owner_start" ]; then end_tree "$gate"; exit 0; fi
+        sleep 2
+      done ) &
+    watcher=$!
+  fi
   set +e
   wait "$gate"
   status=$?
   set -e
+  [ -z "$watcher" ] || kill "$watcher" 2>/dev/null || true
+  if [ -n "$owner" ] && [ "$(started_at "$owner")" != "$owner_start" ]; then
+    rm -f "$log.tmp"; exit 1
+  fi
   mv "$log.tmp" "$log"
   # One file, written in one move: the headers, an empty line, then the tail of the output verbatim.
   # Nothing is parsed out of that output; the gate command is fixed, its output shape is per repository.
@@ -139,7 +146,7 @@ report_record() {
 # Wait one slice for the run in flight, then say how it stands: its record once it ends, a `running` line
 # and the call to make next while it lasts, and an error when its process is gone and left no record.
 wait_for_run() {
-  local since; since=$(date +%s)
+  local since looks=0; since=$(date +%s)
   while :; do
     if run_recorded; then rm -f "$running"; report_record; fi
     if ! run_alive; then
@@ -155,7 +162,9 @@ wait_for_run() {
       printf "help: the gate runs on without this call; run the worker's gate.sh wait with the Bash tool timeout set to 600000 ms until it reports gate_recorded\n"
       exit 3
     fi
-    sleep 1
+    # Often in the first two seconds, where a gate that has little to do ends, then once a second.
+    looks=$((looks + 1))
+    if [ "$looks" -le 20 ]; then sleep 0.1; else sleep 1; fi
   done
 }
 
