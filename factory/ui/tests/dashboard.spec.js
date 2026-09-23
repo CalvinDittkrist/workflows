@@ -314,7 +314,11 @@ test('the layout holds', async ({ page }) => {
   await page.evaluate(() => document.fonts.ready)
 
   // The tolerance leaves room for a machine that rasterises the same glyphs a little differently,
-  // and for nothing more: one changed number on the page moves 291 pixels, measured.
+  // and for nothing more: one changed number on the page moves 291 pixels, measured. The per-pixel
+  // threshold is what tells the two apart: the anti-aliased edges of the same glyph on another host
+  // (Chromium on a Raspberry Pi 4, Debian trixie, against the Ubuntu baseline) differ by up to 0.25 in
+  // YIQ, measured on 2026-09-23, while the faintest text on the page (#7e7e7e on #101010) differs from
+  // its background by 0.42, so a glyph that changes still counts, pixel for pixel.
   await expect(page).toHaveScreenshot('dashboard.png', {
     // The tick is what counts up between two readings; the versions are what changes with a release,
     // and both would make a baseline that has to be approved again for nothing. Their text is
@@ -324,5 +328,6 @@ test('the layout holds', async ({ page }) => {
     animations: 'disabled',
     caret: 'hide',
     maxDiffPixels: 100,
+    threshold: 0.3,
   })
 })
