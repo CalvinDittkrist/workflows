@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -53,6 +54,9 @@ var cannedIssues = []cannedIssue{
 type canned struct {
 	repositories []Connected
 	started      time.Time
+
+	mu    sync.Mutex
+	reads map[string]int // how often the ci stage has read each issue's pull request
 }
 
 // The issues fake mode holds are not asked about: there is no GitHub behind a canned queue, so
@@ -64,6 +68,69 @@ func (c *canned) queue(context.Context, []Held) poll {
 // changesRequested answers that nobody asked for changes. Fake mode opens no pull request — its
 // scripted workers only say they did — so there is none to read a review of.
 func (c *canned) changesRequested(context.Context, string, int) time.Time { return time.Time{} }
+
+// cannedCI is what the ci stage reads of the pull request of a scenario, one reading after the other;
+// the last one stands from then on. The ready worker's pull request waits on its checks, fails them
+// and is green after the fix session; the detached worker's conflicts with its base first. Every other
+// scenario's is green at once.
+var cannedCI = map[string][]string{
+	"ready":    {ciWaiting, ciFailed, ciGreen},
+	"detached": {ciConflicts, ciGreen},
+}
+
+// pullState answers the canned reading of the scenario that works the issue, in the shape GitHub's is
+// read in, so the verdict the dashboard shows is the one the real stage would make.
+func (c *canned) pullState(_ context.Context, held Held, _ []string) (pullReading, error) {
+	scenario := ""
+	for _, issue := range cannedIssues {
+		if issue.number == held.Number {
+			scenario = issue.scenario
+		}
+	}
+	c.mu.Lock()
+	if c.reads == nil {
+		c.reads = map[string]int{}
+	}
+	n := c.reads[held.key()]
+	c.reads[held.key()] = n + 1
+	c.mu.Unlock()
+	script := cannedCI[scenario]
+	state := ciGreen
+	if len(script) > 0 {
+		state = script[min(n, len(script)-1)]
+	}
+	gate := check{Name: "gate", URL: "https://github.com/" + held.Repository + "/actions/runs/1/job/1", State: checkPass,
+		CompletedAt: c.started}
+	read := pullReading{Mergeable: "MERGEABLE", Head: fmt.Sprintf("canned-%d", n), HeadAt: c.started, Bots: 1,
+		Objections: []string{}, Threads: []string{}}
+	switch state {
+	case ciWaiting:
+		gate.State, gate.CompletedAt = checkPending, time.Time{}
+	case ciFailed:
+		gate.State = checkFail
+	case ciConflicts:
+		read.Mergeable = "CONFLICTING"
+	}
+	read.Checks = []check{gate}
+	return read, nil
+}
+
+// failedLogs is the log a failed gate prints.
+func (c *canned) failedLogs(context.Context, string, []check) string {
+	return "gate\tRun make check\t--- FAIL: TestCalibrationFileAge (0.02s)\n    calibration_test.go:41: want a warning, got none\nFAIL"
+}
+
+// openPull answers that no branch has a pull request open: fake mode opens none.
+func (c *canned) openPull(context.Context, string, string) (string, error) { return "", nil }
+
+// cannedMerge is the files a merge of the base conflicts in, for the scenario whose pull request
+// conflicts with its base.
+func cannedMerge(scenario string) []string {
+	if scenario == "detached" {
+		return []string{"docs/preview.md"}
+	}
+	return nil
+}
 
 // cannedQueue spreads the canned entries over the connected repositories, so the one line visibly
 // mixes them, as a real queue across repositories does.
@@ -84,10 +151,10 @@ func cannedQueue(repositories []Connected, now time.Time) []Issue {
 
 // scriptedWorker stands in for `claude -p --output-format stream-json --verbose`. It is a subcommand
 // of the factory's own binary, so fake mode needs nothing installed on the host.
-// Usage: factory scripted-worker <ready|blocked|failed|silent|detached|hang|child|daemon> <owner/name> <issue>
+// Usage: factory scripted-worker <ready|blocked|failed|silent|detached|fix|hang|child|daemon> <owner/name> <issue>
 func scriptedWorker(args []string, stdout, stderr io.Writer) int {
 	if len(args) < 3 {
-		fmt.Fprintln(stderr, "error: usage: factory scripted-worker <ready|blocked|failed|silent|detached|hang|child|daemon> <owner/name> <issue>")
+		fmt.Fprintln(stderr, "error: usage: factory scripted-worker <ready|blocked|failed|silent|detached|fix|hang|child|daemon> <owner/name> <issue>")
 		return 2
 	}
 	scenario, repository := args[0], args[1]
@@ -120,6 +187,14 @@ func scriptedWorker(args []string, stdout, stderr io.Writer) int {
 	s.tool("Read", map[string]any{"file_path": "plugins/worker/skills/work/SKILL.md"}, "1  ---\n2  name: work")
 
 	switch scenario {
+	case "fix":
+		// The fix session of a repair round: it reads what its brief names, fixes it and pushes.
+		s.say("The brief names what failed. Fixing that and nothing else.")
+		s.tool("Edit", map[string]any{"file_path": "calibration/age.go"}, "The file has been updated.")
+		s.tool("Bash", map[string]any{"command": "git commit -am 'fix: warn on an old calibration file' && git push", "description": "Commit and push the fix"},
+			"To github.com:acme/edge-sensors.git")
+		s.result("success", "", false, "completed", map[string]any{"outcome": resultComplete, "summary": "Fixed and pushed."})
+		return 0
 	case "hang":
 		s.thinkAndSay("The calibration procedure is spread over three files.", fmt.Sprintf("worker process %d", os.Getpid()))
 		// A subagent on a model the factory has no price for: its tokens count, its cost cannot.
@@ -200,13 +275,11 @@ func scriptedWorker(args []string, stdout, stderr io.Writer) int {
 	s.skill("worker:pr")
 	pullRequest := fmt.Sprintf("https://github.com/%s/pull/%d", repository, issue+100)
 	s.subagent("worker:pr-author", "Open the pull request", pullRequest)
-	s.skill("worker:ci")
-	s.tool("Bash", map[string]any{"command": "plugins/worker/scripts/pr-wait.sh", "description": "Wait for checks and bot reviewers"},
-		"checks: pass\nreviewers: codex commented\nthreads: 1 unresolved")
-	s.skill("worker:address-reviews")
-	s.tool("Bash", map[string]any{"command": "plugins/worker/scripts/pr-resolve.sh 1", "description": "Reply to and resolve the review thread"}, "resolved: 1")
+	// The session stops after the pull request (WF_STOP_AFTER=pr), and the factory waits on CI.
+	s.tool("Bash", map[string]any{"command": "plugins/worker/scripts/stop.sh pr", "description": "Report the stage the session stops after"},
+		"stopped_after: pr\npull_request: "+pullRequest)
 	s.result("success", "", false, "completed", map[string]any{"outcome": resultComplete, "pullRequest": pullRequest,
-		"summary": "Review: 5/5 PASS after one round. CI green. One Codex thread fixed and resolved."})
+		"summary": "Review: 5/5 PASS after one round. Pull request opened; stopped after pr."})
 	return 0
 }
 

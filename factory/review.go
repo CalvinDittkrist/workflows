@@ -103,6 +103,7 @@ type ghReview struct {
 	} `json:"user"`
 	State       string    `json:"state"`
 	SubmittedAt time.Time `json:"submitted_at"`
+	HTMLURL     string    `json:"html_url"` // where a person reads it, which a blocked ci stage names
 }
 
 // The review states this factory reads. A review that asks for changes is the maintainer's gesture;

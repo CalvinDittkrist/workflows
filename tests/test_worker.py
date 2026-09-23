@@ -447,7 +447,8 @@ class SlowGateTests(ShimTest):
 
     def kill_tree(self, pid):
         """End a process and every descendant it has now, children first, the way a kill of a call walks it.
-        Each process is stopped before its children die, so a parent cannot record their end before its own."""
+        Each process is stopped before its children die, so none of them lives to see a child end and act
+        on it, such as recording the exit of the make it waited for."""
         try:
             os.kill(pid, signal.SIGSTOP)
         except ProcessLookupError:

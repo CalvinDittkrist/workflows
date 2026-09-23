@@ -114,20 +114,24 @@ type Run struct {
 	SignalAt time.Time `json:"signalAt"`
 	// Kind is what this run is in the vocabulary: a first, a resumed or a follow-up run. It says the
 	// same as the signal in the word a person reads, and kindOf is the one place it is decided.
-	Kind        string     `json:"kind"`
-	State       string     `json:"state"` // running or ended
-	Stage       string     `json:"stage"` // the stage the worker is in, read from its skill calls
-	Stages      []string   `json:"stages"`
-	Outcome     string     `json:"outcome"` // empty while the run is running
-	PullRequest string     `json:"pullRequest"`
-	Reason      string     `json:"reason"`
-	Model       string     `json:"model"`
-	SessionID   string     `json:"sessionId"`
-	StartedAt   time.Time  `json:"startedAt"`
-	EndedAt     *time.Time `json:"endedAt"`
-	Turns       int        `json:"turns"`
-	CostUSD     float64    `json:"costUsd"`
-	Tokens      Tokens     `json:"tokens"`
+	Kind        string   `json:"kind"`
+	State       string   `json:"state"` // running or ended
+	Stage       string   `json:"stage"` // the stage the worker is in, read from its skill calls
+	Stages      []string `json:"stages"`
+	Outcome     string   `json:"outcome"` // empty while the run is running
+	PullRequest string   `json:"pullRequest"`
+	// RepairRounds is how many repair rounds the ci stage has spent on that pull request, which the
+	// budget is held against (ci.repair_rounds). A resumed run on the same pull request carries the
+	// count on.
+	RepairRounds int        `json:"repairRounds"`
+	Reason       string     `json:"reason"`
+	Model        string     `json:"model"`
+	SessionID    string     `json:"sessionId"`
+	StartedAt    time.Time  `json:"startedAt"`
+	EndedAt      *time.Time `json:"endedAt"`
+	Turns        int        `json:"turns"`
+	CostUSD      float64    `json:"costUsd"`
+	Tokens       Tokens     `json:"tokens"`
 	// Totals says where turns, cost and tokens come from: worker when the session's result line
 	// reported them, factory while the factory counts them from the assistant lines — during the run,
 	// and at its end when the session ended without a result line, as it does whenever the factory
@@ -157,6 +161,52 @@ type Run struct {
 	resultSummary  string           // what the result line called an error, when the session printed no cause
 	counted        map[string]usage // the usage the factory counted per message id
 	unpricedModels map[string]bool  // the models of counted messages that have no price here
+	// A run starts a session per stage that needs one, and its totals are the sum of theirs: prior is
+	// what the sessions before this one came to, and reported says this one's result line has given
+	// its own totals, after which its assistant lines count nothing more.
+	prior    totals
+	reported bool
+	// lock is the factory's copy of the run's lock while the run lasts, which every session's process
+	// group inherits (Store.lock).
+	lock *os.File
+}
+
+// release lets go of the factory's copy of the run's lock once the run is over. Callers hold the lock
+// of the store.
+func (r *Run) release() {
+	if r.lock != nil {
+		r.lock.Close()
+		r.lock = nil
+	}
+}
+
+// totals is what a run's sessions came to so far.
+type totals struct {
+	turns  int
+	cost   float64
+	tokens Tokens
+	from   string // Totals as it stood
+}
+
+// nextSession readies the record for one more session: what the sessions so far came to is kept, and
+// what the last one reported is read anew. Callers hold the lock.
+func (r *Run) nextSession() {
+	r.prior = totals{turns: r.Turns, cost: r.CostUSD, tokens: r.Tokens, from: r.Totals}
+	r.reported = false
+	r.result, r.misfit, r.lastError, r.resultSummary = nil, "", "", ""
+}
+
+// report takes the totals a session's result line gave. They are the worker's own when every session
+// so far gave its own, and the factory's when one of them ended without it. Callers hold the lock.
+func (r *Run) report(turns int, cost float64, tokens Tokens) {
+	r.Turns, r.CostUSD = r.prior.turns+turns, r.prior.cost+cost
+	r.Tokens = Tokens{Input: r.prior.tokens.Input + tokens.Input, Output: r.prior.tokens.Output + tokens.Output,
+		CacheCreation: r.prior.tokens.CacheCreation + tokens.CacheCreation, CacheRead: r.prior.tokens.CacheRead + tokens.CacheRead}
+	r.Totals = totalsWorker
+	if r.prior.from == totalsFactory {
+		r.Totals = totalsFactory
+	}
+	r.reported = true
 }
 
 // Where the totals of a run come from.
@@ -369,7 +419,7 @@ func (s *Store) update(r *Run, change func()) {
 func (s *Store) count(r *Run, msg message, sub bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if r.Totals != totalsWorker {
+	if !r.reported {
 		r.tally(msg.ID, msg.Model, sub, msg.Usage)
 	}
 	if u := msg.Usage; !sub && u.Input+u.CacheCreation+u.CacheRead > r.ContextPeak {
@@ -404,7 +454,10 @@ func (s *Store) finish(r *Run, outcome, reason string, exitCode *int, owed bool)
 	now := time.Now()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	r.State, r.Outcome, r.EndedAt, r.ExitCode = "ended", outcome, &now, exitCode
+	r.State, r.Outcome, r.EndedAt = "ended", outcome, &now
+	if exitCode != nil { // an ending outside a session keeps the exit of the last session there was
+		r.ExitCode = exitCode
+	}
 	if r.Reason == "" {
 		r.Reason = reason
 	}

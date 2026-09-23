@@ -15,8 +15,8 @@
 #                    child of its own instead of cloning, as a clone of a large repository does, and
 #                    writes that child's pid beside the file
 #   GH_SHIM_BODIES   a directory the body of every call that reads one from standard input
-#                    (`--body-file -`) is appended to, in a file named after the request, so a test
-#                    can read what the factory wrote to GitHub
+#                    (`--body-file -`, `--input -`) is appended to, in a file named after the request,
+#                    so a test can read what the factory wrote to GitHub
 #   GH_SHIM_GATE     a file path that holds the claim: a ref creation writes "<path>.<pid>" and waits
 #                    for "<path>.open" before it touches the repository, so a test can have two
 #                    claimers inside the one act that decides the race
@@ -27,7 +27,8 @@
 # branch with work on it is still where the factory found it.
 #
 # A request without an answer fails, so a call the factory makes and the test did not plan for is
-# seen rather than answered with nothing.
+# seen rather than answered with nothing. The reads of the ci stage are the exception: unanswered,
+# they find a green pull request, because nearly every run that reports one goes through that stage.
 set -u
 
 request="$*"
@@ -39,7 +40,7 @@ named=$(printf '%s' "$request" | tr -c 'A-Za-z0-9' '-')
 # of the request. It is read here, before any answer is decided, so that gh never leaves a body in a
 # pipe nobody empties — a call that fails or stalls reads it as the one that is answered does.
 case " $request " in
-  *" --body-file - "*)
+  *" --body-file - "*|*" --input - "*)
     if [ -n "${GH_SHIM_BODIES:-}" ]; then
       mkdir -p "$GH_SHIM_BODIES"
       cat >> "$GH_SHIM_BODIES/$named"
@@ -136,5 +137,23 @@ if [ "${1:-}" = api ] && [ "${2:-}" = --method ] && [ "${3:-}" = DELETE ]; then
 fi
 
 answer="${GH_SHIM_DIR:-/nowhere}/$named"
-[ -f "$answer" ] || { echo "gh: the shim has no answer for: $request" >&2; exit 1; }
-cat "$answer"
+[ -f "$answer" ] && exec cat "$answer"
+
+# The reads of the ci stage a test did not answer: every pull request is green — mergeable, of the
+# branch of its number on the local repository, one check passed long ago, no review, no thread —
+# and a branch has no open pull request. A test of the ci stage answers them otherwise.
+case "$request" in
+  "pr view "*" --repo "*" --json mergeable,headRefName,headRefOid,isCrossRepository,commits,statusCheckRollup")
+    number=$3; repository=$5
+    remote="${GH_SHIM_REMOTES:-/nowhere}/${repository%%/*}-${repository#*/}"
+    branch=$(git -C "$remote" for-each-ref --format='%(refname:lstrip=2)' refs/heads 2>/dev/null | grep -m1 "^[a-z]*/$number-" || true)
+    printf '{"mergeable":"MERGEABLE","headRefName":"%s","headRefOid":"c0ffee","isCrossRepository":false,"commits":[{"committedDate":"2026-01-01T00:00:00Z"}],"statusCheckRollup":[{"name":"gate","status":"COMPLETED","conclusion":"SUCCESS","completedAt":"2026-01-01T00:00:00Z"}]}\n' "$branch"
+    exit 0 ;;
+  "api --paginate repos/"*"/pulls/"*"/reviews?per_page=100"|"api repos/"*"/pulls?state=open&head="*"&per_page=10")
+    echo '[]'; exit 0 ;;
+  "api graphql --input -")
+    echo '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}'; exit 0 ;;
+esac
+
+echo "gh: the shim has no answer for: $request" >&2
+exit 1

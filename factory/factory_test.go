@@ -72,31 +72,32 @@ func TestMain(m *testing.M) {
 
 // What the HTTP interface promises, read by the names it serves.
 type apiRun struct {
-	ID          int        `json:"id"`
-	Repository  string     `json:"repository"`
-	Issue       int        `json:"issue"`
-	Title       string     `json:"title"`
-	Branch      string     `json:"branch"`
-	Base        string     `json:"base"`
-	Worktree    string     `json:"worktree"`
-	Holding     bool       `json:"holding"`
-	LetGoAt     *time.Time `json:"letGoAt"`
-	Signal      string     `json:"signal"`
-	SignalAt    time.Time  `json:"signalAt"`
-	Kind        string     `json:"kind"`
-	State       string     `json:"state"`
-	Stage       string     `json:"stage"`
-	Stages      []string   `json:"stages"`
-	Outcome     string     `json:"outcome"`
-	PullRequest string     `json:"pullRequest"`
-	Reason      string     `json:"reason"`
-	StartedAt   time.Time  `json:"startedAt"`
-	EndedAt     *time.Time `json:"endedAt"`
-	Turns       int        `json:"turns"`
-	CostUSD     float64    `json:"costUsd"`
-	Totals      string     `json:"totals"`
-	ContextPeak int        `json:"contextPeak"`
-	Tokens      struct {
+	ID           int        `json:"id"`
+	Repository   string     `json:"repository"`
+	Issue        int        `json:"issue"`
+	Title        string     `json:"title"`
+	Branch       string     `json:"branch"`
+	Base         string     `json:"base"`
+	Worktree     string     `json:"worktree"`
+	Holding      bool       `json:"holding"`
+	LetGoAt      *time.Time `json:"letGoAt"`
+	Signal       string     `json:"signal"`
+	SignalAt     time.Time  `json:"signalAt"`
+	Kind         string     `json:"kind"`
+	State        string     `json:"state"`
+	Stage        string     `json:"stage"`
+	Stages       []string   `json:"stages"`
+	Outcome      string     `json:"outcome"`
+	PullRequest  string     `json:"pullRequest"`
+	RepairRounds int        `json:"repairRounds"`
+	Reason       string     `json:"reason"`
+	StartedAt    time.Time  `json:"startedAt"`
+	EndedAt      *time.Time `json:"endedAt"`
+	Turns        int        `json:"turns"`
+	CostUSD      float64    `json:"costUsd"`
+	Totals       string     `json:"totals"`
+	ContextPeak  int        `json:"contextPeak"`
+	Tokens       struct {
 		Input         int `json:"input"`
 		Output        int `json:"output"`
 		CacheCreation int `json:"cacheCreation"`
@@ -179,8 +180,19 @@ func TestFakeModeWorksTheCannedQueueOneRunAtATime(t *testing.T) {
 	if ready.Outcome != "ready" || ready.PullRequest != "https://github.com/acme/edge-sensors/pull/204" {
 		t.Errorf("run 1 ended %q with the pull request %q, want ready with the pull request of the result", ready.Outcome, ready.PullRequest)
 	}
-	if got := strings.Join(ready.Stages, " "); got != "implement review pr ci reviews" {
-		t.Errorf("run 1 went through the stages %q, want %q", got, "implement review pr ci reviews")
+	if got := strings.Join(ready.Stages, " "); got != "implement review pr ci" {
+		t.Errorf("run 1 went through the stages %q, want %q", got, "implement review pr ci")
+	}
+	// Its session stopped after the pull request, and the factory waited on CI: the checks pending, then
+	// failed, one repair round with a fix session given the failed log, then green.
+	var readyLog apiRun
+	f.get(t, "/api/runs/1", &readyLog)
+	if got := factoryTitles(readyLog, "ci: ", "repair round", "worker started"); strings.Join(got, " | ") !=
+		"worker started | ci: waiting | ci: checks-failed | repair round 1 of 3 | worker started | ci: green" {
+		t.Errorf("run 1 logged the ci stage as %q, want it to wait, repair the failed checks once with a fix session and end green", got)
+	}
+	if !strings.Contains(fmt.Sprint(readyLog.Events), "--- FAIL: TestCalibrationFileAge") {
+		t.Errorf("run 1 never gave its fix session the failed log")
 	}
 	// The context peak is the fullest one message of the worker itself came. The scripted session
 	// hands the pull request to a fresh context halfway through, so the peak stands at the message
@@ -191,8 +203,9 @@ func TestFakeModeWorksTheCannedQueueOneRunAtATime(t *testing.T) {
 		t.Errorf("run 1 peaked at %d tokens of context, want %d: the fullest message of the worker itself, taken before the handover dropped it and never from the %d a subagent reported",
 			ready.ContextPeak, readyPeak, subagentContext)
 	}
-	if ready.Turns != 23 || ready.CostUSD != 4.18 || ready.Tokens.Output != 24800 || ready.Tokens.CacheRead != 1204000 || ready.Totals != "worker" {
-		t.Errorf("run 1 has turns %d, cost %v and tokens %+v from %q, want the totals of the result line, from the worker",
+	// Two sessions, each of which reported its own totals: the run's are their sum.
+	if ready.Turns != 2*23 || math.Abs(ready.CostUSD-2*4.18) > 1e-9 || ready.Tokens.Output != 2*24800 || ready.Tokens.CacheRead != 2*1204000 || ready.Totals != "worker" {
+		t.Errorf("run 1 has turns %d, cost %v and tokens %+v from %q, want the sum of the result lines of its two sessions, from the worker",
 			ready.Turns, ready.CostUSD, ready.Tokens, ready.Totals)
 	}
 	// A scripted run is this binary and no Claude Code at all: there is no plugin in it to update and
@@ -284,13 +297,22 @@ func TestFakeModeWorksTheCannedQueueOneRunAtATime(t *testing.T) {
 		}
 	}
 	if detached.Outcome != "ready" || detached.PullRequest != "https://github.com/acme/edge-sensors/pull/221" {
-		t.Errorf("run 5 ended %q with the pull request %q, want ready by its result", detached.Outcome, detached.PullRequest)
+		t.Errorf("run 5 ended %q with the pull request %q because %q, want ready by its result", detached.Outcome, detached.PullRequest, detached.Reason)
 	}
 	if took := detached.EndedAt.Sub(detached.StartedAt); took > daemonLifetime/4 {
 		t.Errorf("run 5 took %s, want it to end without waiting for the process its worker left behind", took)
 	}
 	if len(detached.Warnings) != 1 || !strings.Contains(detached.Warnings[0], "left a process behind") {
 		t.Errorf("run 5 has the warnings %q, want the one that says its worker left a process behind", detached.Warnings)
+	}
+	// Its pull request conflicted with the base: the merge conflicted too, and a fix session was given
+	// the conflicted file. The process its first session left behind did not keep that one from starting.
+	if got := factoryTitles(full, "ci: ", "repair round", "the merge of"); strings.Join(got, " | ") !=
+		"ci: conflicts | repair round 1 of 3 | the merge of main conflicts | ci: green" {
+		t.Errorf("run 5 logged the ci stage as %q, want a conflict repaired by a merge and a fix session", got)
+	}
+	if !strings.Contains(fmt.Sprint(full.Events), "docs/preview.md") {
+		t.Errorf("run 5 never gave its fix session the conflicted file")
 	}
 
 	// timeout: the deadline passed and the whole process group was ended.
@@ -676,7 +698,13 @@ func TestAnInvalidConfigurationIsRefusedWithTheFix(t *testing.T) {
 		{"worker variable that is the base branch", `{"data_dir":"data","repositories":["a/b"],"worker_env":{"WF_BASE_BRANCH":"dev"}}`, `worker_env carries WF_BASE_BRANCH, which is not a worker knob`},
 		{"worker variable of the shell", `{"data_dir":"data","repositories":["a/b"],"worker_env":{"PATH":"/tmp"}}`, `worker_env carries PATH, which is not a worker knob`},
 		{"worker variable that is not a string", `{"data_dir":"data","repositories":["a/b"],"worker_env":{"WF_PR_REVIEW_WAIT":600}}`, `see factory/factory.example.json`},
-		{"repository object with an unknown field", `{"data_dir":"data","repositories":[{"name":"a/b","branch":"dev"}]}`, `a repository is "owner/name" or {"name": "owner/name", "base": "dev"}`},
+		{"repository object with an unknown field", `{"data_dir":"data","repositories":[{"name":"a/b","branch":"dev"}]}`, `a repository is "owner/name" or {"name": "owner/name", "base": "dev", "ci": {"repair_rounds": 2}}`},
+		// The knobs of the ci stage are the factory's own, at the top of the file or on a repository.
+		{"unknown ci knob", `{"data_dir":"data","repositories":["a/b"],"ci":{"repair_round":2}}`, `json: unknown field "repair_round"; the ci knobs are repair_rounds, bot_reviewers, review_wait, checks_grace`},
+		{"unknown ci knob of a repository", `{"data_dir":"data","repositories":[{"name":"a/b","ci":{"grace":"1m"}}]}`, `the ci knobs are repair_rounds, bot_reviewers, review_wait, checks_grace`},
+		{"no repair round", `{"data_dir":"data","repositories":["a/b"],"ci":{"repair_rounds":0}}`, `ci: repair_rounds`},
+		{"a ci knob of a repository that is no duration", `{"data_dir":"data","repositories":[{"name":"a/b","ci":{"review_wait":"soon"}}]}`, `the ci of a/b: review_wait`},
+		{"a ci knob in worker_env", `{"data_dir":"data","repositories":["a/b"],"worker_env":{"WF_CI_REPAIR_ROUNDS":"2"}}`, `worker_env carries WF_CI_REPAIR_ROUNDS, which is a knob of the ci stage the factory runs itself; write it as "ci": {"repair_rounds": ...}`},
 		// The quota check runs the binary the operator installed, never a name PATH or npx resolves.
 		{"quota tool by name", `{"data_dir":"data","repositories":["a/b"],"quota_axi":"quota-axi"}`, `quota_axi "quota-axi" is not an absolute path`},
 		{"quota tool through npx", `{"data_dir":"data","repositories":["a/b"],"quota_axi":"npx -y quota-axi"}`, `is not an absolute path`},
@@ -1433,6 +1461,21 @@ var (
 	pidInEvent         = regexp.MustCompile(`worker (?:child )?process (\d+)`)
 	detachedPidInEvent = regexp.MustCompile(`worker detached process (\d+)`)
 )
+
+// factoryTitles are the titles of the factory's own events in a run's log that begin with one of the
+// prefixes, in the order they were logged.
+func factoryTitles(run apiRun, prefixes ...string) []string {
+	out := []string{}
+	for _, e := range run.Events {
+		for _, prefix := range prefixes {
+			if e.Kind == "factory" && strings.HasPrefix(e.Title, prefix) {
+				out = append(out, e.Title)
+				break
+			}
+		}
+	}
+	return out
+}
 
 // workerPids are the processes the scripted worker said it is, read from the run's log.
 func workerPids(t *testing.T, run apiRun) []int {

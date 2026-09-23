@@ -183,10 +183,11 @@ func TestAClaimOfARepositoryWithItsOwnBaseCutsAndWorksFromThatBase(t *testing.T)
 
 // A host sets the worker knobs of its runs in its configuration, and they reach the session the way
 // a local claim's --env does: in the env block of --settings, where they win over the repository's
-// own settings for that session. The one this exists for is a host whose GitHub account no bot
-// reviewer reviews the pull requests of: with WF_PR_BOT_REVIEWERS set to nothing, its worker waits
-// for no review that is not coming. An empty value is a setting, not an absence, and what the run
-// is stays the factory's whatever the file says.
+// own settings for that session. The knobs of the ci stage are the factory's own, written under "ci",
+// and reach the session in the worker's names beside them. The one this exists for is a host whose
+// GitHub account no bot reviewer reviews the pull requests of: with no bot reviewer, WF_PR_BOT_REVIEWERS
+// is set to nothing, which is a setting and not an absence. What the run is stays the factory's
+// whatever the file says.
 func TestTheHostsWorkerKnobsReachTheSessionBesideWhatTheRunIs(t *testing.T) {
 	t.Parallel()
 	gh := newGhShim(t)
@@ -199,7 +200,8 @@ func TestTheHostsWorkerKnobsReachTheSessionBesideWhatTheRunIs(t *testing.T) {
 	gh.cloneInto(t, data, "acme/edge-sensors")
 	f := gh.work(t, config{"poll": "50ms", "deadline": "90s", "data_dir": data,
 		"repositories": []string{"acme/edge-sensors"},
-		"worker_env":   map[string]string{"WF_PR_BOT_REVIEWERS": "", "WF_PR_REVIEW_WAIT": "5"}})
+		"worker_env":   map[string]string{"WF_REVIEW_ROUNDS": "2"},
+		"ci":           map[string]any{"bot_reviewers": []string{}, "review_wait": "5s"}})
 	run := f.ended(t, 1)
 
 	if run.Outcome != "ready" {
@@ -214,7 +216,10 @@ func TestTheHostsWorkerKnobsReachTheSessionBesideWhatTheRunIs(t *testing.T) {
 		t.Errorf("the worker's settings carry WF_PR_BOT_REVIEWERS=%q (set: %v), want the empty value the host configured: its worker would wait the review window for a bot that never reviews this host's pull requests", bots, set)
 	}
 	if wait := env["WF_PR_REVIEW_WAIT"]; wait != "5" {
-		t.Errorf("the worker's settings carry WF_PR_REVIEW_WAIT=%q, want the host's 5", wait)
+		t.Errorf("the worker's settings carry WF_PR_REVIEW_WAIT=%q, want the host's 5 seconds", wait)
+	}
+	if rounds := env["WF_REVIEW_ROUNDS"]; rounds != "2" {
+		t.Errorf("the worker's settings carry WF_REVIEW_ROUNDS=%q, want the host's 2", rounds)
 	}
 	if env["WF_MODE"] != "manual" || env["WF_ISSUE"] != strconv.Itoa(claimedIssue) || env["WF_BASE_BRANCH"] != "main" {
 		t.Errorf("the worker's settings carry %v; the mode, the issue and the base are the run's own and stay beside the host's knobs", env)
