@@ -24,7 +24,7 @@ type Config struct {
 	DataDir    string   `json:"data_dir"`
 	WorkerArgs []string `json:"worker_args"`
 	// WorkerEnv is the worker knobs every run of this host is given: the variables the worker
-	// plugin's scripts read for themselves, such as WF_PR_BOT_REVIEWERS, by name and value. They are
+	// plugin's scripts read for themselves, such as WF_REVIEW_ROUNDS, by name and value. They are
 	// the knobs a local claim takes with --env and nothing else: what a run is — its mode, its
 	// issue, its base — is the factory's, and a name outside the list is refused (workerKnobs).
 	WorkerEnv map[string]string `json:"worker_env"`
@@ -182,15 +182,25 @@ func factoryOwns(arg string) string {
 
 // workerKnobs are the names worker_env may set: the variables the worker plugin's scripts read for
 // themselves, which is the list the orchestrator's claim.sh accepts for --env (env_accepted), and a
-// drift test holds the two together. A worker of the factory runs with no bot reviewer, on a host
-// whose GitHub account no reviewer is connected to, by "WF_PR_BOT_REVIEWERS": "" — an empty value
-// is a setting of its own, as it is on a claim. What a run is stays out of the list: WF_MODE,
+// drift test holds the two together. An empty value is a setting of its own, as it is on a claim.
+// What a run is stays out of the list: WF_MODE,
 // WF_ISSUE, WF_BASE_BRANCH and WF_REVIEW_MANDATE are the factory's (workerVariables), and a
 // variable of the host's shell is not a setting of the workflow.
 //
 // The knobs of the wait for CI are the factory's own since it runs the ci stage itself, so worker_env
 // refuses them and names the ci knob each one moved to (movedKnobs).
 var workerKnobs = []string{"WF_REVIEWERS", "WF_REVIEW_ROUNDS", "WF_CI_REPAIR_ROUNDS", "WF_PR_BOT_REVIEWERS", "WF_PR_REVIEW_WAIT", "WF_HANDOFF_TOKENS", "WF_CONTEXT_MAX_AGE", "WF_HANDOFF_SESSION_MS", "WF_HANDOFF_POLL_SECONDS", "WF_DOCS_TIMEOUT"}
+
+// hostKnobs is the names worker_env takes: the worker knobs without the ones the ci stage moved.
+func hostKnobs() []string {
+	out := []string{}
+	for _, name := range workerKnobs {
+		if _, moved := movedKnobs[name]; !moved {
+			out = append(out, name)
+		}
+	}
+	return out
+}
 
 // modelOf is the model a worker started with these arguments runs on: the last --model among them, as
 // either spelling of the flag, and the worker agent's own model when they name none.
@@ -290,7 +300,7 @@ func Load(path string) (Settings, error) {
 			return bad("worker_env carries %s, which is a knob of the ci stage the factory runs itself; write it as \"ci\": {\"%s\": ...} at the top of the file or on the repository", name, moved)
 		}
 		if !slices.Contains(workerKnobs, name) {
-			return bad("worker_env carries %s, which is not a worker knob; the names are %s, and an empty value is a setting of its own (\"WF_PR_BOT_REVIEWERS\": \"\" waits for no bot review)", name, strings.Join(workerKnobs, ", "))
+			return bad("worker_env carries %s, which is not a worker knob; the names are %s, and an empty value is a setting of its own", name, strings.Join(hostKnobs(), ", "))
 		}
 	}
 	s.WorkerEnv = c.WorkerEnv

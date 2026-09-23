@@ -252,13 +252,16 @@ func (f *Factory) ci(parent, ctx context.Context, r *Run, entry Entry, claim cla
 		r.PullRequest = pull
 		r.stage(stageCI)
 	})
-	f.runs.event(r, Event{Kind: "factory", Title: "waiting on CI for " + pull,
-		Body: fmt.Sprintf("%d of %d repair rounds taken", r.RepairRounds, f.ciFor(entry.Repository).RepairRounds)})
 	knobs := f.ciFor(entry.Repository)
+	f.runs.event(r, Event{Kind: "factory", Title: "waiting on CI for " + pull,
+		Body: fmt.Sprintf("%d of %d repair rounds taken", r.RepairRounds, knobs.RepairRounds)})
 	held := Held{Repository: entry.Repository, Number: entry.Number, Branch: claim.branch, PullRequest: pull}
 	workflows := hasWorkflows(claim.worktree)
 	var doneAt time.Time
-	target := "" // the commit a repair pushed, which the pull request has to show before it is read again
+	// spent is the head a repair round was spent on, which the pull request has to have left before it
+	// is judged again: GitHub shows a push after a while, and until then it shows the old verdict. Any
+	// other head will do, since somebody may push on top of the repair before GitHub shows it.
+	spent := ""
 	said := ""
 	for {
 		if f.halted(parent, ctx, r, "waited on CI") {
@@ -275,11 +278,10 @@ func (f *Factory) ci(parent, ctx context.Context, r *Run, entry Entry, claim cla
 			if ctx.Err() == nil {
 				f.warn(r, "CI not read", "the pull request "+pull+" could not be read while the factory waited on CI: "+err.Error()+"; it is read again on the next poll")
 			}
-		case target != "" && read.Head != target:
-			// The push of the last round has not reached the pull request yet, and what it shows is
-			// the commit that round was spent on.
+		case spent != "" && read.Head == spent:
+			// The push of the last round has not reached the pull request yet.
 		default:
-			target = ""
+			spent = ""
 			verdict = judge(read, knobs, workflows, time.Now(), &doneAt)
 		}
 		if verdict != said {
@@ -315,7 +317,10 @@ func (f *Factory) ci(parent, ctx context.Context, r *Run, entry Entry, claim cla
 			if !ok {
 				return
 			}
-			target, doneAt, said = pushed, time.Time{}, ""
+			if pushed != read.Head {
+				spent = read.Head // a round that pushed nothing new is judged at once and spends the next
+			}
+			doneAt, said = time.Time{}, ""
 			continue // a repair is read at once: its push is what the next reading is about
 		}
 		select {
@@ -356,13 +361,13 @@ func (f *Factory) repair(parent, ctx context.Context, r *Run, entry Entry, claim
 		f.runs.event(r, Event{Kind: "factory", Title: "the merge of " + claim.base + " conflicts", Body: strings.Join(conflicted, "\n")})
 		brief = fmt.Sprintf("Merging origin/%s into the branch conflicted in these files, and the merge is still in progress in this worktree:\n%s\n\n"+
 			"Resolve every conflict so that the work of both sides stays, commit the merge and push the branch.",
-			claim.base, verbatim(strings.Join(conflicted, "\n")))
+			claim.base, fenced(listed(conflicted, maxConflicted)))
 	} else {
 		failing := read.failing()
 		brief = fmt.Sprintf("These checks failed on the head of the pull request:\n%s\n\n"+
 			"Their failed logs are below. Find the cause, fix it, verify the fix with the single test or linter for the files you touched, "+
 			"commit it in a conventional commit and push the branch.\n\n%s",
-			verbatim(named(failing)), verbatim(f.source.failedLogs(ctx, entry.Repository, failing)))
+			fenced(named(failing)), fenced(f.source.failedLogs(ctx, entry.Repository, failing)))
 	}
 	s := fixSession(fixBrief(entry, claim, pull, brief))
 	f.runs.event(r, Event{Kind: "factory", Title: "briefed a fix session", Body: s.prompt})
@@ -633,7 +638,7 @@ func (g *gitHub) readReviews(ctx context.Context, repository string, number int,
 			return fmt.Errorf("the reviews are no review list: %w", err)
 		}
 		for _, review := range page {
-			if slices.Contains(bots, strings.TrimSuffix(review.User.Login, "[bot]")) {
+			if slices.ContainsFunc(bots, func(bot string) bool { return review.User.Login == bot+"[bot]" }) {
 				read.Bots++
 			}
 			if !review.states() {
@@ -673,7 +678,17 @@ var actionsRun = regexp.MustCompile(`/actions/runs/([0-9]+)`)
 const (
 	maxLogPerRun = 12000
 	maxLogRuns   = 4
+	// maxConflicted is how many conflicted files a brief names; the rest are counted.
+	maxConflicted = 200
 )
+
+// listed is the lines of a list, the first n of them and a count of the rest.
+func listed(lines []string, n int) string {
+	if len(lines) <= n {
+		return strings.Join(lines, "\n")
+	}
+	return strings.Join(lines[:n], "\n") + fmt.Sprintf("\nand %d more; git diff --name-only --diff-filter=U lists them all", len(lines)-n)
+}
 
 // failedLogs is the failed logs of the checks that failed, from GitHub Actions; a check of another
 // system has none to give, and its URL in the brief is where to look.

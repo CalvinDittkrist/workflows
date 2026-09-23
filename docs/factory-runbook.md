@@ -246,17 +246,18 @@ The factory is steered on GitHub alone; its interface never writes ([ADR 0023](a
 The logins in `notify` are asked for a review when a run ends `ready`, and mentioned on the issue when a run waits for a person.
 
 ### The ci stage
-A run's worker session stops once it has opened its pull request (`WF_STOP_AFTER=pr`), and the factory waits on that pull request itself, reading it every `poll` ([ADR 0043](adr/0043-the-migration-runs-from-the-last-stage-to-the-first.md)). It reads mergeability first, then the checks, then the review of a configured bot, then the reviews and unresolved threads of the pull request, and acts on the first that decides:
+A run's worker session stops once it has opened its pull request (`WF_STOP_AFTER=pr`), and the factory waits on that pull request itself, reading it every `poll` ([ADR 0043](adr/0043-the-migration-runs-from-the-last-stage-to-the-first.md)). It reads mergeability first, then the checks, then the review of a configured bot, then the reviews and unresolved threads of the pull request, and acts on the first row that decides:
 
 | The pull request | The factory |
 | --- | --- |
 | conflicts with the base | merges the base into the branch in the run's worktree (a merge commit, never a rebase). A clean merge is pushed as it is; a conflicting one is left in progress and a fix session is started in the worktree with the conflicted files, which resolves, commits and pushes. |
+| has checks pending | waits; the run's stage reads `ci`. |
 | has failed checks | starts a fix session with the failed checks and the tail of their failed logs from GitHub Actions, which fixes, commits and pushes. |
-| has checks pending, or no bot review yet within `review_wait` | waits; the run's stage reads `ci`. |
+| has no review of a listed bot yet, within `review_wait` of its checks passing | waits. |
 | has a writer's review that asks for changes, or an unresolved thread | ends the run `blocked`, naming them: the factory does not answer review comments yet. |
 | is green | ends the run `ready` and asks `notify` for a review. |
 
-Every merge and every fix session is one repair round, counted against `repair_rounds`; a run whose budget is spent while the pull request still conflicts or fails is `blocked`, and its reason names what stands. After a repair the factory reads the pull request again only once GitHub shows the commit it pushed. A fix session that reports `blocked` blocks the run on its words. The ci stage runs inside the run's `deadline`, a cancel ends a fix session like any session, and a run resumed while its pull request is open starts at the ci stage with the rounds of the run before still counted; nothing before it is done again. The host's git needs an identity (`user.name`, `user.email`) for the merge commit, as its worker sessions do for theirs.
+Every merge and every fix session is one repair round, counted against `repair_rounds`; a run whose budget is spent while the pull request still conflicts or fails is `blocked`, and its reason names what stands. After a repair the factory judges the pull request again once its head has moved off the commit the round was spent on. A fix session that reports `blocked` blocks the run on its words. The ci stage runs inside the run's `deadline`, a cancel ends a fix session like any session, and a run resumed while its pull request is open starts at the ci stage with the rounds of the run before still counted; nothing before it is done again. The host's git needs an identity (`user.name`, `user.email`) for the merge commit, as its worker sessions do for theirs.
 
 ## Upkeep
 

@@ -282,6 +282,12 @@ func verbatim(text string) string {
 	if len(text) > maxNotifyReason {
 		text = cut(text, maxNotifyReason) + "\n[truncated; the whole of it is in the run's log on the host]"
 	}
+	return fenced(text)
+}
+
+// fenced is a text in a code fence longer than any run of backticks in it, whole: the fix session's
+// brief carries logs this way, bounded where they are read.
+func fenced(text string) string {
 	fence := strings.Repeat("`", max(3, longestRun(text, '`')+1))
 	return fence + "text\n" + text + "\n" + fence
 }
