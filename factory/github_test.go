@@ -827,7 +827,7 @@ func (g *ghShim) workerEndsWith(t *testing.T, report string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	g.env = append(g.env, "CLAUDE_SHIM_REPORT="+strings.Trim(string(escaped), `"`))
+	g.env = append(g.env, "CLAUDE_SHIM_REPORT="+string(escaped[1:len(escaped)-1])) // without the quotes around it
 }
 
 // workerReports is the pull request the scripted worker of the claude shim ends its session with.
