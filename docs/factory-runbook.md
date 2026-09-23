@@ -57,7 +57,7 @@ Run the following as root unless it says otherwise.
    node --version                 # v22.<minor>.<patch>
    ```
 
-   `/usr/local/go/bin` is not on a login's `PATH`, so the service puts it there (see [Service](#service)). staticcheck is built with that Go as the user `factory`, into `~/go/bin`, where the `Makefile` looks for it:
+   Pasted into a shell, a failed `sha256sum --check` does not stop the lines after it: install nothing that `sha256sum` did not answer `OK` for. `/usr/local/go/bin` is not on a login's `PATH`, so the service puts it there (see [Service](#service)). staticcheck is built with that Go as the user `factory`, into `~/go/bin`, where the `Makefile` looks for it:
 
    ```sh
    sudo -iu factory /usr/local/go/bin/go install honnef.co/go/tools/cmd/staticcheck@2026.2.1
