@@ -38,7 +38,10 @@ Run the following as root unless it says otherwise.
    ```sh
    cd "$(mktemp -d)"
    arch=aarch64   # or x86_64: uname -m
-   curl -fsSL "https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.$arch.tar.xz" | tar -xJ
+   sum=12b331c1d2db6b9eb13cfca64306b1b157a86eb69db83023e261eaa7e7c14588   # x86_64: 8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198
+   curl -fsSLO "https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.$arch.tar.xz"
+   echo "$sum  shellcheck-v0.11.0.linux.$arch.tar.xz" | sha256sum --check
+   tar -xJf "shellcheck-v0.11.0.linux.$arch.tar.xz"
    install -m 0755 shellcheck-v0.11.0/shellcheck /usr/local/bin/shellcheck
    shellcheck --version           # version: 0.11.0
 
@@ -60,7 +63,13 @@ Run the following as root unless it says otherwise.
    sudo -iu factory /usr/local/go/bin/go install honnef.co/go/tools/cmd/staticcheck@2026.2.1
    ```
 
-   The dashboard's browser test installs its own Chromium on the first `make check`; the system libraries that browser needs are installed once as root from a checkout with the dashboard's dependencies, with `npm --prefix factory/ui exec -- playwright install-deps chromium`. When CI moves a pin, move the host's in the same way before the next run.
+   The dashboard's browser test installs its own Chromium on the first `make check`; the system libraries that browser needs are installed once as root, with the Playwright version that `factory/ui/package-lock.json` names, from a directory of root's own:
+
+   ```sh
+   cd "$(mktemp -d)" && npx --yes playwright@1.63.0 install-deps chromium
+   ```
+
+   Never run it from a clone under `/var/lib/factory`: the workers write there, and root would run what they left in its `node_modules`. When CI moves a pin, move the host's in the same way before the next run.
 
    The gate's length is what tells you whether a host is fast enough. A worker runs it twice per issue, and on a Raspberry Pi 4 this repository's full gate takes an estimated 12 to 15 minutes: in run 4 of #106 (2026-09-22) the first four targets alone took 559 s, and the next attempt was cut off at 600 s in `go test -race`. That is longer than the 600 s ceiling of one Bash tool call, which is why that run could not reach `ready`. The worker now runs the gate detached from the call and waits for it in 540 s slices ([ADR 0019](adr/0019-the-gate-runs-once-per-review-round.md)), so a slow host costs time and no longer blocks a run. To judge a host, time `make check` in a clone of each connected repository as the user `factory`.
 3. **Claude Code**, as the user `factory` (`sudo -iu factory`), with the native installer, which needs no Node and puts `claude` in `~/.local/bin` ([setup](https://code.claude.com/docs/en/setup.md)):
