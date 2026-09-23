@@ -14,7 +14,9 @@
 #   CLAUDE_SHIM_FAIL   when set, the session ends with this on its error output and exit 1
 #   CLAUDE_SHIM_RESULT the structured result of the session as one line of JSON, by default a
 #                      complete one with the pull request above; it is printed as it stands, so a
-#                      test can hand the factory one that does not fit the schema
+#                      test can hand the factory one that does not fit the schema, or one with any
+#                      of the schema's fields: the pull request, the panel summary, the gate result
+#                      and the commits a session that stopped early reports
 #   CLAUDE_SHIM_NO_RESULT when set, the session ends well without printing a result line
 #   CLAUDE_SHIM_EXIT   the code the session exits with after its result line, 0 by default
 #   CLAUDE_SHIM_ERROR_SUBTYPE when set, the result line says the session ended in an error of this

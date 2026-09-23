@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -53,6 +54,67 @@ func TestASessionWithoutAResultThatFitsTheSchemaFailsTheRunAndSaysSo(t *testing.
 				t.Errorf("the run carries the pull request %q, want none from a result that does not fit", run.PullRequest)
 			}
 		})
+	}
+}
+
+// A session told to stop after an earlier stage than the last reports what it reached as fields of its
+// result: the pull request, the panel summary, the gate result and the commits ([ADR 0043]). The schema
+// the session is held to declares them, and a result that carries every one of them is a result that
+// fits: the run is ready with its pull request.
+//
+// [ADR 0043]: ../docs/adr/0043-the-migration-runs-from-the-last-stage-to-the-first.md
+func TestAResultCarriesWhatAStoppedSessionReached(t *testing.T) {
+	t.Parallel()
+	gh := newGhShim(t)
+	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
+	gh.loggedInAs(t, "factory-bot")
+	gh.assigns(t, "acme/edge-sensors", claimedIssue, "factory-bot")
+	pullRequest := "https://github.com/acme/edge-sensors/pull/104"
+	gh.workerResults(t, map[string]any{
+		"outcome":      "complete",
+		"pullRequest":  pullRequest,
+		"panelSummary": "review_rounds: 1\npanel: code=PASS security=PASS docs=PASS tests=PASS senior=PASS",
+		"gateResult":   "gate_result: pass (exit 0) at 3f2a9c1",
+		"commits":      []string{"3f2a9c1 feat: retry the upload", "8b01d2e test: the broker drops"},
+		"summary":      "stopped after review",
+	})
+	data := filepath.Join(t.TempDir(), "data")
+	gh.cloneInto(t, data, "acme/edge-sensors")
+	f := gh.work(t, config{"poll": "50ms", "deadline": "90s", "data_dir": data, "repositories": []string{"acme/edge-sensors"}})
+	run := f.ended(t, 1)
+	if run.Outcome != "ready" || run.PullRequest != pullRequest {
+		t.Fatalf("the run ended as %q with %q because %q, want ready with %s; the factory's log:\n%s",
+			run.Outcome, run.PullRequest, run.Reason, pullRequest, f.output(t))
+	}
+
+	workers := gh.workers(t)
+	if len(workers) != 1 {
+		t.Fatalf("the factory started %d workers, want one", len(workers))
+	}
+	var schema struct {
+		Properties map[string]struct {
+			Type  string `json:"type"`
+			Items *struct {
+				Type string `json:"type"`
+			} `json:"items"`
+		} `json:"properties"`
+	}
+	args := workers[0].args
+	for i, arg := range args {
+		if arg == "--json-schema" && i+1 < len(args) {
+			if err := json.Unmarshal([]byte(args[i+1]), &schema); err != nil {
+				t.Fatalf("the session's schema is no JSON: %v", err)
+			}
+		}
+	}
+	for name, want := range map[string]string{"pullRequest": "string", "panelSummary": "string", "gateResult": "string", "commits": "array"} {
+		got, ok := schema.Properties[name]
+		if !ok || got.Type != want {
+			t.Errorf("the session's schema declares %s as %+v, want a field of type %s", name, got, want)
+		}
+	}
+	if items := schema.Properties["commits"].Items; items == nil || items.Type != "string" {
+		t.Errorf("the session's schema declares the commits as %+v, want a list of strings", items)
 	}
 }
 

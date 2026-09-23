@@ -115,16 +115,29 @@ const (
 // structured_output on the result line of the stream (https://code.claude.com/docs/en/headless.md,
 // checked on 2026-09-23). The descriptions are what the session reads to fill it in: the worker skill
 // still ends in a report that opens with ready: or blocked:, and this is that report as data.
+//
+// The panel summary, the gate result and the commits are what a session reports when it was told to
+// stop after an earlier stage than the last ([ADR 0043]): the worker's stop.sh prints them in its final
+// report, and the stage that follows on the factory's side reads them here and not from the worktree's
+// records. A session that ran the whole pipeline leaves them out.
+//
+// [ADR 0043]: ../docs/adr/0043-the-migration-runs-from-the-last-stage-to-the-first.md
 const resultSchema = `{"type":"object","additionalProperties":false,"required":["outcome","summary"],"properties":{` +
 	`"outcome":{"type":"string","enum":["complete","blocked"],"description":"complete when the final report opens with ready:, blocked when it opens with blocked:"},` +
 	`"pullRequest":{"type":"string","description":"the URL of the pull request the session opened or worked on; empty when there is none"},` +
+	`"panelSummary":{"type":"string","description":"the panel_summary_block of the final report, its lines as written; empty when the report has none"},` +
+	`"gateResult":{"type":"string","description":"the gate_result line of the final report, as written; empty when the report has none"},` +
+	`"commits":{"type":"array","items":{"type":"string"},"description":"the lines under commits: in the final report, each a short hash and a subject, as written; empty when the report lists none"},` +
 	`"summary":{"type":"string","description":"the final report after its first word: for blocked, what the session needs from a person and why, as written"}}}`
 
 // result is a session's structured result as the factory reads it.
 type result struct {
-	Outcome     string `json:"outcome"`
-	PullRequest string `json:"pullRequest"`
-	Summary     string `json:"summary"`
+	Outcome      string   `json:"outcome"`
+	PullRequest  string   `json:"pullRequest"`
+	PanelSummary string   `json:"panelSummary"`
+	GateResult   string   `json:"gateResult"`
+	Commits      []string `json:"commits"`
+	Summary      string   `json:"summary"`
 }
 
 // readResult reads the structured output of a result line against the schema. Claude Code holds the
