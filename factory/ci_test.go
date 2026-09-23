@@ -98,7 +98,8 @@ func TestFailedChecksRunAFixSessionWithTheirLogsAndTheRunEndsReadyOnceGreen(t *t
 	if run.RepairRounds != 1 {
 		t.Errorf("the run took %d repair rounds, want 1", run.RepairRounds)
 	}
-	if titles := factoryTitles(run, "ci: ", "repair round"); !equal(titles, []string{"ci: checks-failed", "repair round 1 of 3", "ci: green"}) {
+	// Between the push and the pull request showing it the stage waits, however long that takes.
+	if titles := factoryTitles(run, "ci: checks-failed", "repair round", "ci: green"); !equal(titles, []string{"ci: checks-failed", "repair round 1 of 3", "ci: green"}) {
 		t.Errorf("the ci stage said %v, want checks-failed, one repair round, green", titles)
 	}
 	workers := gh.workers(t)
