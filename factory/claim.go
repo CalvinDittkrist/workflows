@@ -98,8 +98,9 @@ func (f *Factory) claim(ctx context.Context, r *Run, entry Entry) (claimed, erro
 		// one thing the claim exists to make impossible. What the two cannot share is a commit: a
 		// branch is left on the remote only when it carries work the base does not have
 		// (removeRemoteBranch), and a branch somebody has just cut from the base carries none. So a
-		// branch of the recorded name that carries work is the one this factory left there, and
-		// anything else is a claim that is not this host's, whatever it is called.
+		// branch of the recorded name that carries work is the one this factory left there, and one of
+		// that name that carries none is a claim that is not this host's. A branch no record names is
+		// read below.
 		if entry.resume.Branch == held {
 			// The base of the run that held the issue is what its branch was cut from and what it is
 			// read against; a record from before that field was written is read against the base of
@@ -112,6 +113,7 @@ func (f *Factory) claim(ctx context.Context, r *Run, entry Entry) (claimed, erro
 				why := fmt.Sprintf("run %d let this issue go and it was routed again; its branch is on the remote, so nothing is claimed", entry.resume.ID)
 				return f.readopt(ctx, r, connected, clone, against, held, entry.resume.Worktree, entry.Number, why)
 			}
+			return claimed{branch: held}, errLost
 		}
 		// Or it is this factory's own branch that no record names any more: the data directory that
 		// held the records was lost, and the issue was released and is routed and unassigned
