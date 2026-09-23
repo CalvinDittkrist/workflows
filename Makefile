@@ -80,5 +80,7 @@ factory-go:
 	@sc="$$(command -v staticcheck 2>/dev/null || true)"; [ -n "$$sc" ] || sc="$$(go env GOPATH)/bin/staticcheck"; \
 		[ -x "$$sc" ] || { echo 'error: staticcheck not installed; go install honnef.co/go/tools/cmd/staticcheck@2026.2.1' >&2; exit 1; }; \
 		echo "$$sc ./... (in factory)"; cd factory && "$$sc" ./...
-	@# -count=1: the tests start the real binary, whose inputs Go's test cache cannot see, so every gate runs them
-	go -C factory test -race -count=1 ./... # the service is goroutines over shared run records: the gate says so
+	@# -count=1: the tests start the real binary, whose inputs Go's test cache cannot see, so every gate runs them.
+	@# -parallel 16: the tests spend their time waiting on the binary's timers and polls, not on a CPU, so
+	@# they run more at once than go test's default of one per CPU, which on CI's four is mostly idle.
+	go -C factory test -race -count=1 -parallel 16 ./... # the service is goroutines over shared run records: the gate says so
