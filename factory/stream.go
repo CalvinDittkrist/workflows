@@ -124,7 +124,7 @@ func (f *Factory) ingest(r *Run, line []byte) {
 }
 
 // report reads the worker's final report. It is markdown written for a person, so the line that
-// carries the outcome may be bold, quoted, a heading or a list item: `**ready: <url>**`. The first
+// carries the outcome may be bold, quoted, a heading or a list item: `**ready: <url>**`, or bold on the word alone: `**blocked:** <reason>`. The first
 // line that says ready or blocked decides. For ready the detail is the rest of that line, which
 // names the pull request; for blocked it is the reason, which runs to the end of the report because
 // a blocker takes more than one line.
