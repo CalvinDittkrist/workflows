@@ -91,7 +91,7 @@ type Settings struct {
 	DataDir      string
 	WorkerArgs   []string
 	WorkerEnv    map[string]string
-	Paused       bool
+	Paused       bool // as the file said when it was read; a running factory asks Factory.Paused
 	Notify       []string
 	Repositories []Connected
 	QuotaAxi     string // empty: the quota check is off

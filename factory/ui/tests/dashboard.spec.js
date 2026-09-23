@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync } from 'node:fs'
+import { readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { expect, test } from '@playwright/test'
 import { configuration, paused, working } from './where.js'
 
@@ -69,15 +69,20 @@ test('a pause written into the configuration is shown without a restart, and the
   // does it on the host; the tests after this one read it working again.
   const file = configuration('working')
   const was = readFileSync(file, 'utf8')
+  // Written beside the file and renamed over it, so a poll never reads half of it.
+  const save = (body) => {
+    writeFileSync(`${file}.next`, body)
+    renameSync(`${file}.next`, file)
+  }
   await page.goto(working('/'))
   await expect(page.locator('.mode')).toHaveText('working')
   try {
-    writeFileSync(file, JSON.stringify({ ...JSON.parse(was), paused: true }))
+    save(JSON.stringify({ ...JSON.parse(was), paused: true }))
     await expect(page.locator('.mode')).toHaveText('paused')
     // A pause ends nothing: the run that was going still stands as the one running.
     await expect(page.locator('.row.now')).toContainText('#118')
   } finally {
-    writeFileSync(file, was)
+    save(was)
   }
   await expect(page.locator('.mode')).toHaveText('working')
 })

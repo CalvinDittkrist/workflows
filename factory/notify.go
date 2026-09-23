@@ -172,7 +172,18 @@ func (f *Factory) owe(r *Run) bool {
 //
 // Its deadlines are its own and never the factory's: a run that ends because the factory is stopping
 // is the one the maintainer has to hear about, and the factory's own context is cancelled by then.
+//
+// One ending is delivered once per process, whoever asks first: the run that ends makes its own call,
+// and an unpause that reads the same ending pending while that call is still out would otherwise make
+// a second one.
 func (f *Factory) deliver(r *Run) {
+	f.mu.Lock()
+	taken := f.delivered[r.ID]
+	f.delivered[r.ID] = true
+	f.mu.Unlock()
+	if taken {
+		return
+	}
 	if err := f.deliverTo(r); err != nil {
 		f.warn(r, "the notification could not be made",
 			fmt.Sprintf("this ending was not notified on GitHub in full: %v; the run itself is unchanged", err))

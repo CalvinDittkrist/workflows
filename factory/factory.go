@@ -115,6 +115,9 @@ type Factory struct {
 	// quotaUntil is the reset the factory waits for when the quota check found too little left, and
 	// empty while it does not wait (quota.go).
 	quotaUntil *time.Time
+	// delivered is the runs whose ending this process has taken on to notify (deliver), so an unpause
+	// and the run that ends in the same moment cannot both make the call.
+	delivered map[int]bool
 }
 
 // source is where the line comes from on every poll: GitHub, or the canned queue of fake mode. It
@@ -178,7 +181,7 @@ func New(settings Settings, fake bool) (*Factory, error) {
 	}
 	f := &Factory{settings: settings, fake: fake, runs: runs, started: time.Now(), self: self,
 		wake: make(chan struct{}, 1), held: map[string]bool{}, cancelling: map[int]context.CancelCauseFunc{},
-		askedHeld: map[string]time.Time{}}
+		askedHeld: map[string]time.Time{}, delivered: map[int]bool{}}
 	f.paused.Store(settings.Paused)
 	f.source = newGitHub(settings.Repositories, settings.Label)
 	if fake {
