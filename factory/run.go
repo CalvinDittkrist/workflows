@@ -128,7 +128,12 @@ type Run struct {
 	Turns       int        `json:"turns"`
 	CostUSD     float64    `json:"costUsd"`
 	Tokens      Tokens     `json:"tokens"`
-	ContextPeak int        `json:"contextPeak"` // the largest context one message of the worker carried
+	// Totals says where turns, cost and tokens come from: worker when the session's result line
+	// reported them, factory while the factory counts them from the assistant lines — during the run,
+	// and at its end when the session ended without a result line, as it does whenever the factory
+	// ends it. Empty on a record that has none and on one written before this field.
+	Totals      string `json:"totals"`
+	ContextPeak int    `json:"contextPeak"` // the largest context one message of the worker carried
 	// WorkerGroup is the process group the worker session ran in, which is the process group this
 	// host ends to end the session. It is recorded so that a factory the host killed rather than
 	// stopped can be started again and end the worker that outlived it.
@@ -146,14 +151,22 @@ type Run struct {
 	Notified string `json:"notified,omitempty"`
 
 	// What the stream said, kept for the moment the run ends. Not part of the record.
-	reportOutcome string // ready or blocked, as the worker's final report gave it
-	reportDetail  string // the pull request for ready, the reason for blocked
-	lastError     string // the last error the session printed, which is why a failed run failed
-	resultSummary string // what the result line called an error, when the session printed no cause
+	reportOutcome string           // ready or blocked, as the worker's final report gave it
+	reportDetail  string           // the pull request for ready, the reason for blocked
+	lastError     string           // the last error the session printed, which is why a failed run failed
+	resultSummary string           // what the result line called an error, when the session printed no cause
+	counted       map[string]usage // the usage the factory counted per message id
 }
 
-// Tokens are the totals of the session, taken from the result line only: the assistant lines carry
-// the usage at a message's start and undercount the run badly.
+// Where the totals of a run come from.
+const (
+	totalsWorker  = "worker"
+	totalsFactory = "factory"
+)
+
+// Tokens are the totals of the session. The result line's are the worker's own; the ones the factory
+// counts from the assistant lines are a floor, because those lines may carry a message's usage from
+// before it was written to the end.
 type Tokens struct {
 	Input         int `json:"input"`
 	Output        int `json:"output"`
@@ -345,18 +358,25 @@ func (s *Store) update(r *Run, change func()) {
 	s.write(r)
 }
 
-// raiseContextPeak keeps the largest context the worker's own messages carried. The comparison and
-// the write are made under the lock. A context usually grows with every message, so this writes the
-// record about as often as the worker speaks; it stops only once the peak stands, after a handoff or
-// a long run of reading.
-func (s *Store) raiseContextPeak(r *Run, tokens int) {
+// count reads one assistant line into the record: the totals the factory counts, until the worker's
+// result line has reported its own, and the largest context the worker's own messages carried. What
+// a message started from is its input plus everything read from the cache: the context it was
+// answered with. A subagent has a context of its own, which says nothing about how full the worker's
+// is, so only the worker's own messages raise the peak. The record is written with every line, so a
+// run that ends without a result line — even with the factory killed under it — keeps what was
+// counted. It answers false when the message's model has no price here.
+func (s *Store) count(r *Run, msg message, sub bool) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if tokens <= r.ContextPeak {
-		return
+	priced := true
+	if r.Totals != totalsWorker {
+		priced = r.tally(msg.ID, msg.Model, sub, msg.Usage)
 	}
-	r.ContextPeak = tokens
+	if u := msg.Usage; !sub && u.Input+u.CacheCreation+u.CacheRead > r.ContextPeak {
+		r.ContextPeak = u.Input + u.CacheCreation + u.CacheRead
+	}
 	s.write(r)
+	return priced
 }
 
 // finish ends a run. The reason survives as the record's reason unless the stream already gave one,

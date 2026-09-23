@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -79,6 +80,7 @@ type apiRun struct {
 	EndedAt     *time.Time `json:"endedAt"`
 	Turns       int        `json:"turns"`
 	CostUSD     float64    `json:"costUsd"`
+	Totals      string     `json:"totals"`
 	ContextPeak int        `json:"contextPeak"`
 	Tokens      struct {
 		Input         int `json:"input"`
@@ -175,8 +177,9 @@ func TestFakeModeWorksTheCannedQueueOneRunAtATime(t *testing.T) {
 		t.Errorf("run 1 peaked at %d tokens of context, want %d: the fullest message of the worker itself, taken before the handover dropped it and never from the %d a subagent reported",
 			ready.ContextPeak, readyPeak, subagentContext)
 	}
-	if ready.Turns != 23 || ready.CostUSD != 4.18 || ready.Tokens.Output != 24800 || ready.Tokens.CacheRead != 1204000 {
-		t.Errorf("run 1 has turns %d, cost %v and tokens %+v, want the totals of the result line", ready.Turns, ready.CostUSD, ready.Tokens)
+	if ready.Turns != 23 || ready.CostUSD != 4.18 || ready.Tokens.Output != 24800 || ready.Tokens.CacheRead != 1204000 || ready.Totals != "worker" {
+		t.Errorf("run 1 has turns %d, cost %v and tokens %+v from %q, want the totals of the result line, from the worker",
+			ready.Turns, ready.CostUSD, ready.Tokens, ready.Totals)
 	}
 	// A scripted run is this binary and no Claude Code at all: there is no plugin in it to update and
 	// no version of one to record, and fake mode changes nothing about the machine it is tried on.
@@ -288,6 +291,25 @@ func TestFakeModeWorksTheCannedQueueOneRunAtATime(t *testing.T) {
 		if survived(pid) {
 			t.Errorf("process %d of the worker survived the deadline", pid)
 		}
+	}
+	// Ended on the deadline, the worker printed no result line, so the totals are the factory's own
+	// count of the stream: one turn per message of the worker — its first thought and text are one
+	// message on two lines — and every message priced at the list price of the scripted model.
+	turns := 0
+	for _, e := range full.Events {
+		if !e.Sub && (e.Kind == "text" || e.Kind == "tool") {
+			turns++
+		}
+	}
+	tokens := timeout.Tokens
+	if timeout.Totals != "factory" || timeout.Turns != turns || tokens.Input != 400*turns || tokens.CacheCreation != 1200*turns ||
+		tokens.Output != 250*turns {
+		t.Errorf("run 6 has turns %d and tokens %+v from %q, want the %d turns of its stream with their tokens, counted by the factory",
+			timeout.Turns, tokens, timeout.Totals, turns)
+	}
+	opus := float64(tokens.Input)*5 + float64(tokens.CacheCreation)*6.25 + float64(tokens.CacheRead)*0.5 + float64(tokens.Output)*25
+	if want := opus / 1e6; timeout.CostUSD <= 0 || math.Abs(timeout.CostUSD-want) > 1e-9 {
+		t.Errorf("run 6 cost %v, want %v: its tokens at the list price of %s", timeout.CostUSD, want, scriptedModel)
 	}
 
 	// The run is one JSON record and one append-only JSONL event log in the data directory.

@@ -47,6 +47,12 @@ function duration(from, to) {
 }
 
 const tokens = (n) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n || 0))
+
+// What a run cost. Totals the factory counted from the stream, because the worker printed no result
+// line, are marked as counted: they are a floor, not the figure the session reported. The run's own
+// facts say so in words of their own, so they leave the mark off the figure.
+const cost = (run, marked = true) =>
+  run.costUsd ? `$${run.costUsd.toFixed(2)}${marked && run.totals === 'factory' ? ' counted' : ''}` : ''
 const clock = (at) => new Date(at).toLocaleTimeString('en-GB')
 
 // The selected run lives in the URL (#run=2), so a run can be linked, survives a reload and is
@@ -246,7 +252,7 @@ export default function App() {
                 </span>,
                 run.repository,
                 <Tick key="t">{duration(run.startedAt, run.endedAt)}</Tick>,
-                run.costUsd ? `$${run.costUsd.toFixed(2)}` : '',
+                cost(run),
               ]}
             />
           </button>
@@ -364,7 +370,8 @@ function Run({ id, now }) {
           <Tick key="t">{duration(run.startedAt, run.endedAt ?? now)}</Tick>,
           run.turns ? `${run.turns} turns` : '',
           run.contextPeak ? `${tokens(run.contextPeak)} context peak` : '',
-          run.costUsd ? `$${run.costUsd.toFixed(2)}` : '',
+          cost(run, false),
+          run.totals === 'factory' && 'totals counted by the factory',
         ]}
       />
       {versions.length > 0 && (
