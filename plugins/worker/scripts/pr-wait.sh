@@ -14,7 +14,7 @@
 set -uo pipefail
 . "$(dirname "$0")/lib.sh"
 wf_need gh; wf_need jq
-pr="" max="${WF_WAIT_SLICE:-540}"
+pr="" max=$(wf_wait_slice)
 while [ $# -gt 0 ]; do case "$1" in --max-seconds) shift; max="$1";; *) pr="${1#\#}";; esac; shift; done
 [ -n "$pr" ] || pr=$(wf_pr_for_branch)
 [ -n "$pr" ] || wf_die "no open PR for branch $(wf_branch)"
