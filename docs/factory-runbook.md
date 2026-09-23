@@ -66,10 +66,10 @@ Run the following as root unless it says otherwise.
    The dashboard's browser test installs its own Chromium on the first `make check`; the system libraries that browser needs are installed once as root, with the Playwright version that `factory/ui/package-lock.json` names, from a directory of root's own:
 
    ```sh
-   cd "$(mktemp -d)" && npx --yes playwright@1.63.0 install-deps chromium
+   cd "$(mktemp -d -p /root)" && npx --yes playwright@1.63.0 install-deps chromium
    ```
 
-   Never run it from a clone under `/var/lib/factory`: the workers write there, and root would run what they left in its `node_modules`. When CI moves a pin, move the host's in the same way before the next run.
+   Run it only where no parent directory is writable by anyone but root: npx runs the `node_modules/playwright` of the nearest parent that has one, and the workers write to `/tmp` and to the clones under `/var/lib/factory`, so from there root would run what a worker left. When CI moves a pin, move the host's in the same way before the next run.
 
    The gate's length is what tells you whether a host is fast enough. A worker runs it twice per issue, and on a Raspberry Pi 4 this repository's full gate takes an estimated 12 to 15 minutes: in run 4 of #106 (2026-09-22) the first four targets alone took 559 s, and the next attempt was cut off at 600 s in `go test -race`. That is longer than the 600 s ceiling of one Bash tool call, which is why that run could not reach `ready`. The worker now runs the gate detached from the call and waits for it in 540 s slices ([ADR 0019](adr/0019-the-gate-runs-once-per-review-round.md)), so a slow host costs time and no longer blocks a run. To judge a host, time `make check` in a clone of each connected repository as the user `factory`.
 3. **Claude Code**, as the user `factory` (`sudo -iu factory`), with the native installer, which needs no Node and puts `claude` in `~/.local/bin` ([setup](https://code.claude.com/docs/en/setup.md)):
