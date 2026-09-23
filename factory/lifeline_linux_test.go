@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -48,8 +49,10 @@ func TestNoFactoryOutlivesTheTestProcess(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			var said strings.Builder
-			cmd.Stderr = &said
+			// Its error output and the lines read from its standard output are written from two
+			// goroutines, exec's copy and the reader below.
+			said := &saying{}
+			cmd.Stderr = said
 			if err := cmd.Start(); err != nil {
 				t.Fatal(err)
 			}
@@ -59,7 +62,7 @@ func TestNoFactoryOutlivesTheTestProcess(t *testing.T) {
 				defer close(ended)
 				lines := bufio.NewScanner(stdout)
 				for lines.Scan() {
-					said.WriteString(lines.Text() + "\n")
+					_, _ = said.Write([]byte(lines.Text() + "\n"))
 					if n, found := strings.CutPrefix(lines.Text(), "factory pid "); found && pid == 0 {
 						pid, _ = strconv.Atoi(n)
 						if c.kill {
@@ -101,6 +104,24 @@ func TestAFactoryWhoseTestNeverEnds(t *testing.T) {
 	}
 	fmt.Printf("factory pid %d\n", f.cmd.Process.Pid)
 	time.Sleep(time.Hour)
+}
+
+// saying is what the test process said, written to from more than one goroutine.
+type saying struct {
+	mu  sync.Mutex
+	out strings.Builder
+}
+
+func (s *saying) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.out.Write(p)
+}
+
+func (s *saying) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.out.String()
 }
 
 // running says whether /proc has the process of that id and it is not a zombie, which is what an
