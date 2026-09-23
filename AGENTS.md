@@ -1,6 +1,6 @@
 # workflows
 
-Public repository of Claude Code plugins for agent-driven development: an orchestrator that claims GitHub issues into Herdr worktree sessions, a worker pipeline with a fresh-context reviewer panel, and repository standards. Beside the plugins, `factory/` is the factory: a Go service that works routed issues unattended on a host of its own, as a second driver over the same worker pipeline ([ADR 0022](docs/adr/0022-the-factory-is-a-second-driver-over-the-worker-pipeline.md)).
+Public repository of Claude Code plugins for agent-driven development: an orchestrator that claims GitHub issues into Herdr worktree sessions, a worker pipeline with a fresh-context reviewer panel, and repository standards. Beside the plugins, `factory/` is the factory: a Go service that works routed issues unattended on a host of its own, a peer of the local workflow that is taking the delivery pipeline over into Go ([ADR 0038](docs/adr/0038-the-local-workflow-and-the-factory-are-peers.md), [ADR 0040](docs/adr/0040-the-factory-owns-the-delivery-lifecycle-in-go.md)).
 
 ## Commands
 - Gate: `make check` runs everything CI runs (shellcheck, `claude plugin validate --strict`, the standard check, the Python suite through `tests/run.py`, which runs its test classes on a pool of processes, the dashboard's lint and build, the factory's gofmt, vet, staticcheck and Go tests, and the dashboard's browser test); `make lint`, `make validate`, `make standard`, `make test`, `make ui`, `make factory`, `make browser` run one part
@@ -11,7 +11,8 @@ Public repository of Claude Code plugins for agent-driven development: an orches
 
 ## Priorities
 - In this order when they conflict: security, low token use, throughput. One uniform workflow that adapts per repository through `WF_*` variables and its `AGENTS.md`, never through local forks.
-- The local workflow comes first. The factory is a second driver over the same worker pipeline ([ADR 0022](docs/adr/0022-the-factory-is-a-second-driver-over-the-worker-pipeline.md)), built as its own unit that shares no code with the plugins; do not fork the pipeline for it.
+- The local workflow and the factory are peers ([ADR 0038](docs/adr/0038-the-local-workflow-and-the-factory-are-peers.md)): the plugins serve hands-on sessions, the factory serves unattended delivery. Each is its own unit and shares no code with the other; what both must agree on (the branch contract, the base branch rule, the frontier rule, the compact pin, the label vocabulary) is bound by a drift test.
+- The factory owns the delivery pipeline in Go: the stages implement, gate, review, pr, ci and address-reviews, one fresh session per stage that needs judgement, each reporting through a structured result ([ADR 0039](docs/adr/0039-every-session-reports-through-a-structured-result.md), [ADR 0040](docs/adr/0040-the-factory-owns-the-delivery-lifecycle-in-go.md)). It takes the stages over from the worker plugin one release at a time, from the last to the first ([ADR 0043](docs/adr/0043-the-migration-runs-from-the-last-stage-to-the-first.md)); until then its sessions run the worker skill for the stages it does not own yet.
 - The why is in [docs/vision.md](docs/vision.md).
 
 ## Claude Code facts

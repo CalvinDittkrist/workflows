@@ -1,7 +1,7 @@
 # 0022. The factory is a second driver over the worker pipeline
 
 Date: 2026-09-21
-Status: accepted
+Status: superseded by [0040](0040-the-factory-owns-the-delivery-lifecycle-in-go.md); reading the outcome from the final report is superseded by [0039](0039-every-session-reports-through-a-structured-result.md)
 
 ## Context
 An issue that is fully specified and needs no screen still waits for the maintainer to sit down and claim it into a Herdr session. A host that works such issues unattended has to start the same worker session a local claim starts, watch it, and record what it did.

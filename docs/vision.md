@@ -3,7 +3,7 @@
 This repository is my workflow for working with AI agents, with its best practices, and it is maintained and developed continuously. It optimises for high throughput, a workflow that is uniform but adapts to the repository, low token use, and security.
 
 ## Two kinds of workflow
-I develop projects locally and through a factory (for example https://github.com/owainlewis/machinist). That needs more than one workflow. The ideal local workflow comes first; the factory workflow follows. Local and factory are separate units.
+I develop projects locally and through a factory (for example https://github.com/owainlewis/machinist). That needs more than one workflow. The local workflow and the factory are peers: the plugins serve hands-on sessions, the factory serves unattended delivery ([ADR 0038](adr/0038-the-local-workflow-and-the-factory-are-peers.md)). Local and factory are separate units.
 
 The local workflow works through GitHub issues and has a planning mode that creates them.
 

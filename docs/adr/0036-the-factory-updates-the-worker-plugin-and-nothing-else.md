@@ -1,7 +1,7 @@
 # 0036. The factory updates the worker plugin and nothing else
 
 Date: 2026-09-22
-Status: accepted
+Status: superseded by [0042](0042-the-factory-carries-its-own-prompts-and-updates-no-plugin.md), with the last step of the migration ([0043](0043-the-migration-runs-from-the-last-stage-to-the-first.md))
 Extends: [0027](0027-the-factorys-isolation-boundary-is-the-host.md) (what an unattended host may change about itself)
 
 ## Context
