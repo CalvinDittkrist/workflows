@@ -741,20 +741,28 @@ func TestAnIssueIsNotLetGoWhileThisHostIsStillItsAssignee(t *testing.T) {
 	if head := gh.head(t, "acme/edge-sensors", claimedBranch); head != work {
 		t.Errorf("%s of the remote is at %q, want the commit of the run (%s): the worktree is pushed before it goes", claimedBranch, head, work)
 	}
-	var stuck apiRun
-	f.never(t, 2*time.Second, "the issue was let go while this host is still its assignee", func() bool {
-		stuck = apiRun{}
-		f.get(t, "/api/runs/1", &stuck)
-		return stuck.LetGoAt != nil
-	})
-	f.get(t, "/api/runs/1", &stuck)
-	said := 0
-	for _, warning := range stuck.Warnings {
-		if strings.Contains(warning, "could not be taken off") {
-			said++
-		}
+	// The refused removal comes after the worktree has gone, so it is waited for, not assumed to have
+	// been made by then: on a loaded host it has not.
+	run := func() apiRun {
+		var got apiRun
+		f.get(t, "/api/runs/1", &got)
+		return got
 	}
-	if said != 1 {
+	stayed := func(r apiRun) int {
+		said := 0
+		for _, warning := range r.Warnings {
+			if strings.Contains(warning, "could not be taken off") {
+				said++
+			}
+		}
+		return said
+	}
+	f.eventually(t, 30*time.Second, "the warning about the assignee that stayed", func() bool { return stayed(run()) > 0 })
+	f.never(t, 2*time.Second, "the issue was let go while this host is still its assignee", func() bool {
+		return run().LetGoAt != nil
+	})
+	stuck := run()
+	if said := stayed(stuck); said != 1 {
 		t.Errorf("the run carries %d warnings about the assignee that stayed, want one: %v", said, stuck.Warnings)
 	}
 
