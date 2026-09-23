@@ -444,7 +444,8 @@ h3 em {
 }
 .ev-thinking .what,
 .ev-hook .what,
-.ev-init .what {
+.ev-init .what,
+.ev-system .what {
   color: var(--faint);
 }
 /* A subagent's events are set in under the call that started them. */

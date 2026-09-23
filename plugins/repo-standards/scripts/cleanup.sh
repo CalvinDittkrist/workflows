@@ -3,9 +3,11 @@
 # branch chore/standardize, in a worktree inside the repository, so the checkout stays untouched.
 # Usage: cleanup.sh prepare | open
 # prepare  Needs the backup (backup.sh): the tag pre-standard on origin and the catalogue issue. Creates or
-#          resumes the worktree, removes the targets of approved delete findings (tracked files only), runs
-#          scaffold.sh with --skip for each rejected category, and prints `todo:` lines for what needs
-#          judgement: the approved replace and create findings and the <fill in> placeholders.
+#          resumes the worktree, brings every path a rejected category or finding names back to the default
+#          branch (what an earlier prepare applied under an answer since changed), removes the targets of
+#          approved delete findings (tracked files only), runs scaffold.sh with --skip for each rejected
+#          category, and prints `todo:` lines for what needs judgement: the approved replace and create
+#          findings and the <fill in> placeholders.
 # open     Refuses while a <fill in> placeholder is left on the branch. Commits the worktree, pushes the branch
 #          without force and opens the pull request, or updates its description. Nothing to change: no PR.
 set -euo pipefail
@@ -31,8 +33,8 @@ rejected=$(categories "$answers" reject)
 # placeholders <base>: the files the branch adds or changes (staged) that still hold a <fill in> placeholder.
 placeholders() {
   g diff --cached --name-only --diff-filter=AM "$1" | while IFS= read -r f; do
-    [ -f "$wt/$f" ] && grep -qF '<fill in>' "$wt/$f" && printf '%s\n' "$f"
-  done; return 0
+    if [ -f "$wt/$f" ] && grep -qF '<fill in>' "$wt/$f"; then printf '%s\n' "$f"; fi
+  done
 }
 
 if [ "$step" = prepare ]; then
@@ -65,6 +67,29 @@ if [ "$step" = prepare ]; then
     printf 'worktree: %s (new, from %s)\n' "$wt" "$from"
   fi
 
+  # Reconcile what an earlier prepare put on the branch with the answers now, since a later answer replaces an
+  # earlier one: every file scaffold.sh writes for a rejected category and every target of a rejected finding goes
+  # back to how the default branch has it where the branch forked, file by file. A file stays as it is when it is,
+  # or lies under, the target of an approved finding or a file scaffold.sh writes for a category not rejected, so a
+  # rejected directory target never takes back what an approved or unanswered category put inside it. On a new
+  # worktree from the default branch this finds nothing.
+  fork=$(base)
+  g add -A
+  kept=$({ for a in delete replace create; do approved_findings "$answers" "$a"; done | cut -f2
+    bash "$here/scaffold.sh" --paths | awk -F'\t' -v r=" $rejected " '!index(r, " " $1 " ") { print $2 }'; })
+  while IFS= read -r t; do
+    [ -n "$t" ] || continue
+    n=0
+    while IFS= read -r -d '' f; do
+      printf '%s\n' "$kept" | P=$f awk '{ p = ENVIRON["P"] } $0 != "" && (p == $0 || index(p, $0 "/") == 1) { f = 1 } END { exit !f }' && continue
+      g rm -q -f --ignore-unmatch -- ":(literal)$f"
+      [ -z "$(g ls-tree "$fork" -- ":(literal)$f")" ] || g checkout "$fork" -- ":(literal)$f"
+      n=1
+    done < <(g diff --cached --name-only --no-renames -z "$fork" -- ":(literal)$t")
+    [ "$n" = 0 ] || printf 'restored: %s (rejected)\n' "$t"
+  done < <({ bash "$here/scaffold.sh" --paths; cut -f1-3 "$(state_dir)/findings" | awk -F'\t' '$3 == "delete" || $3 == "replace" || $3 == "create"'; } \
+    | awk -F'\t' -v r=" $rejected " 'index(r, " " $1 " ") { print $2 }' | awk '!seen[$0]++')
+
   # Deletions: the targets of approved delete findings. Only tracked files go through the pull request, and only
   # when the tag holds them as they are; a target changed since the tag was set (a tag from an earlier run is
   # kept, never moved) or an untracked one is left for the maintainer, since no backup has it.
@@ -90,7 +115,6 @@ if [ "$step" = prepare ]; then
   for a in replace create; do
     approved_findings "$answers" "$a" | awk -F'\t' '{ print "todo: " $1 " " $3 " " $2 ": " $4 }'
   done
-  fork=$(base)
   placeholders "$fork" | sed 's/^/todo: fill the <fill in> placeholders in /'
   [ -z "$rejected" ] || printf 'untouched: %s (rejected)\n' "$(printf '%s' "$rejected" | sed 's/ /, /g')"
   printf 'next: do the todo lines in %s, run make check there, then cleanup.sh open\n' "$wt"

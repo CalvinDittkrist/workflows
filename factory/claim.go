@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -97,19 +98,32 @@ func (f *Factory) claim(ctx context.Context, r *Run, entry Entry) (claimed, erro
 		// one thing the claim exists to make impossible. What the two cannot share is a commit: a
 		// branch is left on the remote only when it carries work the base does not have
 		// (removeRemoteBranch), and a branch somebody has just cut from the base carries none. So a
-		// branch of the recorded name that carries work is the one this factory left there, and
-		// anything else is a claim that is not this host's, whatever it is called.
-		// The base of the run that held the issue is what its branch was cut from and what it is read
-		// against; a record from before that field was written is read against the base of today.
-		against := entry.resume.Base
-		if against == "" {
-			against = base
-		}
-		carries, err := carriesWork(ctx, clone, held, against)
-		if entry.resume.Branch != held || err != nil || !carries {
+		// branch of the recorded name that carries work is the one this factory left there, and one of
+		// that name that carries none is a claim that is not this host's. A branch no record names is
+		// read below.
+		if entry.resume.Branch == held {
+			// The base of the run that held the issue is what its branch was cut from and what it is
+			// read against; a record from before that field was written is read against the base of
+			// today.
+			against := entry.resume.Base
+			if against == "" {
+				against = base
+			}
+			if carries, err := carriesWork(ctx, clone, held, against); err == nil && carries {
+				why := fmt.Sprintf("run %d let this issue go and it was routed again; its branch is on the remote, so nothing is claimed", entry.resume.ID)
+				return f.readopt(ctx, r, connected, clone, against, held, entry.resume.Worktree, entry.Number, why)
+			}
 			return claimed{branch: held}, errLost
 		}
-		return f.readopt(ctx, r, connected, clone, against, entry)
+		// Or it is this factory's own branch that no record names any more: the data directory that
+		// held the records was lost, and the issue was released and is routed and unassigned
+		// ([ADR 0024]).
+		//
+		// [ADR 0024]: ../docs/adr/0024-a-claim-is-the-creation-of-the-branch-through-the-api.md
+		if own, why := f.orphaned(ctx, r, connected.Name, clone, held, base); own {
+			return f.readopt(ctx, r, connected, clone, base, held, "", entry.Number, why)
+		}
+		return claimed{branch: held}, errLost
 	}
 
 	head, err := git(ctx, clone, "rev-parse", "refs/remotes/origin/"+base)
@@ -172,23 +186,22 @@ func worktreePath(clone, branch string) string {
 	return filepath.Join(clone, ".claude", "worktrees", strings.ReplaceAll(branch, "/", "-"))
 }
 
-// readopt takes an issue back that this factory once held and let go. The branch of the run that
-// held it is still on the remote and carries its commits, so there is nothing to claim: this host is
-// assigned again and the worktree is made from that branch, which is where the run continues
-// ([ADR 0026]). A branch that is gone from the remote never reaches here, and neither does one that
-// carries no work of that run — the issue is then claimed anew, as a first run of it, and the claim
-// decides against whoever else may hold the name.
+// readopt takes an issue back that this factory once held: one it let go, whose branch the record of
+// the run that held it names, or one whose records went with a lost data directory, whose branch
+// orphaned recognised. The branch is still on the remote and carries its commits, so there is
+// nothing to claim: this host is assigned again and the worktree is made from that branch, which is
+// where the run continues ([ADR 0026]). A branch that is gone from the remote never reaches here,
+// and neither does one that carries no work — the issue is then claimed anew, as a first run of it,
+// and the claim decides against whoever else may hold the name. why is the line of the run's log
+// that says which of the two this is.
 //
 // [ADR 0026]: ../docs/adr/0026-the-factory-never-deletes-work-on-its-own.md
-func (f *Factory) readopt(ctx context.Context, r *Run, connected Connected, clone, base string, entry Entry) (claimed, error) {
-	held := entry.resume
-	back := claimed{branch: held.Branch, base: base, created: true, resumed: true}
-	worktree := held.Worktree
+func (f *Factory) readopt(ctx context.Context, r *Run, connected Connected, clone, base, branch, worktree string, issue int, why string) (claimed, error) {
+	back := claimed{branch: branch, base: base, created: true, resumed: true}
 	if worktree == "" {
 		worktree = worktreePath(clone, back.branch)
 	}
-	f.runs.event(r, Event{Kind: "factory", Title: "taking " + back.branch + " back",
-		Body: fmt.Sprintf("run %d let this issue go and it was routed again; its branch is on the remote, so nothing is claimed", held.ID)})
+	f.runs.event(r, Event{Kind: "factory", Title: "taking " + back.branch + " back", Body: why})
 	login, err := f.login(ctx)
 	if err != nil {
 		return back, err
@@ -196,8 +209,8 @@ func (f *Factory) readopt(ctx context.Context, r *Run, connected Connected, clon
 	// The branch is recorded before the issue is assigned, for the reason a claim records it there:
 	// a host that loses power in between is read from this record alone.
 	f.runs.update(r, func() { r.Branch, r.Base = back.branch, back.base })
-	if err := assignSelf(ctx, connected.Name, entry.Number, login); err != nil {
-		return back, fmt.Errorf("issue #%d of %s could not be assigned to %s again: %w", entry.Number, connected.Name, login, err)
+	if err := assignSelf(ctx, connected.Name, issue, login); err != nil {
+		return back, fmt.Errorf("issue #%d of %s could not be assigned to %s again: %w", issue, connected.Name, login, err)
 	}
 	if err := makeWorktree(ctx, clone, back.branch, worktree); err != nil {
 		return back, err
@@ -224,6 +237,66 @@ func carriesWork(ctx context.Context, clone, branch, base string) (bool, error) 
 		return false, err
 	}
 	return beyond != "0", nil
+}
+
+// orphaned says whether a branch of the issue that no record of this factory names is this
+// factory's own all the same: a claim a lost data directory forgot. The issue is routed and
+// unassigned, which is how a release leaves it, so the branch is all there is to read, and three
+// readings of it have to agree ([ADR 0024]):
+//
+//   - it carries work beyond the base, because a branch another claimer has just cut from the base
+//     carries none, and that is the claim this reading must never take;
+//   - the latest activity GitHub records on it — its creation, a push — was made by the login this
+//     host's gh is signed in as, which nobody else can act as;
+//   - no pull request of it is open, because work that is in review is with a person, and taking
+//     it up again would start a second session on a branch somebody is reading.
+//
+// A reading that fails is a branch that is not recognised: the claim then ends lost and touches
+// nothing, which is what it did before this reading existed. why is the line of the run's log for a
+// branch it takes, and a branch it leaves is said in the log too, so a lost run can be read back to
+// the reading that made it lost.
+//
+// The caller has fetched: the work is read from what the remote carries now.
+//
+// [ADR 0024]: ../docs/adr/0024-a-claim-is-the-creation-of-the-branch-through-the-api.md
+func (f *Factory) orphaned(ctx context.Context, r *Run, repository, clone, branch, base string) (bool, string) {
+	leave := func(reason string) (bool, string) {
+		f.runs.event(r, Event{Kind: "factory", Title: branch + " is not this factory's", Body: reason})
+		return false, ""
+	}
+	carries, err := carriesWork(ctx, clone, branch, base)
+	if err != nil {
+		return leave(fmt.Sprintf("what %s carries beyond %s could not be read: %v", branch, base, err))
+	}
+	if !carries {
+		return leave(fmt.Sprintf("%s carries nothing beyond %s, which is what a claim somebody has just made looks like", branch, base))
+	}
+	login, err := f.login(ctx)
+	if err != nil {
+		return leave(err.Error())
+	}
+	raw, err := gh(ctx, "api", "repos/"+repository+"/activity?ref="+url.QueryEscape("refs/heads/"+branch)+"&per_page=1",
+		"--jq", ".[0].actor.login // empty")
+	if err != nil {
+		return leave(fmt.Sprintf("who last pushed %s could not be read: %s", branch, said(err)))
+	}
+	pusher := strings.TrimSpace(string(raw))
+	if !strings.EqualFold(pusher, login) {
+		if pusher == "" {
+			pusher = "nobody GitHub names"
+		}
+		return leave(fmt.Sprintf("%s was last pushed by %s and this host is %s", branch, pusher, login))
+	}
+	owner, _, _ := strings.Cut(repository, "/")
+	raw, err = gh(ctx, "api", "repos/"+repository+"/pulls?state=open&head="+url.QueryEscape(owner+":"+branch)+"&per_page=1",
+		"--jq", "length")
+	if err != nil {
+		return leave(fmt.Sprintf("whether a pull request of %s is open could not be read: %s", branch, said(err)))
+	}
+	if open := strings.TrimSpace(string(raw)); open != "0" {
+		return leave(fmt.Sprintf("a pull request of %s is open, so its work is with a person", branch))
+	}
+	return true, fmt.Sprintf("no record of this factory names %s, and %s pushed it last, carries work on it and has no pull request of it open: it is this factory's own claim, so nothing is claimed", branch, login)
 }
 
 // makeWorktree puts the worktree of a branch this factory holds back into the clone, on the commits

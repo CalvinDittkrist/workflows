@@ -5,10 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -175,6 +177,63 @@ func TestAClaimOfARepositoryWithItsOwnBaseCutsAndWorksFromThatBase(t *testing.T)
 	}
 	if base := workers[0].settings(t).Env["WF_BASE_BRANCH"]; base != "dev" {
 		t.Errorf("the worker's settings carry WF_BASE_BRANCH=%q; it would review against %[1]s a branch cut from dev, and open its pull request against it", base)
+	}
+}
+
+// A host sets the worker knobs of its runs in its configuration, and they reach the session the way
+// a local claim's --env does: in the env block of --settings, where they win over the repository's
+// own settings for that session. The one this exists for is a host whose GitHub account no bot
+// reviewer reviews the pull requests of: with WF_PR_BOT_REVIEWERS set to nothing, its worker waits
+// for no review that is not coming. An empty value is a setting, not an absence, and what the run
+// is stays the factory's whatever the file says.
+func TestTheHostsWorkerKnobsReachTheSessionBesideWhatTheRunIs(t *testing.T) {
+	t.Parallel()
+	gh := newGhShim(t)
+	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
+	gh.loggedInAs(t, "factory-bot")
+	gh.assigns(t, "acme/edge-sensors", claimedIssue, "factory-bot")
+	gh.workerReports(t, "acme/edge-sensors", claimedIssue)
+
+	data := filepath.Join(t.TempDir(), "data")
+	gh.cloneInto(t, data, "acme/edge-sensors")
+	f := gh.work(t, config{"poll": "50ms", "deadline": "90s", "data_dir": data,
+		"repositories": []string{"acme/edge-sensors"},
+		"worker_env":   map[string]string{"WF_PR_BOT_REVIEWERS": "", "WF_PR_REVIEW_WAIT": "5"}})
+	run := f.ended(t, 1)
+
+	if run.Outcome != "ready" {
+		t.Fatalf("the run ended as %q (%s), want ready; the factory's log:\n%s", run.Outcome, run.Reason, f.output(t))
+	}
+	workers := gh.workers(t)
+	if len(workers) != 1 {
+		t.Fatalf("the factory started %d workers, want one", len(workers))
+	}
+	env := workers[0].settings(t).Env
+	if bots, set := env["WF_PR_BOT_REVIEWERS"]; !set || bots != "" {
+		t.Errorf("the worker's settings carry WF_PR_BOT_REVIEWERS=%q (set: %v), want the empty value the host configured: its worker would wait the review window for a bot that never reviews this host's pull requests", bots, set)
+	}
+	if wait := env["WF_PR_REVIEW_WAIT"]; wait != "5" {
+		t.Errorf("the worker's settings carry WF_PR_REVIEW_WAIT=%q, want the host's 5", wait)
+	}
+	if env["WF_MODE"] != "manual" || env["WF_ISSUE"] != strconv.Itoa(claimedIssue) || env["WF_BASE_BRANCH"] != "main" {
+		t.Errorf("the worker's settings carry %v; the mode, the issue and the base are the run's own and stay beside the host's knobs", env)
+	}
+}
+
+// The knobs a host may set are the ones a local claim may set, and no other: the list is the
+// orchestrator's (env_accepted in claim.sh), read out of the script, so a knob added to one driver
+// fails here until the other follows ([ADR 0022]).
+//
+// [ADR 0022]: ../docs/adr/0022-the-factory-is-a-second-driver-over-the-worker-pipeline.md
+func TestTheWorkerKnobsAgreeWithTheOrchestratorsClaim(t *testing.T) {
+	t.Parallel()
+	script := readFile(t, abs(t, filepath.Join("..", "plugins", "orchestrator", "scripts", "claim.sh")))
+	found := regexp.MustCompile(`(?m)^env_accepted="([A-Z0-9_ ]+)"$`).FindStringSubmatch(script)
+	if found == nil {
+		t.Fatalf("the orchestrator's claim.sh names no env_accepted; the factory restates that list and cannot be held to it")
+	}
+	if accepted := strings.Fields(found[1]); !slices.Equal(accepted, workerKnobs) {
+		t.Errorf("worker_env accepts %v, the local claim's --env accepts %v; the two drivers set the same knobs of the one worker", workerKnobs, accepted)
 	}
 }
 
@@ -525,9 +584,10 @@ func TestAClaimAnotherClaimerWonIsRecordedAsLostAndTouchesNothingElse(t *testing
 	// And it does not try the issue again while the branch is there: the run is that record. The
 	// issue stays routed and unassigned, which is also what a released issue looks like — and it was
 	// unassigned after this run began, so the one thing that keeps this factory away from a claim
-	// that is not its own is that it holds nothing here.
+	// that is not its own is that it holds nothing here. The label is the one the lost run answered;
+	// only setting it again would queue the issue once more.
 	gh.timeline(t, "acme/edge-sensors", claimedIssue,
-		labeled("factory", run.StartedAt.Add(-6*time.Hour)), unassigned("somebody", run.StartedAt.Add(time.Minute)))
+		labeled("factory", run.SignalAt), unassigned("somebody", run.StartedAt.Add(time.Minute)))
 	gh.issues(t, "acme/edge-sensors", touched(openIssue(claimedIssue, claimedTitle, run.StartedAt.Add(-72*time.Hour)), run.StartedAt.Add(time.Minute)))
 	asked := "api " + issuesRequest("acme/edge-sensors", "factory")
 	f.eventually(t, 20*time.Second, "several more polls", func() bool { return gh.made(t, asked) >= 8 })
@@ -1147,4 +1207,175 @@ func resolved(t *testing.T, path string) string {
 		t.Fatal(err)
 	}
 	return out
+}
+
+// pushedBy is who GitHub says acted last on a branch of the shim's GitHub — its creation or a push —
+// which is how the factory tells a branch of its own that no record names from somebody else's.
+func (g *ghShim) pushedBy(t *testing.T, repository, branch, login string) {
+	t.Helper()
+	g.answer(t, activityCall(repository, branch), login+"\n")
+}
+
+// openPulls is how many pull requests of a branch are open on the shim's GitHub.
+func (g *ghShim) openPulls(t *testing.T, repository, branch string, open int) {
+	t.Helper()
+	owner, _, _ := strings.Cut(repository, "/")
+	g.answer(t, "api repos/"+repository+"/pulls?state=open&head="+url.QueryEscape(owner+":"+branch)+"&per_page=1 --jq length",
+		strconv.Itoa(open)+"\n")
+}
+
+func activityCall(repository, branch string) string {
+	return "api repos/" + repository + "/activity?ref=" + url.QueryEscape("refs/heads/"+branch) + "&per_page=1 --jq .[0].actor.login // empty"
+}
+
+// A factory whose data directory was lost knows nothing of the issues it held. One of them was
+// released and is routed and unassigned again, and its branch is on the remote with the work of the
+// runs before: the factory pushed it last, and no pull request of it is open. That is this factory's
+// own claim and not a foreign one, so it is taken up again — assigned, its worktree made from the
+// branch, and the worker run on the commits there — rather than recorded as lost ([ADR 0024]).
+//
+// [ADR 0024]: ../docs/adr/0024-a-claim-is-the-creation-of-the-branch-through-the-api.md
+func TestAFactoryThatLostItsDataDirectoryTakesUpItsOwnOrphanedBranch(t *testing.T) {
+	t.Parallel()
+	gh := newGhShim(t)
+	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
+	gh.loggedInAs(t, "factory-bot")
+	gh.assigns(t, "acme/edge-sensors", claimedIssue, "factory-bot")
+	// The host before this one claimed the issue and pushed work on its branch.
+	gh.branchAt(t, "acme/edge-sensors", claimedBranch, gh.head(t, "acme/edge-sensors", "main"))
+	work := gh.commitOn(t, "acme/edge-sensors", claimedBranch)
+	gh.pushedBy(t, "acme/edge-sensors", claimedBranch, "factory-bot")
+	gh.openPulls(t, "acme/edge-sensors", claimedBranch, 0)
+
+	// A fresh data directory: no clone, no record.
+	data := filepath.Join(t.TempDir(), "data")
+	f := gh.work(t, config{"poll": "50ms", "deadline": "90s", "data_dir": data,
+		"repositories": []string{"acme/edge-sensors"}})
+	run := f.ended(t, 1)
+
+	if run.Outcome == outcomeLost || run.Outcome == outcomeFailed {
+		t.Fatalf("the run ended as %q (%s), want the worker's own outcome; the factory's log:\n%s", run.Outcome, run.Reason, f.output(t))
+	}
+	if run.Branch != claimedBranch || !run.Holding {
+		t.Errorf("the run records %q holding=%v, want %s held", run.Branch, run.Holding, claimedBranch)
+	}
+	if created := gh.asked(t, "api --method POST repos/acme/edge-sensors/git/refs"); created != 0 {
+		t.Errorf("the factory tried to create a branch %d times, want none: the branch of its own claim is there", created)
+	}
+	if head := gh.head(t, "acme/edge-sensors", claimedBranch); head != work {
+		t.Errorf("%s of the remote is at %q, want the work that was there (%s)", claimedBranch, head, work)
+	}
+	assigned := fmt.Sprintf("issue edit %d --repo acme/edge-sensors --add-assignee factory-bot", claimedIssue)
+	if made := gh.made(t, assigned); made != 1 {
+		t.Errorf("the factory made `gh %s` %d times, want once", assigned, made)
+	}
+	workers := gh.workers(t)
+	if len(workers) != 1 {
+		t.Fatalf("the factory started %d workers, want one", len(workers))
+	}
+	worktree := filepath.Join(clonePath(data, "acme/edge-sensors"), ".claude", "worktrees", claimedWorktree)
+	if workers[0].cwd != resolved(t, worktree) || workers[0].branch != claimedBranch || workers[0].head != work {
+		t.Errorf("the worker ran in %s on %q at %s, want %s on %s at %s: the run resumes on the commits the branch carries",
+			workers[0].cwd, workers[0].branch, workers[0].head, resolved(t, worktree), claimedBranch, work)
+	}
+}
+
+// A branch of the issue that carries work is still somebody else's when GitHub says another login
+// pushed it last, or when a pull request of it is open and its work is with a person: the claim ends
+// lost and touches nothing, as ADR 0024 decides for every foreign claim.
+//
+// [ADR 0024]: ../docs/adr/0024-a-claim-is-the-creation-of-the-branch-through-the-api.md
+func TestABranchWithWorkThatIsNotTheFactorysOwnStaysAForeignClaim(t *testing.T) {
+	t.Parallel()
+	for _, one := range []struct {
+		name   string
+		pusher string
+		open   int
+	}{
+		{name: "another login pushed it last", pusher: "somebody-else"},
+		{name: "a pull request of it is open", pusher: "factory-bot", open: 1},
+	} {
+		t.Run(one.name, func(t *testing.T) {
+			t.Parallel()
+			gh := newGhShim(t)
+			gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
+			gh.loggedInAs(t, "factory-bot")
+			gh.branchAt(t, "acme/edge-sensors", claimedBranch, gh.head(t, "acme/edge-sensors", "main"))
+			work := gh.commitOn(t, "acme/edge-sensors", claimedBranch)
+			gh.pushedBy(t, "acme/edge-sensors", claimedBranch, one.pusher)
+			gh.openPulls(t, "acme/edge-sensors", claimedBranch, one.open)
+
+			data := filepath.Join(t.TempDir(), "data")
+			clone := gh.cloneInto(t, data, "acme/edge-sensors")
+			f := gh.work(t, config{"poll": "50ms", "deadline": "90s", "data_dir": data,
+				"repositories": []string{"acme/edge-sensors"}})
+			run := f.ended(t, 1)
+
+			if run.Outcome != outcomeLost || run.Holding {
+				t.Fatalf("the run ended as %q (%s) holding=%v, want lost and holding nothing; the factory's log:\n%s",
+					run.Outcome, run.Reason, run.Holding, f.output(t))
+			}
+			if head := gh.head(t, "acme/edge-sensors", claimedBranch); head != work {
+				t.Errorf("%s of the remote is at %q, want where the other claimer left it (%s)", claimedBranch, head, work)
+			}
+			for _, call := range gh.calls(t) {
+				if strings.HasPrefix(call, "issue edit ") || strings.HasPrefix(call, "api --method ") {
+					t.Errorf("the factory called `gh %s` for a foreign claim; it must be left alone", call)
+				}
+			}
+			if len(gh.workers(t)) != 0 {
+				t.Errorf("a claimer that lost started a worker: %v", gh.workers(t))
+			}
+			if _, err := os.Stat(filepath.Join(clone, ".claude", "worktrees")); !os.IsNotExist(err) {
+				t.Errorf("a claimer that lost made a worktree in %s: %v", clone, err)
+			}
+		})
+	}
+}
+
+// A lost run answers the routing it was started for and no later one. Once the foreign branch is
+// gone and the label is set again, the issue is queued like any routed issue and claimed on the
+// branch name that is free now.
+func TestAnIssueWhoseClaimWasLostIsClaimedWhenItIsRoutedAgain(t *testing.T) {
+	t.Parallel()
+	gh := newGhShim(t)
+	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
+	gh.loggedInAs(t, "factory-bot")
+	gh.assigns(t, "acme/edge-sensors", claimedIssue, "factory-bot")
+	// Another claimer holds the issue: its branch is cut from the base and carries nothing yet.
+	gh.branchAt(t, "acme/edge-sensors", claimedBranch, gh.head(t, "acme/edge-sensors", "main"))
+
+	data := filepath.Join(t.TempDir(), "data")
+	gh.cloneInto(t, data, "acme/edge-sensors")
+	f := gh.work(t, config{"poll": "50ms", "deadline": "90s", "data_dir": data,
+		"repositories": []string{"acme/edge-sensors"}})
+	if run := f.ended(t, 1); run.Outcome != outcomeLost {
+		t.Fatalf("run 1 ended as %q (%s), want lost; the factory's log:\n%s", run.Outcome, run.Reason, f.output(t))
+	}
+	// The label that was on the issue all along was answered by that run.
+	f.never(t, 2*time.Second, "the factory ran the issue again under the routing a lost run answered",
+		func() bool { return !f.missing(t, 2) })
+
+	// The other claimer's branch is deleted and the maintainer sets the label again.
+	gh.dropBranch(t, "acme/edge-sensors", claimedBranch)
+	again := time.Now().UTC()
+	gh.issues(t, "acme/edge-sensors", touched(openIssue(claimedIssue, claimedTitle, again.Add(-72*time.Hour)), again))
+	gh.timeline(t, "acme/edge-sensors", claimedIssue,
+		labeled("factory", again.Add(-6*time.Hour)), unlabeled("factory", again.Add(-time.Minute)), labeled("factory", again))
+
+	run := f.ended(t, 2)
+	if run.Outcome == outcomeLost || run.Outcome == outcomeFailed || !run.Holding || run.Branch != claimedBranch {
+		t.Fatalf("run 2 ended as %q (%s) on %q holding=%v, want a claim of %s that holds it; the factory's log:\n%s",
+			run.Outcome, run.Reason, run.Branch, run.Holding, claimedBranch, f.output(t))
+	}
+	// The lost claim met the branch in its fetch and created nothing; the second one created it.
+	if created := gh.asked(t, "api --method POST repos/acme/edge-sensors/git/refs"); created != 1 {
+		t.Errorf("the factory tried to create the branch %d times, want once, by the claim it won", created)
+	}
+	if head := gh.head(t, "acme/edge-sensors", claimedBranch); head == "" {
+		t.Errorf("%s is not on the remote after the claim", claimedBranch)
+	}
+	if len(gh.workers(t)) != 1 {
+		t.Errorf("the factory started %d workers, want one for the claim it won", len(gh.workers(t)))
+	}
 }

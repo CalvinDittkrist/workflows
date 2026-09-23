@@ -139,6 +139,13 @@ func scriptedWorker(args []string, stdout, stderr io.Writer) int {
 		// which the factory logs without it changing how the run ended.
 		s.failingTool("Bash", map[string]any{"command": "make check", "description": "Run the gate"}, "make: *** [check] Error 1")
 		fmt.Fprintln(stdout, "npm warn: a line of the worker's output that is not the stream format")
+		// Lines that are the stream format all the same: a tool call the auto mode classifier denied,
+		// a system line the factory has no use for, and one of a subtype it does not know.
+		s.emit(map[string]any{"type": "system", "subtype": "permission_denied", "tool_name": "Bash", "tool_use_id": "toolu_denied",
+			"decision_reason_type": "classifier", "decision_reason": "[Untrusted Code Integration]",
+			"message": "Permission for this action was denied by the Claude Code auto mode classifier."})
+		s.emit(map[string]any{"type": "system", "subtype": "hook_started", "hook_name": "PreToolUse:Bash"})
+		s.emit(map[string]any{"type": "system", "subtype": "sensor_calibrated", "detail": "a subtype of a later Claude Code"})
 		// Its tool call carries a file far beyond what one event keeps: the log has to survive that,
 		// here and after a restart.
 		s.tool("Write", map[string]any{"file_path": "docs/report.html", "content": strings.Repeat(`<a href="x">&amp;</a>`, 1000)},
