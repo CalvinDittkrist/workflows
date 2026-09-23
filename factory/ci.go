@@ -190,8 +190,8 @@ func (read pullReading) comments() string {
 	return strings.Join(lines, "\n")
 }
 
-// without is the reading with the objections an address-reviews round of this run has answered left
-// out. A review that asks for changes stands on GitHub until its author approves or it is dismissed,
+// without is the reading with the objections an address-reviews round of the issue has answered on
+// the pull request left out. A review that asks for changes stands on GitHub until its author approves or it is dismissed,
 // which only its author does, so an objection that has been answered is no reason for another round:
 // what is left of it is the maintainer's to read, and a new review of theirs is a new objection.
 func (read pullReading) without(answered map[string]bool) pullReading {
@@ -329,8 +329,16 @@ func (f *Factory) ci(parent, ctx context.Context, r *Run, entry Entry, claim cla
 	// other head will do, since somebody may push on top of the repair before GitHub shows it.
 	spent := ""
 	said := ""
-	// answered is the objections this run's address-reviews rounds have answered, by their URL.
+	// answered is the objections an address-reviews round of this issue has answered on this pull
+	// request, by their URL: this run's, and those its records carry from the runs before it.
 	answered := map[string]bool{}
+	for _, before := range f.runs.list() {
+		if before.ID != r.ID && before.Repository == entry.Repository && before.Issue == entry.Number && before.PullRequest == pull {
+			for _, url := range before.Answered {
+				answered[url] = true
+			}
+		}
+	}
 	for {
 		if f.halted(parent, ctx, r, "waited on CI") {
 			return
@@ -486,8 +494,9 @@ func fixBrief(entry Entry, claim claimed, pull, task string) string {
 // or declines each point, commits and pushes, and reports its replies; the factory pushes what the
 // worktree holds, posts the replies, resolves the threads it replied to and answers the review
 // summaries with one comment on the pull request. The session writes nothing to GitHub itself, so a
-// reply can only land on a thread the brief listed. The objections the round answered go into
-// answered. It answers with the commit the round pushed, and ends the run and answers false when the
+// reply can only land on a thread the brief listed. Once their answer is posted, the objections the
+// round showed go into answered and into the run's record, which later runs on the pull request read.
+// It answers with the commit the round pushed, and ends the run and answers false when the
 // round cannot go on.
 func (f *Factory) address(parent, ctx context.Context, r *Run, entry Entry, claim claimed, pull string, read pullReading, answered map[string]bool) (string, bool) {
 	f.runs.update(r, func() { r.stage(stageAddressReviews) })
@@ -509,9 +518,13 @@ func (f *Factory) address(parent, ctx context.Context, r *Run, entry Entry, clai
 	}
 	f.runs.event(r, Event{Kind: "factory", Title: fmt.Sprintf("addressed: fixed %d, declined %d", len(got.Fixed), len(got.Declined)),
 		Body: strings.TrimSpace("fixed:\n" + bullets(got.Fixed) + "\ndeclined:\n" + bullets(got.Declined))})
-	f.postAnswers(ctx, r, entry.Repository, pull, shown, got)
-	for _, o := range shown.Objections {
-		answered[o.URL] = true
+	if f.postAnswers(ctx, r, entry.Repository, pull, shown, got) {
+		f.runs.update(r, func() {
+			for _, o := range shown.Objections {
+				answered[o.URL] = true
+				r.Answered = append(r.Answered, o.URL)
+			}
+		})
 	}
 	f.runs.update(r, func() { r.stage(stageCI) })
 	return head, true
@@ -536,8 +549,9 @@ const maxReply = 60000
 // thread the brief showed it, the first reply to each, and one comment for the review summaries. A
 // reply to a thread the brief did not show is posted nowhere, because the result is the session's
 // writing and the issue it read may have steered it. A call that fails is a warning: its thread stays
-// unresolved, and the next reading of the pull request asks for it again.
-func (f *Factory) postAnswers(ctx context.Context, r *Run, repository, pull string, shown pullReading, got result) {
+// unresolved, and the next reading of the pull request asks for it again. It says whether the review
+// summaries were answered, and only answered ones are left alone by the next reading.
+func (f *Factory) postAnswers(ctx context.Context, r *Run, repository, pull string, shown pullReading, got result) bool {
 	threads := map[string]thread{}
 	for _, t := range shown.Threads {
 		threads[t.ID] = t
@@ -566,17 +580,19 @@ func (f *Factory) postAnswers(ctx context.Context, r *Run, repository, pull stri
 	answer := strings.TrimSpace(got.Answer)
 	switch {
 	case len(shown.Objections) == 0:
+		return false
 	case answer == "":
 		f.warn(r, "review summaries unanswered", "the address-reviews session gave no answer to the review summaries of "+pull+", so the factory commented nothing on it")
-	default:
-		if err := f.source.commentOnPull(ctx, repository, number, cut(answer, maxReply)); err != nil {
-			if ctx.Err() == nil {
-				f.warn(r, "review summaries unanswered", "the answer to the review summaries of "+pull+" could not be posted: "+err.Error())
-			}
-			return
-		}
-		f.runs.event(r, Event{Kind: "factory", Title: "answered the review summaries on " + pull, Body: answer})
+		return false
 	}
+	if err := f.source.commentOnPull(ctx, repository, number, cut(answer, maxReply)); err != nil {
+		if ctx.Err() == nil {
+			f.warn(r, "review summaries unanswered", "the answer to the review summaries of "+pull+" could not be posted: "+err.Error())
+		}
+		return false
+	}
+	f.runs.event(r, Event{Kind: "factory", Title: "answered the review summaries on " + pull, Body: answer})
+	return true
 }
 
 // Bounds on what an address-reviews session is shown of the reviews: the head of each review's or
@@ -870,7 +886,18 @@ func (g *gitHub) pullState(ctx context.Context, held Held, bots []string) (pullR
 			first := t.Comments.Nodes[0]
 			open.Login, open.URL, open.Body = first.Author.Login, first.URL, first.Body
 		}
-		read.Threads = append(read.Threads, open)
+		// Anybody may comment on a pull request of a public repository, and what a thread says becomes
+		// the brief of a session that pushes: only a thread a writer or a bot the host waits for opened
+		// asks for anything.
+		asks := slices.Contains(bots, open.Login)
+		if !asks && open.Login != "" {
+			if asks, err = g.mayPush(ctx, held.Repository, open.Login, "thread "+open.ID); err != nil {
+				return pullReading{}, err
+			}
+		}
+		if asks {
+			read.Threads = append(read.Threads, open)
+		}
 	}
 	return read, nil
 }

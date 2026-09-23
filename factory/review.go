@@ -250,19 +250,25 @@ func (g *gitHub) newestRequest(ctx context.Context, repository string, pull int)
 // that user and not the association GitHub puts on the review, which says that somebody is a member
 // of the organisation or was invited to the repository — neither of which is write access to it.
 func (g *gitHub) mayWrite(ctx context.Context, repository string, review ghReview) (bool, error) {
+	return g.mayPush(ctx, repository, review.User.Login, "review "+strconv.FormatInt(review.ID, 10))
+}
+
+// mayPush says whether login may push to the repository, asked once per key: the review or the
+// review thread the login wrote, which is written once.
+func (g *gitHub) mayPush(ctx context.Context, repository, login, key string) (bool, error) {
 	g.mu.Lock()
-	known, seen := g.writers[review.ID]
+	known, seen := g.writers[key]
 	g.mu.Unlock()
 	if seen {
 		return known, nil
 	}
-	raw, err := gh(ctx, "api", permissionRequest(repository, review.User.Login), "--jq", ".user.permissions.push")
+	raw, err := gh(ctx, "api", permissionRequest(repository, login), "--jq", ".user.permissions.push")
 	if err != nil {
-		return false, fmt.Errorf("whether %s may write to %s could not be read: %w", review.User.Login, repository, err)
+		return false, fmt.Errorf("whether %s may write to %s could not be read: %w", login, repository, err)
 	}
 	may := strings.TrimSpace(string(raw)) == "true"
 	g.mu.Lock()
-	g.writers[review.ID] = may
+	g.writers[key] = may
 	g.mu.Unlock()
 	return may, nil
 }
