@@ -191,6 +191,24 @@ class FactoryGateTests(unittest.TestCase):
         self.assertEqual(re.findall(r"key: staticcheck-([0-9.]+)-", ci), [named.group(1)])
 
 
+class PythonGateTests(unittest.TestCase):
+    """`make test`, the Python part of the gate: it runs the suite through the runner, not plain discovery."""
+
+    def test_make_test_runs_the_whole_suite_through_the_runner(self):
+        # The recipe runs with nothing on PATH but a python3 that records its arguments, one per line.
+        # `-o` takes the dashboard build as done, so the recipe runs without an npm and without a build.
+        with tempfile.TemporaryDirectory() as path:
+            calls = Path(path) / "python3.argv"
+            stub = Path(path) / "python3"
+            stub.write_text(f"#!/bin/sh\nprintf '%s\\n' \"$@\" >> '{calls}'\n")
+            stub.chmod(0o755)
+            r = subprocess.run([shutil.which("make"), "-o", "factory/ui/dist/app/index.html", "test"], cwd=ROOT,
+                               env={"PATH": path, "HOME": path}, text=True, capture_output=True)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            # The runner and no argument: a module or class after it would run part of the suite.
+            self.assertEqual(calls.read_text().splitlines(), ["tests/run.py"])
+
+
 class ShimCallLogTests(ShimTest):
     """The harness itself: what the shims log has to be what a test reads back."""
 

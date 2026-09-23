@@ -510,6 +510,69 @@ func TestPausedShowsTheQueueAndStartsNothing(t *testing.T) {
 	}
 }
 
+// A pause written into the configuration is taken in at the next poll, without a restart: the run
+// that is going ends the way it would have, and not as interrupted, and nothing starts after it while
+// issues stand in the line. Unpaused the same way, the next poll claims again.
+func TestAPauseInTheConfigurationLetsTheRunFinishAndStartsNothingAfterIt(t *testing.T) {
+	t.Parallel()
+	// The hanging issue was interrupted once before, so it is resumed first and the rest of the canned
+	// queue stands behind it while it runs. Its deadline is what ends it here: that is its own ending.
+	data := filepath.Join(t.TempDir(), "data")
+	began := time.Now().UTC().Add(-time.Hour)
+	records(t, data, in("acme/backtest", record(1, hangingIssue(t), "Document the calibration procedure",
+		signalRouted, outcomeInterrupted, true, began, began.Add(time.Minute))))
+	f := start(t, config{"deadline": "10s", "poll": "50ms", "data_dir": data})
+	const going = 2
+	f.waitForTheHangingWorker(t, going)
+
+	f.configure(t, config{"paused": true})
+	f.eventually(t, 5*time.Second, "the pause to be read from the configuration", func() bool { return f.state(t) == "paused" })
+	var run apiRun
+	f.get(t, fmt.Sprintf("/api/runs/%d", going), &run)
+	if run.State != "running" {
+		t.Fatalf("run %d is %q once the pause was read, want still running: the deadline ends it, not the pause", going, run.State)
+	}
+	if ended := f.ended(t, going); ended.Outcome != outcomeTimeout {
+		t.Errorf("the run that was going ended as %q, want %q: a pause ends nothing", ended.Outcome, outcomeTimeout)
+	}
+	f.never(t, 2*time.Second, "a run started while the configuration pauses the factory",
+		func() bool { return !f.missing(t, going+1) })
+	var line apiLine
+	f.get(t, "/api/line", &line)
+	if len(line.Queue) == 0 || len(line.Now) != 0 {
+		t.Errorf("paused, the line is now=%d queue=%v, want the issues standing and nothing running", len(line.Now), keys(line.Queue))
+	}
+
+	f.configure(t, config{"paused": false})
+	f.eventually(t, 20*time.Second, "the next run once the pause is gone from the configuration",
+		func() bool { return !f.missing(t, going+1) })
+	if state := f.state(t); state == "paused" {
+		t.Errorf("the factory says it is %q after the configuration unpaused it", state)
+	}
+}
+
+// A configuration that no longer reads leaves the factory as it runs: still paused here, named once in
+// the log however many polls read it, and taken in again once it reads.
+func TestAConfigurationThatNoLongerReadsChangesNothingAndIsSaidOnce(t *testing.T) {
+	t.Parallel()
+	f := start(t, config{"paused": true, "poll": "50ms"})
+	f.rewrite(t, `{"paused": false, "data_dir": `)
+	// Twenty polls and more of the same broken file.
+	f.never(t, 2*time.Second, "a run started from a configuration that does not read",
+		func() bool { return !f.missing(t, 1) })
+	if state := f.state(t); state != "paused" {
+		t.Errorf("the factory says it is %q after its configuration stopped reading, want the paused it ran with", state)
+	}
+	said := strings.Count(f.output(t), "the factory goes on with the settings it runs with")
+	if said != 1 {
+		t.Errorf("the log names the configuration that does not read %d times, want once; the log:\n%s", said, f.output(t))
+	}
+
+	f.rewrite(t, marshal(t, config{"listen": f.address, "data_dir": f.data, "poll": "50ms",
+		"repositories": []string{"acme/edge-sensors", "acme/backtest"}, "paused": false}))
+	f.eventually(t, 20*time.Second, "the first run once the configuration reads again", func() bool { return !f.missing(t, 1) })
+}
+
 func TestASecondFactoryOnTheSameAddressStartsNothing(t *testing.T) {
 	t.Parallel()
 	first := start(t, config{"paused": true})
@@ -1048,6 +1111,7 @@ type factory struct {
 	address string
 	data    string
 	log     string
+	config  string
 }
 
 // start writes a configuration, starts the binary in fake mode and waits until it answers.
@@ -1080,6 +1144,7 @@ func launch(t *testing.T, c config, env []string, args ...string) *factory {
 		address: c["listen"].(string),
 		data:    c["data_dir"].(string),
 		log:     filepath.Join(filepath.Dir(path), "factory.log"),
+		config:  path,
 	}
 	output, err := os.Create(f.log)
 	if err != nil {
@@ -1294,6 +1359,39 @@ func writeConfig(t *testing.T, c config) string {
 		t.Fatal(err)
 	}
 	return path
+}
+
+// rewrite replaces the configuration file of a running factory with this body, the way an editor
+// saves it: written beside it and renamed over it, so a poll never reads half of it.
+func (f *factory) rewrite(t *testing.T, body string) {
+	t.Helper()
+	next := f.config + ".next"
+	if err := os.WriteFile(next, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(next, f.config); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// configure changes fields of the configuration a running factory was started with.
+func (f *factory) configure(t *testing.T, changes config) {
+	t.Helper()
+	c := config{}
+	read(t, f.config, &c)
+	for field, value := range changes {
+		c[field] = value
+	}
+	f.rewrite(t, marshal(t, c))
+}
+
+// state is what the factory says it is doing, as /api/status serves it.
+func (f *factory) state(t *testing.T) string {
+	t.Helper()
+	var status map[string]any
+	f.get(t, "/api/status", &status)
+	state, _ := status["state"].(string)
+	return state
 }
 
 func freeAddress(t *testing.T) string {

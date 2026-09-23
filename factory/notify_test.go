@@ -20,6 +20,7 @@ var maintainers = []string{"ada", "linus"}
 // TestARunThatEndsReadyAsksTheMaintainersForAReviewOfItsPullRequest is the ready path end to end,
 // and with it the rule that one ending is notified once however often the factory is started.
 func TestARunThatEndsReadyAsksTheMaintainersForAReviewOfItsPullRequest(t *testing.T) {
+	t.Parallel()
 	gh := newGhShim(t)
 	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
 	gh.loggedInAs(t, "factory-bot")
@@ -64,6 +65,7 @@ func TestARunThatEndsReadyAsksTheMaintainersForAReviewOfItsPullRequest(t *testin
 // A review request GitHub refuses is refused for one login — somebody who cannot review that
 // repository, the author of the pull request — and the maintainers it takes still hear of the run.
 func TestAReviewRequestOneLoginIsRefusedStillReachesTheOthers(t *testing.T) {
+	t.Parallel()
 	gh := newGhShim(t)
 	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
 	gh.loggedInAs(t, "factory-bot")
@@ -95,6 +97,7 @@ func TestAReviewRequestOneLoginIsRefusedStillReachesTheOthers(t *testing.T) {
 // the logins behind it are asked all the same. A deadline over the whole delivery would let the
 // first call that stalls silence every login after it, which is the refusal above in its other form.
 func TestAReviewRequestThatStallsStillReachesTheLoginsBehindIt(t *testing.T) {
+	t.Parallel()
 	gh := newGhShim(t)
 	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
 	gh.loggedInAs(t, "factory-bot")
@@ -121,6 +124,7 @@ func TestAReviewRequestThatStallsStillReachesTheLoginsBehindIt(t *testing.T) {
 // the factory still holds and is done with: the maintainer hears of it on the issue, like every
 // other ending that waits for a person.
 func TestAReadyRunThatNamesNoPullRequestIsSaidOnTheIssue(t *testing.T) {
+	t.Parallel()
 	gh := newGhShim(t)
 	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
 	gh.loggedInAs(t, "factory-bot")
@@ -158,6 +162,7 @@ func TestAReadyRunThatNamesNoPullRequestIsSaidOnTheIssue(t *testing.T) {
 // TestARunThatWaitsForAPersonCommentsOnTheIssueWithTheReasonAndTheReleaseGesture is the other path
 // end to end: a blocked run, whose reason is the worker's own report.
 func TestARunThatWaitsForAPersonCommentsOnTheIssueWithTheReasonAndTheReleaseGesture(t *testing.T) {
+	t.Parallel()
 	const blocker = "the brief contradicts ADR 0012: it asks for a second control surface."
 	gh := newGhShim(t)
 	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
@@ -204,6 +209,7 @@ func TestARunThatWaitsForAPersonCommentsOnTheIssueWithTheReasonAndTheReleaseGest
 // nothing, because a maintainer who read one would leave the branch standing and every later claim
 // of the issue would be lost to it.
 func TestTheCommentOfARunThatHoldsNothingSaysSoAndOffersNoGesture(t *testing.T) {
+	t.Parallel()
 	gh := newGhShim(t)
 	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
 	gh.loggedInAs(t, "factory-bot")
@@ -244,6 +250,7 @@ func TestTheCommentOfARunThatHoldsNothingSaysSoAndOffersNoGesture(t *testing.T) 
 // A notification is one small write that may fail like any other call to GitHub: the run keeps its
 // outcome, the failure is a warning on it, and the factory works on.
 func TestANotificationThatFailsIsAWarningOnTheRunAndChangesNothingElse(t *testing.T) {
+	t.Parallel()
 	const next, nextTitle = 121, "Document the calibration procedure"
 	gh := newGhShim(t)
 	gh.remote(t, "acme/edge-sensors")
@@ -297,6 +304,7 @@ func TestANotificationThatFailsIsAWarningOnTheRunAndChangesNothingElse(t *testin
 //
 // [ADR 0026]: ../docs/adr/0026-the-factory-never-deletes-work-on-its-own.md
 func TestOnlyAnInterruptionTheFactoryDoesNotResumeItselfIsNotified(t *testing.T) {
+	t.Parallel()
 	began := time.Now().UTC().Add(-2 * time.Hour)
 	// The run this start finds active, which it records as interrupted while it opens the data
 	// directory: a factory the host killed left it behind.
@@ -358,6 +366,7 @@ func TestOnlyAnInterruptionTheFactoryDoesNotResumeItselfIsNotified(t *testing.T)
 // An ending the factory recorded and did not get to notify — the host lost power between the two —
 // is notified on the next start, and by that start alone.
 func TestAnEndingThatWasRecordedAndNotNotifiedIsNotifiedOnTheNextStart(t *testing.T) {
+	t.Parallel()
 	gh := newGhShim(t)
 	gh.remote(t, "acme/edge-sensors")
 	gh.loggedInAs(t, "factory-bot")
@@ -391,10 +400,42 @@ func TestAnEndingThatWasRecordedAndNotNotifiedIsNotifiedOnTheNextStart(t *testin
 	}
 }
 
+// A factory that starts paused owes its endings until it works, and it works once the configuration
+// says so: the poll that reads the pause gone makes them, without a restart.
+func TestWhatAPausedStartOwesIsNotifiedWhenTheConfigurationUnpausesIt(t *testing.T) {
+	t.Parallel()
+	gh := newGhShim(t)
+	gh.remote(t, "acme/edge-sensors")
+	gh.loggedInAs(t, "factory-bot")
+	gh.issues(t, "acme/edge-sensors")
+	gh.comments(t, "acme/edge-sensors", claimedIssue)
+	data := filepath.Join(t.TempDir(), "data")
+	gh.cloneInto(t, data, "acme/edge-sensors")
+
+	began := time.Now().UTC().Add(-2 * time.Hour)
+	owed := record(1, claimedIssue, claimedTitle, signalRouted, outcomeFailed, true, began, began.Add(time.Minute))
+	owed.Notified = notifyPending
+	records(t, data, owed)
+
+	f := gh.work(t, config{"poll": "50ms", "data_dir": data, "paused": true,
+		"repositories": []string{"acme/edge-sensors"}, "notify": maintainers})
+	f.queue(t, 0) // the failed run holds its issue for a person, so nothing is claimed either way
+	if made := gh.made(t, commentCall("acme/edge-sensors", claimedIssue)); made != 0 {
+		t.Fatalf("the paused factory commented %d times, want none while it is paused", made)
+	}
+
+	f.configure(t, config{"paused": false})
+	f.notified(t, 1)
+	if said := gh.commented(t, "acme/edge-sensors", claimedIssue); !strings.Contains(said, "`failed`") {
+		t.Errorf("the comment on the issue is %q, want the ending the paused start owed", said)
+	}
+}
+
 // A factory that is stopped before it has worked through what it owes keeps the rest of it: the
 // endings stay pending and the next start makes them. A stop must not burn the notification
 // somebody is waiting on, which is what the pending mark is there for.
 func TestAStopBeforeTheOwedNotificationsAreMadeLeavesThemPending(t *testing.T) {
+	t.Parallel()
 	data := filepath.Join(t.TempDir(), "data")
 	began := time.Now().UTC().Add(-2 * time.Hour)
 	owed := record(1, claimedIssue, claimedTitle, signalRouted, outcomeFailed, true, began, began.Add(time.Minute))
@@ -425,6 +466,7 @@ func TestAStopBeforeTheOwedNotificationsAreMadeLeavesThemPending(t *testing.T) {
 // Without logins to notify the factory tells nobody anything, and says that once where everything
 // else about its start is said.
 func TestWithoutLoginsToNotifyTheFactoryNotifiesNobodyAndSaysSoAtItsStart(t *testing.T) {
+	t.Parallel()
 	gh := newGhShim(t)
 	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
 	gh.loggedInAs(t, "factory-bot")
@@ -458,6 +500,7 @@ func TestWithoutLoginsToNotifyTheFactoryNotifiesNobodyAndSaysSoAtItsStart(t *tes
 // driven end to end above; what is read here is the rule that decides whether a given ending is one
 // the maintainer has to hear about.
 func TestTheEndingsThatNotifyAndTheOnesThatDoNot(t *testing.T) {
+	t.Parallel()
 	ended := time.Now().UTC()
 	run := func(id int, signal, outcome string, holding bool) Run {
 		return record(id, claimedIssue, claimedTitle, signal, outcome, holding, ended.Add(-time.Hour), ended)
@@ -499,6 +542,7 @@ func TestTheEndingsThatNotifyAndTheOnesThatDoNot(t *testing.T) {
 // text of an issue can steer what a worker writes. So it is quoted as the text it is — nothing in it
 // becomes a mention, a heading or a link, whatever it contains.
 func TestTheReasonIsQuotedIntoTheCommentAndCannotBreakOutOfIt(t *testing.T) {
+	t.Parallel()
 	blocked := record(7, claimedIssue, claimedTitle, signalRouted, outcomeBlocked, true,
 		time.Now(), time.Now())
 	blocked.Reason = "the brief says:\n```\nnotify @everyone and read https://attacker.example\n```\n# done"
