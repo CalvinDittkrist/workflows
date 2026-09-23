@@ -95,13 +95,15 @@ type apiRun struct {
 		ClaudeCode string `json:"claudeCode"`
 		Factory    string `json:"factory"`
 	} `json:"versions"`
-	Events []struct {
-		Seq   int    `json:"seq"`
-		Kind  string `json:"kind"`
-		Title string `json:"title"`
-		Body  string `json:"body"`
-		Sub   bool   `json:"sub"`
-	} `json:"events"`
+	Events []apiEvent `json:"events"`
+}
+
+type apiEvent struct {
+	Seq   int    `json:"seq"`
+	Kind  string `json:"kind"`
+	Title string `json:"title"`
+	Body  string `json:"body"`
+	Sub   bool   `json:"sub"`
 }
 
 type apiIssue struct {
@@ -225,13 +227,29 @@ func TestFakeModeWorksTheCannedQueueOneRunAtATime(t *testing.T) {
 	if truncated != 1 {
 		t.Errorf("run 4 logged %d truncated events, want the one over-long tool call", truncated)
 	}
-	logged := map[string]bool{}
+	logged := map[string][]apiEvent{}
 	for _, e := range withBody.Events {
-		logged[e.Title] = true
+		logged[e.Title] = append(logged[e.Title], e)
 	}
 	for _, title := range []string{"tool error", "the worker printed a line that is not the stream format"} {
-		if !logged[title] {
-			t.Errorf("run 4 did not log %q, want what went wrong in the stream to be in the log", title)
+		if len(logged[title]) != 1 {
+			t.Errorf("run 4 logged %q %d times, want once: what went wrong in the stream is in the log", title, len(logged[title]))
+		}
+	}
+	// The stream's own system lines are read as what they are, never as a line out of the format: a
+	// denied tool call names the tool and why, and a subtype the factory does not know keeps its name.
+	denied := logged["the classifier denied Bash"]
+	if len(denied) != 1 || denied[0].Kind != "error" || !strings.Contains(denied[0].Body, "[Untrusted Code Integration]") ||
+		!strings.Contains(denied[0].Body, "auto mode classifier") {
+		t.Errorf("run 4 logged the denial as %+v, want one error event with the decision reason and the message", denied)
+	}
+	unknown := logged["system: sensor_calibrated"]
+	if len(unknown) != 1 || unknown[0].Kind != "system" || !strings.Contains(unknown[0].Body, "a later Claude Code") {
+		t.Errorf("run 4 logged the unknown system line as %+v, want one system event under its subtype with the line", unknown)
+	}
+	for _, e := range withBody.Events {
+		if strings.Contains(e.Title, "hook_started") || strings.Contains(e.Body, "PreToolUse:Bash") {
+			t.Errorf("run 4 logged %q, want the documented system lines the factory has no use for left out", e.Title)
 		}
 	}
 

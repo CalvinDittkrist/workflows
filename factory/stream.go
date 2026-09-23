@@ -9,25 +9,47 @@ import (
 // The worker reports nothing to the factory. Everything the factory knows about a run it reads from
 // the stream `claude -p --output-format stream-json --verbose` prints, one JSON object per line
 // (recorded from a real headless worker on 2026-09-21 with Claude Code 2.1.278).
+//
+// Message is an object on an assistant or user line and a string on a permission_denied line, so it
+// is read once the type of the line is known.
 type streamLine struct {
-	Type           string  `json:"type"`
-	Subtype        string  `json:"subtype"`
-	HookName       string  `json:"hook_name"`
-	Outcome        string  `json:"outcome"`
-	Model          string  `json:"model"`
-	SessionID      string  `json:"session_id"`
-	PermissionMode string  `json:"permissionMode"`
-	Parent         *string `json:"parent_tool_use_id"`
-	NumTurns       int     `json:"num_turns"`
-	TotalCostUSD   float64 `json:"total_cost_usd"`
-	IsError        bool    `json:"is_error"`
-	TerminalReason string  `json:"terminal_reason"`
-	Result         any     `json:"result"`
-	Usage          usage   `json:"usage"`
-	Message        struct {
-		Content json.RawMessage `json:"content"`
-		Usage   usage           `json:"usage"`
-	} `json:"message"`
+	Type               string          `json:"type"`
+	Subtype            string          `json:"subtype"`
+	HookName           string          `json:"hook_name"`
+	Outcome            string          `json:"outcome"`
+	Model              string          `json:"model"`
+	SessionID          string          `json:"session_id"`
+	PermissionMode     string          `json:"permissionMode"`
+	Parent             *string         `json:"parent_tool_use_id"`
+	NumTurns           int             `json:"num_turns"`
+	TotalCostUSD       float64         `json:"total_cost_usd"`
+	IsError            bool            `json:"is_error"`
+	TerminalReason     string          `json:"terminal_reason"`
+	Result             any             `json:"result"`
+	Usage              usage           `json:"usage"`
+	ToolName           string          `json:"tool_name"`
+	DecisionReason     string          `json:"decision_reason"`
+	AgentID            string          `json:"agent_id"`
+	DecisionReasonType string          `json:"decision_reason_type"`
+	Message            json.RawMessage `json:"message"`
+}
+
+// message is what an assistant or user line carries in its message.
+type message struct {
+	Content json.RawMessage `json:"content"`
+	Usage   usage           `json:"usage"`
+}
+
+// The system subtypes the stream-json reference documents (checked on 2026-09-23 against
+// https://code.claude.com/docs/en/agent-sdk/typescript.md) that the factory does not record. A system
+// line of any other subtype is logged under its subtype, so a line a later Claude Code adds is seen
+// rather than lost or mistaken for a line out of the format.
+var quietSubtypes = map[string]bool{
+	"compact_boundary": true, "informational": true, "worker_shutting_down": true, "plugin_install": true,
+	"status": true, "task_notification": true, "hook_started": true, "hook_progress": true,
+	"task_started": true, "task_progress": true, "task_updated": true, "background_tasks_changed": true,
+	"thinking_tokens": true, "files_persisted": true, "local_command_output": true, "commands_changed": true,
+	"api_retry": true,
 }
 
 type usage struct {
@@ -60,7 +82,7 @@ var stages = map[string]string{
 // result line the totals of the session.
 func (f *Factory) ingest(r *Run, line []byte) {
 	var m streamLine
-	if json.Unmarshal(line, &m) != nil {
+	if json.Unmarshal(line, &m) != nil || m.Type == "" {
 		f.runs.event(r, Event{Kind: "error", Title: "the worker printed a line that is not the stream format", Body: string(line)})
 		return
 	}
@@ -73,15 +95,28 @@ func (f *Factory) ingest(r *Run, line []byte) {
 	case m.Type == "system" && m.Subtype == "init":
 		f.runs.update(r, func() { r.Model, r.SessionID = m.Model, m.SessionID })
 		f.runs.event(r, Event{Kind: "init", Title: "session " + m.Model + ", permission mode " + m.PermissionMode, Body: m.SessionID})
+	case m.Type == "system" && m.Subtype == "permission_denied":
+		// The session goes on after a denial, which the model is told of in the tool result, so it is
+		// logged as an error without becoming the reason the run ends. A denial in a subagent names
+		// the agent rather than the Agent call it runs under.
+		denier := "the classifier"
+		if m.DecisionReasonType != "classifier" {
+			denier = strings.TrimSpace("a permission " + m.DecisionReasonType)
+		}
+		f.runs.event(r, Event{Kind: "error", Title: denier + " denied " + m.ToolName,
+			Body: strings.TrimSpace(m.DecisionReason + "\n" + blockText(m.Message)), Sub: sub || m.AgentID != ""})
+	case m.Type == "system" && !quietSubtypes[m.Subtype]:
+		f.runs.event(r, Event{Kind: "system", Title: "system: " + m.Subtype, Body: string(line), Sub: sub})
 	case m.Type == "assistant":
 		// What a message started from is its input plus everything read from the cache: the context it
 		// was answered with. A subagent has a context of its own, which says nothing about how full the
 		// worker's is, so only the worker's own messages count.
+		msg := body(m.Message)
 		if !sub {
-			u := m.Message.Usage
+			u := msg.Usage
 			f.runs.raiseContextPeak(r, u.Input+u.CacheCreation+u.CacheRead)
 		}
-		for _, b := range blocks(m.Message.Content) {
+		for _, b := range blocks(msg.Content) {
 			switch b.Type {
 			case "text":
 				f.runs.event(r, Event{Kind: "text", Title: firstLine(b.Text), Body: b.Text, Sub: sub})
@@ -96,7 +131,7 @@ func (f *Factory) ingest(r *Run, line []byte) {
 			}
 		}
 	case m.Type == "user":
-		for _, b := range blocks(m.Message.Content) {
+		for _, b := range blocks(body(m.Message).Content) {
 			if b.Type == "tool_result" && b.IsError {
 				f.error(r, Event{Kind: "error", Title: "tool error", Body: blockText(b.Content), Sub: sub})
 			}
@@ -172,6 +207,12 @@ func pullRequest(detail, repository string) (url, reason string) {
 // undecorate strips the markdown around a line, so the text of the line can be read as text.
 func undecorate(line string) string {
 	return strings.TrimSpace(strings.Trim(strings.TrimSpace(line), "*_`#>- \t"))
+}
+
+func body(raw json.RawMessage) message {
+	var parsed message
+	_ = json.Unmarshal(raw, &parsed) // a line without a message object has no content and no usage
+	return parsed
 }
 
 func blocks(raw json.RawMessage) []block {
