@@ -125,40 +125,59 @@ func TestARunIsCancelledWhenTheRoutingLabelIsTakenOffItsIssue(t *testing.T) {
 // An issue the factory holds whose runs are over is let go on the same three decisions, and this is
 // where they are read: the pull request of its run merged or closed, the issue closed, the routing
 // label taken off it. An issue that reached a pull request keeps its assignee — the work is with a
-// person from then on — and a branch that carries commits stays on the remote whatever the decision
-// was.
+// person from then on. A branch that carries commits stays on the remote whatever the decision was,
+// unless its pull request was merged at the commit the branch is at: then its work is in the base,
+// whatever the merge method, and the branch goes like one that holds nothing.
 func TestAnIdleHeldIssueIsLetGoOnTheDecisionGitHubCarries(t *testing.T) {
 	t.Parallel()
 	for _, one := range []struct {
 		name            string
 		blocked         bool // the run reports blocked, so the issue never reached a pull request
-		decide          func(t *testing.T, gh *ghShim, held issueJSON)
+		decide          func(t *testing.T, gh *ghShim, held issueJSON, work, base string)
 		assigneeRemoved bool
+		branchRemoved   bool
 	}{
 		{
 			name: "the pull request was merged",
-			decide: func(t *testing.T, gh *ghShim, held issueJSON) {
-				gh.pull(t, "acme/edge-sensors", claimedIssue, "closed", true)
+			decide: func(t *testing.T, gh *ghShim, held issueJSON, work, base string) {
+				gh.pullMergedAt(t, "acme/edge-sensors", claimedIssue, work)
+				gh.issue(t, "acme/edge-sensors", held)
+			},
+			branchRemoved: true,
+		},
+		{
+			name: "the issue was closed by its merged pull request",
+			decide: func(t *testing.T, gh *ghShim, held issueJSON, work, base string) {
+				gh.pullMergedAt(t, "acme/edge-sensors", claimedIssue, work)
+				gh.issue(t, "acme/edge-sensors", closedIssue(held))
+			},
+			branchRemoved: true,
+		},
+		{
+			name: "the pull request was merged at a commit the branch has moved on from",
+			decide: func(t *testing.T, gh *ghShim, held issueJSON, work, base string) {
+				gh.pullMergedAt(t, "acme/edge-sensors", claimedIssue, base)
 				gh.issue(t, "acme/edge-sensors", held)
 			},
 		},
 		{
 			name: "the pull request was closed",
-			decide: func(t *testing.T, gh *ghShim, held issueJSON) {
+			decide: func(t *testing.T, gh *ghShim, held issueJSON, work, base string) {
 				gh.pull(t, "acme/edge-sensors", claimedIssue, "closed", false)
 				gh.issue(t, "acme/edge-sensors", held)
 			},
 		},
 		{
 			name: "the issue was closed",
-			decide: func(t *testing.T, gh *ghShim, held issueJSON) {
+			decide: func(t *testing.T, gh *ghShim, held issueJSON, work, base string) {
+				gh.pull(t, "acme/edge-sensors", claimedIssue, "open", false)
 				gh.issue(t, "acme/edge-sensors", closedIssue(held))
 			},
 		},
 		{
 			name:    "the routing label was taken off an issue without a pull request",
 			blocked: true,
-			decide: func(t *testing.T, gh *ghShim, held issueJSON) {
+			decide: func(t *testing.T, gh *ghShim, held issueJSON, work, base string) {
 				gh.issue(t, "acme/edge-sensors", assignedTo(
 					openIssue(claimedIssue, claimedTitle, time.Now().UTC().Add(-72*time.Hour), readyLabel), "factory-bot"))
 			},
@@ -180,6 +199,7 @@ func TestAnIdleHeldIssueIsLetGoOnTheDecisionGitHubCarries(t *testing.T) {
 
 			data := filepath.Join(t.TempDir(), "data")
 			clone := gh.cloneInto(t, data, "acme/edge-sensors")
+			base := gh.head(t, "acme/edge-sensors", "main")
 
 			f := gh.work(t, config{"poll": "50ms", "deadline": "90s", "data_dir": data,
 				"repositories": []string{"acme/edge-sensors"}})
@@ -194,23 +214,40 @@ func TestAnIdleHeldIssueIsLetGoOnTheDecisionGitHubCarries(t *testing.T) {
 			work := committed(t, f, worktree, "worked.md")
 
 			one.decide(t, gh, assignedTo(
-				openIssue(claimedIssue, claimedTitle, time.Now().UTC().Add(-72*time.Hour)), "factory-bot"))
+				openIssue(claimedIssue, claimedTitle, time.Now().UTC().Add(-72*time.Hour)), "factory-bot"), work, base)
 
+			var let apiRun
 			f.eventually(t, 30*time.Second, "the issue to be let go", func() bool {
-				var let apiRun
+				let = apiRun{}
 				f.get(t, "/api/runs/1", &let)
 				return let.LetGoAt != nil
 			})
-			// The host keeps nothing of it, and the remote keeps everything: the branch carries the
-			// commit of the run, which is what the pull request and every later run of it stand on.
+			// The host keeps nothing of it.
 			if _, err := os.Stat(worktree); err == nil {
 				t.Errorf("the worktree %s is still on the host after the issue was let go", worktree)
 			}
 			if localBranch(t, clone, claimedBranch) {
 				t.Errorf("the local branch %s is still in %s after the issue was let go", claimedBranch, clone)
 			}
-			if head := gh.head(t, "acme/edge-sensors", claimedBranch); head != work {
-				t.Errorf("%s of the remote is at %q, want the commit the run made (%s): the worktree is pushed before it goes, and a branch that carries a commit stays",
+			// The remote keeps the branch as long as it carries work the base does not have, which is
+			// what the pull request and every later run of it stand on.
+			removal := "api --method DELETE repos/acme/edge-sensors/git/refs/heads/" + claimedBranch
+			head := gh.head(t, "acme/edge-sensors", claimedBranch)
+			if one.branchRemoved {
+				if head != "" || gh.made(t, removal) != 1 {
+					t.Errorf("%s is still on the remote at %q, want it removed once: its pull request was merged at that commit", claimedBranch, head)
+				}
+				said := ""
+				for _, e := range let.Events {
+					if e.Title == "removed "+claimedBranch+" from the remote" {
+						said = e.Body
+					}
+				}
+				if !strings.Contains(said, "was merged") {
+					t.Errorf("the run says %q of the removal, want the merged pull request named as the reason", said)
+				}
+			} else if head != work || gh.made(t, removal) != 0 {
+				t.Errorf("%s of the remote is at %q, want the commit the run made (%s): the worktree is pushed before it goes, and a branch that carries a commit no merge stands for stays",
 					claimedBranch, head, work)
 			}
 			removed := fmt.Sprintf("issue edit %d --repo acme/edge-sensors --remove-assignee factory-bot", claimedIssue)

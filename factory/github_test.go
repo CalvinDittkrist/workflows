@@ -780,6 +780,15 @@ func (g *ghShim) pullOf(t *testing.T, repository string, number int, state strin
 			"head": map[string]any{"ref": branch, "repo": map[string]any{"full_name": head}}}))
 }
 
+// pullMergedAt is a pull request of the claimed branch that GitHub reports as merged, with the
+// commit the branch was at when it was.
+func (g *ghShim) pullMergedAt(t *testing.T, repository string, number int, sha string) {
+	t.Helper()
+	g.answer(t, fmt.Sprintf("api repos/%s/pulls/%d", repository, number),
+		marshal(t, map[string]any{"number": number, "state": "closed", "merged": true,
+			"head": map[string]any{"ref": claimedBranch, "sha": sha, "repo": map[string]any{"full_name": repository}}}))
+}
+
 // unassigns is the answer to the one edit that takes this host off an issue it lets go, so a removal
 // the factory does not make exactly that way is a call the shim has no answer for.
 func (g *ghShim) unassigns(t *testing.T, repository string, issue int, login string) {
