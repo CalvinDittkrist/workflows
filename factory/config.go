@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 )
@@ -21,6 +23,11 @@ type Config struct {
 	Poll       string   `json:"poll"`
 	DataDir    string   `json:"data_dir"`
 	WorkerArgs []string `json:"worker_args"`
+	// WorkerEnv is the worker knobs every run of this host is given: the variables the worker
+	// plugin's scripts read for themselves, such as WF_PR_BOT_REVIEWERS, by name and value. They are
+	// the knobs a local claim takes with --env and nothing else: what a run is — its mode, its
+	// issue, its base — is the factory's, and a name outside the list is refused (workerKnobs).
+	WorkerEnv map[string]string `json:"worker_env"`
 	// Paused is a pointer because its default is not the zero value: a file that does not name it
 	// runs paused, so working a line unattended is always something the operator wrote down.
 	Paused *bool `json:"paused"`
@@ -83,6 +90,7 @@ type Settings struct {
 	Poll         time.Duration
 	DataDir      string
 	WorkerArgs   []string
+	WorkerEnv    map[string]string
 	Paused       bool
 	Notify       []string
 	Repositories []Connected
@@ -100,7 +108,7 @@ const (
 	defaultPoll         = 60 * time.Second
 	defaultQuotaMinimum = 12
 
-	configFields = "listen, label, deadline, poll, data_dir, worker_args, paused, notify, repositories, quota_axi, quota_minimum"
+	configFields = "listen, label, deadline, poll, data_dir, worker_args, worker_env, paused, notify, repositories, quota_axi, quota_minimum"
 )
 
 // A repository is named as owner/name; the factory never takes a URL or a local path, because the
@@ -161,6 +169,15 @@ func factoryOwns(arg string) string {
 	}
 	return ""
 }
+
+// workerKnobs are the names worker_env may set: the variables the worker plugin's scripts read for
+// themselves, which is the list the orchestrator's claim.sh accepts for --env (env_accepted), and a
+// drift test holds the two together. A worker of the factory runs with no bot reviewer, on a host
+// whose GitHub account no reviewer is connected to, by "WF_PR_BOT_REVIEWERS": "" — an empty value
+// is a setting of its own, as it is on a claim. What a run is stays out of the list: WF_MODE,
+// WF_ISSUE, WF_BASE_BRANCH and WF_REVIEW_MANDATE are the factory's (workerVariables), and a
+// variable of the host's shell is not a setting of the workflow.
+var workerKnobs = []string{"WF_REVIEWERS", "WF_REVIEW_ROUNDS", "WF_CI_REPAIR_ROUNDS", "WF_PR_BOT_REVIEWERS", "WF_PR_REVIEW_WAIT", "WF_HANDOFF_TOKENS", "WF_CONTEXT_MAX_AGE", "WF_HANDOFF_SESSION_MS", "WF_HANDOFF_POLL_SECONDS", "WF_DOCS_TIMEOUT"}
 
 // modelOf is the model a worker started with these arguments runs on: the last --model among them, as
 // either spelling of the flag, and the worker agent's own model when they name none.
@@ -254,6 +271,13 @@ func Load(path string) (Settings, error) {
 			return bad("worker_args carries %s, which the factory gives the worker itself; remove it — worker_args adds arguments to a run, it cannot replace the ones the run is defined by", flag)
 		}
 	}
+	// The names are read in order, so the one the error names is the same on every start.
+	for _, name := range slices.Sorted(maps.Keys(c.WorkerEnv)) {
+		if !slices.Contains(workerKnobs, name) {
+			return bad("worker_env carries %s, which is not a worker knob; the names are %s, and an empty value is a setting of its own (\"WF_PR_BOT_REVIEWERS\": \"\" waits for no bot review)", name, strings.Join(workerKnobs, ", "))
+		}
+	}
+	s.WorkerEnv = c.WorkerEnv
 	named := map[string]bool{}
 	for _, who := range c.Notify {
 		// The login reaches gh as an argument and a comment as a mention, so a spelling GitHub does

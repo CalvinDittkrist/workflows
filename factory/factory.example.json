@@ -5,6 +5,7 @@
   "poll": "60s",
   "data_dir": "/var/lib/factory",
   "worker_args": [],
+  "worker_env": {},
   "paused": true,
   "notify": [
     "CalvinDittkrist"

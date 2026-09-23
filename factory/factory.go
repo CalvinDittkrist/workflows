@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -929,7 +930,7 @@ func (f *Factory) worker(ctx context.Context, entry Entry, claim claimed) (*exec
 		args := []string{"scripted-worker", issue.scenario, issue.Repository, strconv.Itoa(issue.Number)}
 		return exec.CommandContext(ctx, f.self, append(args, f.settings.WorkerArgs...)...), nil
 	}
-	variables := workerVariables(entry, claim)
+	variables := workerVariables(entry, claim, f.settings.WorkerEnv)
 	settings, err := workerSettings(variables)
 	if err != nil {
 		return nil, err
@@ -1011,8 +1012,11 @@ func workerSettings(env map[string]string) (string, error) {
 	return string(settings), nil
 }
 
-// workerVariables is the env block of those settings: what this one session is, and nothing a host
-// may disagree with.
+// workerVariables is the env block of those settings: the worker knobs the host's configuration sets
+// for every run (worker_env, the same knobs a local claim takes with --env), and then what this one
+// session is, which nothing a host writes may disagree with. The knobs go in first, so the session's
+// own keys are written over them and stay what this function says, however the accepted names ever
+// change — the order the orchestrator's claim.sh keeps.
 //
 // WF_REVIEW_MANDATE is that for a follow-up run: the driver's word that this session was started to
 // answer a review, which is what the worker's repair.sh takes for the count of repair rounds to
@@ -1023,14 +1027,18 @@ func workerSettings(env map[string]string) (string, error) {
 // queued for and dispatched once for. One review is one new mandate on the pull request: the repair
 // record keeps the mandate its count was started for, so the session that answers the review has the
 // rounds of that review and the rounds its own CI stage then drives cannot hand it more.
-func workerVariables(entry Entry, claim claimed) map[string]string {
-	variables := map[string]string{
+func workerVariables(entry Entry, claim claimed, knobs map[string]string) map[string]string {
+	variables := maps.Clone(knobs)
+	if variables == nil {
+		variables = map[string]string{}
+	}
+	maps.Copy(variables, map[string]string{
 		"WF_MODE":                              "manual",
 		"WF_ISSUE":                             strconv.Itoa(entry.Issue.Number),
 		"WF_BASE_BRANCH":                       claim.base,
 		"CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1",
 		"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE":      compactPercentage,
-	}
+	})
 	if entry.Signal == signalChangesRequested {
 		variables["WF_REVIEW_MANDATE"] = entry.SignalAt.UTC().Format(time.RFC3339)
 	}

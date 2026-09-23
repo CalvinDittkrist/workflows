@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -176,6 +177,63 @@ func TestAClaimOfARepositoryWithItsOwnBaseCutsAndWorksFromThatBase(t *testing.T)
 	}
 	if base := workers[0].settings(t).Env["WF_BASE_BRANCH"]; base != "dev" {
 		t.Errorf("the worker's settings carry WF_BASE_BRANCH=%q; it would review against %[1]s a branch cut from dev, and open its pull request against it", base)
+	}
+}
+
+// A host sets the worker knobs of its runs in its configuration, and they reach the session the way
+// a local claim's --env does: in the env block of --settings, where they win over the repository's
+// own settings for that session. The one this exists for is a host whose GitHub account no bot
+// reviewer reviews the pull requests of: with WF_PR_BOT_REVIEWERS set to nothing, its worker waits
+// for no review that is not coming. An empty value is a setting, not an absence, and what the run
+// is stays the factory's whatever the file says.
+func TestTheHostsWorkerKnobsReachTheSessionBesideWhatTheRunIs(t *testing.T) {
+	t.Parallel()
+	gh := newGhShim(t)
+	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
+	gh.loggedInAs(t, "factory-bot")
+	gh.assigns(t, "acme/edge-sensors", claimedIssue, "factory-bot")
+	gh.workerReports(t, "acme/edge-sensors", claimedIssue)
+
+	data := filepath.Join(t.TempDir(), "data")
+	gh.cloneInto(t, data, "acme/edge-sensors")
+	f := gh.work(t, config{"poll": "50ms", "deadline": "90s", "data_dir": data,
+		"repositories": []string{"acme/edge-sensors"},
+		"worker_env":   map[string]string{"WF_PR_BOT_REVIEWERS": "", "WF_PR_REVIEW_WAIT": "5"}})
+	run := f.ended(t, 1)
+
+	if run.Outcome != "ready" {
+		t.Fatalf("the run ended as %q (%s), want ready; the factory's log:\n%s", run.Outcome, run.Reason, f.output(t))
+	}
+	workers := gh.workers(t)
+	if len(workers) != 1 {
+		t.Fatalf("the factory started %d workers, want one", len(workers))
+	}
+	env := workers[0].settings(t).Env
+	if bots, set := env["WF_PR_BOT_REVIEWERS"]; !set || bots != "" {
+		t.Errorf("the worker's settings carry WF_PR_BOT_REVIEWERS=%q (set: %v), want the empty value the host configured: its worker would wait the review window for a bot that never reviews this host's pull requests", bots, set)
+	}
+	if wait := env["WF_PR_REVIEW_WAIT"]; wait != "5" {
+		t.Errorf("the worker's settings carry WF_PR_REVIEW_WAIT=%q, want the host's 5", wait)
+	}
+	if env["WF_MODE"] != "manual" || env["WF_ISSUE"] != strconv.Itoa(claimedIssue) || env["WF_BASE_BRANCH"] != "main" {
+		t.Errorf("the worker's settings carry %v; the mode, the issue and the base are the run's own and stay beside the host's knobs", env)
+	}
+}
+
+// The knobs a host may set are the ones a local claim may set, and no other: the list is the
+// orchestrator's (env_accepted in claim.sh), read out of the script, so a knob added to one driver
+// fails here until the other follows ([ADR 0022]).
+//
+// [ADR 0022]: ../docs/adr/0022-the-factory-is-a-second-driver-over-the-worker-pipeline.md
+func TestTheWorkerKnobsAgreeWithTheOrchestratorsClaim(t *testing.T) {
+	t.Parallel()
+	script := readFile(t, abs(t, filepath.Join("..", "plugins", "orchestrator", "scripts", "claim.sh")))
+	found := regexp.MustCompile(`(?m)^env_accepted="([A-Z0-9_ ]+)"$`).FindStringSubmatch(script)
+	if found == nil {
+		t.Fatalf("the orchestrator's claim.sh names no env_accepted; the factory restates that list and cannot be held to it")
+	}
+	if accepted := strings.Fields(found[1]); !slices.Equal(accepted, workerKnobs) {
+		t.Errorf("worker_env accepts %v, the local claim's --env accepts %v; the two drivers set the same knobs of the one worker", workerKnobs, accepted)
 	}
 }
 

@@ -128,6 +128,7 @@ The factory is configured by one JSON file and nothing else: no environment vari
 | `poll` | `60s` | How often GitHub is asked for the line, as a Go duration. |
 | `data_dir` | none, required | Where the clones, the run records and the locks live ([The data directory](#the-data-directory)). |
 | `worker_args` | `[]` | Arguments added to the worker's `claude` command line, such as `["--model", "opus"]`. `--settings`, `--agent`, `--permission-mode`, `--output-format`, `-p` and `--print` are refused: the factory sets them. A `--plugin-dir` here loads the worker from that directory instead of the installed plugin; no run then records a worker version and every one carries a warning. |
+| `worker_env` | `{}` | Worker knobs every run of this host is given, by name and value: the variables of the [README's table](../README.md#configuration) that a worker session reads itself, the same names a local claim takes with `--env` (`WF_REVIEWERS`, `WF_REVIEW_ROUNDS`, `WF_CI_REPAIR_ROUNDS`, `WF_PR_BOT_REVIEWERS`, `WF_PR_REVIEW_WAIT`, `WF_HANDOFF_TOKENS`, `WF_CONTEXT_MAX_AGE`, `WF_HANDOFF_SESSION_MS`, `WF_HANDOFF_POLL_SECONDS`, `WF_DOCS_TIMEOUT`); any other name is refused. They ride in the `env` block of the worker's `--settings`, so they win over the same variable in a repository's `.claude/settings.json` for that session, and an empty value is a setting of its own. `{"WF_PR_BOT_REVIEWERS": ""}` is the one for a host whose machine user no bot reviews the pull requests of: Codex reviews automatically only what a connected account opens, and without it every run waits the whole `WF_PR_REVIEW_WAIT` for a review that never comes. |
 | `paused` | `true` | A paused factory shows the line and claims, resumes and writes nothing. A file that does not name `paused` is paused, so an unattended line is always something you wrote down. |
 | `notify` | `[]` | GitHub logins, without the `@`, that are asked for a review when a run ends `ready` and mentioned in a comment on the issue when it waits for a person. Empty: nobody is notified, and the log says so on start. |
 | `repositories` | none, at least one | The connected repositories, each `"owner/name"` or `{"name": "owner/name", "base": "dev"}` when this host branches off something other than the base the repository names (its `WF_BASE_BRANCH`, else its default branch). |
@@ -146,6 +147,7 @@ A complete configuration, written to `/etc/factory/factory.json` (root owns it, 
   "poll": "60s",
   "data_dir": "/var/lib/factory",
   "worker_args": [],
+  "worker_env": {"WF_PR_BOT_REVIEWERS": ""},
   "paused": false,
   "notify": ["yourname"],
   "quota_axi": "/usr/bin/quota-axi",

@@ -558,6 +558,13 @@ func TestAnInvalidConfigurationIsRefusedWithTheFix(t *testing.T) {
 		{"worker arguments that replace the prompt", `{"data_dir":"data","repositories":["a/b"],"worker_args":["-p","/worker:pr"]}`, `worker_args carries -p`},
 		{"worker arguments that replace the permission mode", `{"data_dir":"data","repositories":["a/b"],"worker_args":["--permission-mode","plan"]}`, `worker_args carries --permission-mode`},
 		{"worker arguments that replace the output format", `{"data_dir":"data","repositories":["a/b"],"worker_args":["--output-format","text"]}`, `worker_args carries --output-format`},
+		// worker_env sets the knobs a worker reads for itself and nothing else: what a run is (its
+		// mode, its issue, its base) is the factory's, and the host's shell is not a setting of the
+		// workflow. The error lists the names, because the operator reads it in the journal.
+		{"worker variable that is the run's own", `{"data_dir":"data","repositories":["a/b"],"worker_env":{"WF_MODE":"yolo"}}`, `worker_env carries WF_MODE, which is not a worker knob; the names are WF_REVIEWERS, WF_REVIEW_ROUNDS`},
+		{"worker variable that is the base branch", `{"data_dir":"data","repositories":["a/b"],"worker_env":{"WF_BASE_BRANCH":"dev"}}`, `worker_env carries WF_BASE_BRANCH, which is not a worker knob`},
+		{"worker variable of the shell", `{"data_dir":"data","repositories":["a/b"],"worker_env":{"PATH":"/tmp"}}`, `worker_env carries PATH, which is not a worker knob`},
+		{"worker variable that is not a string", `{"data_dir":"data","repositories":["a/b"],"worker_env":{"WF_PR_REVIEW_WAIT":600}}`, `see factory/factory.example.json`},
 		{"repository object with an unknown field", `{"data_dir":"data","repositories":[{"name":"a/b","branch":"dev"}]}`, `a repository is "owner/name" or {"name": "owner/name", "base": "dev"}`},
 		// The quota check runs the binary the operator installed, never a name PATH or npx resolves.
 		{"quota tool by name", `{"data_dir":"data","repositories":["a/b"],"quota_axi":"quota-axi"}`, `quota_axi "quota-axi" is not an absolute path`},
