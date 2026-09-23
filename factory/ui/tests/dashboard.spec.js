@@ -133,9 +133,10 @@ test('the selected run shows what it cost, how full its context came and what it
   page,
 }) => {
   await page.goto(working(`/#run=${WARNED_RUN}`))
-  // Its two sessions, the work session and the fix session of its conflict, are summed.
-  await expect(detail(page).locator('.facts').first()).toContainText('$8.36')
-  await expect(detail(page).locator('.facts').first()).toContainText('46 turns')
+  // Its three sessions, the work session, the author session of its pr stage and the fix session of
+  // its conflict, are summed.
+  await expect(detail(page).locator('.facts').first()).toContainText('$12.54')
+  await expect(detail(page).locator('.facts').first()).toContainText('69 turns')
   await expect(detail(page).locator('.facts').first()).not.toContainText('counted')
   await expect(detail(page).locator('.facts').first()).toContainText(/\d+\.\dk context peak/)
   await expect(detail(page).locator('.warnings li')).toContainText('left a process behind')
