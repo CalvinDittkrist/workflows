@@ -104,7 +104,10 @@ if [ "${1:-}" = api ] && [ "${2:-}" = --method ] && [ "${3:-}" = POST ] && [ "$p
   gate="${GH_SHIM_GATE:-}"
   if [ -n "$gate" ]; then
     : > "$gate.$$"
-    while [ ! -f "$gate.open" ]; do sleep 0.02; done
+    # The factory that called ends it when it gives up, and nothing does once that factory is gone:
+    # the wait ends with it, so a test process that was killed leaves no loop polling for a gate.
+    while [ ! -f "$gate.open" ] && kill -0 "$PPID" 2>/dev/null; do sleep 0.02; done
+    [ -f "$gate.open" ] || exit 1
   fi
   if git -C "$remote" update-ref "$ref" "$sha" "" 2>/dev/null; then
     printf '{"ref":"%s","object":{"sha":"%s"}}\n' "$ref" "$sha"
