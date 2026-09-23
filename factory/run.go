@@ -151,11 +151,12 @@ type Run struct {
 	Notified string `json:"notified,omitempty"`
 
 	// What the stream said, kept for the moment the run ends. Not part of the record.
-	reportOutcome string           // ready or blocked, as the worker's final report gave it
-	reportDetail  string           // the pull request for ready, the reason for blocked
-	lastError     string           // the last error the session printed, which is why a failed run failed
-	resultSummary string           // what the result line called an error, when the session printed no cause
-	counted       map[string]usage // the usage the factory counted per message id
+	reportOutcome  string           // ready or blocked, as the worker's final report gave it
+	reportDetail   string           // the pull request for ready, the reason for blocked
+	lastError      string           // the last error the session printed, which is why a failed run failed
+	resultSummary  string           // what the result line called an error, when the session printed no cause
+	counted        map[string]usage // the usage the factory counted per message id
+	unpricedModels map[string]bool  // the models of counted messages that have no price here
 }
 
 // Where the totals of a run come from.
@@ -364,19 +365,33 @@ func (s *Store) update(r *Run, change func()) {
 // answered with. A subagent has a context of its own, which says nothing about how full the worker's
 // is, so only the worker's own messages raise the peak. The record is written with every line, so a
 // run that ends without a result line — even with the factory killed under it — keeps what was
-// counted. It answers false when the message's model has no price here.
-func (s *Store) count(r *Run, msg message, sub bool) bool {
+// counted.
+func (s *Store) count(r *Run, msg message, sub bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	priced := true
 	if r.Totals != totalsWorker {
-		priced = r.tally(msg.ID, msg.Model, sub, msg.Usage)
+		r.tally(msg.ID, msg.Model, sub, msg.Usage)
 	}
 	if u := msg.Usage; !sub && u.Input+u.CacheCreation+u.CacheRead > r.ContextPeak {
 		r.ContextPeak = u.Input + u.CacheCreation + u.CacheRead
 	}
 	s.write(r)
-	return priced
+}
+
+// unpriced is the models whose messages the cost a run ends with leaves out, sorted: none when the
+// worker reported its own totals, which are what Claude Code billed.
+func (s *Store) unpriced(r *Run) []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if r.Totals != totalsFactory {
+		return nil
+	}
+	models := make([]string, 0, len(r.unpricedModels))
+	for model := range r.unpricedModels {
+		models = append(models, model)
+	}
+	sort.Strings(models)
+	return models
 }
 
 // finish ends a run. The reason survives as the record's reason unless the stream already gave one,

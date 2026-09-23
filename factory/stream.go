@@ -127,10 +127,7 @@ func (f *Factory) ingest(r *Run, line []byte) {
 		f.runs.event(r, Event{Kind: "system", Title: "system: " + m.Subtype, Body: string(line), Sub: sub})
 	case m.Type == "assistant":
 		msg := body(m.Message)
-		if !f.runs.count(r, msg, sub) {
-			f.warn(r, "cost not counted for "+msg.Model,
-				"the factory has no price for the model "+msg.Model+", so a cost it counts itself leaves that model's messages out")
-		}
+		f.runs.count(r, msg, sub)
 		for _, b := range blocks(msg.Content) {
 			switch b.Type {
 			case "text":

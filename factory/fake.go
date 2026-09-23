@@ -117,6 +117,10 @@ func scriptedWorker(args []string, stdout, stderr io.Writer) int {
 	switch scenario {
 	case "hang":
 		s.thinkAndSay("The calibration procedure is spread over three files.", fmt.Sprintf("worker process %d", os.Getpid()))
+		// A subagent on a model the factory has no price for: its tokens count, its cost cannot.
+		s.emit(map[string]any{"type": "assistant", "parent_tool_use_id": "toolu_scout", "message": map[string]any{
+			"id": "msg_scout", "model": unpricedModel, "usage": s.usage(true),
+			"content": []map[string]any{{"type": "text", "text": "Three files name the procedure."}}}})
 		child := exec.Command(os.Args[0], "scripted-worker", "child", repository, strconv.Itoa(issue))
 		child.Stdout, child.Stderr = stdout, stderr
 		if err := child.Start(); err != nil {
@@ -208,8 +212,12 @@ type script struct {
 	context  int // what the next message of the worker itself starts from
 }
 
-// scriptedModel is the model every message of the scripted worker names.
-const scriptedModel = "claude-opus-5"
+// scriptedModel is the model the messages of the scripted worker name; unpricedModel is one the
+// factory has no price for, which a subagent of the hanging worker runs on.
+const (
+	scriptedModel = "claude-opus-5"
+	unpricedModel = "claude-unreleased-9"
+)
 
 // thinkAndSay is one message of the worker written as two lines, the way Claude Code prints a
 // message of two content blocks: both carry its id, and the first its usage from before the text was
@@ -284,7 +292,8 @@ func (s *script) usage(sub bool) map[string]any {
 		read = s.context
 	}
 	return map[string]any{"input_tokens": 400, "cache_creation_input_tokens": 1200,
-		"cache_read_input_tokens": read, "output_tokens": 250}
+		"cache_read_input_tokens": read, "output_tokens": 250,
+		"cache_creation": map[string]any{"ephemeral_5m_input_tokens": 400, "ephemeral_1h_input_tokens": 800}}
 }
 
 // compact is what a handoff does to the worker's context: it starts from a loaded session again,

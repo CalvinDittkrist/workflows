@@ -294,22 +294,32 @@ func TestFakeModeWorksTheCannedQueueOneRunAtATime(t *testing.T) {
 	}
 	// Ended on the deadline, the worker printed no result line, so the totals are the factory's own
 	// count of the stream: one turn per message of the worker — its first thought and text are one
-	// message on two lines — and every message priced at the list price of the scripted model.
+	// message on two lines — the tokens of those and of its one subagent message, and the cost of the
+	// worker's messages at the list price of the scripted model. Every message of the worker writes
+	// 400 tokens to the five-minute cache and 800 to the hour's, and reads the context it grew to.
 	turns := 0
 	for _, e := range full.Events {
 		if !e.Sub && (e.Kind == "text" || e.Kind == "tool") {
 			turns++
 		}
 	}
+	messages := turns + 1 // and the subagent's
+	// The context grows by a step with every message of the worker; the one message of its child is
+	// written by a script of its own, which stands at the first step.
+	cacheRead := contextStart*turns + contextStep*((turns-1)*turns/2+1)
 	tokens := timeout.Tokens
-	if timeout.Totals != "factory" || timeout.Turns != turns || tokens.Input != 400*turns || tokens.CacheCreation != 1200*turns ||
-		tokens.Output != 250*turns {
-		t.Errorf("run 6 has turns %d and tokens %+v from %q, want the %d turns of its stream with their tokens, counted by the factory",
-			timeout.Turns, tokens, timeout.Totals, turns)
+	if timeout.Totals != "factory" || timeout.Turns != turns || tokens.Input != 400*messages || tokens.CacheCreation != 1200*messages ||
+		tokens.Output != 250*messages || tokens.CacheRead != cacheRead+subagentContext {
+		t.Errorf("run 6 has turns %d and tokens %+v from %q, want the %d turns of its stream and the tokens of its %d messages, counted by the factory",
+			timeout.Turns, tokens, timeout.Totals, turns, messages)
 	}
-	opus := float64(tokens.Input)*5 + float64(tokens.CacheCreation)*6.25 + float64(tokens.CacheRead)*0.5 + float64(tokens.Output)*25
-	if want := opus / 1e6; timeout.CostUSD <= 0 || math.Abs(timeout.CostUSD-want) > 1e-9 {
-		t.Errorf("run 6 cost %v, want %v: its tokens at the list price of %s", timeout.CostUSD, want, scriptedModel)
+	perMessage := 400*5 + 400*5*1.25 + 800*5*2 + 250*25 // input, the two cache writes, output, at $5 and $25 per million
+	if want := (float64(turns)*perMessage + float64(cacheRead)*0.5) / 1e6; math.Abs(timeout.CostUSD-want) > 1e-9 {
+		t.Errorf("run 6 cost %v, want %v: the worker's messages at the list price of %s, and nothing for the subagent's on %s",
+			timeout.CostUSD, want, scriptedModel, unpricedModel)
+	}
+	if len(timeout.Warnings) != 1 || !strings.Contains(timeout.Warnings[0], "no price for "+unpricedModel) {
+		t.Errorf("run 6 has the warnings %q, want the one that says its cost leaves %s out", timeout.Warnings, unpricedModel)
 	}
 
 	// The run is one JSON record and one append-only JSONL event log in the data directory.

@@ -59,9 +59,9 @@ func (p price) cost(u usage) float64 {
 // tally counts one assistant line into the run's totals. A message comes as one assistant line per
 // content block, all with its id, and a later line carries at least what an earlier one did: a
 // message the run has not seen is one more turn when it is the worker's own, and one it has seen adds
-// only what its usage grew by. It answers false when the model has no price here. Callers hold the
-// lock.
-func (r *Run) tally(id, model string, sub bool, u usage) bool {
+// only what its usage grew by. A model with no price here is noted, for the run's end to say whether
+// the cost it records leaves one out. Callers hold the lock.
+func (r *Run) tally(id, model string, sub bool, u usage) {
 	if r.counted == nil {
 		r.counted = map[string]usage{}
 	}
@@ -82,13 +82,16 @@ func (r *Run) tally(id, model string, sub bool, u usage) bool {
 		r.Turns++
 	}
 	r.Totals = totalsFactory
-	p, ok := priceOf(model)
-	if ok {
-		r.CostUSD += p.cost(grown)
-	}
 	// A message Claude Code writes itself, such as an API error, names no model the API has and
 	// carries no usage: there is nothing to price.
-	return ok || grown == usage{}
+	if p, ok := priceOf(model); ok {
+		r.CostUSD += p.cost(grown)
+	} else if grown != (usage{}) {
+		if r.unpricedModels == nil {
+			r.unpricedModels = map[string]bool{}
+		}
+		r.unpricedModels[model] = true
+	}
 }
 
 // atLeast is the larger of two usages, field by field.
