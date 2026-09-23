@@ -463,11 +463,13 @@ class SlowGateTests(ShimTest):
 
     def start_call(self, **env):
         """`gate.sh run` as a call of its own, in a session of its own, like a worker's tool call; it returns
-        once the gate has started."""
+        once the gate has started and the call has named it in gate.running, which it does just after make
+        starts: a kill between the two is a call ended before it handed the run over, not one ended mid-gate."""
         call = subprocess.Popen(["bash", str(WORKER / "gate.sh"), "run"], cwd=self.repo, start_new_session=True,
                                 env=self.env(**env), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        running = Path(self.git("rev-parse", "--path-format=absolute", "--git-dir").strip()) / "worker/gate.running"
         deadline = time.time() + 10
-        while not (self.repo / "starts.log").exists() and time.time() < deadline:
+        while not ((self.repo / "starts.log").exists() and running.exists()) and time.time() < deadline:
             time.sleep(0.05)
         return call
 
