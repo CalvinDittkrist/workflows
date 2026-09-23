@@ -245,8 +245,11 @@ The factory is steered on GitHub alone; its interface never writes ([ADR 0023](a
 
 The logins in `notify` are asked for a review when a run ends `ready`, and mentioned on the issue when a run waits for a person.
 
+### The pr stage
+A run's worker session stops once its review has recorded the panel summary (`WF_STOP_AFTER=review`), and the factory opens the pull request itself ([ADR 0043](adr/0043-the-migration-runs-from-the-last-stage-to-the-first.md)). It pushes the branch, then starts a read-only author session in the run's worktree: the tools `Read`, `Grep` and `Glob` and nothing else, no MCP server and none of the workflow plugins, briefed with the diff range, the commits, the diff and the issue. The session reports a title in conventional-commit style and a body that closes the issue. The factory uses that body as it is and appends a verification section with the gate result and the panel summary the work session reported, word for word; when the panel did not pass, the section says so and names the reviewers that did not pass. The pull request goes against the base the branch was cut from and is never a draft, since no bot reviews one: you decide on it. An author session that fails, or reports a result that does not fit its schema, ends the run `failed` with the branch pushed. The review is recorded on the run, so a run resumed after it, while the branch is still at the commit the review read and no pull request is open, starts at the pr stage and reviews nothing again; a branch that moved since runs the work session again.
+
 ### The ci stage
-A run's worker session stops once it has opened its pull request (`WF_STOP_AFTER=pr`), and the factory waits on that pull request itself, reading it every `poll` ([ADR 0043](adr/0043-the-migration-runs-from-the-last-stage-to-the-first.md)). It reads mergeability first, then the checks, then the review of a configured bot, then the reviews and unresolved threads of the pull request, and acts on the first row that decides:
+Once the pr stage has opened the pull request, the factory waits on it, reading it every `poll`. It reads mergeability first, then the checks, then the review of a configured bot, then the reviews and unresolved threads of the pull request, and acts on the first row that decides:
 
 | The pull request | The factory |
 | --- | --- |
