@@ -27,10 +27,23 @@ Run the following as root unless it says otherwise.
 1. **The user and its directories.**
 
    ```sh
-   apt-get install -y git gh jq make curl xz-utils
+   apt-get install -y git jq make curl xz-utils
    useradd --create-home --shell /bin/bash factory
    install -d -o factory -g factory -m 0700 /var/lib/factory
    install -d -m 0755 /etc/factory
+   ```
+
+   `gh` comes from GitHub's own apt repository ([install_linux.md](https://github.com/cli/cli/blob/trunk/docs/install_linux.md)), not from the distribution. Debian trixie ships 2.46.0, which still asks for Projects (classic) in `gh pr edit`. GitHub now answers that query with the error `Projects (classic) is being deprecated in favor of the new Projects experience`, so the factory's `gh pr edit --add-reviewer` fails and a run that ends `ready` asks nobody for a review. The keyring is installed only when its checksum matches the one that page lists; apt upgrades the package from that repository along with the rest of the system.
+
+   ```sh
+   key=/etc/apt/keyrings/githubcli-archive-keyring.gpg
+   cd "$(mktemp -d)"
+   curl -fsSLO https://cli.github.com/packages/githubcli-archive-keyring.gpg
+   echo "6084d5d7bd8e288441e0e94fc6275570895da18e6751f70f057485dc2d1a811b  githubcli-archive-keyring.gpg" | sha256sum --check &&
+     install -D -m 0644 githubcli-archive-keyring.gpg "$key" &&
+     echo "deb [arch=$(dpkg --print-architecture) signed-by=$key] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list &&
+     apt-get update && apt-get install -y gh
+   gh --version                   # gh version 2.<minor>.<patch>, newer than 2.46.0
    ```
 
 2. **The gate's tools.** A worker runs each connected repository's `make check`, so the host needs the tools that gate runs, at the versions the repository's CI pins. Read them from its CI workflow (for this repository `.github/workflows/ci.yml`) and from the error lines of its `Makefile`, not from the distribution: a distribution's version finds other things than CI's, and the gate then fails on the host on files the change never touched, which no worker can fix. For this repository that is shellcheck 0.11.0, Go 1.26, Node 22 and staticcheck 2026.2.1; Python is the distribution's `python3`, which CI does not pin. The gate's tests call two more tools that a minimal Debian image lacks and CI's runner has: a C compiler (`build-essential`), because `go test -race` builds with cgo, and `file`, with which the release test checks that the factory's binaries are static.
@@ -229,7 +242,7 @@ The logins in `notify` are asked for a review when a run ends `ready`, and menti
 ## Upkeep
 
 ### Updating
-The factory updates the `workflows` marketplace and the `worker` plugin before every run itself. Claude Code, the factory binary and quota-axi are yours ([ADR 0036](adr/0036-the-factory-updates-the-worker-plugin-and-nothing-else.md)). Update them between runs: stopping the factory interrupts the run that is going, which is resumed once by itself, and a second interruption of the same issue waits for you. `curl -s http://127.0.0.1:7341/api/line | jq '.now | length'` prints `0` when nothing runs; pause the factory first (below) to keep it that way.
+The factory updates the `workflows` marketplace and the `worker` plugin before every run itself. Claude Code, the factory binary and quota-axi are yours ([ADR 0036](adr/0036-the-factory-updates-the-worker-plugin-and-nothing-else.md)). `claude plugin update` compares version numbers, so a change merged under `plugins/worker` reaches a host only after the plugin's version is bumped and released (`scripts/release.sh worker --push`); until then the host runs the old plugin. Update them between runs: stopping the factory interrupts the run that is going, which is resumed once by itself, and a second interruption of the same issue waits for you. `curl -s http://127.0.0.1:7341/api/line | jq '.now | length'` prints `0` when nothing runs; pause the factory first (below) to keep it that way.
 
 - **Claude Code**, as the user `factory`: `claude update`, then `claude --version`. Every run records the version it was made with.
 - **The factory binary**: download and check it as in [Installation](#installation), then `systemctl stop factory`, `install -m 0755 factory-linux-$arch /usr/local/bin/factory`, `systemctl start factory`, and look for the new version in the journal's first line.
@@ -250,4 +263,4 @@ Everything the factory knows about itself is in `data_dir`:
 | `repos/<owner>/<name>/` | The clone of a connected repository, in lower case, with the worktrees of the issues the factory holds under `.claude/worktrees/`. | Not while a worktree in it holds commits that are not pushed. The clone of a repository you disconnected may go once its worktrees are pushed; a clone that is missing is made again on the next start. |
 | `repos/<owner>/.<name>.cloning-*` | A clone that was cut off. | Yes; the next start sweeps it too. |
 
-The factory itself never deletes a record or a log, so the directory grows by one record and one log per run. Back it up if you want the history kept. A host that loses it knows nothing of the work it held, which is still on GitHub on the branches every removed worktree was pushed to, and it loses the history, the automatic resume an issue had left and the notifications it still owed. The issues it held stay assigned to the machine user and out of the line. Release one by taking the assignee off: the factory takes the branch up again by itself when it carries commits beyond the base, the machine user pushed it last and no pull request of it is open. It assigns itself, makes the worktree from the branch and continues on those commits ([ADR 0024](adr/0024-a-claim-is-the-creation-of-the-branch-through-the-api.md)). A branch somebody else pushed last is a foreign claim, and so is one with an open pull request or with nothing beyond the base: the run ends `lost` and touches nothing. Delete such a branch, or finish the issue by hand, and set the routing label again; a lost run stands in the way of no routing newer than it.
+The factory itself never deletes a record or a log, so the directory grows by one record and one log per run. Most of what a host writes comes from the gate, not the factory: an event log is a few KB per run, while the gate's caches, in the home of the user `factory` and in the worktrees, write about 1 GB on the first run and 100 to 150 MB per run afterwards, so the data directory needs no location of its own, not even on an SD card. Back it up if you want the history kept. A host that loses it knows nothing of the work it held, which is still on GitHub on the branches every removed worktree was pushed to, and it loses the history, the automatic resume an issue had left and the notifications it still owed. The issues it held stay assigned to the machine user and out of the line. Release one by taking the assignee off: the factory takes the branch up again by itself when it carries commits beyond the base, the machine user pushed it last and no pull request of it is open. It assigns itself, makes the worktree from the branch and continues on those commits ([ADR 0024](adr/0024-a-claim-is-the-creation-of-the-branch-through-the-api.md)). A branch somebody else pushed last is a foreign claim, and so is one with an open pull request or with nothing beyond the base: the run ends `lost` and touches nothing. Delete such a branch, or finish the issue by hand, and set the routing label again; a lost run stands in the way of no routing newer than it.
