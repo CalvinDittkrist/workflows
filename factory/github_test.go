@@ -819,6 +819,17 @@ func (g *ghShim) workerReportsBlocked(t *testing.T, reason string) {
 	g.env = append(g.env, "CLAUDE_SHIM_REPORT=blocked: "+reason)
 }
 
+// workerEndsWith is the whole final report of the scripted worker, markdown and lines as a worker
+// writes them. The shim puts it into a JSON string as it stands, so it goes there escaped.
+func (g *ghShim) workerEndsWith(t *testing.T, report string) {
+	t.Helper()
+	escaped, err := json.Marshal(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	g.env = append(g.env, "CLAUDE_SHIM_REPORT="+strings.Trim(string(escaped), `"`))
+}
+
 // workerReports is the pull request the scripted worker of the claude shim ends its session with.
 func (g *ghShim) workerReports(t *testing.T, repository string, issue int) {
 	t.Helper()

@@ -11,8 +11,8 @@
 #                      issue in the branch name gives; the factory reads it out of the report
 #   CLAUDE_SHIM_FAIL   when set, the session ends with this on its error output and exit 1
 #   CLAUDE_SHIM_REPORT the final report of the session, by default the ready one above; it is put
-#                      into the stream as it stands, so it is plain text without a quote or a
-#                      backslash in it
+#                      into the stream's JSON string as it stands, so it is escaped for one:
+#                      a line break is \n
 #   CLAUDE_SHIM_COMMIT when set, the session writes and commits a file of that name in the worktree,
 #                      which is the work a run leaves behind for the branch to carry
 #   CLAUDE_SHIM_SLEEP  when set, the session waits that many seconds before it reports, so a test can

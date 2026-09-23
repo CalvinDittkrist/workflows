@@ -202,6 +202,36 @@ func TestARunThatWaitsForAPersonCommentsOnTheIssueWithTheReasonAndTheReleaseGest
 	}
 }
 
+// A blocker is written in markdown for a person. The line that says blocked is read through its
+// markdown, and the lines after it are the worker's own text: the run records them unchanged and the
+// comment on the issue quotes them unchanged, bold, bullets and code included.
+func TestTheLinesOfABlockedReasonAfterTheFirstAreKeptAsTheWorkerWroteThem(t *testing.T) {
+	t.Parallel()
+	const later = "**What's done.** One commit on the branch.\n\n" +
+		"- The runbook, ADR 0037 and README now pin quota-axi 0.1.49\n" +
+		"- `make check` passes on this host"
+	gh := newGhShim(t)
+	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
+	gh.loggedInAs(t, "factory-bot")
+	gh.assigns(t, "acme/edge-sensors", claimedIssue, "factory-bot")
+	gh.workerEndsWith(t, "**blocked:** the host has no quota-axi to test against.\n\n"+later)
+	gh.comments(t, "acme/edge-sensors", claimedIssue)
+
+	data := filepath.Join(t.TempDir(), "data")
+	gh.cloneInto(t, data, "acme/edge-sensors")
+	f := gh.work(t, config{"poll": "50ms", "deadline": "90s", "data_dir": data,
+		"repositories": []string{"acme/edge-sensors"}, "notify": maintainers})
+	run := f.ended(t, 1)
+	if want := "the host has no quota-axi to test against.\n\n" + later; run.Outcome != "blocked" || run.Reason != want {
+		t.Fatalf("the run ended as %q with the reason %q, want blocked with %q; the factory's log:\n%s",
+			run.Outcome, run.Reason, want, f.output(t))
+	}
+	f.notified(t, 1)
+	if said := gh.commented(t, "acme/edge-sensors", claimedIssue); !strings.Contains(said, later) {
+		t.Errorf("the comment on the issue is %q, want the reason's later lines %q in it as written", said, later)
+	}
+}
+
 // The hand-back gesture is the gesture of an issue the factory holds, and a run can end waiting for
 // a person while holding none: a claim that created the branch and failed at the assignee leaves
 // that branch on the remote and holds nothing. Its comment says what the run left — the run's own
