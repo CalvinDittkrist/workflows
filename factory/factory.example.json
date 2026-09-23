@@ -5,11 +5,12 @@
   "poll": "60s",
   "data_dir": "/var/lib/factory",
   "worker_args": [],
+  "worker_env": {},
   "paused": true,
   "notify": [
     "CalvinDittkrist"
   ],
-  "quota_axi": "/usr/local/bin/quota-axi",
+  "quota_axi": "/usr/bin/quota-axi",
   "quota_minimum": 12,
   "repositories": [
     "CalvinDittkrist/workflows"

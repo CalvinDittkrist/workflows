@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -492,6 +493,13 @@ func (f *Factory) hold(repository, reason string) {
 // and a host whose clock is minutes ahead answers a routing made inside that drift only after the
 // label is set once more.
 //
+// A lost claim lets nothing go, because it held nothing, and it stands in the way of the routing it
+// answered and of no later one: the issue whose latest run ended lost comes back into the routed
+// part when the label is set again after that run's signal, and the claim then finds the branch
+// name free, or finds this factory's own branch (orphaned), or loses once more. The label that was
+// on the issue when the claim was lost is answered by that run, so a foreign claim is still met
+// once per routing and never on every poll.
+//
 // Only a connected repository is in the line, held work included: a repository the configuration no
 // longer names is one this host is not to work, whatever its records say it once held. Nothing of it
 // is touched or deleted — the branch, the worktree and the assignee stay — and connecting it again
@@ -551,6 +559,8 @@ func (f *Factory) waiting() []Entry {
 			out = append(out, Entry{Issue: issue, Signal: signalRouted, SignalAt: issue.RoutedAt})
 		case gone.letGo && issue.RoutedAt.After(*gone.let.LetGoAt) && issue.RoutedAt.After(gone.last.SignalAt):
 			out = append(out, Entry{Issue: issue, Signal: signalRouted, SignalAt: issue.RoutedAt, resume: gone.let})
+		case !gone.holds && gone.idle && gone.last.Outcome == outcomeLost && issue.RoutedAt.After(gone.last.SignalAt):
+			out = append(out, Entry{Issue: issue, Signal: signalRouted, SignalAt: issue.RoutedAt})
 		}
 	}
 	return out
@@ -626,7 +636,7 @@ func (f *Factory) execute(parent context.Context, r *Run, entry Entry) {
 		if errors.Is(err, errLost) {
 			// Another claimer created the branch first. Nothing here was touched: no assignee, no
 			// worktree, no worker ([ADR 0024]). The run is the record that this factory will not try
-			// the issue again.
+			// the issue again until it is routed again (waiting).
 			f.finish(r, outcomeLost, "another claimer holds "+claim.branch+" on the remote; this run touched nothing else", nil)
 			return
 		}
@@ -920,7 +930,7 @@ func (f *Factory) worker(ctx context.Context, entry Entry, claim claimed) (*exec
 		args := []string{"scripted-worker", issue.scenario, issue.Repository, strconv.Itoa(issue.Number)}
 		return exec.CommandContext(ctx, f.self, append(args, f.settings.WorkerArgs...)...), nil
 	}
-	variables := workerVariables(entry, claim)
+	variables := workerVariables(entry, claim, f.settings.WorkerEnv)
 	settings, err := workerSettings(variables)
 	if err != nil {
 		return nil, err
@@ -1002,8 +1012,11 @@ func workerSettings(env map[string]string) (string, error) {
 	return string(settings), nil
 }
 
-// workerVariables is the env block of those settings: what this one session is, and nothing a host
-// may disagree with.
+// workerVariables is the env block of those settings: the worker knobs the host's configuration sets
+// for every run (worker_env, the same knobs a local claim takes with --env), and then what this one
+// session is, which nothing a host writes may disagree with. The knobs go in first, so the session's
+// own keys are written over them and stay what this function says, however the accepted names ever
+// change — the order the orchestrator's claim.sh keeps.
 //
 // WF_REVIEW_MANDATE is that for a follow-up run: the driver's word that this session was started to
 // answer a review, which is what the worker's repair.sh takes for the count of repair rounds to
@@ -1014,14 +1027,18 @@ func workerSettings(env map[string]string) (string, error) {
 // queued for and dispatched once for. One review is one new mandate on the pull request: the repair
 // record keeps the mandate its count was started for, so the session that answers the review has the
 // rounds of that review and the rounds its own CI stage then drives cannot hand it more.
-func workerVariables(entry Entry, claim claimed) map[string]string {
-	variables := map[string]string{
+func workerVariables(entry Entry, claim claimed, knobs map[string]string) map[string]string {
+	variables := maps.Clone(knobs)
+	if variables == nil {
+		variables = map[string]string{}
+	}
+	maps.Copy(variables, map[string]string{
 		"WF_MODE":                              "manual",
 		"WF_ISSUE":                             strconv.Itoa(entry.Issue.Number),
 		"WF_BASE_BRANCH":                       claim.base,
 		"CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1",
 		"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE":      compactPercentage,
-	}
+	})
 	if entry.Signal == signalChangesRequested {
 		variables["WF_REVIEW_MANDATE"] = entry.SignalAt.UTC().Format(time.RFC3339)
 	}

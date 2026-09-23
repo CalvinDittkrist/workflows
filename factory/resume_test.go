@@ -132,7 +132,8 @@ func TestTheLineResumesWhatTheFactoryHoldsBeforeItClaimsAnythingNew(t *testing.T
 		record(1, 104, "Retry the upload", signalRouted, outcomeInterrupted, true, began, interruptedAt),
 		record(2, 109, "Warn on an old calibration", signalRouted, outcomeBlocked, true, began, began.Add(10*time.Minute)),
 		record(3, 112, "Replace the CSV parser", signalRouted, outcomeReady, true, began, began.Add(20*time.Minute)),
-		record(4, 115, "Serve the preview", signalRouted, outcomeLost, false, began, began.Add(25*time.Minute)),
+		// The lost run answered the routing that is still on 115, so the label queues nothing again.
+		signalled(record(4, 115, "Serve the preview", signalRouted, outcomeLost, false, began, began.Add(25*time.Minute)), opened),
 		// And 130 is held in a repository this host is no longer connected to. A repository the
 		// configuration does not name is not worked, whatever the records of it say it holds.
 		in("acme/backtest", record(5, 130, "Cache the fills", signalRouted, outcomeInterrupted, true, began, began.Add(40*time.Minute))),
@@ -666,6 +667,12 @@ func record(id, issue int, title, signal, outcome string, holding bool, started,
 		Signal: signal, State: "ended", Outcome: outcome, Stages: []string{}, Warnings: []string{},
 		StartedAt: started, EndedAt: &ended,
 	}
+}
+
+// signalled is a record of the run a signal at that time queued, such as the routing a claim answered.
+func signalled(run Run, at time.Time) Run {
+	run.SignalAt = at
+	return run
 }
 
 // in puts a record in another repository than the one the tests work in.

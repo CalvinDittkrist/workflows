@@ -95,13 +95,15 @@ type apiRun struct {
 		ClaudeCode string `json:"claudeCode"`
 		Factory    string `json:"factory"`
 	} `json:"versions"`
-	Events []struct {
-		Seq   int    `json:"seq"`
-		Kind  string `json:"kind"`
-		Title string `json:"title"`
-		Body  string `json:"body"`
-		Sub   bool   `json:"sub"`
-	} `json:"events"`
+	Events []apiEvent `json:"events"`
+}
+
+type apiEvent struct {
+	Seq   int    `json:"seq"`
+	Kind  string `json:"kind"`
+	Title string `json:"title"`
+	Body  string `json:"body"`
+	Sub   bool   `json:"sub"`
 }
 
 type apiIssue struct {
@@ -225,13 +227,29 @@ func TestFakeModeWorksTheCannedQueueOneRunAtATime(t *testing.T) {
 	if truncated != 1 {
 		t.Errorf("run 4 logged %d truncated events, want the one over-long tool call", truncated)
 	}
-	logged := map[string]bool{}
+	logged := map[string][]apiEvent{}
 	for _, e := range withBody.Events {
-		logged[e.Title] = true
+		logged[e.Title] = append(logged[e.Title], e)
 	}
 	for _, title := range []string{"tool error", "the worker printed a line that is not the stream format"} {
-		if !logged[title] {
-			t.Errorf("run 4 did not log %q, want what went wrong in the stream to be in the log", title)
+		if len(logged[title]) != 1 {
+			t.Errorf("run 4 logged %q %d times, want once: what went wrong in the stream is in the log", title, len(logged[title]))
+		}
+	}
+	// The stream's own system lines are read as what they are, never as a line out of the format: a
+	// denied tool call names the tool and why, and a subtype the factory does not know keeps its name.
+	denied := logged["the classifier denied Bash"]
+	if len(denied) != 1 || denied[0].Kind != "error" || !strings.Contains(denied[0].Body, "[Untrusted Code Integration]") ||
+		!strings.Contains(denied[0].Body, "auto mode classifier") {
+		t.Errorf("run 4 logged the denial as %+v, want one error event with the decision reason and the message", denied)
+	}
+	unknown := logged["system: sensor_calibrated"]
+	if len(unknown) != 1 || unknown[0].Kind != "system" || !strings.Contains(unknown[0].Body, "a later Claude Code") {
+		t.Errorf("run 4 logged the unknown system line as %+v, want one system event under its subtype with the line", unknown)
+	}
+	for _, e := range withBody.Events {
+		if strings.Contains(e.Title, "hook_started") || strings.Contains(e.Body, "PreToolUse:Bash") {
+			t.Errorf("run 4 logged %q, want the documented system lines the factory has no use for left out", e.Title)
 		}
 	}
 
@@ -540,6 +558,13 @@ func TestAnInvalidConfigurationIsRefusedWithTheFix(t *testing.T) {
 		{"worker arguments that replace the prompt", `{"data_dir":"data","repositories":["a/b"],"worker_args":["-p","/worker:pr"]}`, `worker_args carries -p`},
 		{"worker arguments that replace the permission mode", `{"data_dir":"data","repositories":["a/b"],"worker_args":["--permission-mode","plan"]}`, `worker_args carries --permission-mode`},
 		{"worker arguments that replace the output format", `{"data_dir":"data","repositories":["a/b"],"worker_args":["--output-format","text"]}`, `worker_args carries --output-format`},
+		// worker_env sets the knobs a worker reads for itself and nothing else: what a run is (its
+		// mode, its issue, its base) is the factory's, and the host's shell is not a setting of the
+		// workflow. The error lists the names, because the operator reads it in the journal.
+		{"worker variable that is the run's own", `{"data_dir":"data","repositories":["a/b"],"worker_env":{"WF_MODE":"yolo"}}`, `worker_env carries WF_MODE, which is not a worker knob; the names are WF_REVIEWERS, WF_REVIEW_ROUNDS`},
+		{"worker variable that is the base branch", `{"data_dir":"data","repositories":["a/b"],"worker_env":{"WF_BASE_BRANCH":"dev"}}`, `worker_env carries WF_BASE_BRANCH, which is not a worker knob`},
+		{"worker variable of the shell", `{"data_dir":"data","repositories":["a/b"],"worker_env":{"PATH":"/tmp"}}`, `worker_env carries PATH, which is not a worker knob`},
+		{"worker variable that is not a string", `{"data_dir":"data","repositories":["a/b"],"worker_env":{"WF_PR_REVIEW_WAIT":600}}`, `see factory/factory.example.json`},
 		{"repository object with an unknown field", `{"data_dir":"data","repositories":[{"name":"a/b","branch":"dev"}]}`, `a repository is "owner/name" or {"name": "owner/name", "base": "dev"}`},
 		// The quota check runs the binary the operator installed, never a name PATH or npx resolves.
 		{"quota tool by name", `{"data_dir":"data","repositories":["a/b"],"quota_axi":"quota-axi"}`, `quota_axi "quota-axi" is not an absolute path`},
@@ -951,6 +976,10 @@ func TestTheReportIsReadFromMarkdown(t *testing.T) {
 		{"a heading over a summary", "## ready: https://github.com/a/b/pull/7\n\nCI green.", "ready", "https://github.com/a/b/pull/7"},
 		{"a list item after a preamble", "Here is where I got to.\n\n- `blocked: the issue needs Herdr`", "blocked", "the issue needs Herdr"},
 		{"a reason over several lines", "blocked: the brief contradicts ADR 0012.\n\ndecision needed: drop the step.", "blocked", "the brief contradicts ADR 0012.\n\ndecision needed: drop the step."},
+		{"a bold word before the pull request", "**ready:** https://github.com/a/b/pull/7", "ready", "https://github.com/a/b/pull/7"},
+		{"a bold word before the reason", "**Blocked:** Go's race detector can't run on this host.\n\nIt needs cgo.", "blocked", "Go's race detector can't run on this host.\n\nIt needs cgo."},
+		{"a code word before the reason", "`blocked:` the issue needs Herdr", "blocked", "the issue needs Herdr"},
+		{"a reason that opens with code", "blocked: `make check` fails on this host", "blocked", "`make check` fails on this host"},
 		{"no report at all", "I have pushed the branch.", "", ""},
 		{"the word in a sentence", "The run is ready: nothing is left to do.", "", ""},
 	} {
