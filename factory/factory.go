@@ -742,8 +742,8 @@ func (f *Factory) execute(parent context.Context, r *Run, entry Entry) {
 		r.stage(s.stage)
 	})
 
-	// The session's own timeout lies under the run's deadline: whichever passes first ends it, and the
-	// cause the context carries says which one did.
+	// The session's context is derived from the run's, so the run's deadline and the session's own
+	// timeout both end it: whichever passes first, and the cause the context carries says which one did.
 	sessionCtx, endSession := context.WithTimeoutCause(ctx, s.timeout, overran{s})
 	defer endSession()
 	cmd, err := f.command(sessionCtx, s, entry, claim)
@@ -860,7 +860,8 @@ func (f *Factory) execute(parent context.Context, r *Run, entry Entry) {
 		f.finish(r, outcomeTimeout, fmt.Sprintf("the deadline of %s passed; the worker's process group was ended", f.settings.Deadline), &exitCode)
 	case !fitted && errors.As(context.Cause(sessionCtx), &over):
 		f.finish(r, outcomeFailed, over.Error()+"; the worker's process group was ended", &exitCode)
-	case waitErr != nil:
+	case waitErr != nil || r.resultSummary != "":
+		// A result line that says the session ended in an error is one whatever the process exited with.
 		cause := r.lastError
 		if cause == "" {
 			cause = r.resultSummary
@@ -876,7 +877,7 @@ func (f *Factory) execute(parent context.Context, r *Run, entry Entry) {
 	case r.misfit != "":
 		f.finish(r, outcomeFailed, "the session's result does not fit the schema: "+r.misfit, &exitCode)
 	default:
-		f.finish(r, outcomeFailed, "the session ended without a result line; a session ends by printing its structured result", &exitCode)
+		f.endInError(parent, r, "the session ended without a result line; a session ends by printing its structured result", &exitCode)
 	}
 }
 

@@ -141,9 +141,9 @@ func scriptedWorker(args []string, stdout, stderr io.Writer) int {
 		s.result("error_during_execution", "", true, "api_error", nil)
 		return 1
 	case "silent":
-		// A session that ends by itself with a result that carries no structured output. The error output of this one is on the
-		// worker's own stream — a tool that failed and a line that is not the stream format at all —
-		// which the factory logs without it changing how the run ended.
+		// A session that ends by itself with a result that carries no structured output. The error
+		// output of this one is on the worker's own stream — a tool that failed and a line that is not
+		// the stream format at all — which the factory logs without it changing how the run ended.
 		s.failingTool("Bash", map[string]any{"command": "make check", "description": "Run the gate"}, "make: *** [check] Error 1")
 		fmt.Fprintln(stdout, "npm warn: a line of the worker's output that is not the stream format")
 		// Lines that are the stream format all the same: a tool call the auto mode classifier denied,

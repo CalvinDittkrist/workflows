@@ -34,8 +34,8 @@ type session struct {
 // run's deadline, which stays the limit an operator sets and which ends a run with the outcome
 // timeout; a session that outruns its own timeout has failed, and the run says in which stage.
 var (
-	workSession    = session{stage: "implement", prompt: "/worker:work", timeout: 4 * time.Hour}
-	reviewsSession = session{stage: "reviews", prompt: "/worker:address-reviews", timeout: 3 * time.Hour}
+	workSession    = session{stage: stages["worker:work"], prompt: "/worker:work", timeout: 4 * time.Hour}
+	reviewsSession = session{stage: stages["worker:address-reviews"], prompt: "/worker:address-reviews", timeout: 3 * time.Hour}
 )
 
 // sessionTimeoutOverride replaces the timeout of every session when it is set, as a Go duration. It is
@@ -136,15 +136,18 @@ func readResult(raw json.RawMessage) (result, error) {
 	}
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
-	var got result
-	if err := decoder.Decode(&got); err != nil {
+	var read struct {
+		result
+		Summary *string `json:"summary"` // a pointer, so a summary that is missing is told from an empty one
+	}
+	if err := decoder.Decode(&read); err != nil {
 		return result{}, fmt.Errorf("the structured output is not an object of the schema: %v", err)
 	}
-	var fields map[string]json.RawMessage
-	_ = json.Unmarshal(raw, &fields) // it decoded as an object above
-	if _, ok := fields["summary"]; !ok {
+	if read.Summary == nil {
 		return result{}, fmt.Errorf("the structured output has no summary")
 	}
+	got := read.result
+	got.Summary = *read.Summary
 	if got.Outcome != resultComplete && got.Outcome != resultBlocked {
 		return result{}, fmt.Errorf("the structured output reports the outcome %q, which is neither %s nor %s",
 			got.Outcome, resultComplete, resultBlocked)
