@@ -21,3 +21,5 @@ For each review summary and each thread:
 Finish with one line: `addressed: <fixed n, declined m>` and then invoke `/worker:ci`.
 
 When this skill was the session's own prompt, no pipeline above you is driving it and no stage follows this one: once the CI stage comes back green, report `ready: <pr-url>` and stop. No panel summary goes with it — this session ran no reviewer panel, and the one the pull request body carries belongs to the run that opened it. Do not merge.
+
+If a review cannot be settled without a person, such as a point you can neither fix nor decline, stop the way the work skill says, whoever started the session: open the final report with `blocked:` and what you need on that one line, and put the detail after it.
