@@ -133,10 +133,17 @@ test('the selected run shows what it cost, how full its context came and what it
   await page.goto(working(`/#run=${WARNED_RUN}`))
   await expect(detail(page).locator('.facts').first()).toContainText('$4.18')
   await expect(detail(page).locator('.facts').first()).toContainText('23 turns')
+  await expect(detail(page).locator('.facts').first()).not.toContainText('counted')
   await expect(detail(page).locator('.facts').first()).toContainText(/\d+\.\dk context peak/)
   await expect(detail(page).locator('.warnings li')).toContainText('left a process behind')
   // What the run ran with: the factory that recorded it writes its own version into every run.
   await expect(detail(page).locator('.versions')).toContainText(/factory \d+\.\d+\.\d+/)
+
+  // A run whose worker printed no result line yet carries the totals the factory counted from its
+  // stream, and says that they are counted.
+  await page.goto(working(`/#run=${RUNNING_RUN}`))
+  await expect(detail(page).locator('.facts').first()).toContainText(/\d+ turns/)
+  await expect(detail(page).locator('.facts').first()).toContainText(/\$\d+\.\d\d · totals counted by the factory/)
 })
 
 test('the live log sets the events of the worker’s subagents in', async ({ page }) => {

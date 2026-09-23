@@ -293,6 +293,12 @@ func (g *gitHub) readHeld(ctx context.Context, held []Held, letGo map[string]str
 // ends whatever of the issue is still going: a factory that worked the issue on while its pull
 // request was decided would be working against the decision.
 //
+// A pull request merged while the run that opened it still waits in ci ends that run as cancelled,
+// not ready. The merge closes the issue, which is read first, and the run's pull request is not on
+// its record until its report names it, so what the factory hears is the issue closed. Ready would
+// also ask the maintainer for a review of work already merged. The reason the record carries says
+// what happened, and the totals the factory counted say what it cost.
+//
 // The routing label alone is read and not the rest of the frontier rule: routing is what hands an
 // issue to this factory and taking that label off is what takes it back ([ADR 0023]), while
 // ready-for-agent says the issue is ready to be worked at all — an issue already in work is past

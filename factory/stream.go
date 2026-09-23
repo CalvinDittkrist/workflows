@@ -44,6 +44,8 @@ var deniers = map[string]string{
 
 // message is what an assistant or user line carries in its message.
 type message struct {
+	ID      string          `json:"id"`
+	Model   string          `json:"model"`
 	Content json.RawMessage `json:"content"`
 	Usage   usage           `json:"usage"`
 }
@@ -65,6 +67,13 @@ type usage struct {
 	CacheCreation int `json:"cache_creation_input_tokens"`
 	CacheRead     int `json:"cache_read_input_tokens"`
 	Output        int `json:"output_tokens"`
+	// CacheCreationDetail splits the cache writes by how long the cache keeps them, which is what a
+	// write costs: the hour's twice the input price, the five minutes' a quarter above it.
+	CacheCreationDetail cacheCreation `json:"cache_creation"`
+}
+
+type cacheCreation struct {
+	Hour int `json:"ephemeral_1h_input_tokens"`
 }
 
 type block struct {
@@ -86,8 +95,9 @@ var stages = map[string]string{
 	"worker:address-reviews": "reviews",
 }
 
-// ingest reads one line of the worker's stream into the run: its events, its stage, and on the
-// result line the totals of the session.
+// ingest reads one line of the worker's stream into the run: its events, its stage, the totals the
+// factory counts from the assistant lines, and on the result line the worker's own totals, which
+// replace them.
 func (f *Factory) ingest(r *Run, line []byte) {
 	var m streamLine
 	if json.Unmarshal(line, &m) != nil || m.Type == "" {
@@ -116,14 +126,8 @@ func (f *Factory) ingest(r *Run, line []byte) {
 	case m.Type == "system" && !quietSubtypes[m.Subtype]:
 		f.runs.event(r, Event{Kind: "system", Title: "system: " + m.Subtype, Body: string(line), Sub: sub})
 	case m.Type == "assistant":
-		// What a message started from is its input plus everything read from the cache: the context it
-		// was answered with. A subagent has a context of its own, which says nothing about how full the
-		// worker's is, so only the worker's own messages count.
 		msg := body(m.Message)
-		if !sub {
-			u := msg.Usage
-			f.runs.raiseContextPeak(r, u.Input+u.CacheCreation+u.CacheRead)
-		}
+		f.runs.count(r, msg, sub)
 		for _, b := range blocks(msg.Content) {
 			switch b.Type {
 			case "text":
@@ -148,7 +152,7 @@ func (f *Factory) ingest(r *Run, line []byte) {
 		final := text(m.Result)
 		outcome, detail := report(final)
 		f.runs.update(r, func() {
-			r.Turns, r.CostUSD = m.NumTurns, m.TotalCostUSD
+			r.Turns, r.CostUSD, r.Totals = m.NumTurns, m.TotalCostUSD, totalsWorker
 			r.Tokens = Tokens{Input: m.Usage.Input, Output: m.Usage.Output, CacheCreation: m.Usage.CacheCreation, CacheRead: m.Usage.CacheRead}
 			r.reportOutcome, r.reportDetail = outcome, detail
 		})

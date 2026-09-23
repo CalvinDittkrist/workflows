@@ -1188,6 +1188,10 @@ func (f *Factory) finish(r *Run, outcome, reason string, exitCode *int) {
 	if reason != "" {
 		f.runs.event(r, Event{Kind: kind, Title: outcome, Body: reason})
 	}
+	if models := f.runs.unpriced(r); len(models) > 0 {
+		f.warn(r, "cost counted without "+strings.Join(models, ", "),
+			"the factory has no price for "+strings.Join(models, ", ")+", so the cost it counted leaves the messages of that model out")
+	}
 	// Whether the maintainer has to hear of this ending is decided before it is written, so that the
 	// record carries both in one write, and the call itself is made once the ending stands.
 	owed := f.owes(*r, outcome)

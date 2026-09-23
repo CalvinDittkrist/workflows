@@ -96,6 +96,7 @@ func scriptedWorker(args []string, stdout, stderr io.Writer) int {
 	// The child of a hanging worker: it prints which process it is and then waits to be ended with
 	// the process group, which is what proves that no worker process survives a deadline.
 	if scenario == "child" {
+		s.messages = 1 << 20 // its message is one of its own, not the worker's first one again
 		s.say(fmt.Sprintf("worker child process %d", os.Getpid()))
 		time.Sleep(time.Hour)
 		return 0
@@ -115,7 +116,11 @@ func scriptedWorker(args []string, stdout, stderr io.Writer) int {
 
 	switch scenario {
 	case "hang":
-		s.say(fmt.Sprintf("worker process %d", os.Getpid()))
+		s.thinkAndSay("The calibration procedure is spread over three files.", fmt.Sprintf("worker process %d", os.Getpid()))
+		// A subagent on a model the factory has no price for: its tokens count, its cost cannot.
+		s.emit(map[string]any{"type": "assistant", "parent_tool_use_id": "toolu_scout", "message": map[string]any{
+			"id": "msg_scout", "model": unpricedModel, "usage": s.usage(true),
+			"content": []map[string]any{{"type": "text", "text": "Three files name the procedure."}}}})
 		child := exec.Command(os.Args[0], "scripted-worker", "child", repository, strconv.Itoa(issue))
 		child.Stdout, child.Stderr = stdout, stderr
 		if err := child.Start(); err != nil {
@@ -201,9 +206,40 @@ func scriptedWorker(args []string, stdout, stderr io.Writer) int {
 
 // script writes the stream of a worker session, one JSON object per line.
 type script struct {
-	out     io.Writer
-	tools   int
-	context int // what the next message of the worker itself starts from
+	out      io.Writer
+	tools    int
+	messages int
+	context  int // what the next message of the worker itself starts from
+}
+
+// scriptedModel is the model the messages of the scripted worker name; unpricedModel is one the
+// factory has no price for, which a subagent of the hanging worker runs on.
+const (
+	scriptedModel = "claude-opus-5"
+	unpricedModel = "claude-unreleased-9"
+)
+
+// thinkAndSay is one message of the worker written as two lines, the way Claude Code prints a
+// message of two content blocks: both carry its id, and the first its usage from before the text was
+// written. A factory that counted lines rather than messages would count two turns and too much.
+func (s *script) thinkAndSay(thought, text string) {
+	s.messages++
+	id, u := fmt.Sprintf("msg_%d", s.messages), s.usage(false)
+	start := map[string]any{}
+	for k, v := range u {
+		start[k] = v
+	}
+	start["output_tokens"] = 1
+	for _, line := range []struct {
+		usage map[string]any
+		block map[string]any
+	}{
+		{start, map[string]any{"type": "thinking", "thinking": thought}},
+		{u, map[string]any{"type": "text", "text": text}},
+	} {
+		s.emit(map[string]any{"type": "assistant", "parent_tool_use_id": nil, "message": map[string]any{
+			"id": id, "model": scriptedModel, "content": []map[string]any{line.block}, "usage": line.usage}})
+	}
 }
 
 // The context of the scripted worker: it starts at a loaded session and grows with every message the
@@ -228,7 +264,7 @@ func (s *script) hook(name, outcome string) {
 }
 
 func (s *script) init() {
-	s.emit(map[string]any{"type": "system", "subtype": "init", "model": "claude-opus-5",
+	s.emit(map[string]any{"type": "system", "subtype": "init", "model": scriptedModel,
 		"permissionMode": "auto", "session_id": "f7ca4f15-d7f2-4168-ac7c-bc91256d5117"})
 }
 
@@ -237,6 +273,8 @@ func (s *script) init() {
 func (s *script) message(kind, parent string, content []map[string]any) {
 	message := map[string]any{"content": content}
 	if kind == "assistant" {
+		s.messages++
+		message["id"], message["model"] = fmt.Sprintf("msg_%d", s.messages), scriptedModel
 		message["usage"] = s.usage(parent != "")
 	}
 	line := map[string]any{"type": kind, "parent_tool_use_id": nil, "message": message}
@@ -254,7 +292,8 @@ func (s *script) usage(sub bool) map[string]any {
 		read = s.context
 	}
 	return map[string]any{"input_tokens": 400, "cache_creation_input_tokens": 1200,
-		"cache_read_input_tokens": read, "output_tokens": 250}
+		"cache_read_input_tokens": read, "output_tokens": 250,
+		"cache_creation": map[string]any{"ephemeral_5m_input_tokens": 400, "ephemeral_1h_input_tokens": 800}}
 }
 
 // compact is what a handoff does to the worker's context: it starts from a loaded session again,
