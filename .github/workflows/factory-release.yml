@@ -21,7 +21,7 @@ jobs:
           fetch-depth: 0 # the whole history, so the tagged commit can be held against main
       - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24
       - uses: actions/setup-go@v7
         with:
           go-version: '1.26' # the version the gate runs on, so the binaries are built by the compiler CI checked with

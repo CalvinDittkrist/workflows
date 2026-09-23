@@ -14,7 +14,7 @@ jobs:
       # names the versions of what it holds, so a new version never reads an entry of an old one.
       - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24
           cache: npm # npm's download cache, keyed by the dashboard's lockfile; Claude Code still installs its latest
           cache-dependency-path: factory/ui/package-lock.json
       - uses: actions/setup-go@v7
