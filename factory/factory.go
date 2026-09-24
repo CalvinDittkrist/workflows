@@ -101,12 +101,15 @@ type Factory struct {
 	// state of the factory; what has been answered is read from the run records ([ADR 0025]).
 	//
 	// [ADR 0025]: ../docs/adr/0025-one-queue-one-worker-work-in-progress-first.md
-	requested  map[string]time.Time
-	unreadable map[string]string
-	polledAt   time.Time
-	connecting bool
-	user       string          // the login this host's gh is logged in as, read once and kept
-	held       map[string]bool // repositories this factory claims nothing from, so the log says it once
+	requested map[string]time.Time
+	// requestedEarly says that requested was read while a run was going: a run that ends between
+	// that reading and the start of the next one has not been asked about yet.
+	requestedEarly bool
+	unreadable     map[string]string
+	polledAt       time.Time
+	connecting     bool
+	user           string          // the login this host's gh is logged in as, read once and kept
+	held           map[string]bool // repositories this factory claims nothing from, so the log says it once
 	// cancelling is how a poll ends a run that is still going: the cancel of the context that run
 	// works under, by run, put there when the run starts and taken out when it ends or is cancelled.
 	// Only a run of this factory is in it, so a record of an older start can never be signalled here.
@@ -488,6 +491,14 @@ func (f *Factory) dispatch(ctx context.Context) {
 		if r.EndedAt == nil {
 			return
 		}
+	}
+	// The run that was going when this poll read the reviews has ended since, and a review of its pull
+	// request would stand behind whatever the line starts next if it were not read now.
+	f.mu.Lock()
+	early := f.requestedEarly
+	f.mu.Unlock()
+	if early {
+		f.refreshRequested(ctx)
 	}
 	if _, waiting := f.waitingForQuota(time.Now()); waiting {
 		return
