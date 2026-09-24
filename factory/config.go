@@ -49,6 +49,7 @@ type Config struct {
 	// object overrides them one knob at a time (ciKnobs).
 	CI     *ciKnobs     `json:"ci"`
 	Review *reviewKnobs `json:"review"`
+	Gate   *gateKnobs   `json:"gate"`
 }
 
 // Connected is one repository the factory works: its name on GitHub and, optionally, the branch a
@@ -62,10 +63,13 @@ type Connected struct {
 	Base   string       `json:"base"`
 	CI     *ciKnobs     `json:"ci"`
 	Review *reviewKnobs `json:"review"`
-	// wait is the ci stage's knobs for this repository, and panel the review stage's: the host's, with
-	// what the repository's own ci and review objects name written over them. Load fills them in.
+	Gate   *gateKnobs   `json:"gate"`
+	// wait is the ci stage's knobs for this repository, panel the review stage's and gate the gate
+	// stage's: the host's, with what the repository's own ci, review and gate objects name written over
+	// them. Load fills them in.
 	wait  ciSettings
 	panel reviewSettings
+	gate  gateSettings
 }
 
 // UnmarshalJSON takes a connected repository as the name alone or as an object with its settings, so
@@ -85,7 +89,7 @@ func (c *Connected) UnmarshalJSON(raw []byte) error {
 	decoder.DisallowUnknownFields()
 	var read settings
 	if err := decoder.Decode(&read); err != nil {
-		return fmt.Errorf(`%w; a repository is "owner/name" or {"name": "owner/name", "base": "dev", "ci": {"repair_rounds": 2}, "review": {"rounds": 2}}`, err)
+		return fmt.Errorf(`%w; a repository is "owner/name" or {"name": "owner/name", "base": "dev", "ci": {"repair_rounds": 2}, "review": {"rounds": 2}, "gate": {"rounds": 2}}`, err)
 	}
 	*c = Connected(read)
 	return nil
@@ -109,8 +113,9 @@ type Settings struct {
 	// CI is the host's knobs of the ci stage, and each connected repository carries its own, resolved
 	// against them.
 	CI ciSettings
-	// Review is the host's knobs of the review stage, resolved the same way.
+	// Review is the host's knobs of the review stage, and Gate the gate stage's, resolved the same way.
 	Review reviewSettings
+	Gate   gateSettings
 	// WorkerModel is the model the worker runs on, one of those whose quota scope the check reads
 	// (Factory.spends): the worker agent's own unless worker_args names another with --model.
 	WorkerModel string
@@ -123,7 +128,7 @@ const (
 	defaultPoll         = 60 * time.Second
 	defaultQuotaMinimum = 12
 
-	configFields = "listen, label, deadline, poll, data_dir, worker_args, worker_env, paused, notify, repositories, quota_axi, quota_minimum, ci, review"
+	configFields = "listen, label, deadline, poll, data_dir, worker_args, worker_env, paused, notify, repositories, quota_axi, quota_minimum, ci, review, gate"
 )
 
 // A repository is named as owner/name; the factory never takes a URL or a local path, because the
@@ -350,6 +355,11 @@ func Load(path string) (Settings, error) {
 		return bad("review: %v", err)
 	}
 	s.Review = panel
+	gate, err := defaultGate.over(c.Gate)
+	if err != nil {
+		return bad("gate: %v", err)
+	}
+	s.Gate = gate
 	if strings.TrimSpace(c.DataDir) == "" {
 		return bad("data_dir is missing; name the directory the runs are written to, such as \"/var/lib/factory\"")
 	}
@@ -384,6 +394,9 @@ func Load(path string) (Settings, error) {
 		}
 		if r.panel, err = panel.over(r.Review); err != nil {
 			return bad("the review of %s: %v", r.Name, err)
+		}
+		if r.gate, err = gate.over(r.Gate); err != nil {
+			return bad("the gate of %s: %v", r.Name, err)
 		}
 		s.Repositories = append(s.Repositories, r)
 	}

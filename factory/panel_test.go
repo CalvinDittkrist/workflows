@@ -92,12 +92,12 @@ func agentOf(t *testing.T, w workerStart) (string, map[string]any) {
 
 // The work session stops after the gate. The factory then starts the five reviewers beside each other,
 // each read-only, as the inline agent of its own prompt with its tools and its model, in the run's
-// worktree, briefed with the gate result the work session reported; they pass, and the pull request
+// worktree, briefed with the gate result the gate stage recorded; they pass, and the pull request
 // carries the panel the factory derived from their verdicts. The branch did not move, so the gate does
 // not run again.
 func TestThePanelRunsTheFactorysReviewersReadOnlyBesideEachOther(t *testing.T) {
 	t.Parallel()
-	gh, data := panelClaim(t, "@echo the gate ran, which it should not have; exit 1")
+	gh, data := panelClaim(t, "@echo the gate of the panel passes")
 	// Every reviewer waits for the other four to have started before it reports.
 	gh.env = append(gh.env, "CLAUDE_SHIM_REVIEW_BARRIER=5")
 	c := ciConfig(data, nil)
@@ -107,15 +107,15 @@ func TestThePanelRunsTheFactorysReviewersReadOnlyBesideEachOther(t *testing.T) {
 	if run.Outcome != outcomeReady {
 		t.Fatalf("the run ended as %q (%s), want ready; the factory's log:\n%s", run.Outcome, run.Reason, f.output(t))
 	}
-	if !equal(run.Stages, []string{"implement", "review", "pr", "ci"}) {
-		t.Errorf("the run went through the stages %v, want implement, review, pr and ci", run.Stages)
+	if !equal(run.Stages, []string{"implement", "gate", "review", "pr", "ci"}) {
+		t.Errorf("the run went through the stages %v, want implement, gate, review, pr and ci", run.Stages)
 	}
 	workers := gh.workers(t)
 	if len(workers) != 1 {
 		t.Fatalf("the factory started %d worker sessions, want the work session alone", len(workers))
 	}
-	if stop := workers[0].settings(t).Env["WF_STOP_AFTER"]; stop != "gate" {
-		t.Errorf("the work session ran with WF_STOP_AFTER=%q, want gate", stop)
+	if stop := workers[0].settings(t).Env["WF_STOP_AFTER"]; stop != "implement" {
+		t.Errorf("the work session ran with WF_STOP_AFTER=%q, want implement", stop)
 	}
 
 	reviewers := gh.reviewerSessions(t)
@@ -148,13 +148,13 @@ func TestThePanelRunsTheFactorysReviewersReadOnlyBesideEachOther(t *testing.T) {
 		t.Errorf("the factory started the reviewers %v, want the five of the panel once each", seen)
 	}
 	brief := strings.Join(factoryBodies(run, "briefed the reviewers"), "\n")
-	for _, want := range []string{"Review round 1 of 3", "gate_result: pass (exit 0) at c0ffee0", "worked.md", "Issue #104"} {
+	for _, want := range []string{"Review round 1 of 3", "gate_result: pass (exit 0) at " + short(run.Review.Head), "worked.md", "Issue #104"} {
 		if !strings.Contains(brief, want) {
 			t.Errorf("the reviewers' brief does not carry %q:\n%s", want, brief)
 		}
 	}
-	if titles := factoryTitles(run, "running the gate"); len(titles) != 0 {
-		t.Errorf("the factory ran the gate again on a branch no fix moved: %v", titles)
+	if titles := factoryTitles(run, "running the gate"); !equal(titles, []string{"running the gate"}) {
+		t.Errorf("the factory ran the gate as %v, want once in the gate stage and not again on a branch no fix moved", titles)
 	}
 	pulls := gh.opened(t, "acme/edge-sensors")
 	want := "review_rounds: 1\npanel: code=PASS security=PASS docs=PASS tests=PASS senior=PASS\nfixed: 0 (S1 0, S2 0, S3 0)\ndisputed: none"
@@ -208,10 +208,11 @@ func TestMixedVerdictsTakeASecondRoundOfTheReviewersThatAskedForFixes(t *testing
 	if brief := strings.Join(factoryBodies(run, "briefed the reviewers"), "\n"); !strings.Contains(brief, "Review round 2 of 3") {
 		t.Errorf("the second round's reviewers were not briefed as such:\n%s", brief)
 	}
-	// The fix moved the branch, so the gate ran on its head.
-	head := gh.head(t, "acme/edge-sensors", claimedBranch)
-	if titles := factoryTitles(run, "gate_result: "); !equal(titles, []string{"gate_result: pass (exit 0) at " + short(head)}) {
-		t.Errorf("the factory logged the gates %v, want one pass on the final head %s", titles, short(head))
+	// The gate stage ran the gate on the work session's commit, and the fix moved the branch, so the
+	// gate ran again on its head.
+	head, worked := gh.head(t, "acme/edge-sensors", claimedBranch), run.Panel.Rounds[0].Head
+	if titles := factoryTitles(run, "gate_result: "); !equal(titles, []string{"gate_result: pass (exit 0) at " + short(worked), "gate_result: pass (exit 0) at " + short(head)}) {
+		t.Errorf("the factory logged the gates %v, want a pass at %s and one on the final head %s", titles, short(worked), short(head))
 	}
 	pulls := gh.opened(t, "acme/edge-sensors")
 	if len(pulls) != 1 {
@@ -362,8 +363,10 @@ func TestTheFixSessionOfAFullPanelGetsEveryFindingWithinTheArgumentLimit(t *test
 func TestAGateThatFailsOnTheFinalHeadGoesToAFixSessionWithinItsBudget(t *testing.T) {
 	t.Parallel()
 	// worked.md has a line for every session that worked the branch: the work session's, the review fix
-	// session's and then the gate fix session's.
-	const gate = `@lines=$$(wc -l < worked.md | tr -d ' '); echo "worked.md has $$lines lines"; test $$lines -ge 3`
+	// session's and then the gate fix session's. Both gates pass in the gate stage, on the work
+	// session's line alone, and fail on the review fix session's.
+	const gate = `@lines=$$(wc -l < worked.md | tr -d ' '); echo "worked.md has $$lines lines"; test $$lines -ne 2`
+	const never = `@lines=$$(wc -l < worked.md | tr -d ' '); echo "the gate passes on the work session's commit alone"; test $$lines -lt 2`
 	for name, c := range map[string]struct {
 		recipe  string
 		knobs   map[string]any
@@ -371,7 +374,7 @@ func TestAGateThatFailsOnTheFinalHeadGoesToAFixSessionWithinItsBudget(t *testing
 		fixes   int
 	}{
 		"fixed within the budget": {gate, nil, outcomeReady, 1},
-		"over the budget":         {"@echo the gate never passes; exit 2", map[string]any{"gate_rounds": 1}, outcomeBlocked, 1},
+		"over the budget":         {never, map[string]any{"gate_rounds": 1}, outcomeBlocked, 1},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -405,7 +408,7 @@ func TestAGateThatFailsOnTheFinalHeadGoesToAFixSessionWithinItsBudget(t *testing
 				}
 				return
 			}
-			for _, want := range []string{"the gate fails on the final head after 1 of 1 fix sessions (review.gate_rounds)", "the gate never passes"} {
+			for _, want := range []string{"the gate fails on the final head after 1 of 1 fix sessions (review.gate_rounds)", "the gate passes on the work session's commit alone"} {
 				if !strings.Contains(run.Reason, want) {
 					t.Errorf("the run was blocked because %q, want a reason with %q", run.Reason, want)
 				}
@@ -422,26 +425,28 @@ func TestAGateThatFailsOnTheFinalHeadGoesToAFixSessionWithinItsBudget(t *testing
 // gate's and no push. The changes stay in the worktree, which the reason names with them.
 func TestAFixSessionThatLeavesItsChangesUncommittedFailsTheRun(t *testing.T) {
 	t.Parallel()
-	for name, prepare := range map[string]func(*ghShim, *testing.T){
-		"of the review": func(gh *ghShim, t *testing.T) {
+	for name, c := range map[string]struct {
+		recipe  string
+		prepare func(*ghShim, *testing.T)
+		stage   string
+	}{
+		"of the review": {"@true", func(gh *ghShim, t *testing.T) {
 			gh.verdict(t, "code", 1, findings(t, Finding{Severity: "S2", Path: "a.go", Line: 3, Claim: "Off by one.", Why: "It skips the last.", Fix: "Use <=."}))
 			gh.repairs(t, map[string]any{"outcome": "complete", "fixed": []string{"F1"}, "disputed": []map[string]any{}, "skipped": []map[string]any{}, "summary": "Fixed."})
-		},
-		"of the gate": func(gh *ghShim, t *testing.T) {
-			gh.env = append(gh.env, `CLAUDE_SHIM_RESULT={"outcome":"complete","gateResult":"gate_result: fail (exit 2) at c0ffee0","commits":["c0ffee0 feat: the work"],"summary":"stopped after gate"}`)
-		},
+		}, "review"},
+		"of the gate": {"@echo the gate fails; exit 2", func(*ghShim, *testing.T) {}, "gate"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			gh, data := panelClaim(t, "@echo the gate fails; exit 2")
+			gh, data := panelClaim(t, c.recipe)
 			gh.env = append(gh.env, "CLAUDE_SHIM_THEN_UNCOMMITTED=1")
-			prepare(gh, t)
+			c.prepare(gh, t)
 			f := gh.work(t, ciConfig(data, nil))
 			run := f.ended(t, 1)
 			if run.Outcome != outcomeFailed {
 				t.Fatalf("the run ended as %q (%s), want failed; the factory's log:\n%s", run.Outcome, run.Reason, f.output(t))
 			}
-			for _, want := range []string{"the session of the stage review reported complete and left changes it did not commit", "M worked.md", run.Worktree} {
+			for _, want := range []string{"the session of the stage " + c.stage + " reported complete and left changes it did not commit", "M worked.md", run.Worktree} {
 				if !strings.Contains(run.Reason, want) {
 					t.Errorf("the run failed because %q, want a reason with %q", run.Reason, want)
 				}

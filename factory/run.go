@@ -133,6 +133,9 @@ type Run struct {
 	// Panel is what the review stage recorded: its rounds, the verdicts and fixes of each, and the gate
 	// on the final head. A resumed run goes on from it.
 	Panel *Panel `json:"panel,omitempty"`
+	// Gates is every run of the gate, in the gate stage and on the final head: the commit, the exit
+	// status, the duration and the end of the output of each.
+	Gates []Gated `json:"gates,omitempty"`
 	// Answered is the reviews asking for changes on that pull request whose summaries the run
 	// answered, by their URL. A review stands on GitHub until its author approves, so every later run
 	// on the pull request reads these to leave them alone.

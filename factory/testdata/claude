@@ -11,7 +11,7 @@
 #                      not written: only whether a name is there is ever asked)
 #   CLAUDE_SHIM_FAIL   when set, the session ends with this on its error output and exit 1
 #   CLAUDE_SHIM_RESULT the structured result of the session as one line of JSON, by default a
-#                      complete one of a session that stopped after the gate, with a gate that passed;
+#                      complete one of a session that stopped after the implement stage;
 #                      it is printed as it stands, so a test can hand the factory one that does not fit
 #                      the schema, or one with any of the schema's fields: the pull request, the panel
 #                      summary, the gate result and the commits
@@ -221,7 +221,7 @@ if [ -n "$repair" ]; then
   [ -n "$output" ] || output='{"outcome":"complete","fixed":[],"disputed":[],"skipped":[],"summary":"nothing to fix"}'
 fi
 if [ -z "$output" ]; then
-  output='{"outcome":"complete","gateResult":"gate_result: pass (exit 0) at c0ffee0","commits":["c0ffee0 feat: the work"],"summary":"stopped after gate"}'
+  output='{"outcome":"complete","commits":["c0ffee0 feat: the work"],"summary":"stopped after implement"}'
 fi
 
 printf '%s\n' '{"type":"system","subtype":"init","model":"claude-opus-5","permissionMode":"auto","session_id":"5f2d8c11-0b9e-4a3f-9d21-7c6e4b0a1f33"}'

@@ -4,9 +4,9 @@ import { useEffect, useRef, useState } from 'react'
 // /api/repositories and /api/line for the three areas, and /api/runs/{id} for the selected run.
 
 // The stages of the pipeline in the order a run moves through them. The work session is implement;
-// the factory sets the stages after it itself, and a run moves between ci and address-reviews as the
+// the factory runs the stages after it itself, from the gate on, and a run moves between ci and address-reviews as the
 // reviewers ask for changes; this is the line those stages are shown on.
-const STAGES = ['implement', 'review', 'pr', 'ci', 'address-reviews']
+const STAGES = ['implement', 'gate', 'review', 'pr', 'ci', 'address-reviews']
 
 // A stage as a run shows it: the review with the round of its panel the run is in or ended at, and the
 // change class that applied, each class the determinations moved to after an arrow.

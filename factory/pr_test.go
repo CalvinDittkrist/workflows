@@ -36,8 +36,8 @@ func TestTheFactoryOpensThePullRequestFromTheAuthorsTitleAndBody(t *testing.T) {
 	if run.Outcome != outcomeReady || run.PullRequest != pullOfTheClaim {
 		t.Fatalf("the run ended as %q with %q (%s), want ready with %s; the factory's log:\n%s", run.Outcome, run.PullRequest, run.Reason, pullOfTheClaim, f.output(t))
 	}
-	if !equal(run.Stages, []string{"implement", "review", "pr", "ci"}) {
-		t.Errorf("the run went through the stages %v, want implement, review, pr and ci", run.Stages)
+	if !equal(run.Stages, []string{"implement", "gate", "review", "pr", "ci"}) {
+		t.Errorf("the run went through the stages %v, want implement, gate, review, pr and ci", run.Stages)
 	}
 
 	pulls := gh.opened(t, "acme/edge-sensors")
@@ -50,9 +50,11 @@ func TestTheFactoryOpensThePullRequestFromTheAuthorsTitleAndBody(t *testing.T) {
 			p.Title, p.Head, p.Base, p.Draft, claimedBranch)
 	}
 	// The body is the author's as it is, and the verification section carries the run's facts word for
-	// word: the gate the work session reported and the panel of the shim's reviewers, who all pass.
+	// word: the gate the gate stage ran on the reviewed commit and the panel of the shim's reviewers, who
+	// all pass.
 	wantPanel := "review_rounds: 1\npanel: code=PASS security=PASS docs=PASS tests=PASS senior=PASS\nfixed: 0 (S1 0, S2 0, S3 0)\ndisputed: none"
-	for _, want := range []string{authored["body"].(string) + "\n\n## Verification\n", wantPanel, "gate_result: pass (exit 0) at c0ffee0"} {
+	wantGate := "gate_result: pass (exit 0) at " + short(run.Review.Head) + "\ngate_command: make check\ngate_class: full\ngate_duration: "
+	for _, want := range []string{authored["body"].(string) + "\n\n## Verification\n", wantPanel, wantGate} {
 		if !strings.Contains(p.Body, want) {
 			t.Errorf("the pull request's body does not carry %q:\n%s", want, p.Body)
 		}
@@ -61,14 +63,14 @@ func TestTheFactoryOpensThePullRequestFromTheAuthorsTitleAndBody(t *testing.T) {
 		t.Errorf("the body of a pull request whose panel passed says it did not:\n%s", p.Body)
 	}
 
-	// The work session ran with the worker plugin and stopped after the gate; the author session ran
+	// The work session ran with the worker plugin and stopped after the implement stage; the author session ran
 	// read-only, as no agent, in the same worktree, briefed with the range, the commits and the issue.
 	workers, authors := gh.workers(t), gh.authorSessions(t)
 	if len(workers) != 1 || len(authors) != 1 {
 		t.Fatalf("the factory started %d work sessions and %d author sessions, want one of each", len(workers), len(authors))
 	}
-	if stop := workers[0].settings(t).Env["WF_STOP_AFTER"]; stop != "gate" {
-		t.Errorf("the work session ran with WF_STOP_AFTER=%q, want gate", stop)
+	if stop := workers[0].settings(t).Env["WF_STOP_AFTER"]; stop != "implement" {
+		t.Errorf("the work session ran with WF_STOP_AFTER=%q, want implement", stop)
 	}
 	author := authors[0]
 	if !author.started("--tools", "Read,Grep,Glob") || !author.started("--strict-mcp-config") || slices.Contains(author.args, "--agent") {
@@ -264,9 +266,10 @@ func TestAResumeAfterTheReviewStartsAtThePRStageWithoutASecondReview(t *testing.
 	}
 }
 
-// A branch that moved after the review was recorded carries work no reviewer read: the resume runs the
-// work session again instead of opening the pull request.
-func TestAResumeWhoseBranchMovedAfterTheReviewRunsTheWorkSessionAgain(t *testing.T) {
+// A branch that moved after the review was recorded carries work no reviewer read and no gate passed:
+// the resume starts at the gate stage on the branch's head instead of opening the pull request, and
+// runs no work session, since the commits beyond the base are the implementation.
+func TestAResumeWhoseBranchMovedAfterTheReviewStartsAtTheGateStage(t *testing.T) {
 	t.Parallel()
 	gh := newGhShim(t)
 	gh.remote(t, "acme/edge-sensors")
@@ -275,7 +278,7 @@ func TestAResumeWhoseBranchMovedAfterTheReviewRunsTheWorkSessionAgain(t *testing
 	clone := gh.cloneInto(t, data, "acme/edge-sensors")
 	gh.branchAt(t, "acme/edge-sensors", claimedBranch, gh.head(t, "acme/edge-sensors", "main"))
 	reviewed := gh.commitOn(t, "acme/edge-sensors", claimedBranch)
-	gh.commitOn(t, "acme/edge-sensors", claimedBranch)
+	moved := gh.commitOn(t, "acme/edge-sensors", claimedBranch)
 
 	began := time.Now().UTC().Add(-2 * time.Hour)
 	interrupted := record(1, claimedIssue, claimedTitle, signalRouted, outcomeInterrupted, true, began, began.Add(30*time.Minute))
@@ -292,8 +295,14 @@ func TestAResumeWhoseBranchMovedAfterTheReviewRunsTheWorkSessionAgain(t *testing
 	if resumed.Outcome != outcomeReady {
 		t.Fatalf("run 2 ended as %q (%s), want ready; the factory's log:\n%s", resumed.Outcome, resumed.Reason, f.output(t))
 	}
-	if workers := gh.workers(t); len(workers) != 1 {
-		t.Errorf("the resume started %d work sessions, want one: the branch moved after the review", len(workers))
+	if workers := gh.workers(t); len(workers) != 0 {
+		t.Errorf("the resume started %d work sessions, want none: the branch carries the implementation", len(workers))
+	}
+	if !equal(resumed.Stages, []string{"gate", "review", "pr", "ci"}) || len(resumed.Gates) != 1 || resumed.Gates[0].Head != moved || !resumed.Gates[0].Passed {
+		t.Errorf("the resume went through the stages %v with the gates %+v, want it to start at the gate stage with a pass on %s", resumed.Stages, resumed.Gates, short(moved))
+	}
+	if titles := factoryTitles(resumed, "resuming at the gate stage"); len(titles) != 1 {
+		t.Errorf("the resume does not say it starts at the gate stage; its factory events: %v", factoryTitles(resumed, ""))
 	}
 	if titles := factoryTitles(resumed, "the recorded review is behind the branch"); len(titles) != 1 {
 		t.Errorf("the resume does not say the recorded review is behind the branch; its factory events: %v", factoryTitles(resumed, ""))

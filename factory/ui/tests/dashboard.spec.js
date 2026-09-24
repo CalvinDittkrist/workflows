@@ -106,19 +106,20 @@ test('a run is selected through the URL and the selection survives a reload', as
 test('the stage line and the outcome box show the scripted states', async ({ page }) => {
   await page.goto(working(`/#run=${READY_RUN}`))
   const stages = detail(page).locator('.steps li')
-  // The ready run went through every stage: its panel took two rounds, in ci the reviewers asked for
-  // changes, an address-reviews session answered them, and the run ended back in ci. Its change was
-  // of the class docs until a fix moved it to the class upload.
+  // The ready run went through every stage: its gate passed, its panel took two rounds, in ci the
+  // reviewers asked for changes, an address-reviews session answered them, and the run ended back in
+  // ci. Its change was of the class docs until a fix moved it to the class upload.
   await expect(stages).toHaveText([
     'implement',
+    'gate',
     'review, round 2, class docs → upload',
     'pr',
     'ci',
     'address-reviews',
   ])
   await expect(stages.nth(0)).toHaveClass('done')
-  await expect(stages.nth(3)).toHaveClass(/at/)
-  await expect(stages.nth(4)).toHaveClass('done')
+  await expect(stages.nth(4)).toHaveClass(/at/)
+  await expect(stages.nth(5)).toHaveClass('done')
   await expect(detail(page).locator('.outcome')).toContainText('ready')
   await expect(detail(page).getByRole('link')).toHaveAttribute(
     'href',
@@ -126,7 +127,7 @@ test('the stage line and the outcome box show the scripted states', async ({ pag
   )
 
   await page.goto(working(`/#run=${BLOCKED_RUN}`))
-  // The blocked run stopped in its work session and never reached the review after it.
+  // The blocked run stopped in its work session and never reached the gate after it.
   await expect(detail(page).locator('.steps .at')).toHaveText('implement')
   await expect(detail(page).locator('.steps li').nth(1)).toHaveClass('')
   await expect(detail(page).locator('.outcome')).toContainText('blocked')
@@ -136,12 +137,12 @@ test('the stage line and the outcome box show the scripted states', async ({ pag
   // The follow-up run started at address-reviews and ended in ci, and never did the work before them.
   await expect(detail(page).locator('.facts').first()).toContainText('follow-up run')
   await expect(detail(page).locator('.steps .at')).toHaveText('ci')
-  await expect(detail(page).locator('.steps li').nth(4)).toHaveClass('done')
+  await expect(detail(page).locator('.steps li').nth(5)).toHaveClass('done')
   await expect(detail(page).locator('.steps li').nth(0)).toHaveClass('')
 
-  // The run whose fixes left every class shows the class it moved to, full.
+  // The run whose change the fix of its merge took out of every class shows the class full.
   await page.goto(working(`/#run=${WARNED_RUN}`))
-  await expect(detail(page).locator('.steps li').nth(1)).toHaveText('review, round 3, class docs → full')
+  await expect(detail(page).locator('.steps li').nth(2)).toHaveText('review, round 3, class full')
 
   await page.goto(working(`/#run=${RUNNING_RUN}`))
   // The run that is still going has no outcome box at all.
@@ -154,11 +155,11 @@ test('the selected run shows what it cost, how full its context came and what it
   page,
 }) => {
   await page.goto(working(`/#run=${WARNED_RUN}`))
-  // Its fourteen sessions are summed: the work session, seven reviewers over three rounds, the fix
-  // sessions of those rounds and of its gate, the author session of its pr stage and the fix session of
-  // its conflict.
-  await expect(detail(page).locator('.facts').first()).toContainText('$58.52')
-  await expect(detail(page).locator('.facts').first()).toContainText('322 turns')
+  // Its sixteen sessions are summed: the work session, the fix sessions of its merge and its gate in the
+  // gate stage, seven reviewers over three rounds, the fix sessions of those rounds and of its gate on
+  // the final head, the author session of its pr stage and the fix session of its conflict.
+  await expect(detail(page).locator('.facts').first()).toContainText('$66.88')
+  await expect(detail(page).locator('.facts').first()).toContainText('368 turns')
   await expect(detail(page).locator('.facts').first()).not.toContainText('counted')
   await expect(detail(page).locator('.facts').first()).toContainText(/\d+\.\dk context peak/)
   await expect(detail(page).locator('.warnings li')).toContainText('left a process behind')

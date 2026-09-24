@@ -40,7 +40,7 @@ func (f *Factory) head(ctx context.Context, claim claimed) (string, error) {
 
 // reviewedAlready is the review the run before this resumed one recorded, when the branch is still at
 // the commit it was recorded at: the stages up to the review are done, and the run starts at the pr
-// stage. A branch that has moved since is work no reviewer read, and the work session runs again.
+// stage. A branch that has moved since is work no reviewer read, and the run starts at the gate stage or the work session (gatingAlready).
 func (f *Factory) reviewedAlready(ctx context.Context, r *Run, entry Entry, claim claimed) (Review, bool) {
 	prior := entry.resume.Review
 	if kindOf(entry.Signal) != kindResumed || prior == nil {
@@ -55,7 +55,7 @@ func (f *Factory) reviewedAlready(ctx context.Context, r *Run, entry Entry, clai
 	}
 	if head != prior.Head {
 		f.runs.event(r, Event{Kind: "factory", Title: "the recorded review is behind the branch",
-			Body: fmt.Sprintf("run %d recorded the review at %s and the branch is at %s, so the work session runs again", entry.resume.ID, short(prior.Head), short(head))})
+			Body: fmt.Sprintf("run %d recorded the review at %s and the branch is at %s, so the run starts at the gate stage or the work session", entry.resume.ID, short(prior.Head), short(head))})
 		return Review{}, false
 	}
 	f.runs.event(r, Event{Kind: "factory", Title: "resuming at the pr stage",

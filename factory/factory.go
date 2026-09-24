@@ -802,6 +802,12 @@ func (f *Factory) execute(parent context.Context, r *Run, entry Entry) {
 			f.review(parent, ctx, r, entry, claim, panel)
 			return
 		}
+		// One whose branch carries commits beyond the base without a pass of the gate for them starts at
+		// the gate stage: the implementation is committed.
+		if f.gatingAlready(ctx, r, entry, claim) {
+			f.gate(parent, ctx, r, entry, claim)
+			return
+		}
 	}
 
 	s := workSession.overridden()
@@ -825,14 +831,7 @@ func (f *Factory) execute(parent context.Context, r *Run, entry Entry) {
 		f.finish(r, outcomeReady, reason, nil)
 		return
 	}
-	panel, err := f.gatedOf(ctx, claim, got)
-	if err != nil {
-		if !f.halted(parent, ctx, r, "read the gated commit") {
-			f.finish(r, outcomeFailed, "the commit the gate ran on could not be read: "+err.Error()+leftBehind(claim), nil)
-		}
-		return
-	}
-	f.review(parent, ctx, r, entry, claim, panel)
+	f.gate(parent, ctx, r, entry, claim)
 }
 
 // openedAlready is the open pull request of the branch a resumed run continues, which is where it

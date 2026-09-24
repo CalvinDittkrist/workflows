@@ -88,21 +88,15 @@ func TestAReleasedIssueIsAssignedAgainAndResumedInTheSameWorktree(t *testing.T) 
 		t.Errorf("the factory queues %v and runs %d after the release, want an idle line", keys(line.Queue), len(line.Now))
 	}
 
-	// The session itself: the same worktree, and on the commit the work there had reached.
-	workers := gh.workers(t)
-	if len(workers) != 2 {
-		t.Fatalf("the factory started %d workers, want one per run", len(workers))
+	// The resumed run itself: the same worktree, and on the commit the work there had reached. That
+	// commit is beyond the base with no pass of the gate for it, so the run starts at the gate stage
+	// and starts no work session.
+	if workers := gh.workers(t); len(workers) != 1 {
+		t.Fatalf("the factory started %d workers, want the first run's alone", len(workers))
 	}
-	resumedWorker := workers[1]
-	if resumedWorker.cwd != resolved(t, worktree) {
-		t.Errorf("the resumed worker ran in %s, want the worktree of the claim %s", resumedWorker.cwd, resolved(t, worktree))
-	}
-	if resumedWorker.branch != claimedBranch || resumedWorker.head != committed {
-		t.Errorf("the resumed worker ran on %s at %s, want %s at the commit the worktree holds (%s)",
-			resumedWorker.branch, resumedWorker.head, claimedBranch, committed)
-	}
-	if !resumedWorker.started("-p", "/worker:work") {
-		t.Errorf("the resumed worker was started as %v, want the same session a claim starts", resumedWorker.args)
+	if len(second.Stages) == 0 || second.Stages[0] != stageGate || len(second.Gates) == 0 || second.Gates[0].Head != committed {
+		t.Errorf("the resumed run went through %v with the gates %+v, want it to start at the gate stage on the commit the worktree holds (%s)",
+			second.Stages, second.Gates, committed)
 	}
 }
 
@@ -415,15 +409,21 @@ func TestAResumeWhoseWorktreeIsGoneIsMadeAgainFromTheBranch(t *testing.T) {
 		t.Fatalf("run 2 works #%d on the signal %q and ends as %q (%s), want the resume of #%d ending ready; the factory's log:\n%s",
 			resumed.Issue, resumed.Signal, resumed.Outcome, resumed.Reason, claimedIssue, f.output(t))
 	}
-	// The worker ran where the record says, on the branch, and on the commits the remote carries.
-	workers := gh.workers(t)
-	if len(workers) != 1 {
-		t.Fatalf("the factory started %d workers, want one; the factory's log:\n%s", len(workers), f.output(t))
+	// The run went on where the record says, on the branch, and on the commits the remote carries: those
+	// are beyond the base, so it started at the gate stage, gated them and had them reviewed there.
+	if workers := gh.workers(t); len(workers) != 0 {
+		t.Errorf("the factory started %d work sessions, want none: the branch carries the work", len(workers))
 	}
-	worker := workers[0]
-	if worker.cwd != resolved(t, interrupted.Worktree) || worker.branch != claimedBranch || worker.head != work {
-		t.Errorf("the worker ran in %s on %s at %s, want %s on %s at %s: the worktree is made again from the branch",
-			worker.cwd, worker.branch, worker.head, resolved(t, interrupted.Worktree), claimedBranch, work)
+	if len(resumed.Gates) == 0 || resumed.Gates[0].Head != work {
+		t.Errorf("the resumed run ran the gates %+v, want one on %s", resumed.Gates, work)
+	}
+	reviewers := gh.reviewerSessions(t)
+	if len(reviewers) == 0 {
+		t.Fatalf("the factory started no reviewer; the factory's log:\n%s", f.output(t))
+	}
+	if r := reviewers[0]; r.cwd != resolved(t, interrupted.Worktree) || r.branch != claimedBranch || r.head != work {
+		t.Errorf("the reviewer ran in %s on %s at %s, want %s on %s at %s: the worktree is made again from the branch",
+			r.cwd, r.branch, r.head, resolved(t, interrupted.Worktree), claimedBranch, work)
 	}
 	// And the claim is not made again: the branch of this issue is this factory's own.
 	if made := gh.made(t, "api --method POST repos/acme/edge-sensors/git/refs"); made != 0 {
@@ -463,12 +463,9 @@ func TestAWorktreeMadeAgainMovesALocalBranchBehindTheRemoteUpToIt(t *testing.T) 
 		t.Fatalf("run 2 ended as %q (%s), want the resume to end ready; the factory's log:\n%s",
 			resumed.Outcome, resumed.Reason, f.output(t))
 	}
-	workers := gh.workers(t)
-	if len(workers) != 1 {
-		t.Fatalf("the factory started %d workers, want one; the factory's log:\n%s", len(workers), f.output(t))
-	}
-	if workers[0].head != work {
-		t.Errorf("the worker ran at %s, want %s: a worktree made again carries what the remote holds now", workers[0].head, work)
+	resumed := f.ended(t, 2)
+	if len(resumed.Gates) == 0 || resumed.Gates[0].Head != work {
+		t.Errorf("the resumed run ran the gates %+v, want one on %s: a worktree made again carries what the remote holds now", resumed.Gates, work)
 	}
 	if at := gh.git(t, clone, "rev-parse", "refs/heads/"+claimedBranch); at != work {
 		t.Errorf("the branch %s of %s is at %s, want %s: a name that holds nothing the remote does not is moved up to it", claimedBranch, clone, at, work)
