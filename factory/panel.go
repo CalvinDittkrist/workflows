@@ -196,9 +196,11 @@ func repairSession(brief string, round int, findings []Finding) session {
 		schema: repairSchema, read: func(raw json.RawMessage) (result, error) { return readRepair(raw, findings) }}.overridden()
 }
 
-// gateFixSession is the fix session of a gate that failed on the final head.
-func gateFixSession(brief string) session {
-	return session{stage: stageReview, prompt: brief, timeout: fixTimeout, scripted: "fix", commits: true}.overridden()
+// gateFixSession is a fix session of a gate: in the gate stage the one that resolves a conflicting merge
+// of the base or repairs a failing gate, in the review stage the one that repairs the gate on the final
+// head.
+func gateFixSession(stage, brief string) session {
+	return session{stage: stage, prompt: brief, timeout: fixTimeout, scripted: "fix", commits: true}.overridden()
 }
 
 // Panel is what the review stage recorded of a run: the gate its rounds were briefed with, every round
@@ -818,23 +820,17 @@ func (f *Factory) finalGate(parent, ctx context.Context, r *Run, entry Entry, cl
 		if panel.GateRounds >= knobs.GateRounds {
 			record()
 			f.runs.update(r, func() {
-				r.Reason = fmt.Sprintf("the gate fails on the final head after %d of %d fix sessions (review.gate_rounds):\n\n%s",
-					panel.GateRounds, knobs.GateRounds, fenced(lastLines(ran.tail, 40)))
+				r.Reason = fmt.Sprintf("the gate fails on the final head after %d of %d fix sessions (review.gate_rounds):\n\n%s\n\n%s",
+					panel.GateRounds, knobs.GateRounds, fenced(ran.result), fenced(lastLines(ran.tail, 40)))
 			})
 			f.finish(r, outcomeBlocked, "", nil)
 			return "", false
 		}
 		panel.GateRounds++
 		record()
-		s := gateFixSession(gateFixBrief(entry, claim, ran, "the reviewers' fixes"))
+		s := gateFixSession(stageReview, gateFixBrief(entry, claim, ran, "the reviewers' fixes"))
 		f.runs.event(r, Event{Kind: "factory", Title: fmt.Sprintf("briefed a fix session of the gate, %d of %d", panel.GateRounds, knobs.GateRounds), Body: s.prompt})
-		got, ok := f.session(parent, ctx, r, s, entry, claim)
-		if !ok {
-			return "", false
-		}
-		if got.Outcome == resultBlocked {
-			f.runs.update(r, func() { r.Reason = got.Summary })
-			f.finish(r, outcomeBlocked, "", nil)
+		if !f.fixed(parent, ctx, r, s, entry, claim) {
 			return "", false
 		}
 		if head, err := f.head(ctx, claim); err == nil {

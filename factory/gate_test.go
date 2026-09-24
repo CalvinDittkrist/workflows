@@ -146,21 +146,27 @@ func TestAGatePastItsTimeoutIsEndedWithItsProcessGroupAndFails(t *testing.T) {
 
 // When the base has moved on since the branch was cut, the gate stage merges it into the branch with a
 // merge commit before the gate runs. A merge that conflicts goes to a fix session with the conflicted
-// files, and the gate runs on the commit that session leaves.
+// files, and the gate runs on the commit that session leaves; a session that gives the merge up
+// instead of committing it fails the run, and no gate runs on a branch without the base.
 func TestTheGateStageMergesTheBaseAndAConflictGoesToAFixSession(t *testing.T) {
 	t.Parallel()
 	for name, c := range map[string]struct {
 		file     string // the file main takes a change to while the work session runs
 		sessions int
+		abort    bool // the fix session gives the merge up and commits something else
 	}{
-		"a clean merge":       {"other.md", 1},
-		"a conflicting merge": {"worked.md", 2},
+		"a clean merge":       {"other.md", 1, false},
+		"a conflicting merge": {"worked.md", 2, false},
+		"a merge given up":    {"worked.md", 2, true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			gh, data := panelClaim(t, "@echo the gate ran")
 			// The work session stays a while after it committed, and main moves on meanwhile.
 			gh.env = append(gh.env, "CLAUDE_SHIM_SLEEP=5", "CLAUDE_SHIM_THEN_SLEEP=0")
+			if c.abort {
+				gh.env = append(gh.env, "CLAUDE_SHIM_THEN_ABORT_MERGE=1", "CLAUDE_SHIM_THEN_COMMIT=elsewhere.md")
+			}
 			f := gh.work(t, ciConfig(data, nil))
 			f.saw(t, "worker started")
 			other := filepath.Join(t.TempDir(), "other")
@@ -172,6 +178,12 @@ func TestTheGateStageMergesTheBaseAndAConflictGoesToAFixSession(t *testing.T) {
 			moved := gh.head(t, "acme/edge-sensors", "main")
 
 			run := f.ended(t, 1)
+			if c.abort {
+				if run.Outcome != outcomeFailed || !strings.Contains(run.Reason, "left the branch without origin/main") || len(run.Gates) != 0 {
+					t.Errorf("the run ended as %q (%s) with the gates %+v, want it failed without a gate: the merge was never committed", run.Outcome, run.Reason, run.Gates)
+				}
+				return
+			}
 			if run.Outcome != outcomeReady {
 				t.Fatalf("the run ended as %q (%s), want ready; the factory's log:\n%s", run.Outcome, run.Reason, f.output(t))
 			}

@@ -459,11 +459,11 @@ func TestAWorktreeMadeAgainMovesALocalBranchBehindTheRemoteUpToIt(t *testing.T) 
 
 	f := gh.work(t, config{"poll": "50ms", "deadline": "90s", "data_dir": data,
 		"repositories": []string{"acme/edge-sensors"}})
-	if resumed := f.ended(t, 2); resumed.Outcome != outcomeReady {
+	resumed := f.ended(t, 2)
+	if resumed.Outcome != outcomeReady {
 		t.Fatalf("run 2 ended as %q (%s), want the resume to end ready; the factory's log:\n%s",
 			resumed.Outcome, resumed.Reason, f.output(t))
 	}
-	resumed := f.ended(t, 2)
 	if len(resumed.Gates) == 0 || resumed.Gates[0].Head != work {
 		t.Errorf("the resumed run ran the gates %+v, want one on %s: a worktree made again carries what the remote holds now", resumed.Gates, work)
 	}

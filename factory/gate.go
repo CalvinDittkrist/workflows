@@ -91,7 +91,7 @@ func (f *Factory) gateFor(repository string) gateSettings {
 // class and its command, how it ended, how long it took and the end of its output.
 type Gated struct {
 	Stage    string `json:"stage"` // gate, or review for the gate on the final head
-	Head     string `json:"head"`  // empty in fake mode
+	Head     string `json:"head"`  // fake-N in fake mode
 	Class    string `json:"class"`
 	Command  string `json:"command"`
 	Exit     int    `json:"exit"` // -1 for a gate that was ended
@@ -99,12 +99,6 @@ type Gated struct {
 	TimedOut bool   `json:"timedOut,omitempty"`
 	Seconds  int    `json:"seconds"`
 	Tail     string `json:"tail"`
-}
-
-// gateStageFixSession is a fix session of the gate stage: the one that resolves a conflicting merge of
-// the base, and the one that repairs a failing gate.
-func gateStageFixSession(brief string) session {
-	return session{stage: stageGate, prompt: brief, timeout: fixTimeout, scripted: "fix", commits: true}.overridden()
 }
 
 // gate is the gate stage of one run: the base merged into the branch, then the gate of the change class
@@ -162,7 +156,7 @@ func (f *Factory) gate(parent, ctx context.Context, r *Run, entry Entry, claim c
 		}
 		fixes++
 		panel.StageFixes++
-		s := gateStageFixSession(gateFixBrief(entry, claim, ran, "the implementation"))
+		s := gateFixSession(stageGate, gateFixBrief(entry, claim, ran, "the implementation"))
 		f.runs.event(r, Event{Kind: "factory", Title: fmt.Sprintf("briefed a fix session of the gate, %d of %d", fixes, knobs.Rounds), Body: s.prompt})
 		if !f.fixed(parent, ctx, r, s, entry, claim) {
 			return
@@ -199,7 +193,7 @@ func (f *Factory) mergedBase(parent, ctx context.Context, r *Run, entry Entry, c
 	}
 	f.runs.event(r, Event{Kind: "factory", Title: "the merge of " + claim.base + " conflicts", Body: strings.Join(conflicted, "\n")})
 	panel.StageFixes++
-	s := gateStageFixSession(mergeFixBrief(entry, claim, conflicted))
+	s := gateFixSession(stageGate, mergeFixBrief(entry, claim, conflicted))
 	f.runs.event(r, Event{Kind: "factory", Title: "briefed a fix session of the merge", Body: s.prompt})
 	if !f.fixed(parent, ctx, r, s, entry, claim) {
 		return false
@@ -218,7 +212,7 @@ func (f *Factory) mergedBase(parent, ctx context.Context, r *Run, entry Entry, c
 	return true
 }
 
-// fixed runs one fix session of the gate stage and answers whether the run goes on: a session that
+// fixed runs one fix session of a gate or of the merge and answers whether the run goes on: a session that
 // could not run or that reports blocked has ended it.
 func (f *Factory) fixed(parent, ctx context.Context, r *Run, s session, entry Entry, claim claimed) bool {
 	got, ok := f.session(parent, ctx, r, s, entry, claim)
