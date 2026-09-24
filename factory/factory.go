@@ -11,6 +11,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -844,15 +845,47 @@ func (f *Factory) openedAlready(ctx context.Context, r *Run, entry Entry, claim 
 // session ended by itself with a result that fits, and otherwise ends the run the way the session
 // ended and answers false.
 func (f *Factory) session(parent, ctx context.Context, r *Run, s session, entry Entry, claim claimed) (result, bool) {
-	f.runs.update(r, r.nextSession)
+	got, ended := f.runSession(parent, ctx, r, s, entry, claim, "")
+	if ended != nil {
+		f.end(parent, r, *ended)
+		return result{}, false
+	}
+	return got, true
+}
+
+// ending is how a session ended when it left no result to go on with: the outcome and the reason the
+// run ends with, and whether the reason is an error of the session, which may be the quota's
+// (endInError). A session that runs beside others answers with it rather than ending the run, so the
+// stage decides once which of them ends it.
+type ending struct {
+	outcome, reason string
+	exitCode        *int
+	inError         bool
+}
+
+// end ends a run the way one of its sessions ended.
+func (f *Factory) end(parent context.Context, r *Run, e ending) {
+	if e.inError {
+		f.endInError(parent, r, e.reason, e.exitCode)
+		return
+	}
+	f.finish(r, e.outcome, e.reason, e.exitCode)
+}
+
+// runSession starts one session and reads it to its end, and answers with its result, or with how it
+// ended when it left none that fits. label names the session in the run's log when it runs beside
+// others, and is empty for one that runs alone.
+func (f *Factory) runSession(parent, ctx context.Context, r *Run, s session, entry Entry, claim claimed, label string) (result, *ending) {
+	said := &heard{label: label, read: s.read}
+	f.runs.update(r, r.opened)
+	defer f.runs.update(r, func() { r.closed(said) })
 	// The session's context is derived from the run's, so the run's deadline and the session's own
 	// timeout both end it: whichever passes first, and the cause the context carries says which one did.
 	sessionCtx, endSession := context.WithTimeoutCause(ctx, s.timeout, overran{s})
 	defer endSession()
 	cmd, err := f.command(sessionCtx, s, entry, claim)
 	if err != nil {
-		f.abandon(ctx, r, claim, "no worker could be started: "+err.Error())
-		return result{}, false
+		return result{}, abandoned(ctx, claim, "no worker could be started: "+err.Error())
 	}
 	// The worker starts subprocesses of its own; the deadline and the stop have to reach all of them,
 	// so it gets a process group of its own and the group is what is ended.
@@ -865,15 +898,13 @@ func (f *Factory) session(parent, ctx context.Context, r *Run, s session, entry 
 	// left the group is not, which is why the reading below has an end of its own.
 	stdout, stdoutWriter, err := os.Pipe()
 	if err != nil {
-		f.abandon(ctx, r, claim, "the factory could not open a pipe for the worker: "+err.Error())
-		return result{}, false
+		return result{}, abandoned(ctx, claim, "the factory could not open a pipe for the worker: "+err.Error())
 	}
 	stderr, stderrWriter, err := os.Pipe()
 	if err != nil {
 		stdout.Close()
 		stdoutWriter.Close()
-		f.abandon(ctx, r, claim, "the factory could not open a pipe for the worker: "+err.Error())
-		return result{}, false
+		return result{}, abandoned(ctx, claim, "the factory could not open a pipe for the worker: "+err.Error())
 	}
 	cmd.Stdout, cmd.Stderr = stdoutWriter, stderrWriter
 	// The run's lock goes into the process group of every session of the run: the factory takes it
@@ -882,17 +913,18 @@ func (f *Factory) session(parent, ctx context.Context, r *Run, s session, entry 
 	// and the last process of those groups are gone. A factory the host killed ends nothing and holds
 	// nothing any more, and this is what the next start reads to find the worker that outlived it
 	// (endSurvivors).
-	if r.lock == nil {
-		lock, err := f.runs.lock(r.ID)
-		if err != nil {
-			stdout.Close()
-			stdoutWriter.Close()
-			stderr.Close()
-			stderrWriter.Close()
-			f.abandon(ctx, r, claim, "the factory could not take the lock of this run: "+err.Error())
-			return result{}, false
+	var lockErr error
+	f.runs.update(r, func() {
+		if r.lock == nil {
+			r.lock, lockErr = f.runs.lock(r.ID)
 		}
-		f.runs.update(r, func() { r.lock = lock })
+	})
+	if lockErr != nil {
+		stdout.Close()
+		stdoutWriter.Close()
+		stderr.Close()
+		stderrWriter.Close()
+		return result{}, abandoned(ctx, claim, "the factory could not take the lock of this run: "+lockErr.Error())
 	}
 	cmd.ExtraFiles = []*os.File{r.lock}
 	err = cmd.Start()
@@ -901,29 +933,39 @@ func (f *Factory) session(parent, ctx context.Context, r *Run, s session, entry 
 		stdoutWriter.Close()
 		stderr.Close()
 		stderrWriter.Close()
-		f.abandon(ctx, r, claim, "the worker could not be started: "+err.Error())
-		return result{}, false
+		return result{}, abandoned(ctx, claim, "the worker could not be started: "+err.Error())
 	}
 	stdoutWriter.Close() // the worker holds the only writing ends now
 	stderrWriter.Close()
 	// The process group of the session, recorded before a line of its output is read: it is what ends
-	// the session, and a factory that is gone cannot say it afterwards.
-	f.runs.update(r, func() { r.WorkerGroup = cmd.Process.Pid })
-	f.runs.event(r, Event{Kind: "factory", Title: "worker started", Body: fmt.Sprint(cmd.Args)})
+	// the session, and a factory that is gone cannot say it afterwards. The sessions that run beside
+	// each other are in Groups as long as they run.
+	pid := cmd.Process.Pid
+	f.runs.update(r, func() { r.WorkerGroup, r.Groups = pid, append(r.Groups, pid) })
+	defer f.runs.update(r, func() { r.Groups = slices.DeleteFunc(r.Groups, func(g int) bool { return g == pid }) })
+	started := Event{Kind: "factory", Title: "worker started", Body: fmt.Sprint(cmd.Args)}
+	if label != "" {
+		started.Title = label + ": " + started.Title
+	}
+	f.runs.event(r, started)
 
 	var readers sync.WaitGroup
 	readers.Add(2)
 	go func() {
 		defer readers.Done()
-		f.read(r, "the worker's output", stdout, func(line []byte) { f.ingest(r, line, s.read) })
+		f.read(r, said, "the worker's output", stdout, func(line []byte) { f.ingest(r, said, line) })
 	}()
 	go func() {
 		defer readers.Done()
 		// Every line of the error output counts as the cause of a failure, the last one winning. A
 		// real session also writes what is only noise there; the ticket that starts one decides what
 		// of it is a cause.
-		f.read(r, "the worker's error output", stderr, func(line []byte) {
-			f.error(r, Event{Kind: "error", Title: "stderr: " + firstLine(string(line)), Body: string(line)})
+		f.read(r, said, "the worker's error output", stderr, func(line []byte) {
+			title := "stderr: " + firstLine(string(line))
+			if label != "" {
+				title = label + ": " + title
+			}
+			f.error(r, said, Event{Kind: "error", Title: title, Body: string(line)})
 		})
 	}()
 
@@ -931,7 +973,7 @@ func (f *Factory) session(parent, ctx context.Context, r *Run, s session, entry 
 	// Nothing the worker started survives its run, whether it ended by itself, in an error or on the
 	// deadline. The group is ended right after the worker was reaped, which also closes the pipes a
 	// process it left behind would still hold open.
-	_ = endGroup(cmd.Process.Pid, syscall.SIGKILL)
+	_ = endGroup(pid, syscall.SIGKILL)
 	// What the group wrote before it ended is in the pipes and is read in a moment. A process that
 	// took a session of its own — a server started with nohup — is outside the group and keeps the
 	// pipes open for as long as it lives, which no deadline ends: the factory stops reading instead,
@@ -951,49 +993,53 @@ func (f *Factory) session(parent, ctx context.Context, r *Run, s session, entry 
 	stderr.Close()
 
 	exitCode := cmd.ProcessState.ExitCode()
-	f.runs.update(r, func() { r.ExitCode = &exitCode })
+	var got *result
+	var misfit, lastError, resultSummary string
+	f.runs.update(r, func() {
+		r.ExitCode = &exitCode
+		got, misfit, lastError, resultSummary = said.result, said.misfit, said.lastError, said.resultSummary
+	})
 	// The process and the result are read apart. A session that ended by itself with a result that
 	// fits is read by that result: a stop or a deadline that arrives in the same moment ended nothing,
 	// and its pull request would be lost to the record. A process that failed is a failed run whatever
 	// its result said, and a session that ended well without a result that fits is one as well.
-	fitted := waitErr == nil && r.result != nil
+	fitted := waitErr == nil && got != nil
 	stopped, was := cancelledBy(ctx)
 	var over overran
 	switch {
 	case !fitted && parent.Err() != nil:
-		f.finish(r, outcomeInterrupted, "the factory stopped while this run was active; its worker was ended", &exitCode)
+		return result{}, &ending{outcome: outcomeInterrupted, reason: "the factory stopped while this run was active; its worker was ended", exitCode: &exitCode}
 	case !fitted && was:
-		f.finish(r, outcomeCancelled, stopped.Error()+"; the worker's process group was ended and the issue is let go", &exitCode)
+		return result{}, &ending{outcome: outcomeCancelled, reason: stopped.Error() + "; the worker's process group was ended and the issue is let go", exitCode: &exitCode}
 	case !fitted && errors.Is(ctx.Err(), context.DeadlineExceeded):
-		f.finish(r, outcomeTimeout, fmt.Sprintf("the deadline of %s passed; the worker's process group was ended", f.settings.Deadline), &exitCode)
+		return result{}, &ending{outcome: outcomeTimeout, reason: fmt.Sprintf("the deadline of %s passed; the worker's process group was ended", f.settings.Deadline), exitCode: &exitCode}
 	case !fitted && errors.As(context.Cause(sessionCtx), &over):
-		f.finish(r, outcomeFailed, over.Error()+"; the worker's process group was ended", &exitCode)
-	case waitErr != nil || r.resultSummary != "":
+		return result{}, &ending{outcome: outcomeFailed, reason: over.Error() + "; the worker's process group was ended", exitCode: &exitCode}
+	case waitErr != nil || resultSummary != "":
 		// A result line that says the session ended in an error is one whatever the process exited with.
-		cause := r.lastError
+		cause := lastError
 		if cause == "" {
-			cause = r.resultSummary
+			cause = resultSummary
 		}
-		f.endInError(parent, r, strings.TrimSpace(fmt.Sprintf("the session ended in an error (exit %d): %s", exitCode, cause)), &exitCode)
-	case r.result != nil:
-		return *r.result, true
-	case r.misfit != "":
-		f.finish(r, outcomeFailed, "the session's result does not fit the schema: "+r.misfit, &exitCode)
-	default:
-		f.endInError(parent, r, "the session ended without a result line; a session ends by printing its structured result", &exitCode)
+		return result{}, &ending{outcome: outcomeFailed, inError: true, exitCode: &exitCode,
+			reason: strings.TrimSpace(fmt.Sprintf("the session ended in an error (exit %d): %s", exitCode, cause))}
+	case got != nil:
+		return *got, nil
+	case misfit != "":
+		return result{}, &ending{outcome: outcomeFailed, reason: "the session's result does not fit the schema: " + misfit, exitCode: &exitCode}
 	}
-	return result{}, false
+	return result{}, &ending{outcome: outcomeFailed, inError: true, exitCode: &exitCode,
+		reason: "the session ended without a result line; a session ends by printing its structured result"}
 }
 
-// abandon ends a run whose worker never started. A cancel that arrives in that moment — the claim
-// stands, the session is a few lines away — ends the run the way every other cancel does, and only
-// what is really this host's trouble is recorded as a failure of it.
-func (f *Factory) abandon(ctx context.Context, r *Run, claim claimed, reason string) {
+// abandoned is how a run whose worker never started ends. A cancel that arrives in that moment — the
+// claim stands, the session is a few lines away — ends the run the way every other cancel does, and
+// only what is really this host's trouble is recorded as a failure of it.
+func abandoned(ctx context.Context, claim claimed, reason string) *ending {
 	if stopped, was := cancelledBy(ctx); was {
-		f.finish(r, outcomeCancelled, stopped.Error()+"; no worker had been started"+leftBehind(claim), nil)
-		return
+		return &ending{outcome: outcomeCancelled, reason: stopped.Error() + "; no worker had been started" + leftBehind(claim)}
 	}
-	f.finish(r, outcomeFailed, reason+leftBehind(claim), nil)
+	return &ending{outcome: outcomeFailed, reason: reason + leftBehind(claim)}
 }
 
 // cancelled is the cause the context of a cancelled run carries: the decision GitHub was read to
@@ -1206,7 +1252,7 @@ const maxStreamLine = 64 << 20
 // read takes a worker's stream line by line. A stream that cannot be read to its end says so in the
 // run's log — the alternative is a silent reader and a worker that blocks on a pipe nobody empties
 // until the deadline ends it — and what is left of it is drained so the worker can finish.
-func (f *Factory) read(r *Run, what string, stream io.Reader, line func([]byte)) {
+func (f *Factory) read(r *Run, session *heard, what string, stream io.Reader, line func([]byte)) {
 	scanner := bufio.NewScanner(stream)
 	scanner.Buffer(make([]byte, 64*1024), maxStreamLine)
 	for scanner.Scan() {
@@ -1214,18 +1260,18 @@ func (f *Factory) read(r *Run, what string, stream io.Reader, line func([]byte))
 	}
 	// A stream the factory closed itself is not an error of the stream: see drainGrace.
 	if err := scanner.Err(); err != nil && !errors.Is(err, os.ErrClosed) {
-		f.error(r, Event{Kind: "error", Title: what + " could not be read to its end", Body: err.Error()})
+		f.error(r, session, Event{Kind: "error", Title: what + " could not be read to its end", Body: err.Error()})
 		_, _ = io.Copy(io.Discard, stream)
 	}
 }
 
-// error records an error event and keeps it as the reason a failed run ended.
-func (f *Factory) error(r *Run, e Event) {
+// error records an error event and keeps it as the reason the session failed, if it did.
+func (f *Factory) error(r *Run, session *heard, e Event) {
 	f.runs.update(r, func() {
 		if body := firstLine(e.Body); body != "" {
-			r.lastError = body
+			session.lastError = body
 		} else {
-			r.lastError = e.Title
+			session.lastError = e.Title
 		}
 	})
 	f.runs.event(r, e)

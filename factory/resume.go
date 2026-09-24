@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"slices"
 	"syscall"
 	"time"
 )
@@ -35,25 +36,44 @@ import (
 func (f *Factory) endSurvivors() {
 	for _, id := range f.runs.cutOff {
 		run, ok := f.runs.find(id)
-		if !ok || run.WorkerGroup == 0 || f.runs.free(id) {
+		if !ok || f.runs.free(id) {
 			continue
 		}
-		log.Printf("run %d (%s#%d) left a worker behind: ending process group %d, which no factory has been reading",
-			run.ID, run.Repository, run.Issue, run.WorkerGroup)
-		f.runs.event(run, Event{Kind: "factory", Title: "worker ended after the factory",
-			Body: fmt.Sprintf("the process group %d of this run outlived the factory that started it and was ended before the issue is resumed", run.WorkerGroup)})
-		if err := endGroup(run.WorkerGroup, syscall.SIGTERM); err != nil {
-			log.Printf("error: the worker group %d of run %d could not be ended: %v; end it by hand before this issue is worked again", run.WorkerGroup, run.ID, err)
+		groups := survivorGroups(*run)
+		if len(groups) == 0 {
 			continue
+		}
+		log.Printf("run %d (%s#%d) left a worker behind: ending process groups %v, which no factory has been reading",
+			run.ID, run.Repository, run.Issue, groups)
+		f.runs.event(run, Event{Kind: "factory", Title: "worker ended after the factory",
+			Body: fmt.Sprintf("the process groups %v of this run outlived the factory that started them and were ended before the issue is resumed", groups)})
+		for _, group := range groups {
+			if err := endGroup(group, syscall.SIGTERM); err != nil {
+				log.Printf("error: the worker group %d of run %d could not be ended: %v; end it by hand before this issue is worked again", group, run.ID, err)
+			}
 		}
 		if f.runs.freed(id, workerGrace) {
 			continue
 		}
-		_ = endGroup(run.WorkerGroup, syscall.SIGKILL)
+		for _, group := range groups {
+			_ = endGroup(group, syscall.SIGKILL)
+		}
 		if !f.runs.freed(id, workerGrace) {
-			log.Printf("error: the worker group %d of run %d is still there after a kill; end what is left of it by hand before this issue is worked again", run.WorkerGroup, run.ID)
+			log.Printf("error: the worker groups %v of run %d are still there after a kill; end what is left of them by hand before this issue is worked again", groups, run.ID)
 		}
 	}
+}
+
+// survivorGroups is the process groups a run records as its sessions': the last one started and every
+// one that ran beside it, each once.
+func survivorGroups(run Run) []int {
+	out := []int{}
+	for _, group := range append([]int{run.WorkerGroup}, run.Groups...) {
+		if group > 0 && !slices.Contains(out, group) {
+			out = append(out, group)
+		}
+	}
+	return out
 }
 
 // workerGrace is how long a worker that outlived its factory is given to end, first on the signal a
