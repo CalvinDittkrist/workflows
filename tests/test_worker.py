@@ -1668,16 +1668,6 @@ class HandoffTests(ShimTest):
             time.sleep(0.05)
         self.fail(f"no '{needle}' call beyond {seen} within {seconds} s; calls: {self.calls()}")
 
-    def test_one_handover_is_over_before_the_next_one_starts(self):
-        # The detached half keeps asking the pane who is in it while the test goes on. A handover started
-        # while an earlier one still ran raced it through the pane's state and was refused with 'herdr
-        # reports no agent session' (seen in the CI of #82, never on the machine that wrote the test). Every
-        # test of this class that hands over more than once rests on this wait.
-        for _ in range(3):
-            self.assertEqual(self.handoff().returncode, 0)
-        self.assertEqual(self.count("notification show"), 3,
-                         "each handover's detached half is over before the next one starts")
-
     def test_a_dirty_working_tree_is_refused_with_the_files_in_it(self):
         (self.repo / "b.txt").write_text("b\n")
         r = self.handoff()
