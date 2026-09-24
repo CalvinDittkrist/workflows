@@ -430,7 +430,7 @@ func cannedFindings(scenario, reviewer string, round int) []map[string]any {
 }
 
 // reviewerStagger is how far apart the scripted reviewers of one round report.
-const reviewerStagger = 300 * time.Millisecond
+const reviewerStagger = 100 * time.Millisecond
 
 // scriptedReviewer is one reviewer of the panel in one round: it reads the change and reports its
 // verdict and its findings, and nothing else, because it can do nothing else.

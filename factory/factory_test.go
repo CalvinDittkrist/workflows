@@ -143,11 +143,12 @@ type apiLine struct {
 func TestFakeModeWorksTheCannedQueueOneRunAtATime(t *testing.T) {
 	t.Parallel()
 	// The deadline has to be far above what a scripted run costs — a binary built with the race
-	// detector pays about a second on every exit — or a quick run would be read as a timeout.
-	f := start(t, config{"deadline": "15s", "poll": "100ms"})
+	// detector pays about a second on every exit, and the detached run has fourteen sessions, most
+	// of them one after the other — or a quick run would be read as a timeout.
+	f := start(t, config{"deadline": "30s", "poll": "100ms"})
 
 	var line apiLine
-	f.eventually(t, 60*time.Second, "the whole canned queue to be done", func() bool {
+	f.eventually(t, 150*time.Second, "the whole canned queue to be done", func() bool {
 		line = apiLine{}
 		f.get(t, "/api/line", &line)
 		return len(line.Queue) == 0 && len(line.Now) == 0 && len(line.Done) == cannedRuns
@@ -360,7 +361,7 @@ func TestFakeModeWorksTheCannedQueueOneRunAtATime(t *testing.T) {
 	}
 
 	// timeout: the deadline passed and the whole process group was ended.
-	if timeout.Outcome != "timeout" || !strings.Contains(timeout.Reason, "deadline of 15s") {
+	if timeout.Outcome != "timeout" || !strings.Contains(timeout.Reason, "deadline of 30s") {
 		t.Errorf("run 7 ended %q because %q, want timeout on the deadline", timeout.Outcome, timeout.Reason)
 	}
 	full = apiRun{} // a field the interface omits would keep the value of the run read before
@@ -1355,7 +1356,8 @@ func (f *factory) waitForTheHangingWorker(t *testing.T, id int) []int {
 	t.Helper()
 	hanging := hangingIssue(t)
 	var run apiRun
-	f.eventually(t, 60*time.Second, fmt.Sprintf("the hanging worker of run %d and its child", id), func() bool {
+	// Every run of the canned queue before it is worked first, some forty sessions.
+	f.eventually(t, 120*time.Second, fmt.Sprintf("the hanging worker of run %d and its child", id), func() bool {
 		run = apiRun{}
 		response, err := http.Get(fmt.Sprintf("http://%s/api/runs/%d", f.address, id))
 		if err != nil || response.StatusCode != http.StatusOK {
