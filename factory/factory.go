@@ -11,7 +11,6 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
-	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -966,7 +965,7 @@ func (f *Factory) runSession(parent, ctx context.Context, r *Run, s session, ent
 	// each other are in Groups as long as they run.
 	pid := cmd.Process.Pid
 	f.runs.update(r, func() { r.WorkerGroup, r.Groups = pid, append(r.Groups, pid) })
-	defer f.runs.update(r, func() { r.Groups = slices.DeleteFunc(r.Groups, func(g int) bool { return g == pid }) })
+	defer f.runs.update(r, func() { r.ungrouped(pid) })
 	started := Event{Kind: "factory", Title: "worker started", Body: fmt.Sprint(cmd.Args)}
 	if label != "" {
 		started.Title = label + ": " + started.Title

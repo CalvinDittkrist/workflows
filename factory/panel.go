@@ -877,7 +877,7 @@ func (f *Factory) runGate(ctx context.Context, r *Run, entry Entry, claim claime
 	f.runs.update(r, func() { r.Groups = append(r.Groups, pid) })
 	waitErr := cmd.Wait()
 	_ = endGroup(pid, syscall.SIGKILL)
-	f.runs.update(r, func() { r.Groups = slices.DeleteFunc(r.Groups, func(g int) bool { return g == pid }) })
+	f.runs.update(r, func() { r.ungrouped(pid) })
 	code := cmd.ProcessState.ExitCode()
 	var exit *exec.ExitError
 	if waitErr != nil && !errors.As(waitErr, &exit) && ctx.Err() == nil {
