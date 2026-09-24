@@ -17,6 +17,7 @@ max_rounds=3
 max_candidates=3
 share_size=10
 max_reason=300
+max_test=200
 categories="source-inspection cannot-fail duplicate mocks-subject incidental"
 state="$(wf_state_dir)/hunt"
 
@@ -49,6 +50,7 @@ EOF
   f_path=$(trim "$f_path"); f_test=$(trim "$f_test"); f_cat=$(trim "$f_cat"); f_reason=$(trim "$f_reason"); f_conf=$(trim "${f_conf:-}")
   if [ -z "$f_path" ] || [ -z "$f_test" ] || [ -z "$f_reason" ]; then problem="a field is empty"; return 1; fi
   [ "${#f_reason}" -le "$max_reason" ] || { problem="the reason is longer than $max_reason characters"; return 1; }
+  [ "${#f_test}" -le "$max_test" ] || { problem="the test name is longer than $max_test characters"; return 1; }
   wf_in_list "$f_cat" "$categories" || { problem="'$f_cat' is none of the categories $(printf '%s' "$categories" | sed 's/ /, /g')"; return 1; }
   # Only a test file is ever named for removal: a line that names any other file is refused however it was
   # reasoned, so no reply can steer the worker at the code the tests prove. A candidate names a file this
@@ -171,6 +173,7 @@ $1"
 }
 
 removal_list=$(removals)
+test_files=""
 
 case "${1:-}" in
   paths) shares ;;
@@ -207,7 +210,7 @@ case "${1:-}" in
     [ "$n" -ge 1 ] || wf_die "no round of this hunt has started; start one with the worker's hunt.sh round"
     [ -z "$(ended)" ] || wf_die "the hunt has ended ($(ended)); triage no more replies"
     remove=0 kept=0 dropped=0 refused=0 seen=0
-    test_files=$(wf_test_files)
+    test_files=$(wf_test_files)  # the list a candidate's path is checked against in parse_fields
     while IFS= read -r line || [ -n "$line" ]; do
       line=$(trim "$line")
       [ -n "$line" ] || continue

@@ -935,8 +935,9 @@ func TestTheConfiguredBaseWinsOverWhatARepositoryDeclaresAndAnUnusableDeclaratio
 
 // The compact pin is the workflow's, not the factory's: the local claim sets the window and the
 // percentage ([ADR 0031], [ADR 0034]) and this driver restates them, so a session it starts compacts
-// where the workflow says. The numbers are read out of the lib.sh claim.sh builds its session with, which is what makes a change
-// to one of them fail here until the other copy follows ([ADR 0022]).
+// where the workflow says. The numbers are read out of the orchestrator's lib.sh, whose
+// wf_worker_settings the claim and the test hunt both use, so a change to one of them fails here
+// until the other copy follows ([ADR 0022]).
 //
 // [ADR 0022]: ../docs/adr/0022-the-factory-is-a-second-driver-over-the-worker-pipeline.md
 // [ADR 0031]: ../docs/adr/0031-the-workflow-pins-the-size-at-which-a-worker-session-compacts.md

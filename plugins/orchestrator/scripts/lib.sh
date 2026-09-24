@@ -271,7 +271,7 @@ wf_worker_settings() {
 # Start the worker agent in the pane of a fresh worktree (pane, path, ws and branch as wf_create_worktree and
 # its caller set them) with the settings $4 and the first prompt $5, in the Docker sandbox when $1 is 1.
 # $2 is the Herdr agent name before wf_agent_name, $3 the session's display name. A start that fails removes
-# the worktree and the branch again and ends the script. Sets agent_status.
+# the worktree and the branch again and ends the script. Sets agent_name and agent_status.
 wf_start_worker() {
   local sandbox="$1" name="$2" label="$3" settings="$4" prompt="$5" here perm extra
   here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
