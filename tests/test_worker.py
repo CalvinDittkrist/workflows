@@ -2,6 +2,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import signal
 import subprocess
 import sys
@@ -548,11 +549,33 @@ class SlowGateTests(ShimTest):
         # The factory stops a worker, at its deadline or on a stop, by signalling the worker's process group.
         # Claude Code runs each Bash call in a process group of its own, so the signal never reaches the
         # gate: the gate ends because the worker is gone, instead of running on unattended.
+        self.assert_the_gate_ends_with_its_worker(self.env(WF_WAIT_SLICE="60"))
+
+    def test_the_gate_ends_with_its_worker_where_ps_knows_no_session(self):
+        # The ps of macOS refuses the keyword sid and prints the keywords it knows on its standard output;
+        # the call's process group leads there instead. A ps that answers so stands in for it on any host.
+        bin_dir = self.base / "macos-ps"
+        bin_dir.mkdir()
+        ps = bin_dir / "ps"
+        ps.write_text(
+            "#!/bin/bash\n"
+            'case " $* " in *" sid= "*)\n'
+            '  echo "ps: sid: keyword not found"\n'
+            '  echo "%cpu %mem acflag acflg args blocked caught comm command cpu cputime etime f flags gid"\n'
+            "  exit 1 ;;\n"
+            "esac\n"
+            f'exec {shlex.quote(shutil.which("ps"))} "$@"\n')
+        ps.chmod(0o755)
+        env = self.env(WF_WAIT_SLICE="60")
+        env["PATH"] = f"{bin_dir}:{env['PATH']}"
+        self.assert_the_gate_ends_with_its_worker(env)
+
+    def assert_the_gate_ends_with_its_worker(self, env):
         worker = subprocess.Popen(
             [sys.executable, "-c",
              "import subprocess, sys; subprocess.Popen(sys.argv[1:], start_new_session=True).wait()",
              "bash", str(WORKER / "gate.sh"), "run"],
-            cwd=self.repo, start_new_session=True, env=self.env(WF_WAIT_SLICE="60"),
+            cwd=self.repo, start_new_session=True, env=env,
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         deadline = time.time() + 10
         while not (self.repo / "starts.log").exists() and time.time() < deadline:
