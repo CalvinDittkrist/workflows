@@ -475,8 +475,8 @@ func (f *Factory) review(parent, ctx context.Context, r *Run, entry Entry, claim
 	for {
 		if n := len(panel.Rounds); n > 0 {
 			last := panel.Rounds[n-1]
-			if findings := findingsOf(last); last.Repair == nil && len(fixing(last)) > 0 {
-				if !f.repairRound(parent, ctx, r, entry, claim, &panel, knobs, findings) {
+			if last.Repair == nil && len(fixing(last)) > 0 {
+				if !f.repairRound(parent, ctx, r, entry, claim, &panel, knobs, findingsOf(last)) {
 					return
 				}
 				record()
@@ -538,8 +538,8 @@ func lastVerdicts(panel Panel) map[string]string {
 	return last
 }
 
-// order is the reviewers the panel's rounds ran, in the order the configuration names them and then
-// any a round ran that it no longer names, so a summary names every reviewer that ran.
+// order is the reviewers the configuration names, in its order, and then any a round ran that it no
+// longer names, so a summary names every reviewer that ran. The callers keep the ones that ran.
 func order(panel Panel, knobs reviewSettings) []string {
 	out := slices.Clone(knobs.Reviewers)
 	for _, round := range panel.Rounds {
@@ -549,8 +549,7 @@ func order(panel Panel, knobs reviewSettings) []string {
 			}
 		}
 	}
-	ran := lastVerdicts(panel)
-	return slices.DeleteFunc(out, func(name string) bool { _, did := ran[name]; return !did && len(panel.Rounds) > 0 })
+	return out
 }
 
 // fixing is the reviewers of a round whose verdict was fix.

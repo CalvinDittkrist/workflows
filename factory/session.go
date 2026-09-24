@@ -242,10 +242,11 @@ const (
 // checked on 2026-09-23). The descriptions are what the session reads to fill it in: the worker skill
 // still ends in a report that opens with ready: or blocked:, and this is that report as data.
 //
-// The panel summary, the gate result and the commits are what a session reports when it was told to
-// stop after an earlier stage than the last ([ADR 0043]): the worker's stop.sh prints them in its final
-// report, and the stage that follows on the factory's side reads them here and not from the worktree's
-// records. A session that ran the whole pipeline leaves them out.
+// The gate result and the commits are what a session reports when it was told to stop after an
+// earlier stage than the last ([ADR 0043]): the worker's stop.sh prints them in its final report, and
+// the stage that follows on the factory's side reads them here and not from the worktree's records. A
+// session that ran the whole pipeline leaves them out. The panel summary is not among them: the
+// factory derives it from the rounds it recorded, and no session writes it.
 //
 // The replies, the answer and the lists of what was fixed and declined are what an address-reviews
 // session reports: the factory posts the replies and the answer itself (postAnswers), so a session
@@ -255,7 +256,6 @@ const (
 const resultSchema = `{"type":"object","additionalProperties":false,"required":["outcome","summary"],"properties":{` +
 	`"outcome":{"type":"string","enum":["complete","blocked"],"description":"complete when the final report opens with ready:, blocked when it opens with blocked:"},` +
 	`"pullRequest":{"type":"string","description":"the URL of the pull request the session opened or worked on; empty when there is none"},` +
-	`"panelSummary":{"type":"string","description":"the panel_summary_block of the final report, its lines as written; empty when the report has none"},` +
 	`"gateResult":{"type":"string","description":"the gate_result line of the final report, as written; empty when the report has none"},` +
 	`"commits":{"type":"array","items":{"type":"string"},"description":"the lines under commits: in the final report, each a short hash and a subject, as written; empty when the report lists none"},` +
 	`"replies":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["thread","body"],"properties":{` +
@@ -269,16 +269,15 @@ const resultSchema = `{"type":"object","additionalProperties":false,"required":[
 
 // result is a session's structured result as the factory reads it.
 type result struct {
-	Outcome      string   `json:"outcome"`
-	PullRequest  string   `json:"pullRequest"`
-	PanelSummary string   `json:"panelSummary"`
-	GateResult   string   `json:"gateResult"`
-	Commits      []string `json:"commits"`
-	Replies      []reply  `json:"replies"`
-	Answer       string   `json:"answer"`
-	Fixed        []string `json:"fixed"`
-	Declined     []string `json:"declined"`
-	Summary      string   `json:"summary"`
+	Outcome     string   `json:"outcome"`
+	PullRequest string   `json:"pullRequest"`
+	GateResult  string   `json:"gateResult"`
+	Commits     []string `json:"commits"`
+	Replies     []reply  `json:"replies"`
+	Answer      string   `json:"answer"`
+	Fixed       []string `json:"fixed"`
+	Declined    []string `json:"declined"`
+	Summary     string   `json:"summary"`
 	// Title and Body are the pull request an author session wrote, read by readAuthored; the work
 	// session's schema has neither, so its reader refuses them as fields it does not know.
 	Title string `json:"-"`

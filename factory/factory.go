@@ -1199,8 +1199,8 @@ func workerSettings(env map[string]string) (string, error) {
 // own keys are written over them and stay what this function says, however the accepted names ever
 // change — the order the orchestrator's claim.sh keeps.
 //
-// WF_STOP_AFTER is the stage the session ends after, for the session that stops once the review has
-// recorded its panel summary, where the factory's pr stage takes over ([ADR 0043]). No session runs
+// WF_STOP_AFTER is the stage the session ends after, for the session that stops once the gate has
+// recorded its result, where the factory's review stage takes over ([ADR 0043]). No session runs
 // the worker's own ci stage any more, so neither its knobs nor the review mandate of its repair count
 // reach a session: the factory counts the repair rounds itself.
 //
