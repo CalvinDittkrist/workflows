@@ -143,9 +143,10 @@ test('the selected run shows what it cost, how full its context came and what it
   page,
 }) => {
   await page.goto(working(`/#run=${WARNED_RUN}`))
-  // Its two sessions, the work session and the fix session of its conflict, are summed.
-  await expect(detail(page).locator('.facts').first()).toContainText('$8.36')
-  await expect(detail(page).locator('.facts').first()).toContainText('46 turns')
+  // Its three sessions, the work session, the author session of its pr stage and the fix session of
+  // its conflict, are summed.
+  await expect(detail(page).locator('.facts').first()).toContainText('$12.54')
+  await expect(detail(page).locator('.facts').first()).toContainText('69 turns')
   await expect(detail(page).locator('.facts').first()).not.toContainText('counted')
   await expect(detail(page).locator('.facts').first()).toContainText(/\d+\.\dk context peak/)
   await expect(detail(page).locator('.warnings li')).toContainText('left a process behind')
@@ -162,9 +163,10 @@ test('the selected run shows what it cost, how full its context came and what it
 test('the live log sets the events of the worker’s subagents in', async ({ page }) => {
   await page.goto(working(`/#run=${READY_RUN}`))
   const log = detail(page).locator('.log')
-  // The ready run had three sessions, its work session, the fix session of one repair round and the
-  // address-reviews session of the other, and each ended in a result line.
-  await expect(log.locator('.ev-result')).toHaveCount(3)
+  // The ready run had four sessions, its work session, the author session of its pr stage, the fix
+  // session of one repair round and the address-reviews session of the other, and each ended in a
+  // result line.
+  await expect(log.locator('.ev-result')).toHaveCount(4)
   await expect(log.locator('.ev-result').last()).toContainText('result: success')
   const subagent = log.locator('.ev-sub').first()
   await expect(subagent).toContainText('Read the diff under review')

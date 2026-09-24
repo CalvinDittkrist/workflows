@@ -192,6 +192,27 @@ func (c *canned) commentOnPull(_ context.Context, _ string, pull int, _ string) 
 // openPull answers that no branch has a pull request open: fake mode opens none.
 func (c *canned) openPull(context.Context, string, string) (string, error) { return "", nil }
 
+// issueText answers the canned issue's title and a body of its own.
+func (c *canned) issueText(_ context.Context, _ string, number int) (string, string, error) {
+	for _, issue := range cannedIssues {
+		if issue.number == number {
+			return issue.title, "The canned issue #" + strconv.Itoa(number) + " of fake mode: " + issue.title + ".", nil
+		}
+	}
+	return "", "", fmt.Errorf("fake mode has no issue #%d", number)
+}
+
+// createPull answers with the pull request a scripted worker used to name, and opens nothing.
+func (c *canned) createPull(_ context.Context, repository string, p newPull) (string, error) {
+	return fmt.Sprintf("https://github.com/%s/pull/%d", repository, p.issue+100), nil
+}
+
+// cannedChange is the change fake mode briefs its author with: it has no worktree to read one from.
+func cannedChange(entry Entry) facts {
+	return facts{span: "c0ffee0..f00d5ed", commits: fmt.Sprintf("f00d5ed feat: %s", strings.ToLower(entry.Title)),
+		stat: " docs/change.md | 12 ++++++++++++\n 1 file changed, 12 insertions(+)", diff: "diff --git a/docs/change.md b/docs/change.md"}
+}
+
 // cannedMerge is the files a merge of the base conflicts in, for the scenario whose pull request
 // conflicts with its base.
 func cannedMerge(scenario string) []string {
@@ -220,10 +241,10 @@ func cannedQueue(repositories []Connected, now time.Time) []Issue {
 
 // scriptedWorker stands in for `claude -p --output-format stream-json --verbose`. It is a subcommand
 // of the factory's own binary, so fake mode needs nothing installed on the host.
-// Usage: factory scripted-worker <ready|blocked|failed|silent|detached|fix|address|hang|child|daemon> <owner/name> <issue>
+// Usage: factory scripted-worker <ready|blocked|failed|silent|detached|fix|author|address|hang|child|daemon> <owner/name> <issue>
 func scriptedWorker(args []string, stdout, stderr io.Writer) int {
 	if len(args) < 3 {
-		fmt.Fprintln(stderr, "error: usage: factory scripted-worker <ready|blocked|failed|silent|detached|fix|address|hang|child|daemon> <owner/name> <issue>")
+		fmt.Fprintln(stderr, "error: usage: factory scripted-worker <ready|blocked|failed|silent|detached|fix|author|address|hang|child|daemon> <owner/name> <issue>")
 		return 2
 	}
 	scenario, repository := args[0], args[1]
@@ -233,6 +254,9 @@ func scriptedWorker(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	s := &script{out: stdout, context: contextStart}
+	if scenario == "author" {
+		return scriptedAuthor(s, issue)
+	}
 
 	// The child of a hanging worker: it prints which process it is and then waits to be ended with
 	// the process group, which is what proves that no worker process survives a deadline.
@@ -351,18 +375,34 @@ func scriptedWorker(args []string, stdout, stderr io.Writer) int {
 		return 0
 	}
 
-	// The pull request goes to a fresh context, so what the worker carries drops back to a loaded
-	// session: the peak of this run stands here, before the handover, and not at its last message.
+	// The review's checkpoint hands the rest of the stage to a fresh context, so what the worker carries
+	// drops back to a loaded session: the peak of this run stands before the handover, not at its end.
 	s.compact()
-	s.say("Panel: five PASS. Handing the pull request to a fresh context.")
-	s.skill("worker:pr")
-	pullRequest := fmt.Sprintf("https://github.com/%s/pull/%d", repository, issue+100)
-	s.subagent("worker:pr-author", "Open the pull request", pullRequest)
-	// The session stops after the pull request (WF_STOP_AFTER=pr), and the factory waits on CI.
-	s.tool("Bash", map[string]any{"command": "plugins/worker/scripts/stop.sh pr", "description": "Report the stage the session stops after"},
-		"stopped_after: pr\npull_request: "+pullRequest)
-	s.result("success", "", false, "completed", map[string]any{"outcome": resultComplete, "pullRequest": pullRequest,
-		"summary": "Review: 5/5 PASS after one round. Pull request opened; stopped after pr."})
+	s.say("The panel summary is recorded. Stopping after the review.")
+	// The session stops after the review (WF_STOP_AFTER=review), and the factory opens the pull request.
+	// The detached worker's panel ends with the tests reviewer on FIX, which the pull request says.
+	panel := "review_rounds: 1\npanel: code=PASS security=PASS docs=PASS tests=PASS senior=PASS\nfixed: 0 (S1 0, S2 0, S3 0)\ndisputed: none"
+	if scenario == "detached" {
+		panel = "review_rounds: 3\npanel: code=PASS security=PASS docs=PASS tests=FIX→FIX→FIX senior=PASS\nfixed: 4 (S1 0, S2 3, S3 1)\n" +
+			"disputed: tests S2 docs/preview.md:12 a browser test of the preview; the device has no browser to run one in"
+	}
+	gate := "gate_result: pass (exit 0) at f00d5ed"
+	s.tool("Bash", map[string]any{"command": "plugins/worker/scripts/stop.sh", "description": "Report the stage the session stops after"},
+		"ready: stopped after review\npanel_summary_block:\n"+panel+"\n"+gate)
+	s.result("success", "", false, "completed", map[string]any{"outcome": resultComplete, "panelSummary": panel, "gateResult": gate,
+		"summary": "stopped after review"})
+	return 0
+}
+
+// scriptedAuthor is the author session of the pr stage: it reads the change and reports the title and
+// the body of the pull request, and nothing else, because it can do nothing else.
+func scriptedAuthor(s *script, issue int) int {
+	s.init()
+	s.say("The brief carries the diff and the issue. Reading the changed file before writing the description.")
+	s.tool("Read", map[string]any{"file_path": "docs/change.md"}, "1  # The change")
+	s.result("success", "", false, "completed", map[string]any{
+		"title": "feat: the change the canned issue asks for",
+		"body":  fmt.Sprintf("Closes #%d\n\n## What changed\n\nThe canned change of fake mode, in one file.\n\n## Known limits\n\nNone known.", issue)})
 	return 0
 }
 

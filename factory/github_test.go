@@ -650,6 +650,7 @@ type ghShim struct {
 	hanging  string // the file holding how long a clone sleeps instead of cloning
 	gate     string // the file that holds a ref creation until the test lets it through
 	worker   string // the log of the claude shim: how every worker was started
+	authors  string // the log of the claude shim: how every author session of the pr stage was started
 	plugins  string // the log of the claude shim: every plugin and version call before a session
 	env      []string
 }
@@ -667,6 +668,7 @@ func newGhShim(t *testing.T) *ghShim {
 		hanging:  filepath.Join(dir, "hanging"),
 		gate:     filepath.Join(dir, "gate"),
 		worker:   filepath.Join(dir, "workers.log"),
+		authors:  filepath.Join(dir, "authors.log"),
 		plugins:  filepath.Join(dir, "plugins.log"),
 	}
 	for _, d := range []string{g.answers, g.remotes} {
@@ -679,7 +681,7 @@ func newGhShim(t *testing.T) *ghShim {
 		"HOME="+dir, "GH_SHIM_DIR="+g.answers, "GH_SHIM_LOG="+g.log, "GH_SHIM_REMOTES="+g.remotes,
 		"GH_SHIM_BODIES="+g.bodies,
 		"GH_SHIM_FAIL="+g.failing, "GH_SHIM_STALL="+g.stalling, "GH_SHIM_HANG="+g.hanging,
-		"CLAUDE_SHIM_LOG="+g.worker, "CLAUDE_SHIM_PLUGIN_LOG="+g.plugins)
+		"CLAUDE_SHIM_LOG="+g.worker, "CLAUDE_SHIM_AUTHOR_LOG="+g.authors, "CLAUDE_SHIM_PLUGIN_LOG="+g.plugins)
 	return g
 }
 
@@ -724,6 +726,50 @@ func (g *ghShim) ciReads(t *testing.T, repository string, number int, p ciPull) 
 	g.answer(t, "api --paginate "+reviewsRequest(repository, number), marshal(t, p.reviews))
 	g.answer(t, "api graphql --input -", marshal(t, map[string]any{"data": map[string]any{"repository": map[string]any{
 		"pullRequest": map[string]any{"reviewThreads": map[string]any{"nodes": p.threads}}}}}))
+}
+
+// opensPull is the answer to the pull request the pr stage opens: that number of that repository.
+// Unanswered, the shim numbers it after the issue of the branch it is opened from.
+func (g *ghShim) opensPull(t *testing.T, repository string, number int) {
+	t.Helper()
+	g.answer(t, createPullCall(repository), marshal(t, map[string]any{"number": number, "draft": false,
+		"html_url": fmt.Sprintf("https://github.com/%s/pull/%d", repository, number)}))
+}
+
+// createPullCall is the call that opens a pull request, whose body the factory writes to standard input.
+func createPullCall(repository string) string {
+	return "api --method POST repos/" + repository + "/pulls --input -"
+}
+
+// opened is every pull request the pr stage opened on that repository, as the factory sent it.
+func (g *ghShim) opened(t *testing.T, repository string) []newPullJSON {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(g.bodies, requestName(createPullCall(repository))))
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := []newPullJSON{}
+	decoder := json.NewDecoder(strings.NewReader(string(raw)))
+	for decoder.More() {
+		var p newPullJSON
+		if err := decoder.Decode(&p); err != nil {
+			t.Fatalf("the factory opened a pull request with a body that is not JSON: %v\n%s", err, raw)
+		}
+		out = append(out, p)
+	}
+	return out
+}
+
+// newPullJSON is a pull request as the factory asks GitHub to open it.
+type newPullJSON struct {
+	Title string `json:"title"`
+	Head  string `json:"head"`
+	Base  string `json:"base"`
+	Body  string `json:"body"`
+	Draft *bool  `json:"draft"`
 }
 
 // pullViewCall is the read of a pull request the ci stage judges.
@@ -911,19 +957,6 @@ func (g *ghShim) workerResults(t *testing.T, output any) {
 func (g *ghShim) workerPrintsNoResult(t *testing.T) {
 	t.Helper()
 	g.env = append(g.env, "CLAUDE_SHIM_NO_RESULT=1")
-}
-
-// workerReports is the pull request the scripted worker of the claude shim ends its session with.
-func (g *ghShim) workerReports(t *testing.T, repository string, issue int) {
-	t.Helper()
-	g.env = append(g.env, fmt.Sprintf("CLAUDE_SHIM_PR=https://github.com/%s/pull/%d", repository, issue))
-}
-
-// workerReportsCompleteWith is the complete result of a worker that names that pull request, which
-// the factory takes only when it is one of the repository the run is for.
-func (g *ghShim) workerReportsCompleteWith(t *testing.T, pullRequest string) {
-	t.Helper()
-	g.workerResults(t, map[string]any{"outcome": "complete", "pullRequest": pullRequest, "summary": "the work is done and pushed"})
 }
 
 // installs is what the claude shim answers about this host: the version of the worker plugin its

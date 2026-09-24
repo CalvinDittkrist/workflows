@@ -27,8 +27,9 @@
 # branch with work on it is still where the factory found it.
 #
 # A request without an answer fails, so a call the factory makes and the test did not plan for is
-# seen rather than answered with nothing. The reads of the ci stage are the exception: unanswered,
-# they find a green pull request, because nearly every run that reports one goes through that stage.
+# seen rather than answered with nothing. The calls of the pr and ci stages are the exception:
+# unanswered, the issue has a text, the pull request is opened and it is green, because nearly every
+# run goes through those stages.
 set -u
 
 request="$*"
@@ -39,13 +40,14 @@ named=$(printf '%s' "$request" | tr -c 'A-Za-z0-9' '-')
 # A call that reads its body from standard input: it is kept where the test reads it, under the name
 # of the request. It is read here, before any answer is decided, so that gh never leaves a body in a
 # pipe nobody empties — a call that fails or stalls reads it as the one that is answered does.
+input=""
 case " $request " in
   *" --body-file - "*|*" --input - "*)
+    # Read whole and kept as it came, to the last newline, which $(...) alone would take off.
+    input=$(cat; printf x); input=${input%x}
     if [ -n "${GH_SHIM_BODIES:-}" ]; then
       mkdir -p "$GH_SHIM_BODIES"
-      cat >> "$GH_SHIM_BODIES/$named"
-    else
-      cat > /dev/null
+      printf '%s' "$input" >> "$GH_SHIM_BODIES/$named"
     fi
     ;;
 esac
@@ -154,6 +156,15 @@ case "$request" in
     echo '[]'; exit 0 ;;
   "api graphql --input -")
     echo '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}'; exit 0 ;;
+  # The two calls of the pr stage: the issue its author is briefed with, and the pull request it
+  # opens, numbered after the issue of the branch it is opened from.
+  "issue view "*" --repo "*" --json title,body")
+    printf '{"title":"issue %s","body":"The text of issue %s."}\n' "$3" "$3"; exit 0 ;;
+  "api --method POST repos/"*"/pulls --input -")
+    repository=${4#repos/}; repository=${repository%/pulls}
+    number=$(printf '%s' "$input" | sed -n 's#.*"head":"[a-z][a-z]*/\([0-9][0-9]*\)-[^"]*".*#\1#p')
+    printf '{"number":%s,"html_url":"https://github.com/%s/pull/%s","draft":false}\n' "${number:-1}" "$repository" "${number:-1}"
+    exit 0 ;;
   "api graphql --input - --jq .data.addPullRequestReviewThreadReply.comment.url")
     echo 'https://github.com/o/r/pull/1#discussion_r1'; exit 0 ;;
   "api graphql --input - --jq .data.resolveReviewThread.thread.isResolved")

@@ -124,6 +124,10 @@ type Run struct {
 	// budget is held against (ci.repair_rounds). A resumed run on the same pull request carries the
 	// count on.
 	RepairRounds int `json:"repairRounds"`
+	// Review is what the review stage handed on to the pr stage: the panel summary and the gate result
+	// the work session reported, and the commit the branch was at when it did. A resumed run whose
+	// branch is still at that commit and has no pull request open starts at the pr stage with it.
+	Review *Review `json:"review,omitempty"`
 	// Answered is the reviews asking for changes on that pull request whose summaries the run
 	// answered, by their URL. A review stands on GitHub until its author approves, so every later run
 	// on the pull request reads these to leave them alone.

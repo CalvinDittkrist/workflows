@@ -29,7 +29,6 @@ func TestAReviewThatAsksForChangesRunsTheWorkerOnItInTheSameWorktree(t *testing.
 	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
 	gh.loggedInAs(t, "factory-bot")
 	gh.assigns(t, "acme/edge-sensors", claimedIssue, "factory-bot")
-	gh.workerReports(t, "acme/edge-sensors", claimedIssue)
 	// The pull request that run is going to open, with nobody having reviewed it yet.
 	gh.pullRequestIs(t, "acme/edge-sensors", claimedIssue, "open")
 	gh.reviews(t, "acme/edge-sensors", claimedIssue)
@@ -80,9 +79,10 @@ func TestAReviewThatAsksForChangesRunsTheWorkerOnItInTheSameWorktree(t *testing.
 		t.Errorf("the follow-up run ended as %q (%s), want ready again", second.Outcome, second.Reason)
 	}
 	// A follow-up run stands at the address-reviews stage from its first moment and then waits on CI,
-	// where a first run stands at implement and ends in the ci stage.
-	if !equal(first.Stages, []string{"implement", "ci"}) || !equal(second.Stages, []string{"address-reviews", "ci"}) {
-		t.Errorf("the two runs went through the stages %v and %v, want [implement ci] and [address-reviews ci]", first.Stages, second.Stages)
+	// where a first run stands at implement and goes through the pr stage into the ci stage the factory
+	// runs.
+	if !equal(first.Stages, []string{"implement", "pr", "ci"}) || !equal(second.Stages, []string{"address-reviews", "ci"}) {
+		t.Errorf("the two runs went through the stages %v and %v, want [implement pr ci] and [address-reviews ci]", first.Stages, second.Stages)
 	}
 	// The review is a new mandate on the pull request: the follow-up run's count of repair rounds
 	// starts at none, and answering the review it was queued for is not one of them.

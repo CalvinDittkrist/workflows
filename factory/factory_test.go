@@ -184,15 +184,16 @@ func TestFakeModeWorksTheCannedQueueOneRunAtATime(t *testing.T) {
 	if got, want := strings.Join(ready.Stages, " "), "implement review pr ci address-reviews ci"; got != want {
 		t.Errorf("run 1 went through the stages %q, want %q", got, want)
 	}
-	// Its session stopped after the pull request, and the factory waited on CI: the checks pending, then
-	// failed, one repair round with a fix session given the failed log, then review comments answered by
-	// an address-reviews session in a second round, then green.
+	// Its work session stopped after the review, a read-only author session wrote the pull request the
+	// factory opened, and the factory waited on CI: the checks pending, then failed, one repair round with
+	// a fix session given the failed log, then review comments answered by an address-reviews session in
+	// a second round, then green.
 	var readyLog apiRun
 	f.get(t, "/api/runs/1", &readyLog)
 	if got := factoryTitles(readyLog, "ci: ", "repair round", "worker started", "replied", "answered"); strings.Join(got, " | ") !=
-		"worker started | ci: waiting | ci: checks-failed | repair round 1 of 3 | worker started | ci: review-comments | repair round 2 of 3 | "+
+		"worker started | worker started | ci: waiting | ci: checks-failed | repair round 1 of 3 | worker started | ci: review-comments | repair round 2 of 3 | "+
 			"worker started | replied to the thread on upload/retry.go:42 and resolved it | answered the review summaries on https://github.com/acme/edge-sensors/pull/204 | ci: green" {
-		t.Errorf("run 1 logged the ci stage as %q, want it to wait, repair the failed checks with a fix session, answer the review comments with an address-reviews session and end green", got)
+		t.Errorf("run 1 logged the ci stage as %q, want the work and author sessions, then a wait, one repair of the failed checks with a fix session, an answer to the review comments with an address-reviews session and green", got)
 	}
 	if !strings.Contains(fmt.Sprint(readyLog.Events), "--- FAIL: TestCalibrationFileAge") {
 		t.Errorf("run 1 never gave its fix session the failed log")
@@ -201,7 +202,7 @@ func TestFakeModeWorksTheCannedQueueOneRunAtATime(t *testing.T) {
 		t.Errorf("run 1 took %d repair rounds, want 2: the fix of the checks and the answer to the review comments", ready.RepairRounds)
 	}
 	// The context peak is the fullest one message of the worker itself came. The scripted session
-	// hands the pull request to a fresh context halfway through, so the peak stands at the message
+	// hands the review to a fresh context halfway through, so the peak stands at the message
 	// before that handover: neither the last message, which carries less, nor the far larger context
 	// its subagents report, which says nothing about the worker's.
 	const readyPeak = 87_400 // the eleventh message of the worker, the one before the handover
@@ -209,9 +210,10 @@ func TestFakeModeWorksTheCannedQueueOneRunAtATime(t *testing.T) {
 		t.Errorf("run 1 peaked at %d tokens of context, want %d: the fullest message of the worker itself, taken before the handover dropped it and never from the %d a subagent reported",
 			ready.ContextPeak, readyPeak, subagentContext)
 	}
-	// Three sessions, each of which reported its own totals: the run's are their sum.
-	if ready.Turns != 3*23 || math.Abs(ready.CostUSD-3*4.18) > 1e-9 || ready.Tokens.Output != 3*24800 || ready.Tokens.CacheRead != 3*1204000 || ready.Totals != "worker" {
-		t.Errorf("run 1 has turns %d, cost %v and tokens %+v from %q, want the sum of the result lines of its three sessions, from the worker",
+	// Four sessions, the work, the author, the fix and the address-reviews, each of which reported its
+	// own totals: the run's are their sum.
+	if ready.Turns != 4*23 || math.Abs(ready.CostUSD-4*4.18) > 1e-9 || ready.Tokens.Output != 4*24800 || ready.Tokens.CacheRead != 4*1204000 || ready.Totals != "worker" {
+		t.Errorf("run 1 has turns %d, cost %v and tokens %+v from %q, want the sum of the result lines of its four sessions, from the worker",
 			ready.Turns, ready.CostUSD, ready.Tokens, ready.Totals)
 	}
 	// A scripted run is this binary and no Claude Code at all: there is no plugin in it to update and
@@ -417,8 +419,8 @@ func TestFakeModeWorksTheCannedQueueOneRunAtATime(t *testing.T) {
 			agents++
 		}
 	}
-	if agents != 6 || subs != agents {
-		t.Errorf("run 1 logged %d Agent calls and %d subagent events, want six reviewers and authors and one event each", agents, subs)
+	if agents != 5 || subs != agents {
+		t.Errorf("run 1 logged %d Agent calls and %d subagent events, want the five reviewers and one event each", agents, subs)
 	}
 	if len(full.Events) != full.EventCount {
 		t.Errorf("run 1 served %d events for an event count of %d", len(full.Events), full.EventCount)

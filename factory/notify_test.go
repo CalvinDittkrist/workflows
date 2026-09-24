@@ -25,7 +25,6 @@ func TestARunThatEndsReadyAsksTheMaintainersForAReviewOfItsPullRequest(t *testin
 	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
 	gh.loggedInAs(t, "factory-bot")
 	gh.assigns(t, "acme/edge-sensors", claimedIssue, "factory-bot")
-	gh.workerReports(t, "acme/edge-sensors", claimedIssue)
 	pullRequest := fmt.Sprintf("https://github.com/acme/edge-sensors/pull/%d", claimedIssue)
 	gh.reviewRequests(t, pullRequest, maintainers...)
 
@@ -70,7 +69,6 @@ func TestAReviewRequestOneLoginIsRefusedStillReachesTheOthers(t *testing.T) {
 	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
 	gh.loggedInAs(t, "factory-bot")
 	gh.assigns(t, "acme/edge-sensors", claimedIssue, "factory-bot")
-	gh.workerReports(t, "acme/edge-sensors", claimedIssue)
 	pullRequest := fmt.Sprintf("https://github.com/acme/edge-sensors/pull/%d", claimedIssue)
 	gh.reviewRequests(t, pullRequest, maintainers...)
 	gh.fail(t, "pr edit * --add-reviewer ada") // the one login GitHub will not take
@@ -102,7 +100,6 @@ func TestAReviewRequestThatStallsStillReachesTheLoginsBehindIt(t *testing.T) {
 	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
 	gh.loggedInAs(t, "factory-bot")
 	gh.assigns(t, "acme/edge-sensors", claimedIssue, "factory-bot")
-	gh.workerReports(t, "acme/edge-sensors", claimedIssue)
 	pullRequest := fmt.Sprintf("https://github.com/acme/edge-sensors/pull/%d", claimedIssue)
 	gh.reviewRequests(t, pullRequest, maintainers...)
 	gh.stall(t, "pr edit * --add-reviewer ada") // the first login's call is taken and never answered
@@ -122,19 +119,28 @@ func TestAReviewRequestThatStallsStillReachesTheLoginsBehindIt(t *testing.T) {
 
 // A run that ends ready and names no pull request has nothing to ask a review of, and is an issue
 // the factory still holds and is done with: the maintainer hears of it on the issue, like every
-// other ending that waits for a person.
+// other ending that waits for a person. No run of this factory ends so any more — the work session
+// stops after the review and the factory opens the pull request itself, and a follow-up run answers
+// the review in its own address-reviews stage — so such a run is one a factory before it recorded,
+// whose session ran the pipeline to its end and named a pull request of another repository, and
+// whose ending that factory did not get to make.
 func TestAReadyRunThatNamesNoPullRequestIsSaidOnTheIssue(t *testing.T) {
 	t.Parallel()
 	gh := newGhShim(t)
-	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
+	gh.remote(t, "acme/edge-sensors")
 	gh.loggedInAs(t, "factory-bot")
-	gh.assigns(t, "acme/edge-sensors", claimedIssue, "factory-bot")
-	gh.workerReportsCompleteWith(t, "https://github.com/someone/edge-sensors-fork/pull/3")
+	gh.issues(t, "acme/edge-sensors")
 	gh.comments(t, "acme/edge-sensors", claimedIssue)
-
 	data := filepath.Join(t.TempDir(), "data")
 	gh.cloneInto(t, data, "acme/edge-sensors")
-	f := gh.work(t, config{"poll": "50ms", "deadline": "90s", "data_dir": data,
+
+	began := time.Now().UTC().Add(-2 * time.Hour)
+	owed := record(1, claimedIssue, claimedTitle, signalRouted, outcomeReady, true, began, began.Add(30*time.Minute))
+	_, owed.Reason = pullRequest("https://github.com/someone/edge-sensors-fork/pull/3", "acme/edge-sensors")
+	owed.Notified = notifyPending
+	records(t, data, owed)
+
+	f := gh.work(t, config{"poll": "50ms", "data_dir": data,
 		"repositories": []string{"acme/edge-sensors"}, "notify": maintainers})
 	run := f.ended(t, 1)
 	if run.Outcome != "ready" || run.PullRequest != "" {
@@ -501,7 +507,6 @@ func TestWithoutLoginsToNotifyTheFactoryNotifiesNobodyAndSaysSoAtItsStart(t *tes
 	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
 	gh.loggedInAs(t, "factory-bot")
 	gh.assigns(t, "acme/edge-sensors", claimedIssue, "factory-bot")
-	gh.workerReports(t, "acme/edge-sensors", claimedIssue)
 
 	data := filepath.Join(t.TempDir(), "data")
 	gh.cloneInto(t, data, "acme/edge-sensors")

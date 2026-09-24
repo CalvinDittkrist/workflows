@@ -20,7 +20,6 @@ func TestARunUpdatesTheWorkerPluginBeforeItStartsAndRecordsWhatItRanWith(t *test
 	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
 	gh.loggedInAs(t, "factory-bot")
 	gh.assigns(t, "acme/edge-sensors", claimedIssue, "factory-bot")
-	gh.workerReports(t, "acme/edge-sensors", claimedIssue)
 	gh.installs(t, "0.9.3", "2.1.278 (Claude Code)")
 
 	data := filepath.Join(t.TempDir(), "data")
@@ -91,7 +90,6 @@ func TestAFactoryStoppedWhileItUpdatesTheWorkerInterruptsTheRunRatherThanFailing
 	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
 	gh.loggedInAs(t, "factory-bot")
 	gh.assigns(t, "acme/edge-sensors", claimedIssue, "factory-bot")
-	gh.workerReports(t, "acme/edge-sensors", claimedIssue)
 	gh.installs(t, "0.9.3", "2.1.278 (Claude Code)")
 	gh.updatesHang(t)
 
@@ -143,7 +141,6 @@ func TestAVersionThatCannotBeReadIsAWarningAndNoVersionOnTheRecord(t *testing.T)
 	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
 	gh.loggedInAs(t, "factory-bot")
 	gh.assigns(t, "acme/edge-sensors", claimedIssue, "factory-bot")
-	gh.workerReports(t, "acme/edge-sensors", claimedIssue)
 	// A worker plugin that is installed but switched off, and a Claude Code that printed no version.
 	gh.installs(t, "0.9.3", "")
 	gh.switchedOff(t)
@@ -182,7 +179,6 @@ func TestAFailedUpdateIsAWarningAndTheRunGoesOnWithWhatIsInstalled(t *testing.T)
 	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
 	gh.loggedInAs(t, "factory-bot")
 	gh.assigns(t, "acme/edge-sensors", claimedIssue, "factory-bot")
-	gh.workerReports(t, "acme/edge-sensors", claimedIssue)
 	gh.installs(t, "0.9.3", "2.1.278 (Claude Code)")
 	gh.updatesFail(t, "claude: the marketplace could not be fetched")
 
@@ -227,7 +223,6 @@ func TestAWorkerLoadedFromAPluginDirectoryRecordsNoVersionOffTheInstall(t *testi
 	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
 	gh.loggedInAs(t, "factory-bot")
 	gh.assigns(t, "acme/edge-sensors", claimedIssue, "factory-bot")
-	gh.workerReports(t, "acme/edge-sensors", claimedIssue)
 	// A host that has the plugin installed and switched on, and still gives its worker a checkout of
 	// its own: a developer's host, and the one configuration the install is not what a session runs.
 	gh.installs(t, "0.9.3", "2.1.278 (Claude Code)")
