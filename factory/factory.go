@@ -138,9 +138,10 @@ type source interface {
 	pullState(ctx context.Context, held Held, bots []string) (pullReading, error)
 	failedLogs(ctx context.Context, repository string, failed []check) string
 	openPull(ctx context.Context, repository, branch string) (string, error)
-	// replyAndResolve and commentOnPull carry what an address-reviews session answered to GitHub: a
-	// reply in one review thread and its resolution, and one comment on the pull request.
-	replyAndResolve(ctx context.Context, id, body string) error
+	// replyToThread, resolveThread and commentOnPull carry what an address-reviews session answered to
+	// GitHub: a reply in one review thread, its resolution, and one comment on the pull request.
+	replyToThread(ctx context.Context, id, body string) error
+	resolveThread(ctx context.Context, id string) error
 	commentOnPull(ctx context.Context, repository string, pull int, body string) error
 }
 
@@ -753,7 +754,7 @@ func (f *Factory) execute(parent context.Context, r *Run, entry Entry) {
 	// A resumed run whose branch has a pull request open is past the stages that open one: it starts at
 	// the ci stage, with the repair rounds its pull request has had, and nothing before it is done again.
 	if pull := f.openedAlready(ctx, r, entry, claim); pull != "" {
-		if entry.resume.PullRequest == pull {
+		if pullOf(entry.resume.PullRequest) == pullOf(pull) {
 			f.runs.update(r, func() { r.RepairRounds = entry.resume.RepairRounds })
 		}
 		f.ci(parent, ctx, r, entry, claim, pull, false)

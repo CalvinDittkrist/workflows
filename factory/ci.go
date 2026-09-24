@@ -157,14 +157,32 @@ type objection struct {
 }
 
 // thread is one unresolved review thread: its id, which a reply and a resolution name it by, where it
-// is, and who opened it with what.
+// is, who opened it with what, and what was said in it since by those whose words count.
 type thread struct {
-	ID    string
-	Path  string
-	Line  int
+	ID      string
+	Path    string
+	Line    int
+	Login   string
+	URL     string
+	Body    string
+	Replies []threadReply
+}
+
+// threadReply is one comment in a thread after the one that opened it.
+type threadReply struct {
 	Login string
 	URL   string
 	Body  string
+}
+
+// said is the thread's conversation as an address-reviews brief shows it: the opening comment, then
+// every reply in order, each cut to its head.
+func (t thread) said() string {
+	parts := []string{cut(strings.TrimSpace(t.Body), maxReviewBody)}
+	for _, reply := range t.Replies {
+		parts = append(parts, fmt.Sprintf("### reply by @%s: %s\n%s", reply.Login, reply.URL, cut(strings.TrimSpace(reply.Body), maxReviewBody)))
+	}
+	return strings.Join(parts, "\n")
 }
 
 func (o objection) line() string { return fmt.Sprintf("- %s asked for changes: %s", o.Login, o.URL) }
@@ -190,18 +208,40 @@ func (read pullReading) comments() string {
 	return strings.Join(lines, "\n")
 }
 
+// answerKey is the URL of an answered review as the factory matches it: GitHub answers for either
+// spelling of a repository (repositoryKey), so a run recorded under Acme/Repo answered the review a
+// later reading finds under acme/repo.
+func answerKey(url string) string { return strings.ToLower(url) }
+
+// pullOf is the pull request of a URL as the factory matches it (pullKey), its repository in either
+// spelling, and the URL itself when it names no pull request.
+func pullOf(link string) string {
+	found := pullRequestURL.FindStringSubmatch(link)
+	number, ok := pullNumber(link)
+	if !ok {
+		return link
+	}
+	return pullKey(found[1], number)
+}
+
 // without is the reading with the objections an address-reviews round of the issue has answered on
-// the pull request left out. A review that asks for changes stands on GitHub until its author approves or it is dismissed,
+// the pull request left out, and the threads it replied to whose resolution is all that is left. A review that asks for changes stands on GitHub until its author approves or it is dismissed,
 // which only its author does, so an objection that has been answered is no reason for another round:
 // what is left of it is the maintainer's to read, and a new review of theirs is a new objection.
-func (read pullReading) without(answered map[string]bool) pullReading {
+func (read pullReading) without(answered, replied map[string]bool) pullReading {
 	standing := []objection{}
 	for _, o := range read.Objections {
-		if !answered[o.URL] {
+		if !answered[answerKey(o.URL)] {
 			standing = append(standing, o)
 		}
 	}
-	read.Objections = standing
+	open := []thread{}
+	for _, t := range read.Threads {
+		if !replied[t.ID] {
+			open = append(open, t)
+		}
+	}
+	read.Objections, read.Threads = standing, open
 	return read
 }
 
@@ -330,12 +370,18 @@ func (f *Factory) ci(parent, ctx context.Context, r *Run, entry Entry, claim cla
 	spent := ""
 	said := ""
 	// answered is the objections an address-reviews round of this issue has answered on this pull
-	// request, by their URL: this run's, and those its records carry from the runs before it.
-	answered := map[string]bool{}
+	// request, by their URL (answerKey): this run's, and those its records carry from the runs before
+	// it. replied is the threads such a round replied to whose resolution did not go through: the
+	// reply stands, so the next reading only resolves them.
+	answered, replied := map[string]bool{}, map[string]bool{}
 	for _, before := range f.runs.list() {
-		if before.ID != r.ID && before.Repository == entry.Repository && before.Issue == entry.Number && before.PullRequest == pull {
+		if before.ID != r.ID && repositoryKey(before.Repository) == repositoryKey(entry.Repository) && before.Issue == entry.Number &&
+			pullOf(before.PullRequest) == pullOf(pull) {
 			for _, url := range before.Answered {
-				answered[url] = true
+				answered[answerKey(url)] = true
+			}
+			for _, id := range before.Replied {
+				replied[id] = true
 			}
 		}
 	}
@@ -358,7 +404,8 @@ func (f *Factory) ci(parent, ctx context.Context, r *Run, entry Entry, claim cla
 			// The push of the last round has not reached the pull request yet.
 		default:
 			spent = ""
-			read = read.without(answered)
+			f.resolveReplied(ctx, r, read, replied)
+			read = read.without(answered, replied)
 			if mandate {
 				mandate = false
 				if len(read.Objections)+len(read.Threads) == 0 {
@@ -366,7 +413,7 @@ func (f *Factory) ci(parent, ctx context.Context, r *Run, entry Entry, claim cla
 						Body: "the review this run was queued for no longer stands, so there is nothing to answer and the run waits on CI"})
 					f.runs.update(r, func() { r.stage(stageCI) })
 				} else {
-					pushed, ok := f.address(parent, ctx, r, entry, claim, pull, read, answered)
+					pushed, ok := f.address(parent, ctx, r, entry, claim, pull, read, answered, replied)
 					if !ok {
 						return
 					}
@@ -407,7 +454,7 @@ func (f *Factory) ci(parent, ctx context.Context, r *Run, entry Entry, claim cla
 			var pushed string
 			var ok bool
 			if verdict == ciComments {
-				pushed, ok = f.address(parent, ctx, r, entry, claim, pull, read, answered)
+				pushed, ok = f.address(parent, ctx, r, entry, claim, pull, read, answered, replied)
 			} else {
 				pushed, ok = f.repair(parent, ctx, r, entry, claim, pull, verdict, read)
 			}
@@ -498,7 +545,7 @@ func fixBrief(entry Entry, claim claimed, pull, task string) string {
 // round showed go into answered and into the run's record, which later runs on the pull request read.
 // It answers with the commit the round pushed, and ends the run and answers false when the
 // round cannot go on.
-func (f *Factory) address(parent, ctx context.Context, r *Run, entry Entry, claim claimed, pull string, read pullReading, answered map[string]bool) (string, bool) {
+func (f *Factory) address(parent, ctx context.Context, r *Run, entry Entry, claim claimed, pull string, read pullReading, answered, replied map[string]bool) (string, bool) {
 	f.runs.update(r, func() { r.stage(stageAddressReviews) })
 	listing, shown := reviewListing(read)
 	s := addressSession(addressBrief(entry, claim, pull, listing))
@@ -518,16 +565,35 @@ func (f *Factory) address(parent, ctx context.Context, r *Run, entry Entry, clai
 	}
 	f.runs.event(r, Event{Kind: "factory", Title: fmt.Sprintf("addressed: fixed %d, declined %d", len(got.Fixed), len(got.Declined)),
 		Body: strings.TrimSpace("fixed:\n" + bullets(got.Fixed) + "\ndeclined:\n" + bullets(got.Declined))})
-	if f.postAnswers(ctx, r, entry.Repository, pull, shown, got) {
+	if f.postAnswers(ctx, r, entry.Repository, pull, shown, got, replied) {
 		f.runs.update(r, func() {
 			for _, o := range shown.Objections {
-				answered[o.URL] = true
+				answered[answerKey(o.URL)] = true
 				r.Answered = append(r.Answered, o.URL)
 			}
 		})
 	}
 	f.runs.update(r, func() { r.stage(stageCI) })
 	return head, true
+}
+
+// resolveReplied resolves the unresolved threads of a reading that a round replied to already. A thread
+// that is resolved now leaves replied; one that still is not stays there, out of every brief, and is
+// tried again on the next reading.
+func (f *Factory) resolveReplied(ctx context.Context, r *Run, read pullReading, replied map[string]bool) {
+	for _, t := range read.Threads {
+		if !replied[t.ID] {
+			continue
+		}
+		if err := f.source.resolveThread(ctx, t.ID); err != nil {
+			if ctx.Err() == nil {
+				f.warn(r, "thread not resolved", fmt.Sprintf("the thread on %s:%d has its reply but could not be resolved again, which the next reading tries again: %v", t.Path, t.Line, err))
+			}
+			continue
+		}
+		f.runs.event(r, Event{Kind: "factory", Title: fmt.Sprintf("resolved the thread on %s:%d", t.Path, t.Line),
+			Body: "the thread got its reply on an earlier round, whose resolution did not go through"})
+	}
 }
 
 // bullets is a list as the lines of an event, one point each.
@@ -548,10 +614,13 @@ const maxReply = 60000
 // postAnswers makes the calls that carry a session's replies to GitHub: a reply and a resolution per
 // thread the brief showed it, the first reply to each, and one comment for the review summaries. A
 // reply to a thread the brief did not show is posted nowhere, because the result is the session's
-// writing and the issue it read may have steered it. A call that fails is a warning: its thread stays
-// unresolved, and the next reading of the pull request asks for it again. It says whether the review
-// summaries were answered, and only answered ones are left alone by the next reading.
-func (f *Factory) postAnswers(ctx context.Context, r *Run, repository, pull string, shown pullReading, got result) bool {
+// writing and the issue it read may have steered it. A reply that fails is a warning: its thread stays
+// unresolved, and the next reading of the pull request asks for it again. A resolution that fails
+// after its reply went through is a warning too, and the thread goes into replied, whose threads the
+// next reading resolves without asking a session again, so no thread gets the same answer twice. It
+// says whether the review summaries were answered, and only answered ones are left alone by the next
+// reading.
+func (f *Factory) postAnswers(ctx context.Context, r *Run, repository, pull string, shown pullReading, got result, replied map[string]bool) bool {
 	threads := map[string]thread{}
 	for _, t := range shown.Threads {
 		threads[t.ID] = t
@@ -569,9 +638,20 @@ func (f *Factory) postAnswers(ctx context.Context, r *Run, repository, pull stri
 			continue
 		}
 		delete(threads, reply.Thread) // one reply per thread
-		if err := f.source.replyAndResolve(ctx, t.ID, cut(body, maxReply)); err != nil {
+		if err := f.source.replyToThread(ctx, t.ID, cut(body, maxReply)); err != nil {
 			if ctx.Err() == nil {
 				f.warn(r, "reply not posted", fmt.Sprintf("the reply to the thread on %s:%d could not be posted and the thread stays unresolved: %v", t.Path, t.Line, err))
+			}
+			continue
+		}
+		if err := f.source.resolveThread(ctx, t.ID); err != nil {
+			f.runs.update(r, func() {
+				replied[t.ID] = true
+				r.Replied = append(r.Replied, t.ID)
+			})
+			f.runs.event(r, Event{Kind: "factory", Title: fmt.Sprintf("replied to the thread on %s:%d", t.Path, t.Line), Body: body})
+			if ctx.Err() == nil {
+				f.warn(r, "thread not resolved", fmt.Sprintf("the thread on %s:%d has its reply but could not be resolved, which the next reading of the pull request tries again: %v", t.Path, t.Line, err))
 			}
 			continue
 		}
@@ -624,7 +704,7 @@ func reviewListing(read pullReading) (string, pullReading) {
 		}
 	}
 	for _, t := range read.Threads {
-		if fits(fmt.Sprintf("## thread %s on %s:%d by @%s: %s\n%s", t.ID, t.Path, t.Line, t.Login, t.URL, cut(strings.TrimSpace(t.Body), maxReviewBody))) {
+		if fits(fmt.Sprintf("## thread %s on %s:%d by @%s: %s\n%s", t.ID, t.Path, t.Line, t.Login, t.URL, t.said())) {
 			shown.Threads = append(shown.Threads, t)
 		}
 	}
@@ -796,13 +876,19 @@ func (c ghRollup) check() check {
 }
 
 // threadsQuery reads the review threads of one pull request: the id a reply names each by, whether it
-// is resolved, where it is, and who opened it with what.
+// is resolved, where it is, and its conversation, who said what, up to maxThreadComments comments.
 const threadsQuery = `query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){` +
-	`reviewThreads(first:100){nodes{id isResolved path line comments(first:1){nodes{author{__typename login} url body}}}}}}}`
+	`reviewThreads(first:100){nodes{id isResolved path line comments(first:` + maxThreadComments + `){nodes{author{__typename login} url body}}}}}}}`
+
+// maxThreadComments bounds the comments read of one thread, the opening one among them.
+const maxThreadComments = "50"
 
 // replyMutation and resolveMutation are the two calls that answer one thread: a reply in it, and its
-// resolution, which is what the worker's pr-resolve.sh makes.
+// resolution, which is what the worker's pr-resolve.sh makes. Each reads its own answer back
+// (replyAnswer, resolveAnswer), so the two are told apart and one can fail without the other.
 const (
+	replyAnswer     = ".data.addPullRequestReviewThreadReply.comment.url"
+	resolveAnswer   = ".data.resolveReviewThread.thread.isResolved"
 	replyMutation   = `mutation($id:ID!,$body:String!){addPullRequestReviewThreadReply(input:{pullRequestReviewThreadId:$id,body:$body}){comment{url}}}`
 	resolveMutation = `mutation($id:ID!){resolveReviewThread(input:{threadId:$id}){thread{isResolved}}}`
 )
@@ -882,47 +968,73 @@ func (g *gitHub) pullState(ctx context.Context, held Held, bots []string) (pullR
 		if t.IsResolved {
 			continue
 		}
-		open := thread{ID: t.ID, Path: t.Path, Line: t.Line}
-		bot := false
-		if len(t.Comments.Nodes) > 0 {
-			first := t.Comments.Nodes[0]
-			open.Login, open.URL, open.Body = first.Author.Login, first.URL, first.Body
-			bot = first.Author.Type == "Bot"
+		open := thread{ID: t.ID, Path: t.Path, Line: t.Line, Replies: []threadReply{}}
+		comments := t.Comments.Nodes
+		if len(comments) > 0 {
+			open.Login, open.URL, open.Body = comments[0].Author.Login, comments[0].URL, comments[0].Body
 		}
 		// Anybody may comment on a pull request of a public repository, and what a thread says becomes
 		// the brief of a session that pushes: only a thread a writer or a bot the host waits for opened
-		// asks for anything. GraphQL gives a bot's login without [bot], so the account's type is what
-		// tells the bot from a user of the same name.
-		asks := bot && slices.Contains(bots, open.Login)
-		if !asks && open.Login != "" {
-			if asks, err = g.mayPush(ctx, held.Repository, open.Login, "thread "+open.ID); err != nil {
+		// asks for anything, and only the replies of such accounts are shown with it. GraphQL gives a
+		// bot's login without [bot], so the account's type is what tells the bot from a user of the
+		// same name.
+		counts := func(login, kind string) (bool, error) {
+			if kind == "Bot" && slices.Contains(bots, login) {
+				return true, nil
+			}
+			if login == "" {
+				return false, nil
+			}
+			return g.mayPush(ctx, held.Repository, login, "thread "+open.ID+" "+login)
+		}
+		if len(comments) == 0 {
+			continue
+		}
+		asks, err := counts(open.Login, comments[0].Author.Type)
+		if err != nil {
+			return pullReading{}, err
+		}
+		if !asks {
+			continue
+		}
+		for _, c := range comments[1:] {
+			may, err := counts(c.Author.Login, c.Author.Type)
+			if err != nil {
 				return pullReading{}, err
 			}
+			if may {
+				open.Replies = append(open.Replies, threadReply{Login: c.Author.Login, URL: c.URL, Body: c.Body})
+			}
 		}
-		if asks {
-			read.Threads = append(read.Threads, open)
-		}
+		read.Threads = append(read.Threads, open)
 	}
 	return read, nil
 }
 
-// replyAndResolve answers one review thread: the reply first, so a thread is never resolved without
-// the word that says why, then the resolution.
-func (g *gitHub) replyAndResolve(ctx context.Context, id, body string) error {
-	for _, call := range []struct {
-		query     string
-		variables map[string]any
-	}{
-		{replyMutation, map[string]any{"id": id, "body": body}},
-		{resolveMutation, map[string]any{"id": id}},
-	} {
-		input, err := json.Marshal(map[string]any{"query": call.query, "variables": call.variables})
-		if err != nil {
-			return err
-		}
-		if _, err := ghInput(ctx, ghTimeout, string(input), "api", "graphql", "--input", "-"); err != nil {
-			return err
-		}
+// replyToThread posts one reply in a review thread. The factory posts it before it resolves the
+// thread, so a thread is never resolved without the word that says why.
+func (g *gitHub) replyToThread(ctx context.Context, id, body string) error {
+	return g.mutate(ctx, replyMutation, replyAnswer, map[string]any{"id": id, "body": body})
+}
+
+// resolveThread resolves one review thread.
+func (g *gitHub) resolveThread(ctx context.Context, id string) error {
+	return g.mutate(ctx, resolveMutation, resolveAnswer, map[string]any{"id": id})
+}
+
+// mutate makes one GraphQL call that writes, its query on standard input, and reads back the field that
+// shows it went through.
+func (g *gitHub) mutate(ctx context.Context, query, answer string, variables map[string]any) error {
+	input, err := json.Marshal(map[string]any{"query": query, "variables": variables})
+	if err != nil {
+		return err
+	}
+	raw, err := ghInput(ctx, ghTimeout, string(input), "api", "graphql", "--input", "-", "--jq", answer)
+	if err != nil {
+		return err
+	}
+	if got := strings.TrimSpace(string(raw)); got == "" || got == "null" || got == "false" {
+		return fmt.Errorf("GitHub answered %q for %s", got, answer)
 	}
 	return nil
 }
