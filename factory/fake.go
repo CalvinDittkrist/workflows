@@ -172,9 +172,10 @@ func (c *canned) failedLogs(context.Context, string, []check) string {
 	return "gate\tRun make check\t--- FAIL: TestCalibrationFileAge (0.02s)\n    calibration_test.go:41: want a warning, got none\nFAIL"
 }
 
-// replyAndResolve takes the reply: the canned pull request's thread is only there while its reading
-// says so.
-func (c *canned) replyAndResolve(context.Context, string, string) error { return nil }
+// replyToThread and resolveThread take the reply and the resolution: the canned pull request's thread
+// is only there while its reading says so.
+func (c *canned) replyToThread(context.Context, string, string) error { return nil }
+func (c *canned) resolveThread(context.Context, string) error         { return nil }
 
 // commentOnPull answers the review the maintainer of fake mode asked for changes with, so the pull
 // request of that issue has no review comments from then on.
