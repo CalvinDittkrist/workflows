@@ -221,3 +221,78 @@ wf_start_agent() {
   fi
   wf_wait_agent "$pane"
 }
+
+# The settings object of a worker session, as JSON: the one a claim starts and the one a test hunt starts,
+# so both sessions run under the same rules. $1 is the mode, $2 the issue (empty for a session that works no
+# issue, which then carries no WF_ISSUE), $3 a JSON object of worker knobs for its env block.
+# Session-scoped configuration travels through --settings so hooks and skills can read it from the environment.
+# The worker session disables the planner and orchestrator plugins so their skills and agents stay out of its context.
+# CLAUDE_CODE_DISABLE_BACKGROUND_TASKS keeps subagents in the foreground: the reviewer reports come back as the
+# results of the Agent calls, so the worker never spends turns waiting for them (ADR 0017).
+# The status line makes the worker's context size visible in its pane and writes it into the worktree, where
+# the worker's own checkpoint reads it (ADR 0020). It is this plugin's script by absolute path: the worker
+# session has this plugin disabled, which hides its skills and agents, not its files.
+# The safety net under that is the compact trigger: a session that is not handed over in time compacts instead
+# of growing until the model refuses. Claude Code compacts at a percentage of autoCompactWindow, and that
+# percentage is not documented, so this function pins both numbers here and nowhere else (ADR 0031). The
+# trigger is their product, and it is the number the status line is given, so the pane shows the size against
+# the point this session compacts by and not against a window it never reaches. refreshInterval keeps the
+# value fresh while one long tool call runs, which changes no message and would otherwise render nothing.
+# The window is the lever for the trigger, because the percentage cannot be raised: 312 500 puts the trigger
+# at 250 000 (ADR 0034).
+wf_worker_settings() {
+  local mode="$1" issue="$2" env_extra="${3:-"{}"}" here compact_window compact_pct compact_trigger sl
+  here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+  compact_window=312500
+  # CLAUDE_AUTOCOMPACT_PCT_OVERRIDE can only lower the percentage ("values above the default percentage are
+  # ignored", https://code.claude.com/docs/en/env-vars.md), and 80 is under the default the measured worker
+  # sessions compacted at, so it is the percentage that applies rather than a request Claude Code drops.
+  compact_pct=80
+  compact_trigger=$((compact_window * compact_pct / 100))
+  # claude runs statusLine.command through a shell, so the path is quoted: a checkout under "/Users/John Smith"
+  # would otherwise split into words, nothing would render, and the worker's checkpoint would read a missing
+  # value as a handoff for the rest of the run.
+  sl="$(wf_shell_quote "$here/statusline.sh") $compact_trigger"
+  # The worker knobs ride in the same env block, beside the keys every session sets. Claude Code merges an
+  # env block per variable across the settings levels and takes the command line's value for a key it sets
+  # (https://code.claude.com/docs/en/settings.md, checked 2026-09-21), so a knob given here wins over the
+  # repository's settings for this one session and leaves every other variable of theirs alone. The knobs go
+  # in first, so the keys every session sets are written over them and stay what this function says they are
+  # however the accepted names ever change.
+  jq -cn --arg m "$mode" --arg i "$issue" --arg sl "$sl" \
+    --argjson w "$compact_window" --arg p "$compact_pct" --argjson e "$env_extra" \
+    '{env:($e + {WF_MODE:$m, CLAUDE_CODE_DISABLE_BACKGROUND_TASKS:"1", CLAUDE_AUTOCOMPACT_PCT_OVERRIDE:$p}
+           + (if $i != "" then {WF_ISSUE:$i} else {} end)),
+      enabledPlugins:{"planner@workflows":false, "orchestrator@workflows":false},
+      statusLine:{type:"command", command:$sl, padding:0, refreshInterval:60},
+      autoCompactWindow:$w}'
+}
+
+# Start the worker agent in the pane of a fresh worktree (pane, path, ws and branch as wf_create_worktree and
+# its caller set them) with the settings $4 and the first prompt $5, in the Docker sandbox when $1 is 1.
+# $2 is the Herdr agent name before wf_agent_name, $3 the session's display name. A start that fails removes
+# the worktree and the branch again and ends the script. Sets agent_status.
+wf_start_worker() {
+  local sandbox="$1" name="$2" label="$3" settings="$4" prompt="$5" here perm extra
+  here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+  perm="${WF_WORKER_PERMISSION_MODE:-auto}"
+  name=$(wf_agent_name "$name")
+  # WF_CLAUDE_ARGS applies to every session, WF_WORKER_CLAUDE_ARGS to workers only (e.g. "--model sonnet", "--plugin-dir /path" while developing).
+  extra="${WF_CLAUDE_ARGS:-} ${WF_WORKER_CLAUDE_ARGS:-}"
+  if [ "$sandbox" = 1 ]; then
+    # A command line for the shell in the new pane: every value is quoted for it (the settings JSON carries
+    # quotes of its own since the status line moved in), the script by its full path because that pane's
+    # working directory is not this script's, and only $extra stays bare, because it is a list of flags.
+    herdr pane run "$pane" "$(wf_shell_quote "$here/sbx-worker.sh") $(wf_shell_quote "$path") -- --agent worker --strict-mcp-config --permission-mode $(wf_shell_quote "$perm") --settings $(wf_shell_quote "$settings") --name $(wf_shell_quote "$label") $extra $(wf_shell_quote "$prompt")" >/dev/null
+    herdr agent wait "$pane" --until idle --until blocked --timeout 300000 >/dev/null || wf_warn "worker did not become ready within 5 minutes; inspect pane $pane"
+    wf_wait_agent "$pane"
+  else
+    # shellcheck disable=SC2086  # $extra is a flag list and must word-split
+    if ! wf_start_agent "$pane" "$name" --agent worker --strict-mcp-config --permission-mode "$perm" --settings "$settings" --name "$label" $extra "$prompt"; then
+      wf_rollback_worktree "$ws" "$path" "$branch"
+      wf_die "$start_error Worktree and branch $branch were removed."
+    fi
+  fi
+  # shellcheck disable=SC2034  # read by the caller
+  agent_name="$name"
+}
