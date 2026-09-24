@@ -193,7 +193,8 @@ func TestTooLittleQuotaWaitsForTheResetAndStartsAfterIt(t *testing.T) {
 
 // A run spends the models of its reviewers as well as the worker's: the default panel runs three of
 // its five on sonnet, so a sonnet scope below the minimum holds the run back while the worker's opus
-// has plenty. A panel whose reviewers all inherit the worker's model spends no sonnet, and starts.
+// has plenty, and so does a panel that inherits the worker's model with a change class that asks a
+// reviewer on sonnet. A panel whose reviewers all inherit the worker's model spends no sonnet, and starts.
 func TestTheQuotaOfTheReviewersModelsHoldsARunBack(t *testing.T) {
 	t.Parallel()
 	for name, c := range map[string]struct {
@@ -202,6 +203,9 @@ func TestTheQuotaOfTheReviewersModelsHoldsARunBack(t *testing.T) {
 	}{
 		"the default panel":                 {nil, true},
 		"a panel that inherits every model": {map[string]any{"reviewers": []string{"security", "senior"}}, false},
+		// A change class may ask a reviewer the panel does not have.
+		"a change class with a reviewer on sonnet": {map[string]any{"reviewers": []string{"security", "senior"},
+			"classes": []map[string]any{{"name": "code", "paths": []string{"src/**"}, "gate": []string{}, "reviewers": []string{"code"}}}}, true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

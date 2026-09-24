@@ -107,8 +107,15 @@ test('the stage line and the outcome box show the scripted states', async ({ pag
   await page.goto(working(`/#run=${READY_RUN}`))
   const stages = detail(page).locator('.steps li')
   // The ready run went through every stage: its panel took two rounds, in ci the reviewers asked for
-  // changes, an address-reviews session answered them, and the run ended back in ci.
-  await expect(stages).toHaveText(['implement', 'review, round 2', 'pr', 'ci', 'address-reviews'])
+  // changes, an address-reviews session answered them, and the run ended back in ci. Its change was
+  // of the class docs until a fix moved it to the class upload.
+  await expect(stages).toHaveText([
+    'implement',
+    'review, round 2, class docs → upload',
+    'pr',
+    'ci',
+    'address-reviews',
+  ])
   await expect(stages.nth(0)).toHaveClass('done')
   await expect(stages.nth(3)).toHaveClass(/at/)
   await expect(stages.nth(4)).toHaveClass('done')
@@ -131,6 +138,10 @@ test('the stage line and the outcome box show the scripted states', async ({ pag
   await expect(detail(page).locator('.steps .at')).toHaveText('ci')
   await expect(detail(page).locator('.steps li').nth(4)).toHaveClass('done')
   await expect(detail(page).locator('.steps li').nth(0)).toHaveClass('')
+
+  // The run whose fixes left every class shows the class it moved to, full.
+  await page.goto(working(`/#run=${WARNED_RUN}`))
+  await expect(detail(page).locator('.steps li').nth(1)).toHaveText('review, round 3, class docs → full')
 
   await page.goto(working(`/#run=${RUNNING_RUN}`))
   // The run that is still going has no outcome box at all.

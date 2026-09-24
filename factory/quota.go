@@ -188,7 +188,14 @@ func parseQuota(raw []byte, models []string) (quota, error) {
 // of its panel that names one of its own rather than inheriting the worker's.
 func (f *Factory) spends(repository string) []string {
 	models := []string{f.settings.WorkerModel}
-	for _, name := range f.reviewFor(repository).Reviewers {
+	// Which change class a run's change is of is known only once it is made, so every reviewer a class
+	// of the repository names may run, beside the panel.
+	knobs := f.reviewFor(repository)
+	names := slices.Clone(knobs.Reviewers)
+	for _, class := range knobs.Classes {
+		names = append(names, class.Reviewers...)
+	}
+	for _, name := range names {
 		if model := reviewers[name].model; model != "inherit" && !slices.Contains(models, model) {
 			models = append(models, model)
 		}
