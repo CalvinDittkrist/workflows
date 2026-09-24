@@ -491,6 +491,9 @@ func (f *Factory) review(parent, ctx context.Context, r *Run, entry Entry, claim
 			return
 		}
 	}
+	// The gate's determination reads the repository's panel, not the review's class, so the class full
+	// it may come to asks every configured reviewer.
+	configured := knobs
 	knobs.Reviewers = classed.Reviewers
 	record()
 	for {
@@ -518,7 +521,7 @@ func (f *Factory) review(parent, ctx context.Context, r *Run, entry Entry, claim
 		f.runs.event(r, Event{Kind: "factory", Title: fmt.Sprintf("the review ends after %d of %d rounds with a fix verdict standing", len(panel.Rounds), knobs.Rounds),
 			Body: "the reviewers " + strings.Join(dueReviewers(panel, knobs), ", ") + " did not pass, which the pull request says"})
 	}
-	gate, ok := f.finalGate(parent, ctx, r, entry, claim, &panel, knobs, record)
+	gate, ok := f.finalGate(parent, ctx, r, entry, claim, &panel, configured, record)
 	if !ok {
 		return
 	}
@@ -810,7 +813,7 @@ func (f *Factory) finalGate(parent, ctx context.Context, r *Run, entry Entry, cl
 			return "", false
 		}
 		if len(classed.Gate) == 0 {
-			panel.Gate, panel.GatedAt = fmt.Sprintf("%s (the change class %s has no gate) at %s\ngate_class: %s", gateNone, classed.Class, short(classed.Head), classed.Class), classed.Head
+			panel.Gate, panel.GatedAt = noGateResult(classed), classed.Head
 			record()
 			f.runs.event(r, Event{Kind: "factory", Title: firstLine(panel.Gate), Body: panel.Gate})
 			return panel.Gate, true
@@ -863,11 +866,17 @@ func (f *Factory) finalGate(parent, ctx context.Context, r *Run, entry Entry, cl
 const gateNone = "gate_result: none"
 
 // movedSinceGate says whether the gate has to run on the head the review ended at: a gate result that
-// is neither a pass nor that of a class without a gate, or a branch that moved off the commit that
-// result is for. Fake mode has no commits, and
-// its head counts the fix sessions that committed (fakeHead).
+// is not a pass, or a branch that moved off the commit that result is for. The result of a class
+// without a gate counts as a pass only when the factory determined that class for the gate on that
+// commit itself, never because a session reported it. Fake mode has no commits, and its head counts
+// the fix sessions that committed (fakeHead).
 func (f *Factory) movedSinceGate(ctx context.Context, claim claimed, panel Panel) (bool, error) {
-	if !strings.HasPrefix(panel.Gate, "gate_result: pass") && !strings.HasPrefix(panel.Gate, gateNone) {
+	settled := strings.HasPrefix(panel.Gate, "gate_result: pass")
+	if strings.HasPrefix(panel.Gate, gateNone) {
+		classed, ok := classedFor(panel, classForGate)
+		settled = ok && len(classed.Gate) == 0 && classed.Head == panel.GatedAt
+	}
+	if !settled {
 		return true, nil
 	}
 	if f.fake {
@@ -957,6 +966,11 @@ func (f *Factory) runGate(ctx context.Context, r *Run, entry Entry, claim claime
 // gateResult is the result of a gate that ran, as the pull request carries it.
 func gateResult(status, head string, classed Classed, seconds int) string {
 	return fmt.Sprintf("gate_result: %s at %s\ngate_command: %s\ngate_class: %s\ngate_duration: %d s", status, short(head), commandLine(classed.Gate), classed.Class, seconds)
+}
+
+// noGateResult is the result of the gate of a class without one, in the lines of gateResult.
+func noGateResult(classed Classed) string {
+	return fmt.Sprintf("%s (the change class %s has no gate) at %s\ngate_command: none\ngate_class: %s", gateNone, classed.Class, short(classed.Head), classed.Class)
 }
 
 // gateFixBrief is the prompt of a fix session of the gate that failed on the final head.

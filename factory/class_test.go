@@ -102,6 +102,10 @@ func TestAChangeClassDecidesTheReviewersAndTheGateOnTheFinalHead(t *testing.T) {
 				if !strings.Contains(why, "upload/retry.go is outside every class") {
 					t.Errorf("the factory said the class full applied because %q, want the file outside every class named", why)
 				}
+				// The class full asks the repository's whole panel, not the reviewers of the review's class.
+				if classed, ok := classedFor(*run.Panel, classForGate); !ok || !equal(classed.Reviewers, defaultReview.Reviewers) {
+					t.Errorf("the run recorded the class of the gate %+v, want the reviewers %v", classed, defaultReview.Reviewers)
+				}
 			}
 		})
 	}
@@ -130,7 +134,7 @@ func TestAClassWithoutAGateRunsNoneAndAChangeOutsideEveryClassIsFull(t *testing.
 		if run.Panel == nil || !strings.HasPrefix(run.Panel.Gate, none) || !equal(classesOf(run), []string{"docs/review", "docs/gate"}) {
 			t.Errorf("the run recorded the panel %+v, want no gate on the final head of the class docs", run.Panel)
 		}
-		if pulls := gh.opened(t, "acme/edge-sensors"); len(pulls) != 1 || !strings.Contains(pulls[0].Body, none) {
+		if pulls := gh.opened(t, "acme/edge-sensors"); len(pulls) != 1 || !strings.Contains(pulls[0].Body, none+"\ngate_command: none\ngate_class: docs") {
 			t.Errorf("the factory opened %+v, want one pull request that says no gate ran", pulls)
 		}
 	})
