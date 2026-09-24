@@ -786,6 +786,12 @@ func (f *Factory) execute(parent context.Context, r *Run, entry Entry) {
 			f.pr(parent, ctx, r, entry, claim, review)
 			return
 		}
+		// One whose run before recorded rounds of the review, on a branch that still carries them, goes
+		// on with the review from the last round it recorded.
+		if panel, ok := f.reviewingAlready(ctx, r, entry, claim); ok {
+			f.review(parent, ctx, r, entry, claim, panel)
+			return
+		}
 	}
 
 	s := workSession.overridden()
@@ -809,14 +815,14 @@ func (f *Factory) execute(parent context.Context, r *Run, entry Entry) {
 		f.finish(r, outcomeReady, reason, nil)
 		return
 	}
-	review, err := f.reviewOf(ctx, claim, got)
+	panel, err := f.gatedOf(ctx, claim, got)
 	if err != nil {
-		if !f.halted(parent, ctx, r, "read the reviewed commit") {
-			f.finish(r, outcomeFailed, "the commit the review ended at could not be read: "+err.Error()+leftBehind(claim), nil)
+		if !f.halted(parent, ctx, r, "read the gated commit") {
+			f.finish(r, outcomeFailed, "the commit the gate ran on could not be read: "+err.Error()+leftBehind(claim), nil)
 		}
 		return
 	}
-	f.pr(parent, ctx, r, entry, claim, review)
+	f.review(parent, ctx, r, entry, claim, panel)
 }
 
 // openedAlready is the open pull request of the branch a resumed run continues, which is where it
@@ -877,6 +883,13 @@ func (f *Factory) end(parent context.Context, r *Run, e ending) {
 // others, and is empty for one that runs alone.
 func (f *Factory) runSession(parent, ctx context.Context, r *Run, s session, entry Entry, claim claimed, label string) (result, *ending) {
 	said := &heard{label: label, read: s.read}
+	// A session that runs beside others says when its process is up, or that it never will be.
+	began := sync.OnceFunc(func() {
+		if s.began != nil {
+			s.began()
+		}
+	})
+	defer began()
 	f.runs.update(r, r.opened)
 	defer f.runs.update(r, func() { r.closed(said) })
 	// The session's context is derived from the run's, so the run's deadline and the session's own
@@ -948,6 +961,7 @@ func (f *Factory) runSession(parent, ctx context.Context, r *Run, s session, ent
 		started.Title = label + ": " + started.Title
 	}
 	f.runs.event(r, started)
+	began()
 
 	var readers sync.WaitGroup
 	readers.Add(2)

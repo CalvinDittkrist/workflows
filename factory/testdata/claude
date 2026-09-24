@@ -11,16 +11,21 @@
 #                      there is ever asked)
 #   CLAUDE_SHIM_FAIL   when set, the session ends with this on its error output and exit 1
 #   CLAUDE_SHIM_RESULT the structured result of the session as one line of JSON, by default a
-#                      complete one of a session that stopped after the review, with a panel that
-#                      passed and a gate that passed; it is printed as it stands, so a test can hand
-#                      the factory one that does not fit the schema, or one with any of the schema's
-#                      fields: the pull request, the panel summary, the gate result and the commits
+#                      complete one of a session that stopped after the gate, with a gate that passed;
+#                      it is printed as it stands, so a test can hand the factory one that does not fit
+#                      the schema, or one with any of the schema's fields: the pull request, the panel
+#                      summary, the gate result and the commits
+#   CLAUDE_SHIM_REPAIR_RESULT
+#                      the result of a fix session of the review stage, the one whose schema has the
+#                      disputed findings, instead of CLAUDE_SHIM_RESULT; by default one that fixed,
+#                      disputed and skipped nothing
 #   CLAUDE_SHIM_NO_RESULT when set, the session ends well without printing a result line
 #   CLAUDE_SHIM_EXIT   the code the session exits with after its result line, 0 by default
 #   CLAUDE_SHIM_ERROR_SUBTYPE when set, the result line says the session ended in an error of this
 #                      subtype, with no structured output, as error_max_structured_output_retries does
-#   CLAUDE_SHIM_COMMIT when set, the session writes and commits a file of that name in the worktree,
-#                      which is the work a run leaves behind for the branch to carry
+#   CLAUDE_SHIM_COMMIT when set, the session adds a line to a file of that name in the worktree and
+#                      commits it, which is the work a run leaves behind for the branch to carry: every
+#                      session that works the branch moves it by one commit
 #   CLAUDE_SHIM_COMMIT_BACKTICKS
 #                      when set, that file is one line of this many backticks instead, which is what a
 #                      Markdown fence around its diff has to be longer than
@@ -37,6 +42,15 @@
 #   CLAUDE_SHIM_AUTHOR_RESULT  its structured result as one line of JSON, by default a title and a
 #                              body that closes the issue in the branch name
 #   CLAUDE_SHIM_AUTHOR_FAIL    when set, it ends with this on its error output and exit 1
+#
+# A reviewer of the panel, the session started with --agents, is none of those either: it is logged to
+# CLAUDE_SHIM_REVIEW_LOG and reads its result from a file of CLAUDE_SHIM_REVIEWS named after it and the
+# how-manieth time it runs, code.2 for the code reviewer's second round, then from one named after it
+# alone, and passes with no finding when there is neither. A file that holds FAIL ends it on exit 1
+# with that on its error output, and one whose first line is SLEEP <seconds> waits that long first.
+# With CLAUDE_SHIM_REVIEW_BARRIER set, a reviewer waits until that many reviewers have started before
+# it reports, and fails when they do not within 20 seconds: reviewers run one after the other never
+# get past it.
 #
 # The structured result is the one thing a session owes the factory (ADR 0039).
 #
@@ -90,9 +104,21 @@ esac
 log="${CLAUDE_SHIM_LOG:-/dev/null}"
 # The author session of the pr stage is the one started with --tools: it is logged apart and answers
 # apart, so the worker log and every variable above stay about the sessions that work the branch.
-author=""
-for argument in "$@"; do [ "$argument" = --tools ] && author=1; done
+author="" agents="" reviewer="" repair="" previous=""
+for argument in "$@"; do
+  [ "$argument" = --tools ] && author=1
+  [ "$argument" = --agents ] && agents=1
+  [ "$previous" = --agent ] && reviewer="${argument%-reviewer}"
+  [ "$previous" = --json-schema ] && case "$argument" in *'"disputed"'*) repair=1 ;; esac
+  previous="$argument"
+done
+[ -n "$agents" ] || reviewer=""
+[ -z "$reviewer" ] || author=""
 [ -z "$author" ] || log="${CLAUDE_SHIM_AUTHOR_LOG:-/dev/null}"
+[ -z "$reviewer" ] || log="${CLAUDE_SHIM_REVIEW_LOG:-/dev/null}"
+# Reviewers run beside each other, so a record is written under a lock that keeps them whole.
+tries=0
+while ! mkdir "$log.lock" 2>/dev/null && [ "$tries" -lt 200 ]; do tries=$((tries + 1)); sleep 0.05; done
 {
   echo "call"
   printf 'cwd %s\n' "$(pwd -P)"
@@ -103,8 +129,50 @@ for argument in "$@"; do [ "$argument" = --tools ] && author=1; done
   for argument in "$@"; do printf 'arg %s\n' "$argument"; done
   env | while IFS= read -r entry; do printf 'env %s\n' "${entry%%=*}"; done
 } >> "$log"
+rmdir "$log.lock" 2>/dev/null
 
 issue=$(git rev-parse --abbrev-ref HEAD 2>/dev/null | sed -n 's#^[a-z][a-z]*/\([0-9][0-9]*\)-.*#\1#p')
+
+if [ -n "$reviewer" ]; then
+  printf '%s\n' '{"type":"system","subtype":"init","model":"claude-sonnet-5","permissionMode":"auto","session_id":"3b7e1d20-6c4a-4e8f-9b1d-2a3c4d5e6f70"}'
+  if [ -n "${CLAUDE_SHIM_REVIEW_BARRIER:-}" ]; then
+    waited=0
+    while [ "$(grep -c '^call$' "$log")" -lt "$CLAUDE_SHIM_REVIEW_BARRIER" ]; do
+      waited=$((waited + 1))
+      if [ "$waited" -gt 200 ]; then
+        echo "the $reviewer reviewer waited for $CLAUDE_SHIM_REVIEW_BARRIER reviewers beside it, and they never came" >&2
+        exit 1
+      fi
+      sleep 0.1
+    done
+  fi
+  round=$(grep -cx "arg $reviewer-reviewer" "$log" 2>/dev/null)
+  file=""
+  if [ -n "${CLAUDE_SHIM_REVIEWS:-}" ]; then
+    for candidate in "$CLAUDE_SHIM_REVIEWS/$reviewer.${round:-1}" "$CLAUDE_SHIM_REVIEWS/$reviewer"; do
+      if [ -f "$candidate" ]; then file="$candidate"; break; fi
+    done
+  fi
+  output='{"verdict":"pass","findings":[]}'
+  if [ -n "$file" ]; then
+    output=$(cat "$file")
+    case "$output" in
+      SLEEP\ *)
+        sleep "$(printf '%s' "$output" | sed -n '1s/^SLEEP //p')" &
+        wait
+        output=$(printf '%s' "$output" | sed '1d')
+        ;;
+    esac
+    if [ "$output" = FAIL ]; then
+      echo "the $reviewer reviewer failed" >&2
+      exit 1
+    fi
+  fi
+  text=$(printf '%s' "$output" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')
+  printf '{"type":"result","subtype":"success","is_error":false,"terminal_reason":"completed","num_turns":4,"total_cost_usd":0.5,"result":"%s","structured_output":%s,"usage":{"input_tokens":200,"cache_creation_input_tokens":300,"cache_read_input_tokens":5000,"output_tokens":400}}\n' \
+    "$text" "$output"
+  exit 0
+fi
 
 if [ -n "$author" ]; then
   printf '%s\n' '{"type":"system","subtype":"init","model":"claude-opus-5","permissionMode":"auto","session_id":"9a1c3e70-2b4d-4f6e-8a0b-1c2d3e4f5a6b"}'
@@ -132,8 +200,12 @@ if [ -n "${CLAUDE_SHIM_FAIL:-}" ]; then
 fi
 
 output="${CLAUDE_SHIM_RESULT:-}"
+if [ -n "$repair" ]; then
+  output="${CLAUDE_SHIM_REPAIR_RESULT:-}"
+  [ -n "$output" ] || output='{"outcome":"complete","fixed":[],"disputed":[],"skipped":[],"summary":"nothing to fix"}'
+fi
 if [ -z "$output" ]; then
-  output='{"outcome":"complete","panelSummary":"review_rounds: 1\npanel: code=PASS security=PASS docs=PASS tests=PASS senior=PASS\nfixed: 0 (S1 0, S2 0, S3 0)\ndisputed: none","gateResult":"gate_result: pass (exit 0) at c0ffee0","summary":"stopped after review"}'
+  output='{"outcome":"complete","gateResult":"gate_result: pass (exit 0) at c0ffee0","commits":["c0ffee0 feat: the work"],"summary":"stopped after gate"}'
 fi
 
 printf '%s\n' '{"type":"system","subtype":"init","model":"claude-opus-5","permissionMode":"auto","session_id":"5f2d8c11-0b9e-4a3f-9d21-7c6e4b0a1f33"}'
@@ -142,7 +214,7 @@ if [ -n "${CLAUDE_SHIM_COMMIT:-}" ]; then
   if [ -n "${CLAUDE_SHIM_COMMIT_BACKTICKS:-}" ]; then
     { head -c "$CLAUDE_SHIM_COMMIT_BACKTICKS" /dev/zero | tr '\0' '`'; echo; } > "$CLAUDE_SHIM_COMMIT"
   else
-    printf 'the work of one session\n' > "$CLAUDE_SHIM_COMMIT"
+    printf 'the work of session %s\n' "${calls:-1}" >> "$CLAUDE_SHIM_COMMIT"
   fi
   git add -A >/dev/null 2>&1
   git -c user.email=worker@example.com -c user.name=worker commit -q -m "feat: $CLAUDE_SHIM_COMMIT" >/dev/null 2>&1

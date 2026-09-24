@@ -47,7 +47,8 @@ type Config struct {
 	QuotaMinimum *int   `json:"quota_minimum"`
 	// CI is the knobs of the ci stage for every connected repository, and a repository's own ci
 	// object overrides them one knob at a time (ciKnobs).
-	CI *ciKnobs `json:"ci"`
+	CI     *ciKnobs     `json:"ci"`
+	Review *reviewKnobs `json:"review"`
 }
 
 // Connected is one repository the factory works: its name on GitHub and, optionally, the branch a
@@ -57,12 +58,14 @@ type Config struct {
 //
 // [ADR 0022]: ../docs/adr/0022-the-factory-is-a-second-driver-over-the-worker-pipeline.md
 type Connected struct {
-	Name string   `json:"name"`
-	Base string   `json:"base"`
-	CI   *ciKnobs `json:"ci"`
-	// wait is the ci stage's knobs for this repository: the host's, with what the repository's own
-	// ci object names written over them. Load fills it in.
-	wait ciSettings
+	Name   string       `json:"name"`
+	Base   string       `json:"base"`
+	CI     *ciKnobs     `json:"ci"`
+	Review *reviewKnobs `json:"review"`
+	// wait is the ci stage's knobs for this repository, and panel the review stage's: the host's, with
+	// what the repository's own ci and review objects name written over them. Load fills them in.
+	wait  ciSettings
+	panel reviewSettings
 }
 
 // UnmarshalJSON takes a connected repository as the name alone or as an object with its settings, so
@@ -82,7 +85,7 @@ func (c *Connected) UnmarshalJSON(raw []byte) error {
 	decoder.DisallowUnknownFields()
 	var read settings
 	if err := decoder.Decode(&read); err != nil {
-		return fmt.Errorf(`%w; a repository is "owner/name" or {"name": "owner/name", "base": "dev", "ci": {"repair_rounds": 2}}`, err)
+		return fmt.Errorf(`%w; a repository is "owner/name" or {"name": "owner/name", "base": "dev", "ci": {"repair_rounds": 2}, "review": {"rounds": 2}}`, err)
 	}
 	*c = Connected(read)
 	return nil
@@ -106,6 +109,8 @@ type Settings struct {
 	// CI is the host's knobs of the ci stage, and each connected repository carries its own, resolved
 	// against them.
 	CI ciSettings
+	// Review is the host's knobs of the review stage, resolved the same way.
+	Review reviewSettings
 	// WorkerModel is the model the worker runs on, the one whose quota scope the check reads: the
 	// worker agent's own unless worker_args names another with --model.
 	WorkerModel string
@@ -118,7 +123,7 @@ const (
 	defaultPoll         = 60 * time.Second
 	defaultQuotaMinimum = 12
 
-	configFields = "listen, label, deadline, poll, data_dir, worker_args, worker_env, paused, notify, repositories, quota_axi, quota_minimum, ci"
+	configFields = "listen, label, deadline, poll, data_dir, worker_args, worker_env, paused, notify, repositories, quota_axi, quota_minimum, ci, review"
 )
 
 // A repository is named as owner/name; the factory never takes a URL or a local path, because the
@@ -188,11 +193,11 @@ func factoryOwns(arg string) string {
 // review, which the factory, answering reviews itself, never is, and a variable of the host's shell
 // is not a setting of the workflow.
 //
-// The knobs of the wait for CI are the factory's own since it runs the ci stage itself, so worker_env
-// refuses them and names the ci knob each one moved to (movedKnobs).
+// The knobs of the review and of the wait for CI are the factory's own since it runs those stages
+// itself, so worker_env refuses them and names the knob each one moved to (movedKnobs).
 var workerKnobs = []string{"WF_REVIEWERS", "WF_REVIEW_ROUNDS", "WF_CI_REPAIR_ROUNDS", "WF_PR_BOT_REVIEWERS", "WF_PR_REVIEW_WAIT", "WF_HANDOFF_TOKENS", "WF_CONTEXT_MAX_AGE", "WF_HANDOFF_SESSION_MS", "WF_HANDOFF_POLL_SECONDS", "WF_DOCS_TIMEOUT"}
 
-// hostKnobs is the names worker_env takes: the worker knobs without the ones the ci stage moved.
+// hostKnobs is the names worker_env takes: the worker knobs without the ones the factory's stages took.
 func hostKnobs() []string {
 	out := []string{}
 	for _, name := range workerKnobs {
@@ -298,7 +303,7 @@ func Load(path string) (Settings, error) {
 	// The names are read in order, so the one the error names is the same on every start.
 	for _, name := range slices.Sorted(maps.Keys(c.WorkerEnv)) {
 		if moved, ok := movedKnobs[name]; ok {
-			return bad("worker_env carries %s, which is a knob of the ci stage the factory runs itself; write it as \"ci\": {\"%s\": ...} at the top of the file or on the repository", name, moved)
+			return bad("worker_env carries %s, which is a knob of the %s stage the factory runs itself; write it as \"%s\": {\"%s\": ...} at the top of the file or on the repository", name, moved[0], moved[0], moved[1])
 		}
 		if !slices.Contains(workerKnobs, name) {
 			return bad("worker_env carries %s, which is not a worker knob; the names are %s, and an empty value is a setting of its own", name, strings.Join(hostKnobs(), ", "))
@@ -340,6 +345,11 @@ func Load(path string) (Settings, error) {
 		return bad("ci: %v", err)
 	}
 	s.CI = host
+	panel, err := defaultReview.over(c.Review)
+	if err != nil {
+		return bad("review: %v", err)
+	}
+	s.Review = panel
 	if strings.TrimSpace(c.DataDir) == "" {
 		return bad("data_dir is missing; name the directory the runs are written to, such as \"/var/lib/factory\"")
 	}
@@ -371,6 +381,9 @@ func Load(path string) (Settings, error) {
 		seen[strings.ToLower(r.Name)] = true
 		if r.wait, err = host.over(r.CI); err != nil {
 			return bad("the ci of %s: %v", r.Name, err)
+		}
+		if r.panel, err = panel.over(r.Review); err != nil {
+			return bad("the review of %s: %v", r.Name, err)
 		}
 		s.Repositories = append(s.Repositories, r)
 	}

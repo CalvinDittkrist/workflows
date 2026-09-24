@@ -652,6 +652,8 @@ type ghShim struct {
 	worker   string // the log of the claude shim: how every worker was started
 	authors  string // the log of the claude shim: how every author session of the pr stage was started
 	plugins  string // the log of the claude shim: every plugin and version call before a session
+	reviewer string // the log of the claude shim: how every reviewer session of the panel was started
+	verdicts string // the directory the claude shim reads a reviewer's result from (CLAUDE_SHIM_REVIEWS)
 	env      []string
 }
 
@@ -670,8 +672,10 @@ func newGhShim(t *testing.T) *ghShim {
 		worker:   filepath.Join(dir, "workers.log"),
 		authors:  filepath.Join(dir, "authors.log"),
 		plugins:  filepath.Join(dir, "plugins.log"),
+		reviewer: filepath.Join(dir, "reviews.log"),
+		verdicts: filepath.Join(dir, "verdicts"),
 	}
-	for _, d := range []string{g.answers, g.remotes} {
+	for _, d := range []string{g.answers, g.remotes, g.verdicts} {
 		if err := os.MkdirAll(d, 0o700); err != nil {
 			t.Fatal(err)
 		}
@@ -681,7 +685,8 @@ func newGhShim(t *testing.T) *ghShim {
 		"HOME="+dir, "GH_SHIM_DIR="+g.answers, "GH_SHIM_LOG="+g.log, "GH_SHIM_REMOTES="+g.remotes,
 		"GH_SHIM_BODIES="+g.bodies,
 		"GH_SHIM_FAIL="+g.failing, "GH_SHIM_STALL="+g.stalling, "GH_SHIM_HANG="+g.hanging,
-		"CLAUDE_SHIM_LOG="+g.worker, "CLAUDE_SHIM_AUTHOR_LOG="+g.authors, "CLAUDE_SHIM_PLUGIN_LOG="+g.plugins)
+		"CLAUDE_SHIM_LOG="+g.worker, "CLAUDE_SHIM_AUTHOR_LOG="+g.authors, "CLAUDE_SHIM_PLUGIN_LOG="+g.plugins,
+		"CLAUDE_SHIM_REVIEW_LOG="+g.reviewer, "CLAUDE_SHIM_REVIEWS="+g.verdicts)
 	return g
 }
 

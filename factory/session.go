@@ -41,22 +41,29 @@ type session struct {
 	// (--tools), which is what makes it read-only; the tools limit what it can do, not which files it
 	// reads, and it is held to schema rather than to resultSchema.
 	readOnly bool
-	schema   string
+	// schema is the JSON schema the session's result is held to, resultSchema when it is empty.
+	schema string
+	// agent and agents are the inline agent a read-only session runs as (--agents, --agent): a reviewer
+	// of the panel, whose prompt, tools and model the definition carries. model is that definition's
+	// model; a session whose agent inherits it runs on the model worker_args names.
+	agent, agents, model string
 	// read reads the session's structured output, readResult when it is nil.
 	read func(json.RawMessage) (result, error)
+	// began is called once the session's process is up, or once it is known that it never will be.
+	began func()
 }
 
 // The work session is the one a local claim starts and the one a first and a resumed run of an issue
 // start with, the resumed one when its branch has no pull request open yet and is not waiting at the
 // pr stage: it derives where the work stands from git and GitHub as any worker does, and it stops once
-// the review has recorded its panel summary, where the factory's pr stage takes over. A follow-up run
+// the gate has recorded its result, where the factory's review stage takes over. A follow-up run
 // starts no work session: the maintainer has read the pull request and asked for changes, so it starts
 // at the ci stage's address-reviews session.
 //
 // The timeouts are fixed here and not in the host's configuration. They are a backstop above the
 // run's deadline, which stays the limit an operator sets and which ends a run with the outcome
 // timeout; a session that outruns its own timeout has failed, and the run says in which stage.
-var workSession = session{stage: stages["worker:work"], prompt: "/worker:work", timeout: 4 * time.Hour, stopAfter: stageReview}
+var workSession = session{stage: stages["worker:work"], prompt: "/worker:work", timeout: 4 * time.Hour, stopAfter: stageGate}
 
 // fixTimeout is how long one fix session of the ci stage may run, addressTimeout one address-reviews
 // session, and authorTimeout the session that writes the pull request's title and body.
@@ -139,13 +146,17 @@ func (f *Factory) command(ctx context.Context, s session, entry Entry, claim cla
 	if err != nil {
 		return nil, err
 	}
+	schema := s.schema
+	if schema == "" {
+		schema = resultSchema
+	}
 	args := []string{
 		"--agent", "worker",
 		"--output-format", "stream-json", "--verbose",
 		"--permission-mode", "auto",
 		"--strict-mcp-config",
 		"--settings", settings,
-		"--json-schema", resultSchema,
+		"--json-schema", schema,
 	}
 	args = append(args, f.settings.WorkerArgs...)
 	args = append(args, "-p", s.prompt)
@@ -184,7 +195,15 @@ func (f *Factory) readOnlyCommand(ctx context.Context, s session, claim claimed)
 		"--settings", string(settings),
 		"--json-schema", s.schema,
 	}
-	args = append(args, readOnlyArgs(f.settings.WorkerArgs)...)
+	if s.agent != "" {
+		// The session runs as the inline agent its definition names; --tools stays, so the session is
+		// read-only whatever the definition says (https://code.claude.com/docs/en/cli-reference.md and
+		// https://code.claude.com/docs/en/sub-agents.md, checked on 2026-09-24).
+		args = append(args, "--agents", s.agents, "--agent", s.agent)
+	}
+	if s.agent == "" || s.model == "inherit" {
+		args = append(args, readOnlyArgs(f.settings.WorkerArgs)...)
+	}
 	args = append(args, "-p", s.prompt)
 	cmd := exec.CommandContext(ctx, "claude", args...)
 	cmd.Dir = claim.worktree
@@ -264,6 +283,10 @@ type result struct {
 	// session's schema has neither, so its reader refuses them as fields it does not know.
 	Title string `json:"-"`
 	Body  string `json:"-"`
+	// Verdict is a reviewer's report, read by readVerdict, and Repair a review fix session's, read by
+	// readRepair.
+	Verdict *Verdict `json:"-"`
+	Repair  *Repair  `json:"-"`
 }
 
 // reply is an address-reviews session's reply to one review thread, named by its id.

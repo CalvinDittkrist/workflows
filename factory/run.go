@@ -128,6 +128,9 @@ type Run struct {
 	// the work session reported, and the commit the branch was at when it did. A resumed run whose
 	// branch is still at that commit and has no pull request open starts at the pr stage with it.
 	Review *Review `json:"review,omitempty"`
+	// Panel is what the review stage recorded: its rounds, the verdicts and fixes of each, and the gate
+	// on the final head. A resumed run goes on from it.
+	Panel *Panel `json:"panel,omitempty"`
 	// Answered is the reviews asking for changes on that pull request whose summaries the run
 	// answered, by their URL. A review stands on GitHub until its author approves, so every later run
 	// on the pull request reads these to leave them alone.

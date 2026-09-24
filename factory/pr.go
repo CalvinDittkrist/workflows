@@ -17,7 +17,7 @@ import (
 //
 // [ADR 0043]: ../docs/adr/0043-the-migration-runs-from-the-last-stage-to-the-first.md
 
-// The stages the work session ends after and the factory's pr stage.
+// The factory's review and pr stages.
 const (
 	stageReview = "review"
 	stagePR     = "pr"
@@ -28,16 +28,6 @@ type Review struct {
 	Head         string `json:"head"` // the commit the branch was at; empty in fake mode, which has no worktree
 	PanelSummary string `json:"panelSummary"`
 	GateResult   string `json:"gateResult"`
-}
-
-// reviewOf is the review a work session that stopped after the review reported, at the commit its
-// worktree is at now.
-func (f *Factory) reviewOf(ctx context.Context, claim claimed, got result) (Review, error) {
-	head, err := f.head(ctx, claim)
-	if err != nil {
-		return Review{}, err
-	}
-	return Review{Head: head, PanelSummary: got.PanelSummary, GateResult: got.GateResult}, nil
 }
 
 // head is the commit the worktree of a claim is at, and empty in fake mode.
@@ -248,7 +238,7 @@ func verification(review Review) string {
 	if panel == "" {
 		panel = "none reported"
 	}
-	out := "## Verification\n\nThe factory appended this section from the run's facts, as the work session reported them.\n\n" +
+	out := "## Verification\n\nThe factory appended this section from the run's facts: the gate result it holds and the panel its review stage recorded.\n\n" +
 		"Gate:\n\n" + fenced(gate) + "\n\nReviewer panel:\n\n" + fenced(panel) + "\n"
 	if why := notPassed(review.PanelSummary); why != "" {
 		out += "\n**The reviewer panel did not pass:** " + why + "\n"
@@ -275,7 +265,7 @@ func notPassed(summary string) string {
 		unreviewed = unreviewed || strings.HasPrefix(line, "unreviewed:")
 	}
 	if panel == "" {
-		return "the work session reported no panel: line, so no reviewer's verdict is known."
+		return "the run recorded no panel: line, so no reviewer's verdict is known."
 	}
 	failing := []string{}
 	marks := verdictToken.FindAllStringSubmatchIndex(panel, -1)
