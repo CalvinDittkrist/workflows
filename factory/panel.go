@@ -201,13 +201,13 @@ func reviewerSession(name, brief string, round int) session {
 // repairSession is the fix session of one review round, given every finding of the round and held to
 // repairSchema.
 func repairSession(brief string, round int, findings []Finding) session {
-	return session{stage: stageReview, prompt: brief, timeout: fixTimeout, scripted: fmt.Sprintf("review-fix:%d", round),
+	return session{stage: stageReview, prompt: brief, timeout: fixTimeout, scripted: fmt.Sprintf("review-fix:%d", round), commits: true,
 		schema: repairSchema, read: func(raw json.RawMessage) (result, error) { return readRepair(raw, findings) }}.overridden()
 }
 
 // gateFixSession is the fix session of a gate that failed on the final head.
 func gateFixSession(brief string) session {
-	return session{stage: stageReview, prompt: brief, timeout: fixTimeout, scripted: "fix"}.overridden()
+	return session{stage: stageReview, prompt: brief, timeout: fixTimeout, scripted: "fix", commits: true}.overridden()
 }
 
 // Panel is what the review stage recorded of a run: the gate its rounds were briefed with, every round
@@ -273,7 +273,7 @@ const (
 // reviewSchema is the result of a reviewer session: its verdict and its findings.
 const reviewSchema = `{"type":"object","additionalProperties":false,"required":["verdict","findings"],"properties":{` +
 	`"verdict":{"type":"string","enum":["pass","fix"],"description":"fix when any finding is S1 or S2, pass otherwise"},` +
-	`"findings":{"type":"array","description":"one per problem you verified; empty for a clean diff","items":{"type":"object","additionalProperties":false,` +
+	`"findings":{"type":"array","description":"one per problem you verified, at most 50; empty for a clean diff","items":{"type":"object","additionalProperties":false,` +
 	`"required":["severity","path","line","claim","why","fix"],"properties":{` +
 	`"severity":{"type":"string","enum":["S1","S2","S3"],"description":"S1 must fix before the pull request, S2 should fix, S3 a nit"},` +
 	`"path":{"type":"string","description":"the file the finding is in, relative to the worktree; empty when it is in no file"},` +
@@ -281,6 +281,10 @@ const reviewSchema = `{"type":"object","additionalProperties":false,"required":[
 	`"claim":{"type":"string","description":"what is wrong, in one sentence"},` +
 	`"why":{"type":"string","description":"why it is wrong"},` +
 	`"fix":{"type":"string","description":"how to verify or fix it, in one line"}}}}}}`
+
+// maxFindings is how many findings one reviewer reports at most, which is what keeps the fix session's
+// brief within its bound (repairBrief).
+const maxFindings = 50
 
 // readVerdict reads a reviewer's result: a verdict that agrees with its findings, each of them of a
 // known severity with a claim. A result that is not of that shape does not fit, and the run fails
@@ -300,6 +304,9 @@ func readVerdict(raw json.RawMessage) (result, error) {
 	}
 	if read.Verdict == nil || read.Findings == nil {
 		return result{}, fmt.Errorf("the structured output lacks the verdict or the findings")
+	}
+	if n := len(*read.Findings); n > maxFindings {
+		return result{}, fmt.Errorf("the structured output carries %d findings, more than the %d a reviewer reports", n, maxFindings)
 	}
 	blocking := false
 	for i, finding := range *read.Findings {
@@ -725,12 +732,32 @@ func (f *Factory) repairRound(parent, ctx context.Context, r *Run, entry Entry, 
 	return true
 }
 
+// Bounds on the findings a fix session's brief carries, which is an argument of the command line as
+// the reviewers' brief is: every finding keeps its line, and when they are more than maxBriefFindings
+// together, each is cut to an even share of it, which is never less than minFindingShare. A line leads
+// with its id, its severity and its place, so what a cut leaves is still the finding the session has to
+// fix or dispute by its id, and the rest of it is in the files it names. The whole panel reporting
+// maxFindings each fits: five reviewers of 50 findings at the least share are 60000 bytes and their
+// line breaks, far below the 128 KiB Linux holds an argument to.
+const (
+	maxBriefFindings = 60000
+	minFindingShare  = 240
+)
+
 // repairBrief is the prompt of a round's fix session.
 func repairBrief(entry Entry, claim claimed, round Round, rounds int) string {
 	lines := []string{}
 	for _, v := range round.Verdicts {
 		for _, finding := range v.Findings {
 			lines = append(lines, v.Reviewer+": "+finding.line())
+		}
+	}
+	if len(strings.Join(lines, "\n")) > maxBriefFindings {
+		share := max(maxBriefFindings/len(lines)-1, minFindingShare)
+		for i, line := range lines {
+			if len(line) > share {
+				lines[i] = cut(line, share-len("…")) + "…"
+			}
 		}
 	}
 	return fmt.Sprintf("The factory runs the reviewer panel of the branch %s for issue #%d of %s, whose base is %s. "+

@@ -1085,6 +1085,7 @@ func inProcess(t *testing.T, gh *ghShim) {
 type workerStart struct {
 	cwd, branch, head string
 	pid, pgid         int
+	longest           int // the size of the longest argument in bytes
 	args              []string
 	env               []string
 }
@@ -1179,10 +1180,12 @@ func sessionsIn(t *testing.T, log string) []workerStart {
 		t.Fatal(err)
 	}
 	started := []workerStart{}
+	last := ""
 	for _, line := range strings.Split(string(raw), "\n") {
 		field, value, _ := strings.Cut(line, " ")
 		if field == "call" {
 			started = append(started, workerStart{})
+			last = field
 			continue
 		}
 		if len(started) == 0 {
@@ -1190,21 +1193,34 @@ func sessionsIn(t *testing.T, log string) []workerStart {
 		}
 		w := &started[len(started)-1]
 		switch field {
+		case "cwd", "branch", "head", "pid", "pgid", "longest", "arg", "env":
+			last = field
+		default:
+			// A line of no field is the next line of an argument that has more than one, a brief's.
+			if last == "arg" {
+				w.args[len(w.args)-1] += "\n" + line
+			}
+			continue
+		}
+		switch field {
 		case "cwd":
 			w.cwd = value
 		case "branch":
 			w.branch = value
 		case "head":
 			w.head = value
-		case "pid", "pgid":
+		case "pid", "pgid", "longest":
 			number, err := strconv.Atoi(value)
 			if err != nil {
 				t.Fatalf("the worker wrote %q as its %s", value, field)
 			}
-			if field == "pid" {
+			switch field {
+			case "pid":
 				w.pid = number
-			} else {
+			case "pgid":
 				w.pgid = number
+			default:
+				w.longest = number
 			}
 		case "arg":
 			w.args = append(w.args, value)

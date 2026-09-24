@@ -47,6 +47,10 @@ type session struct {
 	// of the panel, whose prompt, tools and model the definition carries. model is that definition's
 	// model; a session whose agent inherits it runs on the model worker_args names.
 	agent, agents, model string
+	// commits is a session the factory briefs to commit its work on the branch, which the factory then
+	// pushes or gates by its commit: one that reports complete with changes it did not commit has not
+	// done what it reports (Factory.session).
+	commits bool
 	// read reads the session's structured output, readResult when it is nil.
 	read func(json.RawMessage) (result, error)
 	// began is called once the session's process is up, or once it is known that it never will be.
@@ -79,7 +83,7 @@ var sessionTimeoutOverride string
 
 // fixSession is the session of one repair round of the ci stage, given the brief of that round.
 func fixSession(brief string) session {
-	return session{stage: stageCI, prompt: brief, timeout: fixTimeout, scripted: "fix"}.overridden()
+	return session{stage: stageCI, prompt: brief, timeout: fixTimeout, scripted: "fix", commits: true}.overridden()
 }
 
 // authorSession is the session of the pr stage, given its brief: read-only, held to authorSchema and
@@ -97,7 +101,7 @@ const readTools = "Read,Grep,Glob"
 
 // addressSession is the session that answers what the reviewers ask for, given the brief of its round.
 func addressSession(brief string) session {
-	return session{stage: stageAddressReviews, prompt: brief, timeout: addressTimeout, scripted: "address"}.overridden()
+	return session{stage: stageAddressReviews, prompt: brief, timeout: addressTimeout, scripted: "address", commits: true}.overridden()
 }
 
 func (s session) overridden() session {

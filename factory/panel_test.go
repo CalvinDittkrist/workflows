@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -275,7 +276,17 @@ func TestAResultOfTheReviewThatDoesNotFitFailsTheRunNamingIt(t *testing.T) {
 	}{
 		"a reviewer": {func(gh *ghShim, t *testing.T) {
 			gh.verdict(t, "security", 1, strings.Replace(blocking, `"verdict":"fix"`, `"verdict":"pass"`, 1))
+			// Every reviewer reports once all five run, and stays a moment after it has, so each reports
+			// while the others are still running and the round is the last thing the run does.
+			gh.env = append(gh.env, "CLAUDE_SHIM_REVIEW_BARRIER=5", "CLAUDE_SHIM_REVIEW_LINGER=1")
 		}, []string{"the security reviewer: ", "the verdict is pass with an S1 or S2 finding standing"}},
+		"a reviewer with more findings than it reports": {func(gh *ghShim, t *testing.T) {
+			found := []Finding{}
+			for range maxFindings + 1 {
+				found = append(found, Finding{Severity: "S3", Path: "a.go", Line: 1, Claim: "A nit.", Why: "Taste.", Fix: "Change it."})
+			}
+			gh.verdict(t, "docs", 1, findings(t, found...))
+		}, []string{"the docs reviewer: ", "carries 51 findings, more than the 50 a reviewer reports"}},
 		"a fix session": {func(gh *ghShim, t *testing.T) {
 			gh.verdict(t, "code", 1, blocking)
 			gh.repairs(t, map[string]any{"outcome": "complete", "fixed": []string{}, "disputed": []map[string]any{}, "skipped": []map[string]any{}, "summary": "Nothing."})
@@ -298,7 +309,51 @@ func TestAResultOfTheReviewThatDoesNotFitFailsTheRunNamingIt(t *testing.T) {
 			if pulls := gh.opened(t, "acme/edge-sensors"); len(pulls) != 0 {
 				t.Errorf("the factory opened %d pull requests after a review that did not fit", len(pulls))
 			}
+			// Every session printed its result line, which gave its own totals, whether or not its result fit.
+			if run.Totals != totalsWorker {
+				t.Errorf("the run's totals come from %q, want %s: every session reported its own", run.Totals, totalsWorker)
+			}
 		})
+	}
+}
+
+// A panel that reports as much as it may still gives its fix session a brief the command line takes:
+// every finding is in it by its id, cut to its share when they are too long together, and the brief
+// stays below the 128 KiB Linux holds an argument to.
+func TestTheFixSessionOfAFullPanelGetsEveryFindingWithinTheArgumentLimit(t *testing.T) {
+	t.Parallel()
+	gh, data := panelClaim(t, "@true")
+	// 250 findings of this length are far beyond the argument limit together.
+	long := strings.Repeat("The retry loop keeps its backoff across successes. ", 16)
+	ids := []string{}
+	for _, name := range defaultReview.Reviewers {
+		found := []Finding{}
+		for i := range maxFindings {
+			found = append(found, Finding{Severity: "S2", Path: "upload/retry.go", Line: i + 1, Claim: "The backoff is never reset.", Why: long, Fix: "Reset it on success."})
+			ids = append(ids, "F"+strconv.Itoa(len(ids)+1))
+		}
+		gh.verdict(t, name, 1, findings(t, found...))
+	}
+	gh.repairs(t, map[string]any{"outcome": "complete", "fixed": ids, "disputed": []map[string]any{}, "skipped": []map[string]any{}, "summary": "Fixed them all."})
+	c := ciConfig(data, nil)
+	c["review"] = map[string]any{"rounds": 1} // the fix session is what this is about, not the rounds after it
+	f := gh.work(t, c)
+	run := f.ended(t, 1)
+	if run.Outcome != outcomeReady {
+		t.Fatalf("the run ended as %q (%s), want ready; the factory's log:\n%s", run.Outcome, run.Reason, f.output(t))
+	}
+	workers := gh.workers(t)
+	if len(workers) != 2 {
+		t.Fatalf("the factory started %d worker sessions, want the work session and one fix session of the review", len(workers))
+	}
+	if longest := workers[1].longest; longest >= 128*1024 {
+		t.Errorf("the fix session's longest argument is %d bytes, which Linux refuses at 128 KiB", longest)
+	}
+	brief := strings.Join(workers[1].args, "\n")
+	for _, id := range ids {
+		if !strings.Contains(brief, id+" [S2] upload/retry.go:") {
+			t.Fatalf("the fix session's brief does not carry the finding %s", id)
+		}
 	}
 }
 
@@ -308,7 +363,7 @@ func TestAGateThatFailsOnTheFinalHeadGoesToAFixSessionWithinItsBudget(t *testing
 	t.Parallel()
 	// worked.md has a line for every session that worked the branch: the work session's, the review fix
 	// session's and then the gate fix session's.
-	const gate = `@lines=$$(wc -l < worked.md); echo "worked.md has $$lines lines"; test $$lines -ge 3`
+	const gate = `@lines=$$(wc -l < worked.md | tr -d ' '); echo "worked.md has $$lines lines"; test $$lines -ge 3`
 	for name, c := range map[string]struct {
 		recipe  string
 		knobs   map[string]any
@@ -357,6 +412,45 @@ func TestAGateThatFailsOnTheFinalHeadGoesToAFixSessionWithinItsBudget(t *testing
 			}
 			if pulls := gh.opened(t, "acme/edge-sensors"); len(pulls) != 0 {
 				t.Errorf("the factory opened %d pull requests on a gate that fails", len(pulls))
+			}
+		})
+	}
+}
+
+// A fix session that reports complete and leaves its changes uncommitted fails the run: the factory
+// goes on by the commit the branch is at, so the fix it reports would reach no reviewer's commit, no
+// gate's and no push. The changes stay in the worktree, which the reason names with them.
+func TestAFixSessionThatLeavesItsChangesUncommittedFailsTheRun(t *testing.T) {
+	t.Parallel()
+	for name, prepare := range map[string]func(*ghShim, *testing.T){
+		"of the review": func(gh *ghShim, t *testing.T) {
+			gh.verdict(t, "code", 1, findings(t, Finding{Severity: "S2", Path: "a.go", Line: 3, Claim: "Off by one.", Why: "It skips the last.", Fix: "Use <=."}))
+			gh.repairs(t, map[string]any{"outcome": "complete", "fixed": []string{"F1"}, "disputed": []map[string]any{}, "skipped": []map[string]any{}, "summary": "Fixed."})
+		},
+		"of the gate": func(gh *ghShim, t *testing.T) {
+			gh.env = append(gh.env, `CLAUDE_SHIM_RESULT={"outcome":"complete","gateResult":"gate_result: fail (exit 2) at c0ffee0","commits":["c0ffee0 feat: the work"],"summary":"stopped after gate"}`)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			gh, data := panelClaim(t, "@echo the gate fails; exit 2")
+			gh.env = append(gh.env, "CLAUDE_SHIM_THEN_UNCOMMITTED=1")
+			prepare(gh, t)
+			f := gh.work(t, ciConfig(data, nil))
+			run := f.ended(t, 1)
+			if run.Outcome != outcomeFailed {
+				t.Fatalf("the run ended as %q (%s), want failed; the factory's log:\n%s", run.Outcome, run.Reason, f.output(t))
+			}
+			for _, want := range []string{"the session of the stage review reported complete and left changes it did not commit", "M worked.md", run.Worktree} {
+				if !strings.Contains(run.Reason, want) {
+					t.Errorf("the run failed because %q, want a reason with %q", run.Reason, want)
+				}
+			}
+			if workers := gh.workers(t); len(workers) != 2 {
+				t.Errorf("the factory started %d worker sessions, want the work session and the fix session", len(workers))
+			}
+			if pulls := gh.opened(t, "acme/edge-sensors"); len(pulls) != 0 {
+				t.Errorf("the factory opened %d pull requests without the fix the session reported", len(pulls))
 			}
 		})
 	}

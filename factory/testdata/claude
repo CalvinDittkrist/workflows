@@ -6,9 +6,9 @@
 # structured_output, and the same object as JSON text in result.
 #
 #   CLAUDE_SHIM_LOG    one record per call: the directory it ran in, the branch and commit that
-#                      directory is on, the process and its group, every argument, and every
-#                      environment variable name (values are not written: only whether a name is
-#                      there is ever asked)
+#                      directory is on, the process and its group, every argument and the size of
+#                      the longest one in bytes, and every environment variable name (values are
+#                      not written: only whether a name is there is ever asked)
 #   CLAUDE_SHIM_FAIL   when set, the session ends with this on its error output and exit 1
 #   CLAUDE_SHIM_RESULT the structured result of the session as one line of JSON, by default a
 #                      complete one of a session that stopped after the gate, with a gate that passed;
@@ -26,6 +26,9 @@
 #   CLAUDE_SHIM_COMMIT when set, the session adds a line to a file of that name in the worktree and
 #                      commits it, which is the work a run leaves behind for the branch to carry: every
 #                      session that works the branch moves it by one commit
+#   CLAUDE_SHIM_THEN_UNCOMMITTED
+#                      when set, every session after the first one CLAUDE_SHIM_LOG records adds its
+#                      line to that file and commits nothing, as a fix session that forgot to
 #   CLAUDE_SHIM_COMMIT_BACKTICKS
 #                      when set, that file is one line of this many backticks instead, which is what a
 #                      Markdown fence around its diff has to be longer than
@@ -50,7 +53,8 @@
 # with that on its error output, and one whose first line is SLEEP <seconds> waits that long first.
 # With CLAUDE_SHIM_REVIEW_BARRIER set, a reviewer waits until that many reviewers have started before
 # it reports, and fails when they do not within 20 seconds: reviewers run one after the other never
-# get past it.
+# get past it. With CLAUDE_SHIM_REVIEW_LINGER set, a reviewer stays that many seconds after its result
+# line before it exits, as a session does while Claude Code shuts down.
 #
 # The structured result is the one thing a session owes the factory (ADR 0039).
 #
@@ -121,12 +125,16 @@ tries=0
 while ! mkdir "$log.lock" 2>/dev/null && [ "$tries" -lt 200 ]; do tries=$((tries + 1)); sleep 0.05; done
 {
   echo "call"
+  # The process and its group first: a test that ends the session early still finds what to look for.
+  printf 'pid %s\n' "$$"
+  printf 'pgid %s\n' "$(ps -o pgid= -p $$ | tr -d ' ')"
   printf 'cwd %s\n' "$(pwd -P)"
   printf 'branch %s\n' "$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo none)"
   printf 'head %s\n' "$(git rev-parse HEAD 2>/dev/null || echo none)"
-  printf 'pid %s\n' "$$"
-  printf 'pgid %s\n' "$(ps -o pgid= -p $$ | tr -d ' ')"
   for argument in "$@"; do printf 'arg %s\n' "$argument"; done
+  # The size of the longest argument in bytes, which Linux holds to 128 KiB each (MAX_ARG_STRLEN): a
+  # length is counted in bytes under the C locale.
+  printf 'longest %s\n' "$(export LC_ALL=C; n=0; for argument in "$@"; do [ "${#argument}" -le "$n" ] || n=${#argument}; done; echo "$n")"
   env | while IFS= read -r entry; do printf 'env %s\n' "${entry%%=*}"; done
 } >> "$log"
 rmdir "$log.lock" 2>/dev/null
@@ -171,6 +179,10 @@ if [ -n "$reviewer" ]; then
   text=$(printf '%s' "$output" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')
   printf '{"type":"result","subtype":"success","is_error":false,"terminal_reason":"completed","num_turns":4,"total_cost_usd":0.5,"result":"%s","structured_output":%s,"usage":{"input_tokens":200,"cache_creation_input_tokens":300,"cache_read_input_tokens":5000,"output_tokens":400}}\n' \
     "$text" "$output"
+  if [ -n "${CLAUDE_SHIM_REVIEW_LINGER:-}" ]; then
+    sleep "$CLAUDE_SHIM_REVIEW_LINGER" &
+    wait
+  fi
   exit 0
 fi
 
@@ -216,8 +228,10 @@ if [ -n "${CLAUDE_SHIM_COMMIT:-}" ]; then
   else
     printf 'the work of session %s\n' "${calls:-1}" >> "$CLAUDE_SHIM_COMMIT"
   fi
-  git add -A >/dev/null 2>&1
-  git -c user.email=worker@example.com -c user.name=worker commit -q -m "feat: $CLAUDE_SHIM_COMMIT" >/dev/null 2>&1
+  if [ "${calls:-0}" -le 1 ] || [ -z "${CLAUDE_SHIM_THEN_UNCOMMITTED:-}" ]; then
+    git add -A >/dev/null 2>&1
+    git -c user.email=worker@example.com -c user.name=worker commit -q -m "feat: $CLAUDE_SHIM_COMMIT" >/dev/null 2>&1
+  fi
 fi
 
 # In a child, so that the signal the factory ends the session with is taken while it waits.

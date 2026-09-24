@@ -859,14 +859,44 @@ func (f *Factory) openedAlready(ctx context.Context, r *Run, entry Entry, claim 
 
 // session starts one session and reads it to its end. It answers with the session's result when the
 // session ended by itself with a result that fits, and otherwise ends the run the way the session
-// ended and answers false.
+// ended and answers false. A session that commits and reports complete with changes it did not commit
+// fails the run: the factory goes on by the commit the branch is at, so its report would name work
+// the branch does not carry, and the next reviewer or gate would read files no push takes along.
 func (f *Factory) session(parent, ctx context.Context, r *Run, s session, entry Entry, claim claimed) (result, bool) {
 	got, ended := f.runSession(parent, ctx, r, s, entry, claim, "")
 	if ended != nil {
 		f.end(parent, r, *ended)
 		return result{}, false
 	}
+	if !s.commits || got.Outcome != resultComplete {
+		return got, true
+	}
+	left, err := f.uncommitted(ctx, claim)
+	if err != nil {
+		if !f.halted(parent, ctx, r, "read the worktree") {
+			f.finish(r, outcomeFailed, "the worktree could not be read after the session of the stage "+s.stage+": "+err.Error()+leftBehind(claim), nil)
+		}
+		return result{}, false
+	}
+	if len(left) > 0 {
+		f.finish(r, outcomeFailed, fmt.Sprintf("the session of the stage %s reported complete and left changes it did not commit, which the branch does not carry; "+
+			"they stay in the worktree %s:\n%s", s.stage, claim.worktree, fenced(listed(left, maxListed, "git status")))+leftBehind(claim), nil)
+		return result{}, false
+	}
 	return got, true
+}
+
+// uncommitted is the paths of the worktree that differ from its commit, staged or not, and the files
+// git does not track and does not ignore. Fake mode has no worktree.
+func (f *Factory) uncommitted(ctx context.Context, claim claimed) ([]string, error) {
+	if f.fake {
+		return nil, nil
+	}
+	out, err := git(ctx, claim.worktree, "status", "--porcelain")
+	if err != nil || out == "" {
+		return nil, err
+	}
+	return strings.Split(out, "\n"), nil
 }
 
 // ending is how a session ended when it left no result to go on with: the outcome and the reason the
