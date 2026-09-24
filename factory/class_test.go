@@ -138,6 +138,23 @@ func TestAClassWithoutAGateRunsNoneAndAChangeOutsideEveryClassIsFull(t *testing.
 			t.Errorf("the factory opened %+v, want one pull request that says no gate ran", pulls)
 		}
 	})
+	// The class full is the change no class vouches for: all five reviewers read it, however narrow the
+	// repository's own panel is.
+	t.Run("a narrowed panel", func(t *testing.T) {
+		t.Parallel()
+		gh, data := panelClaim(t, "@echo make check ran")
+		gh.workerCommits(t, "upload/retry.go")
+		c := classedConfig(data, docsClass([]string{}))
+		c["repositories"].([]map[string]any)[0]["review"].(map[string]any)["reviewers"] = []string{"docs"}
+		f := gh.work(t, c)
+		run := f.ended(t, 1)
+		if run.Outcome != outcomeReady {
+			t.Fatalf("the run ended as %q (%s), want ready; the factory's log:\n%s", run.Outcome, run.Reason, f.output(t))
+		}
+		if got := agents(t, gh); !equal(slices.Sorted(slices.Values(got)), slices.Sorted(slices.Values(defaultReview.Reviewers))) {
+			t.Errorf("the factory started the reviewers %v for the class full, want all five", got)
+		}
+	})
 	// The patterns are read part by part: *.md is a Markdown file at the root, docs/** anything under
 	// docs, however deep.
 	for file, want := range map[string]string{"upload/retry.go": classFull, "notes/todo.md": classFull, "README.md": "docs", "docs/api/v2/index.md": "docs"} {
