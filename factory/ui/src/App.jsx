@@ -3,10 +3,14 @@ import { useEffect, useRef, useState } from 'react'
 // The dashboard reads the factory's read-only interface and never writes: it polls /api/status,
 // /api/repositories and /api/line for the three areas, and /api/runs/{id} for the selected run.
 
-// The stages of the pipeline in the order a run moves through them. The factory reads the stages of
-// the work session from the worker's skill calls and sets ci and address-reviews itself, which a run
-// moves between as the reviewers ask for changes; this is the line those stages are shown on.
+// The stages of the pipeline in the order a run moves through them. The work session is implement;
+// the factory sets the stages after it itself, and a run moves between ci and address-reviews as the
+// reviewers ask for changes; this is the line those stages are shown on.
 const STAGES = ['implement', 'review', 'pr', 'ci', 'address-reviews']
+
+// A stage as a run shows it: the review with the round of its panel the run is in or ended at.
+const stageOf = (run, stage = run.stage) =>
+  stage === 'review' && run.panel?.round ? `review, round ${run.panel.round}` : stage
 
 // Of the runs that are done, the newest are drawn: the factory keeps every run it ever made, and a
 // page that drew them all would grow with the months. The older ones are reached by their id.
@@ -205,7 +209,7 @@ export default function App() {
               <em>#{active.issue}</em>
               {active.title}
             </span>
-            <Facts items={[active.repository, active.stage, <Tick key="t">{duration(active.startedAt, now)}</Tick>]} />
+            <Facts items={[active.repository, stageOf(active), <Tick key="t">{duration(active.startedAt, now)}</Tick>]} />
           </button>
         ) : (
           <p className="none">{mode.replace(/-/g, ' ')}</p>
@@ -381,7 +385,7 @@ function Run({ id, now }) {
       <ol className="steps">
         {STAGES.map((stage) => (
           <li key={stage} className={stage === run.stage ? `at state-${state}` : reached.has(stage) ? 'done' : ''}>
-            {stage}
+            {stageOf(run, stage)}
           </li>
         ))}
       </ol>
