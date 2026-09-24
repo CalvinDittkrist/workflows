@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -177,8 +178,8 @@ type Run struct {
 	counted        map[string]usage // the usage the factory counted per message id
 	unpricedModels map[string]bool  // the models of counted messages that have no price here
 	// A run starts a session per stage that needs one, and its totals are the sum of theirs. open is how
-	// many of them have not given their own totals yet, and short says one ended without them: the
-	// totals are the worker's own only while every session that ended gave its own.
+	// many of the running ones have not given their own totals yet, and short says one ended without
+	// them: the totals are the worker's own only once every session has given its own (provenance).
 	open  int
 	short bool
 	// lock is the factory's copy of the run's lock while the run lasts, which every session's process
@@ -214,32 +215,52 @@ type heard struct {
 	tokens        Tokens
 }
 
+// ungrouped takes a process group that has ended out of Groups. It makes a new slice rather than
+// deleting in place: the copies of the record the store hands out (list, get) share the old one and
+// are read without the lock. Callers hold the lock.
+func (r *Run) ungrouped(pid int) {
+	r.Groups = slices.DeleteFunc(slices.Clone(r.Groups), func(g int) bool { return g == pid })
+}
+
 // opened readies the record for one more session. Callers hold the lock.
 func (r *Run) opened() { r.open++ }
 
 // closed is the end of a session: one that never gave its own totals leaves the factory's count in
 // the run's. Callers hold the lock.
 func (r *Run) closed(s *heard) {
-	r.open--
 	if !s.reported {
+		r.open--
 		r.short = true
+	}
+	if r.Totals != "" {
+		r.Totals = r.provenance()
 	}
 }
 
 // report takes the totals a session's result line gave in place of what the factory counted of that
-// session. They are the worker's own when every session so far gave its own, and the factory's when
-// one of them ended without it or is still being counted. Callers hold the lock.
+// session. Callers hold the lock.
 func (r *Run) report(s *heard, turns int, cost float64, tokens Tokens) {
 	r.Turns += turns - s.turns
 	r.CostUSD += cost - s.cost
 	r.Tokens = Tokens{Input: r.Tokens.Input + tokens.Input - s.tokens.Input, Output: r.Tokens.Output + tokens.Output - s.tokens.Output,
 		CacheCreation: r.Tokens.CacheCreation + tokens.CacheCreation - s.tokens.CacheCreation,
 		CacheRead:     r.Tokens.CacheRead + tokens.CacheRead - s.tokens.CacheRead}
-	s.reported = true
-	r.Totals = totalsWorker
-	if r.short || r.open > 1 { // open counts this session until it has ended (closed)
-		r.Totals = totalsFactory
+	if !s.reported {
+		r.open--
 	}
+	s.reported = true
+	r.Totals = r.provenance()
+}
+
+// provenance is where the totals come from now: the worker's own once every session gave its own, and
+// the factory's while one of them is still being counted or ended without them. It is decided again
+// whenever a session reports or ends, so sessions that run beside each other leave the same answer in
+// whichever order they do. Callers hold the lock.
+func (r *Run) provenance() string {
+	if r.short || r.open > 0 {
+		return totalsFactory
+	}
+	return totalsWorker
 }
 
 // Where the totals of a run come from.
