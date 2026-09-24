@@ -507,7 +507,7 @@ func (f *Factory) dispatch(ctx context.Context) {
 		if !f.claimable(entry.Repository) {
 			continue // the issue keeps its place in the line; nothing of it is started or recorded
 		}
-		allowed, warning := f.quotaAllows(ctx)
+		allowed, warning := f.quotaAllows(ctx, entry.Repository)
 		if !allowed {
 			return // the entry keeps its place; the check runs again after the reset
 		}
@@ -1089,7 +1089,7 @@ func cancelledBy(ctx context.Context) (cancelled, bool) {
 //
 // [ADR 0026]: ../docs/adr/0026-the-factory-never-deletes-work-on-its-own.md
 func (f *Factory) endInError(ctx context.Context, r *Run, reason string, exitCode *int) {
-	exhausted, scope, until, err := f.quotaExhausted(ctx)
+	exhausted, scope, until, err := f.quotaExhausted(ctx, r.Repository)
 	if err != nil {
 		f.warn(r, "quota not checked after the error",
 			"the quota could not be checked after the session's error, so the run is failed rather than resumed after a reset: "+err.Error())

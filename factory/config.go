@@ -111,8 +111,8 @@ type Settings struct {
 	CI ciSettings
 	// Review is the host's knobs of the review stage, resolved the same way.
 	Review reviewSettings
-	// WorkerModel is the model the worker runs on, the one whose quota scope the check reads: the
-	// worker agent's own unless worker_args names another with --model.
+	// WorkerModel is the model the worker runs on, one of those whose quota scope the check reads
+	// (Factory.spends): the worker agent's own unless worker_args names another with --model.
 	WorkerModel string
 }
 

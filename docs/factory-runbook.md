@@ -152,7 +152,7 @@ The factory is configured by one JSON file and nothing else: no environment vari
 | `notify` | `[]` | GitHub logins, without the `@`, that are asked for a review when a run ends `ready` and mentioned in a comment on the issue when it waits for a person. Empty: nobody is notified, and the log says so on start. |
 | `repositories` | none, at least one | The connected repositories, each `"owner/name"` or `{"name": "owner/name", "base": "dev"}` when this host branches off something other than the base the repository names (its `WF_BASE_BRANCH`, else its default branch). The object may also carry `"ci"` and `"review"` with any of their knobs, which then stand for that repository over the host's. |
 | `quota_axi` | none: the check is off | The absolute path of the quota-axi installed above. |
-| `quota_minimum` | `12` | The percentage of the all-models scope or the worker's model scope below which no run starts; `0` never waits. |
+| `quota_minimum` | `12` | The percentage of the all-models scope, or of the scope of a model the run spends (the worker's, and the one a reviewer of the repository's panel names for itself), below which no run starts; `0` never waits. |
 
 The command line has three flags for the service: `-config <file>` (default `factory.json` in the working directory), `-paused`, which pauses a factory whose file says otherwise and never unpauses one, and `-version`. `-fake` works a canned queue with scripted workers and is for development only.
 

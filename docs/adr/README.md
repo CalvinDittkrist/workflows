@@ -47,3 +47,4 @@ One file per decision, numbered, never edited after acceptance (supersede instea
 | [0041](0041-a-change-class-decides-the-gate-and-the-reviewers-before-the-pull-request.md) | A change class decides the gate and the reviewers before the pull request, and CI remains the full gate | accepted |
 | [0042](0042-the-factory-carries-its-own-prompts-and-updates-no-plugin.md) | The factory carries its own prompts and updates no plugin | accepted |
 | [0043](0043-the-migration-runs-from-the-last-stage-to-the-first.md) | The migration runs from the last stage to the first, through a temporary stop-after knob | accepted |
+| [0044](0044-the-quota-check-reads-the-scope-of-every-model-a-run-spends.md) | The quota check reads the scope of every model a run spends | accepted |

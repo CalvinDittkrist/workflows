@@ -115,12 +115,12 @@ func TestTheWorkerModelAgreesWithTheWorkerAgent(t *testing.T) {
 	}
 }
 
-// Enough quota left: the run starts, as if there were no check at all. What counts is the smaller of
-// the all-models scope and the scope of the worker's model; a scope of another model that is nearly
-// used up is none of this run's business.
+// Enough quota left: the run starts, as if there were no check at all. What counts is the smallest of
+// the all-models scope and the scopes of the models the run spends; a scope of a model no session of
+// the run runs on that is nearly used up is none of this run's business.
 func TestARunStartsWhenEnoughQuotaIsLeft(t *testing.T) {
 	t.Parallel()
-	q := newQuotaShim(t, "all=80 opus=40 sonnet=3 reset=+3600")
+	q := newQuotaShim(t, "all=80 opus=40 sonnet=30 haiku=3 reset=+3600")
 	f, _ := claimsWithQuota(t, q, config{})
 	run := f.ended(t, 1)
 	if run.Outcome != "ready" {
@@ -188,6 +188,48 @@ func TestTooLittleQuotaWaitsForTheResetAndStartsAfterIt(t *testing.T) {
 	f.get(t, "/api/status", &status)
 	if status.State != "running" || status.QuotaUntil != nil {
 		t.Errorf("after the reset the factory says %q until %v, want running and no quota wait", status.State, status.QuotaUntil)
+	}
+}
+
+// A run spends the models of its reviewers as well as the worker's: the default panel runs three of
+// its five on sonnet, so a sonnet scope below the minimum holds the run back while the worker's opus
+// has plenty. A panel whose reviewers all inherit the worker's model spends no sonnet, and starts.
+func TestTheQuotaOfTheReviewersModelsHoldsARunBack(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct {
+		review map[string]any
+		waits  bool
+	}{
+		"the default panel":                 {nil, true},
+		"a panel that inherits every model": {map[string]any{"reviewers": []string{"security", "senior"}}, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			q := newQuotaShim(t, "all=80 opus=90 sonnet=5 reset=+3", "all=80 opus=90 sonnet=60 reset=+3600")
+			settings := config{}
+			if c.review != nil {
+				settings["review"] = c.review
+			}
+			f, _ := claimsWithQuota(t, q, settings)
+			if c.waits {
+				until := f.waitsForQuota(t)
+				if !strings.Contains(f.output(t), "5 % of model:sonnet is left") {
+					t.Errorf("the factory's log does not say it waited for model:sonnet with 5 %%:\n%s", f.output(t))
+				}
+				run := f.ended(t, 1)
+				if run.StartedAt.Before(until) {
+					t.Errorf("the run started at %s, before the reset at %s the factory said it waits for", run.StartedAt, until)
+				}
+				return
+			}
+			run := f.ended(t, 1)
+			if run.Outcome != "ready" {
+				t.Fatalf("the run ended as %q (%s), want ready; the factory's log:\n%s", run.Outcome, run.Reason, f.output(t))
+			}
+			if calls := q.calls(t); len(calls) != 1 {
+				t.Errorf("the factory asked quota-axi %d times, want once: a panel on opus alone has no sonnet to wait for", len(calls))
+			}
+		})
 	}
 }
 
