@@ -96,7 +96,7 @@ class HuntBranchBriefTests(ShimTest):
 
     def test_the_pull_request_brief_carries_the_hunt_record_instead_of_an_issue(self):
         self.run_script(WORKER / "hunt.sh", "round")
-        self.run_script(WORKER / "hunt.sh", "triage",
+        self.run_script(WORKER / "hunt.sh", "triage", "1",
                         stdin="candidate: test_app.py | test_app | cannot-fail | asserts a constant | medium\n")
         brief = self.skill_brief("worker", "pr", WF_BASE_BRANCH="main")
         self.assertIn("issue: none", brief)
@@ -2631,7 +2631,7 @@ still_proven: no, it touched no behaviour
             "candidate: app.py | login | duplicate | the code itself | high",
             "Here are my findings:",
         ])
-        out = self.hunt("triage", stdin=reply).stdout
+        out = self.hunt("triage", "1", stdin=reply).stdout
         self.assertIn("remove: tests/test_login.py | test_constant | cannot-fail | asserts the constant 1\n", out)
         self.assertIn("kept: tests/test_logout.py | test_logout | mocks-subject", out)
         self.assertIn("refused: 'candidate: app.py | login | duplicate | the code itself | high': app.py is no test file", out)
@@ -2639,7 +2639,6 @@ still_proven: no, it touched no behaviour
         self.assertIn("hunt_triage: 1 to remove, 1 kept, 0 dropped, 2 refused", out)
 
     def test_malformed_candidates_are_refused_with_their_reason(self):
-        self.hunt("round")
         cases = {
             "candidate: tests/test_login.py | test_constant | cannot-fail | a | b | high": "it has 6 fields separated by |, not 5",
             "candidate: tests/test_login.py | test_constant | flaky | it sleeps | high": "'flaky' is none of the categories",
@@ -2650,24 +2649,37 @@ still_proven: no, it touched no behaviour
             "candidate: tests/test_gone.py | test_x | cannot-fail | a constant | high": "tests/test_gone.py is no test file this repository tracks",
             "candidate: tests/test_login.py | test_constant | cannot-fail | " + "x" * 301 + " | high": "the reason is longer than 300 characters",
         }
-        for line, reason in cases.items():
+        # One share for each case, since a share's reply is triaged once: a directory each, sorted before tests.
+        for i in range(len(cases)):
+            (self.repo / f"a{i}/tests").mkdir(parents=True)
+            (self.repo / f"a{i}/tests/test_x.py").write_text("def test_x():\n    pass\n")
+        self.git("add", "."); self.git("commit", "-qm", "shares")
+        self.hunt("round")
+        for share, (line, reason) in enumerate(cases.items(), start=1):
             with self.subTest(line=line):
-                out = self.hunt("triage", stdin=line + "\n").stdout
+                out = self.hunt("triage", str(share), stdin=line + "\n").stdout
                 self.assertIn(f"refused: '{line}': {reason}", out)
                 self.assertIn("1 refused", out)
 
     def test_a_hunter_names_at_most_three_candidates(self):
         self.hunt("round")
         lines = [f"candidate: tests/test_login.py | t{i} | incidental | log lines | low" for i in range(4)]
-        out = self.hunt("triage", stdin="\n".join(lines)).stdout
+        out = self.hunt("triage", "1", stdin="\n".join(lines)).stdout
         self.assertIn("hunt_triage: 0 to remove, 0 kept, 3 dropped, 1 refused", out)
         self.assertIn("at most 3 candidates", out)
 
     def test_a_medium_candidate_proposed_twice_is_recorded_once(self):
         self.hunt("round")
         line = "candidate: tests/test_logout.py | test_logout | mocks-subject | logout may be stubbed | medium\n"
-        self.hunt("triage", stdin=line)
-        out = self.hunt("triage", stdin=line).stdout
+        self.hunt("triage", "1", stdin=line)
+        # One reply per share and round: the same share is not triaged twice.
+        again = self.hunt("triage", "1", stdin=line, ok=False)
+        self.assertNotEqual(again.returncode, 0)
+        self.assertIn("triaged already", again.stderr)
+        self.remove_constant_test()
+        self.hunt("removed", stdin=self.REMOVED)
+        self.hunt("round")
+        out = self.hunt("triage", "1", stdin=line).stdout
         self.assertIn("(recorded already)", out)
         self.assertIn("hunt_kept: 1\n", self.hunt("print").stdout)
 
@@ -2706,31 +2718,76 @@ still_proven: no, it touched no behaviour
 
     def test_rounds_run_until_one_removes_nothing(self):
         self.assertIn("hunt_round: 1 of at most 3\n", self.hunt("round").stdout)
-        self.hunt("triage", stdin="candidate: tests/test_logout.py | test_logout | mocks-subject | stubbed | medium\n")
+        self.hunt("triage", "1", stdin="candidate: tests/test_logout.py | test_logout | mocks-subject | stubbed | medium\n")
         self.remove_constant_test()
         self.hunt("removed", stdin=self.REMOVED)
         second = self.hunt("round").stdout
         self.assertIn("hunt_round: 2 of at most 3\n", second)
         # The next round's hunter is told what was checked and kept in its share.
         self.assertIn("  kept: tests/test_logout.py | test_logout | mocks-subject | stubbed\n", second)
+        self.hunt("triage", "1", stdin="no candidates\n")
         ended = self.hunt("round").stdout
         self.assertIn("hunt_round: none; the hunt has ended: round 2 removed nothing", ended)
         self.assertIn("next: 1 test(s) removed in 2 round(s): run the worker's gate.sh run", ended)
         self.assertIn("hunt_rounds: 2 of at most 3; the hunt has ended: round 2 removed nothing", self.hunt("print").stdout)
-        r = self.hunt("triage", stdin="no candidates\n", ok=False)
+        r = self.hunt("triage", "1", stdin="no candidates\n", ok=False)
         self.assertIn("the hunt has ended", r.stderr)
 
     def test_a_hunt_that_removes_nothing_ends_after_its_first_round_without_a_pull_request(self):
         self.hunt("round")
-        self.hunt("triage", stdin="no candidates\n")
+        self.hunt("triage", "1", stdin="no candidates\n")
         ended = self.hunt("round").stdout
         self.assertIn("round 1 removed nothing", ended)
         self.assertIn("open no pull request", ended)
         self.assertIn("/orchestrator:abandon hunt/tests-2026-09-24", ended)
 
+    def test_a_round_left_before_every_reply_was_triaged_resumes_with_the_shares_still_out(self):
+        (self.repo / "spec").mkdir()
+        (self.repo / "spec/test_api.py").write_text("def test_api():\n    assert api()\n")
+        self.git("add", "."); self.git("commit", "-qm", "spec")
+        first = self.hunt("round").stdout
+        self.assertIn("share 1: spec, files: 1\n", first)
+        self.assertIn("share 2: tests, files: 2\n", first)
+        self.hunt("triage", "1", stdin="no candidates\n")
+        # A fresh context calls round again: the round is not closed, and only share 2 is handed out.
+        resumed = self.hunt("round").stdout
+        self.assertIn("hunt_round: 1 of at most 3, resumed: 1 of 2 share(s) not triaged yet", resumed)
+        self.assertIn("share 2: tests, files: 2\n  file: tests/test_login.py\n", resumed)
+        self.assertNotIn("share 1:", resumed)
+        self.hunt("triage", "2", stdin="no candidates\n")
+        self.assertIn("round 1 removed nothing", self.hunt("round").stdout)
+
+    def test_a_triage_names_a_share_of_the_running_round(self):
+        self.hunt("round")
+        for args, message in ((["triage"], "name the share"), (["triage", "x"], "name the share"),
+                              (["triage", "2"], "round 1 has no share 2")):
+            with self.subTest(args=args):
+                r = self.hunt(*args, stdin="no candidates\n", ok=False)
+                self.assertNotEqual(r.returncode, 0)
+                self.assertIn(message, r.stderr)
+
+    def test_a_removal_a_later_commit_restores_is_no_longer_listed(self):
+        self.hunt("round")
+        self.remove_constant_test()
+        self.hunt("removed", stdin=self.REMOVED)
+        self.git("revert", "--no-edit", "HEAD")
+        printed = self.hunt("print").stdout
+        self.assertIn("hunt_removed: 0\n", printed)
+        self.assertIn("hunt_note: 1 recorded removal(s) no longer stand", printed)
+
+    def test_a_removal_whose_test_is_still_in_its_file_is_refused(self):
+        self.hunt("round")
+        (self.repo / "app.py").write_text("")
+        (self.repo / "tests/test_login.py").write_text(HUNT_SOURCE + "\n# touched\n")
+        self.git("commit", "-qam", "test: touch the file, remove nothing")
+        r = self.hunt("removed", stdin=self.REMOVED, ok=False)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("still names test_constant", r.stderr)
+
     def test_the_hunt_runs_three_rounds_at_most(self):
         for n in range(3):
             self.assertIn(f"hunt_round: {n + 1} of at most 3", self.hunt("round").stdout)
+            self.hunt("triage", "1", stdin="no candidates\n")
             (self.repo / "tests" / f"test_x{n}.py").write_text("def test_x():\n    pass\n")
             self.git("add", "."); self.git("commit", "-qm", "x")
             self.git("rm", "-q", f"tests/test_x{n}.py"); self.git("commit", "-qm", f"test: remove test_x{n}")

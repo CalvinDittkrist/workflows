@@ -3,8 +3,8 @@
 # Usage: hunt.sh paths     the shares of the test files, one hunter each, at most ten files a share
 #        hunt.sh round     start the next round and print its shares with the candidates kept in them, or
 #                          say that the hunt has ended
-#        hunt.sh triage    one hunter's reply on stdin: records every medium candidate as kept, names every
-#                          high one to remove, drops the low ones and refuses every line that does not fit
+#        hunt.sh triage N  the reply of share N's hunter on stdin: records every medium candidate as kept, names
+#                          every high one to remove, drops the low ones and refuses every line that does not fit
 #        hunt.sh removed   record the removal the last commit made, its block on stdin
 #        hunt.sh print     the hunt block the reviewer and pull request briefs carry instead of an issue
 # The records live in this worktree's git directory beside the panel and gate records (ADR 0018), and the
@@ -75,20 +75,25 @@ count_files() {
 rounds() { count_files round; }
 field() { wf_record_field "$1" "$2"; }
 
+# Whether the file $1 at HEAD still names the test $2 as a word: a removed test is gone from its file.
+in_head() { git cat-file -e "HEAD:$1" 2>/dev/null && git show "HEAD:$1" | grep -Fqw -- "$2"; }
+
 # Records are named by their number, never by their path: the git directory may lie under a path with a
 # space in it, and the lists below are split into words.
 removal() { printf '%s/removal.%s\n' "$state" "$1"; }
 kept_file() { printf '%s/kept.%s\n' "$state" "$1"; }
 
 # The numbers of the removals that describe this branch: a record counts while its commit is in the history
-# of HEAD, so a removal a reset took away is not listed as one the pull request makes.
+# of HEAD and its test is not back in its file, so neither a removal a reset took away nor one a later commit
+# restored is listed as one the pull request makes.
 # The list is read once per call of this script, into removal_list below: nothing in one call changes it
 # before the call ends.
 removals() {
   local k=1 n
   n=$(count_files removal)
   while [ "$k" -le "$n" ]; do
-    if git merge-base --is-ancestor "$(field "$(removal "$k")" commit)" HEAD 2>/dev/null; then printf '%s\n' "$k"; fi
+    if git merge-base --is-ancestor "$(field "$(removal "$k")" commit)" HEAD 2>/dev/null &&
+      ! in_head "$(field "$(removal "$k")" path)" "$(field "$(removal "$k")" test)"; then printf '%s\n' "$k"; fi
     k=$((k + 1))
   done
 }
@@ -114,8 +119,9 @@ kept_records() {
 }
 kept_line() { local f; f=$(kept_file "$1"); printf '%s | %s | %s | %s\n' "$(field "$f" path)" "$(field "$f" test)" "$(field "$f" category)" "$(field "$f" reason)"; }
 
-# A round runs until the next call of `round` closes it; that call decides whether the hunt goes on, and an
-# end it decides is recorded, so every later call reads the same end. Nothing while the hunt goes on.
+# A round runs until a call of `round` after every share's reply is triaged closes it; that call decides
+# whether the hunt goes on, and an end it decides is recorded, so every later call reads the same end.
+# Nothing while the hunt goes on.
 ended() { [ ! -f "$state/end" ] || field "$state/end" reason; }
 # Why closing the running round ends the hunt, or nothing when another round runs.
 end_reason() {
@@ -165,6 +171,18 @@ $dirs
 EOF
 }
 
+# A round's shares are recorded as it starts, so the round a context left before every hunter reported is
+# resumed with the same shares, numbered as they were, whatever the removals since changed in the files.
+shares_file() { printf '%s/shares.%s\n' "$state" "$1"; }
+share_count() { [ -f "$(shares_file "$1")" ] && grep -c '^share ' "$(shares_file "$1")" || printf '0\n'; }
+share_block() { awk -v s="share $2:" 'index($0, s) == 1 { on = 1; print; next } /^[^ ]/ { on = 0 } on' "$(shares_file "$1")"; }
+triaged_file() { printf '%s/triaged.%s.%s\n' "$state" "$1" "$2"; }
+# The shares of round $1 whose hunter's reply has not been triaged.
+pending_shares() {
+  local s=1 c; c=$(share_count "$1")
+  while [ "$s" -le "$c" ]; do [ -f "$(triaged_file "$1" "$s")" ] || printf '%s\n' "$s"; s=$((s + 1)); done
+}
+
 clean_tree() {
   local dirty; dirty=$(wf_dirty_tree)
   [ -z "$dirty" ] || wf_die "the working tree has uncommitted changes:
@@ -180,6 +198,14 @@ case "${1:-}" in
   round)
     clean_tree "Commit each removal on its own, record it with hunt.sh removed, then start the next round."
     why=$(ended)
+    # A round closes once every share's reply is triaged; until then this call prints the shares still out.
+    n=$(rounds)
+    if [ -z "$why" ] && [ "$n" -ge 1 ] && [ -n "$(pending_shares "$n")" ]; then
+      pending=$(pending_shares "$n")
+      wf_kv hunt_round "$n of at most $max_rounds, resumed: $(printf '%s' "$pending" | grep -c .) of $(share_count "$n") share(s) not triaged yet; hunt these, then call round again"
+      for s in $pending; do share_block "$n" "$s"; done
+      exit 0
+    fi
     if [ -z "$why" ]; then
       why=$(end_reason)
       if [ -n "$why" ]; then
@@ -200,15 +226,22 @@ case "${1:-}" in
     fi
     next=$(( $(rounds) + 1 ))
     mkdir -p "$state"
+    # The shares are written before the round, so a round is never recorded without them.
+    shares kept > "$(shares_file "$next").tmp"
+    mv "$(shares_file "$next").tmp" "$(shares_file "$next")"
     printf 'round: %s\ncommit: %s\nat: %s\n\n' "$next" "$(git rev-parse HEAD)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$state/round.$next.tmp"
     mv "$state/round.$next.tmp" "$state/round.$next"
     wf_kv hunt_round "$next of at most $max_rounds"
-    shares kept
+    cat "$(shares_file "$next")"
     ;;
   triage)
     n=$(rounds)
     [ "$n" -ge 1 ] || wf_die "no round of this hunt has started; start one with the worker's hunt.sh round"
     [ -z "$(ended)" ] || wf_die "the hunt has ended ($(ended)); triage no more replies"
+    share="${2:-}"
+    case "$share" in ''|*[!0-9]*) wf_die "name the share whose reply this is: hunt.sh triage <share number> < reply" ;; esac
+    [ "$share" -ge 1 ] && [ "$share" -le "$(share_count "$n")" ] || wf_die "round $n has no share $share; its shares are 1 to $(share_count "$n")"
+    [ ! -f "$(triaged_file "$n" "$share")" ] || wf_die "the reply of share $share is triaged already in round $n; each hunter's reply is triaged once"
     remove=0 kept=0 dropped=0 refused=0 seen=0
     test_files=$(wf_test_files)  # the list a candidate's path is checked against in parse_fields
     while IFS= read -r line || [ -n "$line" ]; do
@@ -244,6 +277,8 @@ case "${1:-}" in
         low) dropped=$((dropped + 1)); wf_kv dropped "$summary" ;;
       esac
     done
+    printf 'share: %s\nremove: %s\nkept: %s\ndropped: %s\nrefused: %s\n\n' "$share" "$remove" "$kept" "$dropped" "$refused" > "$(triaged_file "$n" "$share").tmp"
+    mv "$(triaged_file "$n" "$share").tmp" "$(triaged_file "$n" "$share")"
     wf_kv hunt_triage "$remove to remove, $kept kept, $dropped dropped, $refused refused"
     [ "$refused" = 0 ] || printf 'help: a refused line is dropped; ask its hunter nothing\n'
     ;;
@@ -272,6 +307,7 @@ $removed_form"
     ! is_removed "$f_path" "$f_test" || wf_die "$f_test in $f_path is recorded as removed already"
     git diff-tree --no-commit-id --name-only -r "$head" | grep -Fxq -- "$f_path" ||
       wf_die "the last commit does not touch $f_path, so it is not the removal of $f_test; commit the removal on its own, then record it"
+    ! in_head "$f_path" "$f_test" || wf_die "$f_path still names $f_test at the last commit, so the commit did not remove it; remove the test, commit, then record it"
     f=$(removal $(( $(count_files removal) + 1 )))
     mkdir -p "$state"
     printf 'round: %s\ncommit: %s\npath: %s\ntest: %s\ncategory: %s\nreason: %s\nwhy: %s\nstill_proven: %s\n\n' \
@@ -291,7 +327,7 @@ $removed_form"
     wf_kv hunt_removed "$removed"
     wf_kv hunt_kept "$kept"
     stale=$(( $(count_files removal) - removed ))
-    [ "$stale" = 0 ] || wf_kv hunt_note "$stale recorded removal(s) name a commit no longer in this branch's history, so they are not listed"
+    [ "$stale" = 0 ] || wf_kv hunt_note "$stale recorded removal(s) no longer stand, because their commit left this branch's history or their test is back in its file, so they are not listed"
     # The fields are text a hunter and the worker wrote, so every line of the block is indented and none
     # can be read as a key of the brief.
     printf 'hunt_block:\n'
@@ -306,5 +342,5 @@ $removed_form"
     for k in $kept_list; do printf '  kept, round %s: %s\n' "$(field "$(kept_file "$k")" round)" "$(kept_line "$k")"; done
     [ "$removed$kept" != 00 ] || printf '  nothing removed and nothing kept\n'
     ;;
-  *) wf_die "usage: hunt.sh paths | hunt.sh round | hunt.sh triage < reply | hunt.sh removed < block | hunt.sh print" ;;
+  *) wf_die "usage: hunt.sh paths | hunt.sh round | hunt.sh triage <share> < reply | hunt.sh removed < block | hunt.sh print" ;;
 esac
