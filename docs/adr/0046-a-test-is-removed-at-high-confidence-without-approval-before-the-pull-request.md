@@ -1,7 +1,7 @@
 # 0046. A test is removed at high confidence without a person's approval before the pull request
 
 Date: 2026-09-24
-Status: accepted
+Status: accepted; amended 2026-09-25 by [ADR 0047](0047-a-test-hunt-reads-its-shares-whole-and-hunts-while-it-finds-something.md) (the worker checks a `medium` candidate instead of keeping it unread)
 
 ## Context
 A test hunt ([ADR 0045](0045-a-test-hunt-runs-on-a-branch-without-an-issue.md)) sends read-only hunters through a repository's tests. Asking the maintainer about each candidate would stop an unattended session once per test, and the maintainer would judge each removal with less context than the pull request gives. Removing a test that did prove something loses evidence silently. Spec #170.

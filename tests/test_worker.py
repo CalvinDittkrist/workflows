@@ -2561,7 +2561,7 @@ class StopAfterTests(PanelRecordCalls, ShimTest):
 
 class HuntPathsTests(ShimTest):
     """The shares a test hunt sends its hunters to: the directories that carry test files by the fixed
-    conventions, a large one split by file count."""
+    conventions, packed into shares of at most 1500 lines and a longer file split into parts by line."""
 
     def commit(self, files):
         for name, text in files.items():
@@ -2591,15 +2591,20 @@ class HuntPathsTests(ShimTest):
             "app/views_test.py", "pkg/server_test.go", "ui/src/app.test.tsx", "ui/src/api.spec.js",
         ]))
         self.assertIn("hunt_shares: 5,", out)
-        self.assertIn(": ui/src, files: 2\n", out)
+        self.assertIn(": ui/src, files: 2, lines: 0\n", out)
 
-    def test_a_large_directory_is_split_into_bounded_shares(self):
-        self.commit({f"tests/test_{i:02}.py": "" for i in range(23)})
+    def test_a_large_directory_is_packed_by_lines_and_a_long_file_is_split_into_parts(self):
+        # Five files of 600 lines pack two to a share, and a file of 3200 lines is read in three parts, so no
+        # hunter gets more than it can read to the end.
+        files = {f"tests/test_{i}.py": "x = 1\n" * 600 for i in range(5)}
+        files["tests/test_long.py"] = "x = 1\n" * 3200
+        self.commit(files)
         out = self.shares()
-        self.assertIn("hunt_shares: 3,", out)
-        self.assertIn("share 1: tests, part 1 of 3, files: 10\n", out)
-        self.assertIn("share 3: tests, part 3 of 3, files: 3\n", out)
-        self.assertEqual(out.count("  file: "), 23)
+        self.assertIn("hunt_shares: 6, at most 1500 lines each;", out)
+        self.assertIn("share 1: tests, files: 2, lines: 1200\n  file: tests/test_0.py\n  file: tests/test_1.py\n", out)
+        self.assertIn("share 3: tests, files: 1, lines: 600\n  file: tests/test_4.py\n", out)
+        self.assertIn("share 4: tests, part 1 of 3 of tests/test_long.py, lines 1-1500 of 3200\n  file: tests/test_long.py\n", out)
+        self.assertIn("share 6: tests, part 3 of 3 of tests/test_long.py, lines 3001-3200 of 3200\n", out)
 
     def test_a_repository_without_test_files_is_refused_with_the_patterns(self):
         self.commit({"app.py": "", "tests/fixtures/test_x.py": ""})
@@ -2646,7 +2651,7 @@ why: it checks that the number 1 is true, which no change to the code can break
 still_proven: no, it touched no behaviour
 """
 
-    def test_a_triaged_reply_names_the_removals_keeps_the_medium_ones_and_refuses_what_does_not_fit(self):
+    def test_a_triaged_reply_names_the_removals_and_the_checks_and_refuses_what_does_not_fit(self):
         self.hunt("round")
         reply = "\n".join([
             "candidate: tests/test_login.py | test_constant | cannot-fail | asserts the constant 1 | high",
@@ -2656,10 +2661,10 @@ still_proven: no, it touched no behaviour
         ])
         out = self.hunt("triage", "1", stdin=reply).stdout
         self.assertIn("remove: tests/test_login.py | test_constant | cannot-fail | asserts the constant 1\n", out)
-        self.assertIn("kept: tests/test_logout.py | test_logout | mocks-subject", out)
+        self.assertIn("check: tests/test_logout.py | test_logout | mocks-subject | logout may be stubbed\n", out)
         self.assertIn("refused: 'candidate: app.py | login | duplicate | the code itself | high': app.py is no test file", out)
         self.assertIn("refused: 'Here are my findings:': not a candidate line", out)
-        self.assertIn("hunt_triage: 1 to remove, 1 kept, 0 dropped, 2 refused", out)
+        self.assertIn("hunt_triage: 1 to remove, 1 to check, 0 kept, 0 dropped, 2 refused", out)
 
     def test_malformed_candidates_are_refused_with_their_reason(self):
         cases = {
@@ -2688,10 +2693,10 @@ still_proven: no, it touched no behaviour
         self.hunt("round")
         lines = [f"candidate: tests/test_login.py | t{i} | incidental | log lines | low" for i in range(4)]
         out = self.hunt("triage", "1", stdin="\n".join(lines)).stdout
-        self.assertIn("hunt_triage: 0 to remove, 0 kept, 3 dropped, 1 refused", out)
+        self.assertIn("hunt_triage: 0 to remove, 0 to check, 0 kept, 3 dropped, 1 refused", out)
         self.assertIn("at most 3 candidates", out)
 
-    def test_a_medium_candidate_proposed_twice_is_recorded_once(self):
+    def test_a_candidate_proposed_twice_is_recorded_once(self):
         self.hunt("round")
         line = "candidate: tests/test_logout.py | test_logout | mocks-subject | logout may be stubbed | medium\n"
         self.hunt("triage", "1", stdin=line)
@@ -2703,8 +2708,23 @@ still_proven: no, it touched no behaviour
         self.hunt("removed", stdin=self.REMOVED)
         self.hunt("round")
         out = self.hunt("triage", "1", stdin=line).stdout
-        self.assertIn("(recorded already)", out)
+        self.assertIn("(checked already)", out)
+        self.assertNotIn("check:", out)
         self.assertIn("hunt_kept: 1\n", self.hunt("print").stdout)
+
+    def test_a_high_candidate_the_worker_leaves_is_kept_and_not_named_for_removal_again(self):
+        self.hunt("round")
+        line = "candidate: tests/test_login.py | test_login | cannot-fail | looks constant | high\n"
+        self.assertIn("remove: tests/test_login.py | test_login", self.hunt("triage", "1", stdin=line).stdout)
+        # The worker read it and found that it proves the login: nothing is removed, and the test stays kept.
+        printed = self.hunt("print").stdout
+        self.assertIn("hunt_kept: 1\n", printed)
+        self.assertIn("\n  kept, round 1: tests/test_login.py | test_login | cannot-fail | looks constant\n", printed)
+        second = self.hunt("round").stdout
+        self.assertIn("  kept: tests/test_login.py | test_login | cannot-fail | looks constant\n", second)
+        out = self.hunt("triage", "1", stdin=line).stdout
+        self.assertNotIn("remove:", out)
+        self.assertIn("hunt_triage: 0 to remove, 0 to check, 1 kept, 0 dropped, 0 refused", out)
 
     def test_a_removal_is_recorded_at_its_commit_and_printed_with_its_reason(self):
         self.hunt("round")
@@ -2739,7 +2759,7 @@ still_proven: no, it touched no behaviour
         self.assertIn("starts with yes or no", r.stderr)
         self.assertIn("hunt_removed: 0\n", self.hunt("print").stdout)
 
-    def test_rounds_run_until_one_removes_nothing(self):
+    def test_rounds_run_until_one_finds_no_new_candidate(self):
         self.assertIn("hunt_round: 1 of at most 3\n", self.hunt("round").stdout)
         self.hunt("triage", "1", stdin="candidate: tests/test_logout.py | test_logout | mocks-subject | stubbed | medium\n")
         self.remove_constant_test()
@@ -2750,17 +2770,17 @@ still_proven: no, it touched no behaviour
         self.assertIn("  kept: tests/test_logout.py | test_logout | mocks-subject | stubbed\n", second)
         self.hunt("triage", "1", stdin="no candidates\n")
         ended = self.hunt("round").stdout
-        self.assertIn("hunt_round: none; the hunt has ended: round 2 removed nothing", ended)
+        self.assertIn("hunt_round: none; the hunt has ended: round 2 found no new candidate", ended)
         self.assertIn("next: 1 test(s) removed in 2 round(s): run the worker's gate.sh run", ended)
-        self.assertIn("hunt_rounds: 2 of at most 3; the hunt has ended: round 2 removed nothing", self.hunt("print").stdout)
+        self.assertIn("hunt_rounds: 2 of at most 3; the hunt has ended: round 2 found no new candidate", self.hunt("print").stdout)
         r = self.hunt("triage", "1", stdin="no candidates\n", ok=False)
         self.assertIn("the hunt has ended", r.stderr)
 
-    def test_a_hunt_that_removes_nothing_ends_after_its_first_round_without_a_pull_request(self):
+    def test_a_hunt_that_finds_nothing_ends_after_its_first_round_without_a_pull_request(self):
         self.hunt("round")
         self.hunt("triage", "1", stdin="no candidates\n")
         ended = self.hunt("round").stdout
-        self.assertIn("round 1 removed nothing", ended)
+        self.assertIn("round 1 found no new candidate", ended)
         self.assertIn("open no pull request", ended)
         self.assertIn("/orchestrator:abandon hunt/tests-2026-09-24", ended)
 
@@ -2769,16 +2789,16 @@ still_proven: no, it touched no behaviour
         (self.repo / "spec/test_api.py").write_text("def test_api():\n    assert api()\n")
         self.git("add", "."); self.git("commit", "-qm", "spec")
         first = self.hunt("round").stdout
-        self.assertIn("share 1: spec, files: 1\n", first)
-        self.assertIn("share 2: tests, files: 2\n", first)
+        self.assertIn("share 1: spec, files: 1, lines: 2\n", first)
+        self.assertIn("share 2: tests, files: 2, lines: 8\n", first)
         self.hunt("triage", "1", stdin="no candidates\n")
         # A fresh context calls round again: the round is not closed, and only share 2 is handed out.
         resumed = self.hunt("round").stdout
         self.assertIn("hunt_round: 1 of at most 3, resumed: 1 of 2 share(s) not triaged yet", resumed)
-        self.assertIn("share 2: tests, files: 2\n  file: tests/test_login.py\n", resumed)
+        self.assertIn("share 2: tests, files: 2, lines: 8\n  file: tests/test_login.py\n", resumed)
         self.assertNotIn("share 1:", resumed)
         self.hunt("triage", "2", stdin="no candidates\n")
-        self.assertIn("round 1 removed nothing", self.hunt("round").stdout)
+        self.assertIn("round 1 found no new candidate", self.hunt("round").stdout)
 
     def test_a_triage_names_a_share_of_the_running_round(self):
         self.hunt("round")
@@ -2807,15 +2827,29 @@ still_proven: no, it touched no behaviour
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("still names test_constant", r.stderr)
 
+    def test_a_later_round_hunts_only_the_files_the_round_before_found_something_in(self):
+        first = self.hunt("round").stdout
+        self.assertIn("share 1: tests, files: 2, lines: 8\n  file: tests/test_login.py\n  file: tests/test_logout.py\n", first)
+        self.hunt("triage", "1", stdin="candidate: tests/test_logout.py | test_logout | mocks-subject | stubbed | medium\n")
+        second = self.hunt("round").stdout
+        self.assertIn("hunt_shares: 1,", second)
+        self.assertIn("share 1: tests, files: 1, lines: 2\n  file: tests/test_logout.py\n", second)
+        self.assertNotIn("test_login.py", second)
+
+    def test_a_hunt_ends_when_the_files_it_found_something_in_are_gone(self):
+        self.hunt("round")
+        self.hunt("triage", "1", stdin="candidate: tests/test_logout.py | test_logout | cannot-fail | asserts a stub | high\n")
+        self.git("rm", "-q", "tests/test_logout.py"); self.git("commit", "-qm", "test: remove test_logout")
+        self.hunt("removed", stdin="remove: tests/test_logout.py | test_logout | cannot-fail | asserts a stub\n"
+                                   "why: it asserts what a stub returns\nstill_proven: no, it proved nothing\n")
+        ended = self.hunt("round").stdout
+        self.assertIn("the hunt has ended: no file round 1 found a candidate in is a test file any more", ended)
+        self.assertIn("next: 1 test(s) removed in 1 round(s)", ended)
+
     def test_the_hunt_runs_three_rounds_at_most(self):
         for n in range(3):
             self.assertIn(f"hunt_round: {n + 1} of at most 3", self.hunt("round").stdout)
-            self.hunt("triage", "1", stdin="no candidates\n")
-            (self.repo / "tests" / f"test_x{n}.py").write_text("def test_x():\n    pass\n")
-            self.git("add", "."); self.git("commit", "-qm", "x")
-            self.git("rm", "-q", f"tests/test_x{n}.py"); self.git("commit", "-qm", f"test: remove test_x{n}")
-            self.hunt("removed", stdin=f"remove: tests/test_x{n}.py | test_x | cannot-fail | no assertion\n"
-                                       "why: it asserts nothing\nstill_proven: no, it proved nothing\n")
+            self.hunt("triage", "1", stdin=f"candidate: tests/test_logout.py | t{n} | incidental | log lines | medium\n")
         self.assertIn("the hunt has ended: 3 rounds ran", self.hunt("round").stdout)
 
 
