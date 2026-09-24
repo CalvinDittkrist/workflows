@@ -125,8 +125,9 @@ type Run struct {
 	// count on.
 	RepairRounds int `json:"repairRounds"`
 	// Review is what the review stage handed on to the pr stage: the panel summary it derived from its
-	// recorded rounds, the gate result on the final head, and the commit the branch was at then. A resumed run whose
-	// branch is still at that commit and has no pull request open starts at the pr stage with it.
+	// recorded rounds, the gate result on the final head, and the commit the branch was at then. A
+	// resumed run whose branch is still at that commit and has no pull request open starts at the pr
+	// stage with it.
 	Review *Review `json:"review,omitempty"`
 	// Panel is what the review stage recorded: its rounds, the verdicts and fixes of each, and the gate
 	// on the final head. A resumed run goes on from it.

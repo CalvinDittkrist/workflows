@@ -75,7 +75,7 @@ func TestAResultCarriesWhatAStoppedSessionReached(t *testing.T) {
 		"pullRequest": pullRequest,
 		"gateResult":  "gate_result: pass (exit 0) at 3f2a9c1",
 		"commits":     []string{"3f2a9c1 feat: retry the upload", "8b01d2e test: the broker drops"},
-		"summary":     "stopped after review",
+		"summary":     "stopped after gate",
 	})
 	data := filepath.Join(t.TempDir(), "data")
 	gh.cloneInto(t, data, "acme/edge-sensors")
