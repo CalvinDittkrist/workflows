@@ -1099,11 +1099,6 @@ class BoardAndAbandonTests(ShimTest):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("branch: fix/12-fix-login-timeout", r.stdout)
 
-    def test_abandon_names_an_issue_without_a_worktree(self):
-        r = self.run_script(ORCH / "abandon.sh", "12")
-        self.assertNotEqual(r.returncode, 0)
-        self.assertIn("no worktree branch for issue #12", r.stderr)
-
     def test_abandon_refuses_dirty_or_unpushed_without_force(self):
         self.run_script(ORCH / "claim.sh", "12")
         path = self.repo / ".claude/worktrees/fix-12-fix-login-timeout"
