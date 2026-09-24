@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -156,8 +157,11 @@ func (f *Factory) command(ctx context.Context, s session, entry Entry, claim cla
 
 // readOnlyCommand is the process of a read-only session: no worker agent and no plugin, so no skill,
 // hook or workflow variable of the worker reaches it, the tools cut down to readTools, and its own
-// schema. It keeps what every session keeps: the compact pin, no background tasks, the auto permission
-// mode, the configured worker arguments and the worktree as its directory, which it reads.
+// schema. The settings of the worktree it runs in are not loaded (--setting-sources user): the branch
+// is the work under review, and a hook its .claude/settings.json declares would run a command at the
+// session's start, which no tool list holds back. Of the configured worker arguments it takes the
+// model alone (readOnlyArgs). It keeps what every session keeps: the compact pin, no background tasks,
+// the auto permission mode and the worktree as its directory, which it reads.
 func (f *Factory) readOnlyCommand(ctx context.Context, s session, claim claimed) (*exec.Cmd, error) {
 	variables := map[string]string{
 		"CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1",
@@ -175,16 +179,34 @@ func (f *Factory) readOnlyCommand(ctx context.Context, s session, claim claimed)
 		"--output-format", "stream-json", "--verbose",
 		"--permission-mode", "auto",
 		"--strict-mcp-config",
+		"--setting-sources", "user",
 		"--tools", readTools,
 		"--settings", string(settings),
 		"--json-schema", s.schema,
 	}
-	args = append(args, f.settings.WorkerArgs...)
+	args = append(args, readOnlyArgs(f.settings.WorkerArgs)...)
 	args = append(args, "-p", s.prompt)
 	cmd := exec.CommandContext(ctx, "claude", args...)
 	cmd.Dir = claim.worktree
 	cmd.Env = workerEnv(os.Environ(), variables)
 	return cmd, nil
+}
+
+// readOnlyArgs is what a read-only session takes of worker_args: the model it names, and nothing else.
+// worker_args is written for the worker, and an argument that gives it a capability — an MCP server
+// (--mcp-config, which --strict-mcp-config still loads), a plugin directory, an added directory or
+// tools — would give it to a session that reads text somebody else wrote as well
+// (https://code.claude.com/docs/en/cli-reference.md, checked on 2026-09-24).
+func readOnlyArgs(workerArgs []string) []string {
+	for i := len(workerArgs) - 1; i >= 0; i-- {
+		if model, ok := strings.CutPrefix(workerArgs[i], "--model="); ok {
+			return []string{"--model", model}
+		}
+		if workerArgs[i] == "--model" && i+1 < len(workerArgs) {
+			return []string{"--model", workerArgs[i+1]}
+		}
+	}
+	return nil
 }
 
 // The outcomes a session reports. complete is a session that finished its stages; with a pull request
@@ -316,17 +338,31 @@ func readAuthored(raw json.RawMessage, issue int) (result, error) {
 	}
 	title, body := strings.TrimSpace(*read.Title), strings.TrimSpace(*read.Body)
 	switch {
-	case strings.ContainsAny(title, "\r\n"):
-		return result{}, fmt.Errorf("the title %q is more than one line", firstLine(title))
+	case strings.IndexFunc(title, lineBreaking) >= 0:
+		return result{}, fmt.Errorf("the title %q is more than one line or carries a control character", firstLine(title))
 	case !conventionalTitle.MatchString(title):
 		return result{}, fmt.Errorf("the title %q is not in conventional-commit style, type(scope): subject", title)
 	case utf8.RuneCountInString(title) > maxTitle:
 		return result{}, fmt.Errorf("the title is %d characters long, more than %d", utf8.RuneCountInString(title), maxTitle)
 	case !closes(body, issue):
 		return result{}, fmt.Errorf("the body carries no closing reference to #%d, such as Closes #%d", issue, issue)
+	case verificationHeading.MatchString(body):
+		return result{}, fmt.Errorf("the body carries a verification section of its own, which only the factory writes from the run's facts")
 	}
 	return result{Outcome: resultComplete, Title: title, Body: body}, nil
 }
+
+// lineBreaking is a character that breaks a line or is no text at all: the control characters, among
+// them CR, LF and NEL (U+0085), and the Unicode line and paragraph separators.
+func lineBreaking(r rune) bool {
+	return unicode.IsControl(r) || r == '\u2028' || r == '\u2029'
+}
+
+// verificationHeading is a Markdown heading of a verification section. The factory appends the one
+// section of that name from the run's gate result and panel summary; an author that read an issue or a
+// diff telling it to write one of its own would put a verification nobody ran above the real one.
+// Both kinds of heading count: an ATX heading (## Verification) and a setext one, underlined with = or -.
+var verificationHeading = regexp.MustCompile(`(?im)^[ \t]{0,3}(#{1,6}[ \t]*verification\b|verification[^\n]*\n[ \t]{0,3}(=+|-+)[ \t]*$)`)
 
 // closes says whether a body carries a keyword GitHub closes an issue by, followed by that issue.
 func closes(body string, issue int) bool {

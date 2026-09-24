@@ -84,6 +84,16 @@ func (f *Factory) pr(parent, ctx context.Context, r *Run, entry Entry, claim cla
 	if _, ok := f.pushed(parent, ctx, r, claim, "the branch"); !ok {
 		return
 	}
+	// A resumed run whose reading of the open pull request failed ran its work session again, and the
+	// pull request that reading missed may stand: the run goes on with it rather than opening a second
+	// one, which GitHub refuses for the same branch.
+	if pull := f.openAlready(ctx, r, entry, claim); pull != "" {
+		if pullOf(entry.resume.PullRequest) == pullOf(pull) {
+			f.runs.update(r, func() { r.RepairRounds = entry.resume.RepairRounds })
+		}
+		f.ci(parent, ctx, r, entry, claim, pull, false)
+		return
+	}
 	facts, err := f.changeFacts(ctx, entry, claim)
 	if err != nil {
 		if !f.halted(parent, ctx, r, "read the change for the pull request") {
@@ -110,6 +120,27 @@ func (f *Factory) pr(parent, ctx context.Context, r *Run, entry Entry, claim cla
 	}
 	f.runs.event(r, Event{Kind: "factory", Title: "opened " + url, Body: got.Title})
 	f.ci(parent, ctx, r, entry, claim, url, false)
+}
+
+// openAlready is the pull request the branch has open when the pr stage is about to open one, and
+// empty when it has none. A reading that fails is warned about and taken as none: the pull request is
+// then opened, and GitHub's refusal says so if one stands after all.
+func (f *Factory) openAlready(ctx context.Context, r *Run, entry Entry, claim claimed) string {
+	if claim.branch == "" {
+		return ""
+	}
+	pull, err := f.source.openPull(ctx, entry.Repository, claim.branch)
+	if err != nil {
+		if ctx.Err() == nil {
+			f.warn(r, "pull request not read", "whether "+claim.branch+" has a pull request open could not be read before one is opened: "+err.Error())
+		}
+		return ""
+	}
+	if pull != "" {
+		f.runs.event(r, Event{Kind: "factory", Title: "going on with " + pull,
+			Body: "the branch " + claim.branch + " has this pull request open already, so the pr stage opens none"})
+	}
+	return pull
 }
 
 // facts is what the author session is briefed with: the diff range, the commits, the files and the
@@ -159,25 +190,34 @@ func (f *Factory) changeFacts(ctx context.Context, entry Entry, claim claimed) (
 }
 
 // Bounds on what the author's brief carries: it is an argument of the command line, which Linux holds
-// to 128 KiB, and the author reads the rest of the change from the worktree.
+// to 128 KiB, and the author reads the rest of the change from the worktree. Each bound holds a part as
+// it is fenced, fence included, since a fence is longer than the longest run of backticks in its text.
 const (
 	maxBriefDiff  = 60000
 	maxBriefIssue = 16000
 	maxBriefList  = 8000
 )
 
+// fencedWithin is fenced(text), cut until it fits in n bytes, with rest on a line of its own inside the
+// fence once anything of the text is left out.
+func fencedWithin(text string, n int, rest string) string {
+	if out := fenced(text); len(out) <= n {
+		return out
+	}
+	for kept := text; ; {
+		out := fenced(kept + "\n" + rest)
+		if len(out) <= n || kept == "" {
+			return out
+		}
+		kept = cut(kept, max(0, len(kept)-(len(out)-n)))
+	}
+}
+
 // authorBrief is the prompt of the author session.
 func authorBrief(entry Entry, claim claimed, c facts) string {
-	diff := c.diff
-	if len(diff) > maxBriefDiff {
-		diff = cut(diff, maxBriefDiff) + "\n[the rest of the diff is left out; read the changed files in this worktree]"
-	}
 	issueBody := c.issueBody
 	if c.issueUnread != "" {
 		issueBody = "(the issue's text could not be read; its title is above)"
-	}
-	if len(issueBody) > maxBriefIssue {
-		issueBody = cut(issueBody, maxBriefIssue) + "\n[the rest of the issue is left out]"
 	}
 	return fmt.Sprintf("The factory opens the pull request for issue #%d of %s, and you write its title and body. "+
 		"The branch %s is checked out in this worktree; it was cut from %s, which the pull request goes against. "+
@@ -189,8 +229,10 @@ func authorBrief(entry Entry, claim claimed, c facts) string {
 		"Describe the change the diff makes, not what the issue asked for. Leave out a verification section, test results and the reviewer panel: "+
 		"the factory appends the gate result and the panel summary to the body itself.\n",
 		entry.Number, entry.Repository, claim.branch, claim.base, c.span,
-		fenced(cut(c.commits, maxBriefList)), fenced(cut(c.stat, maxBriefList)), fenced(diff),
-		entry.Number, firstLine(c.issueTitle), fenced(issueBody), maxTitle, entry.Number)
+		fencedWithin(c.commits, maxBriefList, "[the rest of the commits is left out]"),
+		fencedWithin(c.stat, maxBriefList, "[the rest of the files is left out]"),
+		fencedWithin(c.diff, maxBriefDiff, "[the rest of the diff is left out; read the changed files in this worktree]"),
+		entry.Number, firstLine(c.issueTitle), fencedWithin(issueBody, maxBriefIssue, "[the rest of the issue is left out]"), maxTitle, entry.Number)
 }
 
 // verification is the section the factory appends to the author's body: the gate result and the panel

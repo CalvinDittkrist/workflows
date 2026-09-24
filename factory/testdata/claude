@@ -21,6 +21,9 @@
 #                      subtype, with no structured output, as error_max_structured_output_retries does
 #   CLAUDE_SHIM_COMMIT when set, the session writes and commits a file of that name in the worktree,
 #                      which is the work a run leaves behind for the branch to carry
+#   CLAUDE_SHIM_COMMIT_BACKTICKS
+#                      when set, that file is one line of this many backticks instead, which is what a
+#                      Markdown fence around its diff has to be longer than
 #   CLAUDE_SHIM_SLEEP  when set, the session waits that many seconds before it reports, so a test can
 #                      reach a worker that is still going
 #   CLAUDE_SHIM_THEN_SLEEP, CLAUDE_SHIM_THEN_RESULT
@@ -136,7 +139,11 @@ fi
 printf '%s\n' '{"type":"system","subtype":"init","model":"claude-opus-5","permissionMode":"auto","session_id":"5f2d8c11-0b9e-4a3f-9d21-7c6e4b0a1f33"}'
 
 if [ -n "${CLAUDE_SHIM_COMMIT:-}" ]; then
-  printf 'the work of one session\n' > "$CLAUDE_SHIM_COMMIT"
+  if [ -n "${CLAUDE_SHIM_COMMIT_BACKTICKS:-}" ]; then
+    { head -c "$CLAUDE_SHIM_COMMIT_BACKTICKS" /dev/zero | tr '\0' '`'; echo; } > "$CLAUDE_SHIM_COMMIT"
+  else
+    printf 'the work of one session\n' > "$CLAUDE_SHIM_COMMIT"
+  fi
   git add -A >/dev/null 2>&1
   git -c user.email=worker@example.com -c user.name=worker commit -q -m "feat: $CLAUDE_SHIM_COMMIT" >/dev/null 2>&1
 fi
