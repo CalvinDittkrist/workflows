@@ -119,42 +119,35 @@ func TestAReviewRequestThatStallsStillReachesTheLoginsBehindIt(t *testing.T) {
 
 // A run that ends ready and names no pull request has nothing to ask a review of, and is an issue
 // the factory still holds and is done with: the maintainer hears of it on the issue, like every
-// other ending that waits for a person. Such a run is a follow-up run whose session runs the rest of
-// the pipeline itself and names a pull request of another repository, which the factory does not take.
+// other ending that waits for a person. No run of this factory ends so any more — the work session
+// stops after the review and the factory opens the pull request itself, and a follow-up run answers
+// the review in its own address-reviews stage — so such a run is one a factory before it recorded,
+// whose session ran the pipeline to its end and named a pull request of another repository, and
+// whose ending that factory did not get to make.
 func TestAReadyRunThatNamesNoPullRequestIsSaidOnTheIssue(t *testing.T) {
 	t.Parallel()
 	gh := newGhShim(t)
 	gh.remote(t, "acme/edge-sensors")
 	gh.loggedInAs(t, "factory-bot")
+	gh.issues(t, "acme/edge-sensors")
+	gh.comments(t, "acme/edge-sensors", claimedIssue)
 	data := filepath.Join(t.TempDir(), "data")
-	clone := gh.cloneInto(t, data, "acme/edge-sensors")
-	gh.branchAt(t, "acme/edge-sensors", claimedBranch, gh.head(t, "acme/edge-sensors", "main"))
+	gh.cloneInto(t, data, "acme/edge-sensors")
 
 	began := time.Now().UTC().Add(-2 * time.Hour)
-	ended := began.Add(30 * time.Minute)
-	held := record(1, claimedIssue, claimedTitle, signalRouted, outcomeReady, true, began, ended)
-	held.Branch, held.Worktree = claimedBranch, filepath.Join(clone, ".claude", "worktrees", claimedWorktree)
-	held.PullRequest = pullOfTheClaim
-	records(t, data, held)
-	gh.issues(t, "acme/edge-sensors")
-	gh.issue(t, "acme/edge-sensors", assignedTo(openIssue(claimedIssue, claimedTitle, began.Add(-72*time.Hour)), "factory-bot"))
-	gh.pullRequestIs(t, "acme/edge-sensors", claimedIssue, "open")
-	gh.mayWrite(t, "acme/edge-sensors", "maintainer", true)
-	gh.reviews(t, "acme/edge-sensors", claimedIssue, review(1, "maintainer", "CHANGES_REQUESTED", ended.Add(10*time.Minute).Truncate(time.Second)))
-	gh.workerReportsCompleteWith(t, "https://github.com/someone/edge-sensors-fork/pull/3")
-	gh.comments(t, "acme/edge-sensors", claimedIssue)
+	owed := record(1, claimedIssue, claimedTitle, signalRouted, outcomeReady, true, began, began.Add(30*time.Minute))
+	_, owed.Reason = pullRequest("https://github.com/someone/edge-sensors-fork/pull/3", "acme/edge-sensors")
+	owed.Notified = notifyPending
+	records(t, data, owed)
 
-	f := gh.work(t, config{"poll": "50ms", "deadline": "90s", "data_dir": data,
+	f := gh.work(t, config{"poll": "50ms", "data_dir": data,
 		"repositories": []string{"acme/edge-sensors"}, "notify": maintainers})
-	run := f.ended(t, 2)
-	if run.Signal != signalChangesRequested {
-		t.Fatalf("run 2 ran on the signal %q, want the review that asks for changes; the factory's log:\n%s", run.Signal, f.output(t))
-	}
+	run := f.ended(t, 1)
 	if run.Outcome != "ready" || run.PullRequest != "" {
 		t.Fatalf("the run ended as %q with the pull request %q, want ready with none; the factory's log:\n%s",
 			run.Outcome, run.PullRequest, f.output(t))
 	}
-	f.notified(t, 2)
+	f.notified(t, 1)
 
 	said := gh.commented(t, "acme/edge-sensors", claimedIssue)
 	for _, want := range []string{

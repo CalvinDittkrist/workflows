@@ -20,7 +20,7 @@ import (
 
 // TestAReviewThatAsksForChangesRunsTheWorkerOnItInTheSameWorktree drives the whole signal: a run
 // ends ready and leaves a pull request, somebody with write access asks for changes on it, and the
-// factory runs the worker's address-reviews stage in the worktree of the claim ([ADR 0023]).
+// factory runs its address-reviews stage in the worktree of the claim ([ADR 0023]).
 //
 // [ADR 0023]: ../docs/adr/0023-github-is-the-only-control-surface-of-the-factory.md
 func TestAReviewThatAsksForChangesRunsTheWorkerOnItInTheSameWorktree(t *testing.T) {
@@ -33,6 +33,9 @@ func TestAReviewThatAsksForChangesRunsTheWorkerOnItInTheSameWorktree(t *testing.
 	gh.pullRequestIs(t, "acme/edge-sensors", claimedIssue, "open")
 	gh.reviews(t, "acme/edge-sensors", claimedIssue)
 	gh.mayWrite(t, "acme/edge-sensors", "maintainer", true)
+	// The address-reviews session of the follow-up run, which answers the review summary.
+	gh.answer(t, pullCommented, pullOfTheClaim+"#issuecomment-5\n")
+	gh.env = append(gh.env, `CLAUDE_SHIM_THEN_RESULT={"outcome":"complete","summary":"logged","answer":"Every retry is logged now.","fixed":["log every retry"]}`)
 
 	data := filepath.Join(t.TempDir(), "data")
 	clone := gh.cloneInto(t, data, "acme/edge-sensors")
@@ -55,9 +58,15 @@ func TestAReviewThatAsksForChangesRunsTheWorkerOnItInTheSameWorktree(t *testing.
 
 	// The gesture: a maintainer requests changes on the pull request, after that run ended.
 	requestedAt := after(*first.EndedAt)
-	gh.reviews(t, "acme/edge-sensors", claimedIssue,
-		review(7001, "maintainer", "CHANGES_REQUESTED", requestedAt))
+	gesture := review(7001, "maintainer", "CHANGES_REQUESTED", requestedAt)
+	gesture["html_url"] = pullOfTheClaim + "#pullrequestreview-7001"
+	gesture["body"] = "Log every retry."
+	gh.reviews(t, "acme/edge-sensors", claimedIssue, gesture)
 
+	// The follow-up run answers the review, pushes what the worktree holds, and waits on CI until the
+	// pull request shows that push; the review stands on GitHub, answered.
+	f.sawIn(t, 2, "answered the review summaries")
+	gh.ciReads(t, "acme/edge-sensors", claimedIssue, ciPull{head: committed, reviews: []map[string]any{gesture}})
 	second := f.ended(t, 2)
 	if second.Signal != signalChangesRequested || second.Issue != claimedIssue {
 		t.Fatalf("run 2 works #%d on the signal %q, want #%d on a review that asks for changes; the factory's log:\n%s",
@@ -69,11 +78,23 @@ func TestAReviewThatAsksForChangesRunsTheWorkerOnItInTheSameWorktree(t *testing.
 	if second.Outcome != outcomeReady {
 		t.Errorf("the follow-up run ended as %q (%s), want ready again", second.Outcome, second.Reason)
 	}
-	// The stage it opens in is its prompt, which no Skill call in the stream announces: a follow-up
-	// run stands at the reviews stage from its first moment, where a first run stands at implement
-	// and ends in the ci stage the factory runs.
-	if !equal(first.Stages, []string{"implement", "pr", "ci"}) || !equal(second.Stages, []string{"reviews"}) {
-		t.Errorf("the two runs went through the stages %v and %v, want [implement pr ci] and [reviews]", first.Stages, second.Stages)
+	// A follow-up run stands at the address-reviews stage from its first moment and then waits on CI,
+	// where a first run stands at implement and goes through the pr stage into the ci stage the factory
+	// runs.
+	if !equal(first.Stages, []string{"implement", "pr", "ci"}) || !equal(second.Stages, []string{"address-reviews", "ci"}) {
+		t.Errorf("the two runs went through the stages %v and %v, want [implement pr ci] and [address-reviews ci]", first.Stages, second.Stages)
+	}
+	// The review is a new mandate on the pull request: the follow-up run's count of repair rounds
+	// starts at none, and answering the review it was queued for is not one of them.
+	if second.RepairRounds != 0 {
+		t.Errorf("the follow-up run took %d repair rounds, want none: the round that answers its review is the mandate itself", second.RepairRounds)
+	}
+	if titles := factoryTitles(second, "answering the review", "repair round", "answered the review summaries", "ci: green"); !equal(titles,
+		[]string{"answering the review on " + pullOfTheClaim, "answered the review summaries on " + pullOfTheClaim, "ci: green"}) {
+		t.Errorf("the follow-up run said %v, want that it answered the review and went green without a repair round", titles)
+	}
+	if said := gh.wrote(t, pullCommented); said != "Every retry is logged now." {
+		t.Errorf("the factory answered the review with %q, want the session's answer", said)
 	}
 	if !second.SignalAt.Equal(requestedAt) {
 		t.Errorf("the follow-up run stands for a review submitted at %s, want the one at %s", second.SignalAt, requestedAt)
@@ -92,8 +113,8 @@ func TestAReviewThatAsksForChangesRunsTheWorkerOnItInTheSameWorktree(t *testing.
 		t.Errorf("the factory made `gh %s` %d times, want once: the issue is this host's already", assigned, made)
 	}
 
-	// The session itself: the same worktree, on the commit the work there had reached, and started at
-	// the stage that answers a review rather than at the beginning of the pipeline.
+	// The session itself: the same worktree, on the commit the work there had reached, briefed with the
+	// review by the factory rather than started on a skill of the worker's pipeline.
 	workers := gh.workers(t)
 	if len(workers) != 2 {
 		t.Fatalf("the factory started %d workers, want one per run", len(workers))
@@ -106,22 +127,12 @@ func TestAReviewThatAsksForChangesRunsTheWorkerOnItInTheSameWorktree(t *testing.
 		t.Errorf("the follow-up worker ran on %s at %s, want %s at the commit the worktree holds (%s)",
 			follower.branch, follower.head, claimedBranch, committed)
 	}
-	if !follower.started("-p", "/worker:address-reviews") {
-		t.Errorf("the follow-up worker was started as %v, want the address-reviews skill as its prompt", follower.args)
+	if follower.started("-p", "/worker:address-reviews") {
+		t.Errorf("the follow-up worker was started on the worker's address-reviews skill, want the factory's own brief: %v", follower.args)
 	}
-	// And the driver's word that the session is here for a review, which is what the worker's
-	// repair.sh starts the pull request's count of repair rounds again on: a maintainer who requests
-	// changes gives the pull request a mandate the rounds its checks once needed must not refuse,
-	// and the session may not read that out of its own prompt. A first run carries it not at all.
-	// It names the review, so the session has the rounds of that one review: the count it starts again
-	// is kept against this word, and the rounds its own CI stage then drives cannot start it a second
-	// time.
-	wantMandate := requestedAt.UTC().Format(time.RFC3339)
-	if mandate := follower.settings(t).Env["WF_REVIEW_MANDATE"]; mandate != wantMandate {
-		t.Errorf("the follow-up worker's settings carry WF_REVIEW_MANDATE=%q, want the review's own %s: without it the repair count of a pull request that spent its rounds refuses the maintainer's review", mandate, wantMandate)
-	}
-	if mandate, set := workers[0].settings(t).Env["WF_REVIEW_MANDATE"]; set {
-		t.Errorf("the first run's settings carry WF_REVIEW_MANDATE=%q; a run nobody asked for could start its own repair count again", mandate)
+	brief := strings.Join(addressBriefs(second), "\n")
+	if !strings.Contains(brief, "Log every retry.") || !strings.Contains(brief, pullOfTheClaim+"#pullrequestreview-7001") {
+		t.Errorf("the address-reviews session's brief does not carry the review it answers:\n%s", brief)
 	}
 
 	// One review is one run, however many polls read it: the review stands on GitHub unanswered as far

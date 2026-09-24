@@ -168,10 +168,10 @@ type gitHub struct {
 	// of an issue the routed line no longer holds, and the issue behind a watched pull request is one
 	// this factory holds, which is to say one the line never holds.
 	pullWarnings map[string]bool
-	// writers is whether the author of a review may write to the repository, asked once per review
-	// (review.go): a review is submitted once, and the access its author had then is what the
-	// follow-up run it queues stands on.
-	writers map[int64]bool
+	// writers is whether the author of a review or a review thread may write to the repository, asked
+	// once per review and per thread (review.go): each is written once, and the access its author had
+	// then is what the factory acts on.
+	writers map[string]bool
 	// finished is the pull requests that were merged or closed, which are not read again: what a
 	// review asked of them is nobody's to answer any more, and a factory that kept asking would spend
 	// a call per poll on every issue it has ever held.
@@ -436,7 +436,7 @@ func newGitHub(repositories []Connected, label string) *gitHub {
 		unreadable:    map[string]string{},
 		issueWarnings: map[string]bool{},
 		pullWarnings:  map[string]bool{},
-		writers:       map[int64]bool{},
+		writers:       map[string]bool{},
 		finished:      map[string]bool{},
 		refused:       map[string]string{},
 	}

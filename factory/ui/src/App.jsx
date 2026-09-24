@@ -3,9 +3,10 @@ import { useEffect, useRef, useState } from 'react'
 // The dashboard reads the factory's read-only interface and never writes: it polls /api/status,
 // /api/repositories and /api/line for the three areas, and /api/runs/{id} for the selected run.
 
-// The stages of the worker pipeline in the order a run moves through them. The factory reads the
-// stage a run is in from the worker's skill calls; this is the line those stages are shown on.
-const STAGES = ['implement', 'review', 'pr', 'ci', 'reviews']
+// The stages of the pipeline in the order a run moves through them. The factory reads the stages of
+// the work session from the worker's skill calls and sets ci and address-reviews itself, which a run
+// moves between as the reviewers ask for changes; this is the line those stages are shown on.
+const STAGES = ['implement', 'review', 'pr', 'ci', 'address-reviews']
 
 // Of the runs that are done, the newest are drawn: the factory keeps every run it ever made, and a
 // page that drew them all would grow with the months. The older ones are reached by their id.

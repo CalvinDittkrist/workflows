@@ -109,7 +109,7 @@ func (f *Factory) pr(parent, ctx context.Context, r *Run, entry Entry, claim cla
 		return
 	}
 	f.runs.event(r, Event{Kind: "factory", Title: "opened " + url, Body: got.Title})
-	f.ci(parent, ctx, r, entry, claim, url)
+	f.ci(parent, ctx, r, entry, claim, url, false)
 }
 
 // facts is what the author session is briefed with: the diff range, the commits, the files and the

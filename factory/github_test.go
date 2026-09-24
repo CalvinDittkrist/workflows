@@ -959,13 +959,6 @@ func (g *ghShim) workerPrintsNoResult(t *testing.T) {
 	g.env = append(g.env, "CLAUDE_SHIM_NO_RESULT=1")
 }
 
-// workerReportsCompleteWith is the complete result of a worker that names that pull request, which
-// the factory takes only when it is one of the repository the run is for.
-func (g *ghShim) workerReportsCompleteWith(t *testing.T, pullRequest string) {
-	t.Helper()
-	g.workerResults(t, map[string]any{"outcome": "complete", "pullRequest": pullRequest, "summary": "the work is done and pushed"})
-}
-
 // installs is what the claude shim answers about this host: the version of the worker plugin its
 // user scope holds, and what `claude --version` prints — an empty one being a binary that printed
 // no version at all.
