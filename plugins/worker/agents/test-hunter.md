@@ -27,4 +27,4 @@ Reply with at most three lines of this form, the most certain first, and nothing
 candidate: <path> | <test> | <category> | <reason> | <confidence>
 ```
 
-The path as the brief names it, the test by its name as the file spells it, a category from the list, a one-line reason in plain words without the `|` character, and `high`, `medium` or `low`. When nothing in your share breaks the rule, reply `no candidates`.
+The path as the brief names it, the test by its name as the file spells it, a category from the list, a one-line reason in plain words without the `|` character and at most 300 characters long, and `high`, `medium` or `low`. When nothing in your share breaks the rule, reply `no candidates`.

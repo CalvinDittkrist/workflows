@@ -2645,6 +2645,10 @@ still_proven: no, it touched no behaviour
             "candidate: tests/test_login.py | test_constant | flaky | it sleeps | high": "'flaky' is none of the categories",
             "candidate: tests/test_login.py | test_constant | cannot-fail | a constant | sure": "'sure' is no confidence",
             "candidate: tests/test_login.py |  | cannot-fail | a constant | high": "a field is empty",
+            "candidate: tests/../app.py | login | cannot-fail | a constant | high": "tests/../app.py is no test file this repository tracks",
+            "candidate: /etc/tests/x.sh | x | cannot-fail | a constant | high": "/etc/tests/x.sh is no test file this repository tracks",
+            "candidate: tests/test_gone.py | test_x | cannot-fail | a constant | high": "tests/test_gone.py is no test file this repository tracks",
+            "candidate: tests/test_login.py | test_constant | cannot-fail | " + "x" * 301 + " | high": "the reason is longer than 300 characters",
         }
         for line, reason in cases.items():
             with self.subTest(line=line):
@@ -2722,7 +2726,7 @@ still_proven: no, it touched no behaviour
         ended = self.hunt("round").stdout
         self.assertIn("round 1 removed nothing", ended)
         self.assertIn("open no pull request", ended)
-        self.assertIn("abandon.sh hunt/tests-2026-09-24", ended)
+        self.assertIn("/orchestrator:abandon hunt/tests-2026-09-24", ended)
 
     def test_the_hunt_runs_three_rounds_at_most(self):
         for n in range(3):

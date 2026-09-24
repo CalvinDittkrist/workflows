@@ -16,6 +16,7 @@ set -euo pipefail
 max_rounds=3
 max_candidates=3
 share_size=10
+max_reason=300
 categories="source-inspection cannot-fail duplicate mocks-subject incidental"
 state="$(wf_state_dir)/hunt"
 
@@ -47,10 +48,16 @@ $rest
 EOF
   f_path=$(trim "$f_path"); f_test=$(trim "$f_test"); f_cat=$(trim "$f_cat"); f_reason=$(trim "$f_reason"); f_conf=$(trim "${f_conf:-}")
   if [ -z "$f_path" ] || [ -z "$f_test" ] || [ -z "$f_reason" ]; then problem="a field is empty"; return 1; fi
+  [ "${#f_reason}" -le "$max_reason" ] || { problem="the reason is longer than $max_reason characters"; return 1; }
   wf_in_list "$f_cat" "$categories" || { problem="'$f_cat' is none of the categories $(printf '%s' "$categories" | sed 's/ /, /g')"; return 1; }
   # Only a test file is ever named for removal: a line that names any other file is refused however it was
-  # reasoned, so no reply can steer the worker at the code the tests prove.
+  # reasoned, so no reply can steer the worker at the code the tests prove. A candidate names a file this
+  # repository tracks, exactly as the rule lists it, so a path through .. or from the root never passes; a
+  # removal names the file its commit touched, which the removed command checks against that commit.
   [ -n "$(printf '%s\n' "$f_path" | wf_test_paths)" ] || { problem="$f_path is no test file by the hunt's conventions ($wf_test_file_rule)"; return 1; }
+  if [ "$want" = 5 ] && ! printf '%s\n' "$test_files" | grep -Fxq -- "$f_path"; then
+    problem="$f_path is no test file this repository tracks; name it exactly as the brief lists it"; return 1
+  fi
   if [ "$want" = 5 ]; then
     case "$f_conf" in high|medium|low) ;; *) problem="'$f_conf' is no confidence; it is high, medium or low"; return 1 ;; esac
   fi
@@ -73,6 +80,8 @@ kept_file() { printf '%s/kept.%s\n' "$state" "$1"; }
 
 # The numbers of the removals that describe this branch: a record counts while its commit is in the history
 # of HEAD, so a removal a reset took away is not listed as one the pull request makes.
+# The list is read once per call of this script, into removal_list below: nothing in one call changes it
+# before the call ends.
 removals() {
   local k=1 n
   n=$(count_files removal)
@@ -81,8 +90,8 @@ removals() {
     k=$((k + 1))
   done
 }
-removed_in() { local k c=0; for k in $(removals); do [ "$(field "$(removal "$k")" round)" = "$1" ] && c=$((c + 1)); done; printf '%s\n' "$c"; }
-is_removed() { local k; for k in $(removals); do [ "$(field "$(removal "$k")" path)" = "$1" ] && [ "$(field "$(removal "$k")" test)" = "$2" ] && return 0; done; return 1; }
+removed_in() { local k c=0; for k in $removal_list; do [ "$(field "$(removal "$k")" round)" = "$1" ] && c=$((c + 1)); done; printf '%s\n' "$c"; }
+is_removed() { local k; for k in $removal_list; do [ "$(field "$(removal "$k")" path)" = "$1" ] && [ "$(field "$(removal "$k")" test)" = "$2" ] && return 0; done; return 1; }
 is_kept() {
   local k=1 n; n=$(count_files kept)
   while [ "$k" -le "$n" ]; do
@@ -117,8 +126,9 @@ end_reason() {
 # files, so no hunter's share is unbounded. With $1 = kept, each share lists the candidates kept in it, which
 # its hunter is told not to propose again.
 shares() {
-  local files dirs dir list total parts part i count=0 k n
+  local files dirs dir list slice kept_list="" total parts part i count=0 k n
   files=$(wf_test_files)
+  [ "${1:-}" != kept ] || kept_list=$(kept_records)
   [ -n "$files" ] || wf_die "no test file in this repository matches the conventions of a test hunt: $wf_test_file_rule"
   dirs=$(printf '%s\n' "$files" | awk '{ if (!sub(/\/[^\/]*$/, "")) $0 = "."; print }' | sort -u)
   total=0
@@ -137,16 +147,15 @@ EOF
     while [ "$part" -le "$parts" ]; do
       count=$((count + 1))
       i=$(( (part - 1) * share_size + 1 ))
+      slice=$(printf '%s\n' "$list" | sed -n "$i,$((i + share_size - 1))p")
       if [ "$parts" = 1 ]; then printf 'share %s: %s, files: %s\n' "$count" "$dir" "$n"
-      else printf 'share %s: %s, part %s of %s, files: %s\n' "$count" "$dir" "$part" "$parts" "$(printf '%s\n' "$list" | sed -n "$i,$((i + share_size - 1))p" | wc -l | tr -d ' ')"; fi
-      printf '%s\n' "$list" | sed -n "$i,$((i + share_size - 1))p" | sed 's/^/  file: /'
-      if [ "${1:-}" = kept ]; then
-        for k in $(kept_records); do
-          if printf '%s\n' "$list" | sed -n "$i,$((i + share_size - 1))p" | grep -Fxq -- "$(field "$(kept_file "$k")" path)"; then
-            printf '  kept: %s\n' "$(kept_line "$k")"
-          fi
-        done
-      fi
+      else printf 'share %s: %s, part %s of %s, files: %s\n' "$count" "$dir" "$part" "$parts" "$(printf '%s\n' "$slice" | wc -l | tr -d ' ')"; fi
+      printf '%s\n' "$slice" | sed 's/^/  file: /'
+      for k in $kept_list; do
+        if printf '%s\n' "$slice" | grep -Fxq -- "$(field "$(kept_file "$k")" path)"; then
+          printf '  kept: %s\n' "$(kept_line "$k")"
+        fi
+      done
       part=$((part + 1))
     done
   done <<EOF
@@ -160,6 +169,8 @@ clean_tree() {
 $dirty
 $1"
 }
+
+removal_list=$(removals)
 
 case "${1:-}" in
   paths) shares ;;
@@ -175,12 +186,12 @@ case "${1:-}" in
       fi
     fi
     if [ -n "$why" ]; then
-      n=$(rounds); removed=$(removals | grep -c . || true)
+      n=$(rounds); removed=$(printf '%s' "$removal_list" | grep -c . || true)
       wf_kv hunt_round "none; the hunt has ended: $why"
       if [ "$removed" -gt 0 ]; then
         wf_kv next "$removed test(s) removed in $n round(s): run the worker's gate.sh run, then review, pull request and CI as the hunt skill says"
       else
-        wf_kv next "nothing removed in $n round(s): open no pull request and run no review; report 'hunt: nothing removed' with the kept candidates of hunt.sh print and abandon.sh $(wf_branch) for the maintainer"
+        wf_kv next "nothing removed in $n round(s): open no pull request and run no review; report 'hunt: nothing removed' with the kept candidates of hunt.sh print and /orchestrator:abandon $(wf_branch) for the maintainer"
       fi
       exit 0
     fi
@@ -196,6 +207,7 @@ case "${1:-}" in
     [ "$n" -ge 1 ] || wf_die "no round of this hunt has started; start one with the worker's hunt.sh round"
     [ -z "$(ended)" ] || wf_die "the hunt has ended ($(ended)); triage no more replies"
     remove=0 kept=0 dropped=0 refused=0 seen=0
+    test_files=$(wf_test_files)
     while IFS= read -r line || [ -n "$line" ]; do
       line=$(trim "$line")
       [ -n "$line" ] || continue
@@ -240,7 +252,7 @@ case "${1:-}" in
     clean_tree "A removal is recorded at the commit that makes it: commit it on its own, then record it again."
     head=$(git rev-parse HEAD)
     [ "$head" != "$(field "$state/round.$n" commit)" ] || wf_die "the last commit is the one round $n started at, so it removes nothing; commit the removal on its own, then record it"
-    for k in $(removals); do
+    for k in $removal_list; do
       [ "$(field "$(removal "$k")" commit)" != "$head" ] || wf_die "the last commit is recorded already as the removal of $(field "$(removal "$k")" test); one commit removes one test, so commit the next removal on its own first"
     done
     line_of() { printf '%s\n' "$block" | sed -n -E "s/^[[:space:]]*$1:[[:space:]]*//p"; }
@@ -252,6 +264,7 @@ $removed_form"
 $removed_form"
     why=$(trim "$(line_of why)"); still=$(trim "$(line_of still_proven)")
     if has_break "$why" || has_break "$still"; then wf_die "a line of the removal block carries a carriage return or another line separator; write each line as one line of plain text"; fi
+    if [ "${#why}" -gt "$max_reason" ] || [ "${#still}" -gt "$max_reason" ]; then wf_die "the why: and still_proven: lines hold at most $max_reason characters each; say it in one plain sentence"; fi
     case "$still" in yes*|no*) ;; *) wf_die "still_proven: starts with yes or no: 'yes, by <which test>' or 'no, <why no test needs to>'" ;; esac
     ! is_removed "$f_path" "$f_test" || wf_die "$f_test in $f_path is recorded as removed already"
     git diff-tree --no-commit-id --name-only -r "$head" | grep -Fxq -- "$f_path" ||
@@ -265,7 +278,7 @@ $removed_form"
     ;;
   print)
     n=$(rounds)
-    list=$(removals); removed=$(printf '%s' "$list" | grep -c . || true)
+    list=$removal_list; removed=$(printf '%s' "$list" | grep -c . || true)
     kept_list=$(kept_records); kept=$(printf '%s' "$kept_list" | grep -c . || true)
     wf_kv hunt "a test hunt on $(wf_branch): it removes tests that prove nothing and closes no issue"
     why=$(ended)
