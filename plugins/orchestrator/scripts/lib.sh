@@ -239,16 +239,16 @@ wf_start_agent() {
 # the point this session compacts by and not against a window it never reaches. refreshInterval keeps the
 # value fresh while one long tool call runs, which changes no message and would otherwise render nothing.
 # The window is the lever for the trigger, because the percentage cannot be raised: 312 500 puts the trigger
-# at 250 000 (ADR 0034).
+# at 250 000 (ADR 0034). The factory restates both numbers, and its test reads them out of this file.
+wf_compact_window=312500
+# CLAUDE_AUTOCOMPACT_PCT_OVERRIDE can only lower the percentage ("values above the default percentage are
+# ignored", https://code.claude.com/docs/en/env-vars.md), and 80 is under the default the measured worker
+# sessions compacted at, so it is the percentage that applies rather than a request Claude Code drops.
+wf_compact_pct=80
 wf_worker_settings() {
-  local mode="$1" issue="$2" env_extra="${3:-"{}"}" here compact_window compact_pct compact_trigger sl
+  local mode="$1" issue="$2" env_extra="${3:-"{}"}" here compact_trigger sl
   here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-  compact_window=312500
-  # CLAUDE_AUTOCOMPACT_PCT_OVERRIDE can only lower the percentage ("values above the default percentage are
-  # ignored", https://code.claude.com/docs/en/env-vars.md), and 80 is under the default the measured worker
-  # sessions compacted at, so it is the percentage that applies rather than a request Claude Code drops.
-  compact_pct=80
-  compact_trigger=$((compact_window * compact_pct / 100))
+  compact_trigger=$((wf_compact_window * wf_compact_pct / 100))
   # claude runs statusLine.command through a shell, so the path is quoted: a checkout under "/Users/John Smith"
   # would otherwise split into words, nothing would render, and the worker's checkpoint would read a missing
   # value as a handoff for the rest of the run.
@@ -260,7 +260,7 @@ wf_worker_settings() {
   # in first, so the keys every session sets are written over them and stay what this function says they are
   # however the accepted names ever change.
   jq -cn --arg m "$mode" --arg i "$issue" --arg sl "$sl" \
-    --argjson w "$compact_window" --arg p "$compact_pct" --argjson e "$env_extra" \
+    --argjson w "$wf_compact_window" --arg p "$wf_compact_pct" --argjson e "$env_extra" \
     '{env:($e + {WF_MODE:$m, CLAUDE_CODE_DISABLE_BACKGROUND_TASKS:"1", CLAUDE_AUTOCOMPACT_PCT_OVERRIDE:$p}
            + (if $i != "" then {WF_ISSUE:$i} else {} end)),
       enabledPlugins:{"planner@workflows":false, "orchestrator@workflows":false},

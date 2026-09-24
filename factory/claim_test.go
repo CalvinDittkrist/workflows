@@ -935,7 +935,7 @@ func TestTheConfiguredBaseWinsOverWhatARepositoryDeclaresAndAnUnusableDeclaratio
 
 // The compact pin is the workflow's, not the factory's: the local claim sets the window and the
 // percentage ([ADR 0031], [ADR 0034]) and this driver restates them, so a session it starts compacts
-// where the workflow says. The numbers are read out of claim.sh itself, which is what makes a change
+// where the workflow says. The numbers are read out of the lib.sh claim.sh builds its session with, which is what makes a change
 // to one of them fail here until the other copy follows ([ADR 0022]).
 //
 // [ADR 0022]: ../docs/adr/0022-the-factory-is-a-second-driver-over-the-worker-pipeline.md
@@ -943,19 +943,19 @@ func TestTheConfiguredBaseWinsOverWhatARepositoryDeclaresAndAnUnusableDeclaratio
 // [ADR 0034]: ../docs/adr/0034-the-compact-trigger-is-raised-through-the-window.md
 func TestTheCompactPinAgreesWithTheOrchestratorsClaim(t *testing.T) {
 	t.Parallel()
-	script := readFile(t, abs(t, filepath.Join("..", "plugins", "orchestrator", "scripts", "claim.sh")))
+	script := readFile(t, abs(t, filepath.Join("..", "plugins", "orchestrator", "scripts", "lib.sh")))
 	pinned := func(name string) string {
 		t.Helper()
 		found := regexp.MustCompile(`(?m)^` + name + `=([0-9]+)$`).FindStringSubmatch(script)
 		if found == nil {
-			t.Fatalf("the orchestrator's claim.sh pins no %s; the factory restates that number and cannot be held to it", name)
+			t.Fatalf("the orchestrator's lib.sh pins no %s; the factory restates that number and cannot be held to it", name)
 		}
 		return found[1]
 	}
-	if window := pinned("compact_window"); window != strconv.Itoa(compactWindow) {
+	if window := pinned("wf_compact_window"); window != strconv.Itoa(compactWindow) {
 		t.Errorf("a worker of the factory compacts at a window of %d, the local claim pins %s", compactWindow, window)
 	}
-	if percentage := pinned("compact_pct"); percentage != compactPercentage {
+	if percentage := pinned("wf_compact_pct"); percentage != compactPercentage {
 		t.Errorf("a worker of the factory compacts at %s%% of its window, the local claim pins %s%%", compactPercentage, percentage)
 	}
 }
