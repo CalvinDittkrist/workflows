@@ -302,8 +302,10 @@ wf_start_worker() {
 # files among its hunters; a test fails when the two copies find different files.
 # shellcheck disable=SC2034  # read by hunt.sh
 wf_test_file_rule='test_*.py, *_test.py, *_test.go, *.test.* and *.spec.* (JavaScript and TypeScript), and code files in a tests or spec directory; fixtures, testdata, __snapshots__, node_modules and vendor directories are skipped'
-wf_test_files() {
-  git -c core.quotePath=false ls-files 2>/dev/null | awk '{
+wf_test_files() { git -c core.quotePath=false ls-files 2>/dev/null | wf_test_paths; }
+# The paths on stdin that are test files by that rule, one per line.
+wf_test_paths() {
+  awk '{
     n = split($0, part, "/"); name = part[n]; indir = 0
     for (i = 1; i < n; i++) {
       if (part[i] ~ /^(fixtures|testdata|__snapshots__|node_modules|vendor)$/) next

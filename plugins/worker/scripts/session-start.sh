@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # SessionStart hook: when the branch names an issue, assign it to me and inject its context.
-# Silent (exit 0, no output) when the session is not an issue worktree or is a subagent.
+# Silent (exit 0, no output) when the session is not an issue worktree or is a subagent; a test hunt's session
+# is given a waiting handoff note and nothing else.
 set -uo pipefail
 . "$(dirname "$0")/lib.sh"
 input=$(cat)
@@ -10,7 +11,10 @@ source_=$(printf '%s' "$input" | jq -r '.source // "startup"')
 session_id=$(printf '%s' "$input" | jq -r '.session_id // empty')
 cwd=$(printf '%s' "$input" | jq -r '.cwd // empty')
 if [ -n "$cwd" ]; then cd "$cwd" 2>/dev/null || exit 0; fi
-issue=$(wf_issue); [ -n "$issue" ] || exit 0
+issue=$(wf_issue)
+# A branch without an issue leaves the session alone, with one exception: a test hunt, whose branch names no
+# issue (ADR 0045), hands its pipeline over like a ticket does, and its fresh context needs the note.
+[ -n "$issue" ] || wf_is_hunt_branch || exit 0
 mode="${WF_MODE:-manual}"
 
 emit() { jq -n --arg c "$1" '{hookSpecificOutput:{hookEventName:"SessionStart",additionalContext:$c}}'; }
@@ -27,7 +31,7 @@ if state=$(wf_state_dir 2>/dev/null) && [ -f "$state/handoff" ] && [ -z "$(wf_re
   handoff="$state/handoff"
 fi
 
-if [ "$source_" != "startup" ] && [ -z "$handoff" ]; then
+if [ -n "$issue" ] && [ "$source_" != "startup" ] && [ -z "$handoff" ]; then
   emit "Worker session for issue #$issue (mode: $mode, branch: $(wf_branch)). Re-read the issue with \`gh issue view $issue\` if you lost its context."
   exit 0
 fi
@@ -70,6 +74,14 @@ emit_with_handoff() {
   fi
   emit "$1$(handoff_context)"
 }
+
+# A test hunt has no issue to load: its session is silent until a handoff note waits for it, and then it is
+# given the note alone. Its record, not an issue, is what its stages read.
+if [ -z "$issue" ]; then
+  [ -n "$handoff" ] || exit 0
+  emit_with_handoff "Worker session for the test hunt on $(wf_branch) (mode: $mode). It works no issue: hunt.sh print shows its record."
+  exit 0
+fi
 
 if ! command -v gh >/dev/null 2>&1 || ! json=$(gh issue view "$issue" --json number,title,body,url,labels,assignees,comments 2>/dev/null); then
   emit_with_handoff "Worker session for issue #$issue (mode: $mode). GitHub is unavailable in this session, so the issue text could not be loaded. Ask the user for it or run \`gh issue view $issue\` once gh works."
