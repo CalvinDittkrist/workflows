@@ -118,7 +118,21 @@ function run(binary, dir, name, on, flags) {
       data_dir: join(dir, name),
       // A configuration that does not name it is paused, and one of the two factories here works.
       paused: false,
-      repositories: ['acme/edge-sensors', 'acme/backtest'],
+      // The change classes of the repository the ready and the detached runs work: both change a
+      // document, which is the class docs, and their fixes move the ready run's change to the class
+      // upload, which has no gate, and the detached run's out of every class, to full.
+      repositories: [
+        {
+          name: 'acme/edge-sensors',
+          review: {
+            classes: [
+              { name: 'docs', paths: ['docs/**'], gate: ['make', 'docs'] },
+              { name: 'upload', paths: ['docs/**', 'upload/**'], gate: [] },
+            ],
+          },
+        },
+        'acme/backtest',
+      ],
     }),
   )
   const factory = spawn(binary, ['-config', config, '-fake', ...flags], { stdio: 'inherit' })

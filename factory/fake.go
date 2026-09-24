@@ -460,7 +460,7 @@ func scriptedReviewer(s *script, scenario, name string, round int) int {
 func scriptedRepair(s *script, scenario string, round int) int {
 	s.init()
 	s.say("The brief carries the findings of the round. Fixing what stands.")
-	s.tool("Edit", map[string]any{"file_path": "upload/retry.go"}, "The file has been updated.")
+	s.tool("Edit", map[string]any{"file_path": cannedFix(scenario)}, "The file has been updated.")
 	s.tool("Bash", map[string]any{"command": "git commit -am 'fix: address the review'", "description": "Commit the fixes"}, "[feat 1a2b3c4] fix: address the review")
 	report := map[string]any{"outcome": resultComplete, "fixed": []string{}, "disputed": []map[string]any{}, "skipped": []map[string]any{}}
 	switch {
@@ -482,14 +482,34 @@ func scriptedRepair(s *script, scenario string, round int) int {
 
 // cannedGate is the gate on the final head in fake mode: the detached issue's fails on its first run,
 // which a fix session repairs; every other one passes.
-func cannedGate(scenario string, panel Panel) gateRun {
+func cannedGate(scenario string, panel Panel, classed Classed) gateRun {
 	head := fakeHead(panel)
 	if scenario == "detached" && panel.GateRounds == 0 {
-		return gateRun{head: head, result: "gate_result: fail (exit 2) at " + head + "\ngate_command: make check\ngate_duration: 41 s",
+		return gateRun{head: head, result: gateResult("fail (exit 2)", head, classed, 41),
 			tail: "--- FAIL: TestPreviewServes (0.02s)\n    preview_test.go:31: the preview answered 404\nFAIL\nmake: *** [check] Error 1"}
 	}
-	return gateRun{passed: true, head: head, result: "gate_result: pass (exit 0) at " + head + "\ngate_command: make check\ngate_duration: 38 s",
-		tail: "ok  \tpreview\t0.4s"}
+	return gateRun{passed: true, head: head, result: gateResult("pass (exit 0)", head, classed, 38), tail: "ok  \tpreview\t0.4s"}
+}
+
+// cannedFiles is the files a fake run's change touches at the head it is at: the document its work
+// session wrote, and once a fix session committed, the file its fixes edit (cannedFix).
+func cannedFiles(scenario string, panel Panel) []string {
+	files := []string{"docs/change.md"}
+	if scenario == "detached" {
+		files = []string{"docs/preview.md"}
+	}
+	if fakeHead(panel) != fakeHead(Panel{}) {
+		files = append(files, cannedFix(scenario))
+	}
+	return files
+}
+
+// cannedFix is the file the scripted fix sessions of a scenario edit.
+func cannedFix(scenario string) string {
+	if scenario == "detached" {
+		return "preview/serve.go"
+	}
+	return "upload/retry.go"
 }
 
 // scriptedAuthor is the author session of the pr stage: it reads the change and reports the title and

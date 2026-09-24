@@ -8,9 +8,18 @@ import { useEffect, useRef, useState } from 'react'
 // reviewers ask for changes; this is the line those stages are shown on.
 const STAGES = ['implement', 'review', 'pr', 'ci', 'address-reviews']
 
-// A stage as a run shows it: the review with the round of its panel the run is in or ended at.
-const stageOf = (run, stage = run.stage) =>
-  stage === 'review' && run.panel?.round ? `review, round ${run.panel.round}` : stage
+// A stage as a run shows it: the review with the round of its panel the run is in or ended at, and the
+// change class that applied, each class the determinations moved to after an arrow.
+const stageOf = (run, stage = run.stage) => {
+  if (stage !== 'review' || !run.panel) return stage
+  const classes = (run.panel.classes ?? []).map((c) => c.class).filter((name, i, all) => name !== all[i - 1])
+  return [
+    run.panel.round ? `review, round ${run.panel.round}` : 'review',
+    classes.length > 0 && `class ${classes.join(' → ')}`,
+  ]
+    .filter(Boolean)
+    .join(', ')
+}
 
 // Of the runs that are done, the newest are drawn: the factory keeps every run it ever made, and a
 // page that drew them all would grow with the months. The older ones are reached by their id.

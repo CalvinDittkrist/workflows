@@ -145,7 +145,15 @@ func TestFakeModeWorksTheCannedQueueOneRunAtATime(t *testing.T) {
 	// The deadline has to be far above what a scripted run costs — a binary built with the race
 	// detector pays about a second on every exit, and the detached run has fourteen sessions, most
 	// of them one after the other — or a quick run would be read as a timeout.
-	f := start(t, config{"deadline": "30s", "poll": "100ms"})
+	// The runs of acme/edge-sensors change a document, which is the class docs; the ready run's fixes
+	// move its change to the class upload, which has no gate, and the detached run's out of every class.
+	f := start(t, config{"deadline": "30s", "poll": "100ms", "repositories": []any{
+		map[string]any{"name": "acme/edge-sensors", "review": map[string]any{"classes": []map[string]any{
+			{"name": "docs", "paths": []string{"docs/**"}, "gate": []string{"make", "docs"}},
+			{"name": "upload", "paths": []string{"docs/**", "upload/**"}, "gate": []string{}},
+		}}},
+		"acme/backtest",
+	}})
 
 	var line apiLine
 	f.eventually(t, 150*time.Second, "the whole canned queue to be done", func() bool {
@@ -205,6 +213,12 @@ func TestFakeModeWorksTheCannedQueueOneRunAtATime(t *testing.T) {
 		!strings.Contains(readyLog.Review.PanelSummary, "panel: code=FIX→PASS security=PASS docs=PASS tests=FIX→PASS senior=PASS") ||
 		!strings.Contains(readyLog.Review.PanelSummary, "the sleep is the fake clock's, which returns at once") {
 		t.Errorf("run 1 recorded the panel %+v and handed the pr stage %+v, want two rounds, the second of code and tests, and the dispute", readyLog.Panel, readyLog.Review)
+	}
+	// Its change was a document, the class docs, until its fix edited upload/retry.go: the class of the
+	// final head is upload, whose gate is none, and the pull request says so.
+	if got := classesOf(readyLog); !equal(got, []string{"docs/review", "upload/gate"}) ||
+		!strings.HasPrefix(readyLog.Review.GateResult, "gate_result: none (the change class upload has no gate)") {
+		t.Errorf("run 1 recorded the classes %v and the gate result %q, want docs for the review, then upload without a gate", got, readyLog.Review.GateResult)
 	}
 	if !strings.Contains(fmt.Sprint(readyLog.Events), "--- FAIL: TestCalibrationFileAge") {
 		t.Errorf("run 1 never gave its fix session the failed log")
@@ -339,6 +353,11 @@ func TestFakeModeWorksTheCannedQueueOneRunAtATime(t *testing.T) {
 	if full.Panel == nil || len(full.Panel.Rounds) != 3 || full.Panel.GateRounds != 1 || full.Review == nil ||
 		!strings.Contains(full.Review.PanelSummary, "tests=FIX→FIX→FIX") || !strings.HasPrefix(full.Review.GateResult, "gate_result: pass") {
 		t.Errorf("run 5 recorded the panel %+v and handed the pr stage %+v, want three rounds with tests on FIX in each and a gate that passed after one fix", full.Panel, full.Review)
+	}
+	// Its fixes edited preview/serve.go, which no class covers: the gate on the final head is the class
+	// full's, determined again before it ran the second time.
+	if got := classesOf(full); !equal(got, []string{"docs/review", "full/gate", "full/gate"}) || !strings.Contains(full.Review.GateResult, "gate_command: make check\ngate_class: full") {
+		t.Errorf("run 5 recorded the classes %v and the gate result %q, want docs for the review and full before each gate", got, full.Review.GateResult)
 	}
 
 	// follow-up: the maintainer asked for changes on run 5's pull request after it ended, and the
@@ -756,6 +775,27 @@ func TestAnInvalidConfigurationIsRefusedWithTheFix(t *testing.T) {
 		{"a reviewer the panel does not have", `{"data_dir":"data","repositories":[{"name":"a/b","review":{"reviewers":["code","style"]}}]}`, `the review of a/b: reviewers carries "style", which is no reviewer; the reviewers are code, security, docs, tests, senior`},
 		{"a reviewer named twice", `{"data_dir":"data","repositories":["a/b"],"review":{"reviewers":["code","code"]}}`, `reviewers names "code" twice`},
 		{"no reviewer", `{"data_dir":"data","repositories":["a/b"],"review":{"reviewers":[]}}`, `reviewers is empty`},
+		// A change class decides the gate and the reviewers before the pull request, so one the factory
+		// cannot read the same way on every run is refused, naming the class and the fix.
+		{"a class without a name", `{"data_dir":"data","repositories":[{"name":"a/b","review":{"classes":[{"paths":["docs/**"],"gate":[]}]}}]}`, `the review of a/b: classes: class 1: the class has no name; name it, such as "docs"`},
+		{"a class with a blank name", `{"data_dir":"data","repositories":["a/b"],"review":{"classes":[{"name":"  ","paths":["docs/**"],"gate":[]}]}}`, `review: classes: class 1: the class has no name`},
+		{"a class named as a sentence", `{"data_dir":"data","repositories":["a/b"],"review":{"classes":[{"name":"the docs","paths":["docs/**"],"gate":[]}]}}`, `the name "the docs" is not a class name`},
+		{"a class named full", `{"data_dir":"data","repositories":["a/b"],"review":{"classes":[{"name":"full","paths":["docs/**"],"gate":[]}]}}`, `the name "full" is the built-in class`},
+		{"two classes of one name", `{"data_dir":"data","repositories":["a/b"],"review":{"classes":[{"name":"docs","paths":["docs/**"],"gate":[]},{"name":"docs","paths":["*.md"],"gate":[]}]}}`, `class 2: the name "docs" is taken by an earlier class`},
+		{"a class without paths", `{"data_dir":"data","repositories":["a/b"],"review":{"classes":[{"name":"docs","gate":[]}]}}`, `the class "docs" has no paths; name the files it covers as patterns`},
+		{"a pattern that is no pattern", `{"data_dir":"data","repositories":["a/b"],"review":{"classes":[{"name":"docs","paths":["docs/[a-"],"gate":[]}]}}`, `the class "docs": the path pattern "docs/[a-" is not a pattern`},
+		{"a pattern from the root of the disk", `{"data_dir":"data","repositories":["a/b"],"review":{"classes":[{"name":"docs","paths":["/docs/**"],"gate":[]}]}}`, `the path pattern "/docs/**" starts at /`},
+		{"a pattern of a directory", `{"data_dir":"data","repositories":["a/b"],"review":{"classes":[{"name":"docs","paths":["docs/"],"gate":[]}]}}`, `ends in /, which no file does; write "docs/**"`},
+		{"a pattern that walks up", `{"data_dir":"data","repositories":["a/b"],"review":{"classes":[{"name":"docs","paths":["../docs/**"],"gate":[]}]}}`, `has the part ".."`},
+		{"a pattern with ** inside a part", `{"data_dir":"data","repositories":["a/b"],"review":{"classes":[{"name":"docs","paths":["docs/**.md"],"gate":[]}]}}`, `** stands alone between slashes`},
+		{"an empty pattern", `{"data_dir":"data","repositories":["a/b"],"review":{"classes":[{"name":"docs","paths":[""],"gate":[]}]}}`, `a path pattern is empty`},
+		{"a gate that is a string", `{"data_dir":"data","repositories":["a/b"],"review":{"classes":[{"name":"docs","paths":["docs/**"],"gate":"make docs"}]}}`, `the gate of the class "docs" is "make docs", which is not a list of arguments; write it as a list of arguments, such as ["make", "docs"], or [] for no gate`},
+		{"a gate that is null", `{"data_dir":"data","repositories":["a/b"],"review":{"classes":[{"name":"docs","paths":["docs/**"],"gate":null}]}}`, `the gate of the class "docs" is null, which is not a list of arguments`},
+		{"a gate left out", `{"data_dir":"data","repositories":["a/b"],"review":{"classes":[{"name":"docs","paths":["docs/**"]}]}}`, `the class "docs" has no gate; write it as a list of arguments`},
+		{"a gate without a program", `{"data_dir":"data","repositories":["a/b"],"review":{"classes":[{"name":"docs","paths":["docs/**"],"gate":["","docs"]}]}}`, `the gate of the class "docs" names no program`},
+		{"a class with a reviewer the panel does not have", `{"data_dir":"data","repositories":["a/b"],"review":{"classes":[{"name":"docs","paths":["docs/**"],"gate":[],"reviewers":["docs","style"]}]}}`, `the class "docs": reviewers carries "style", which is no reviewer; the reviewers are code, security, docs, tests, senior, or leave reviewers out`},
+		{"a class without reviewers", `{"data_dir":"data","repositories":["a/b"],"review":{"classes":[{"name":"docs","paths":["docs/**"],"gate":[],"reviewers":[]}]}}`, `the class "docs": reviewers is empty`},
+		{"a class with a field it does not have", `{"data_dir":"data","repositories":["a/b"],"review":{"classes":[{"name":"docs","patterns":["docs/**"],"gate":[]}]}}`, `unknown field "patterns"; its fields are name, paths, gate, reviewers`},
 		{"a review knob in worker_env", `{"data_dir":"data","repositories":["a/b"],"worker_env":{"WF_REVIEWERS":"code"}}`, `worker_env carries WF_REVIEWERS, which is a knob of the review stage the factory runs itself; write it as "review": {"reviewers": ...}`},
 		// The quota check runs the binary the operator installed, never a name PATH or npx resolves.
 		{"quota tool by name", `{"data_dir":"data","repositories":["a/b"],"quota_axi":"quota-axi"}`, `quota_axi "quota-axi" is not an absolute path`},

@@ -26,6 +26,9 @@
 #   CLAUDE_SHIM_COMMIT when set, the session adds a line to a file of that name in the worktree and
 #                      commits it, which is the work a run leaves behind for the branch to carry: every
 #                      session that works the branch moves it by one commit
+#   CLAUDE_SHIM_THEN_COMMIT
+#                      the file every session after the first one CLAUDE_SHIM_LOG records commits its
+#                      line to instead, so a fix session can change a file the work session did not
 #   CLAUDE_SHIM_THEN_UNCOMMITTED
 #                      when set, every session after the first one CLAUDE_SHIM_LOG records adds its
 #                      line to that file and commits nothing, as a fix session that forgot to
@@ -204,6 +207,7 @@ calls=$(grep -c '^call$' "$log" 2>/dev/null)
 if [ "${calls:-0}" -gt 1 ]; then
   [ -n "${CLAUDE_SHIM_THEN_SLEEP:-}" ] && CLAUDE_SHIM_SLEEP=$CLAUDE_SHIM_THEN_SLEEP
   [ -n "${CLAUDE_SHIM_THEN_RESULT:-}" ] && CLAUDE_SHIM_RESULT=$CLAUDE_SHIM_THEN_RESULT
+  [ -n "${CLAUDE_SHIM_THEN_COMMIT:-}" ] && CLAUDE_SHIM_COMMIT=$CLAUDE_SHIM_THEN_COMMIT
 fi
 
 if [ -n "${CLAUDE_SHIM_FAIL:-}" ]; then
@@ -223,6 +227,7 @@ fi
 printf '%s\n' '{"type":"system","subtype":"init","model":"claude-opus-5","permissionMode":"auto","session_id":"5f2d8c11-0b9e-4a3f-9d21-7c6e4b0a1f33"}'
 
 if [ -n "${CLAUDE_SHIM_COMMIT:-}" ]; then
+  mkdir -p "$(dirname "$CLAUDE_SHIM_COMMIT")"
   if [ -n "${CLAUDE_SHIM_COMMIT_BACKTICKS:-}" ]; then
     { head -c "$CLAUDE_SHIM_COMMIT_BACKTICKS" /dev/zero | tr '\0' '`'; echo; } > "$CLAUDE_SHIM_COMMIT"
   else
