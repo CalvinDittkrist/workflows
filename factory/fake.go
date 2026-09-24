@@ -54,9 +54,14 @@ var cannedIssues = []cannedIssue{
 type canned struct {
 	repositories []Connected
 	started      time.Time
+	runs         *Store // the records, which remember a review of fake mode across a restart
 
 	mu    sync.Mutex
 	reads map[string]int // how often the ci stage has read each issue's pull request
+	// requested is when the maintainer of fake mode asked for changes on the pull request of an issue,
+	// and answered the issues whose pull request the factory has commented on since.
+	requested map[int]time.Time
+	answered  map[int]bool
 }
 
 // The issues fake mode holds are not asked about: there is no GitHub behind a canned queue, so
@@ -65,34 +70,74 @@ func (c *canned) queue(context.Context, []Held) poll {
 	return poll{issues: cannedQueue(c.repositories, c.started)}
 }
 
-// changesRequested answers that nobody asked for changes. Fake mode opens no pull request — its
-// scripted workers only say they did — so there is none to read a review of.
-func (c *canned) changesRequested(context.Context, string, int) time.Time { return time.Time{} }
+// cannedPull is the number of the pull request a scripted worker of that issue reports.
+func cannedPull(issue int) int { return issue + 100 }
+
+// changesRequested answers that the maintainer asked for changes on the pull request of the detached
+// worker, the first time the factory asks about it, which is once that run has ended, and at that
+// moment from then on: one review, which queues one follow-up run. A data directory that holds that
+// follow-up run already has had its review, so a restarted factory reads the same one again rather than
+// a new one. Nobody asks for changes on any other pull request.
+func (c *canned) changesRequested(_ context.Context, _ string, pull int) time.Time {
+	issue := pull - 100
+	if scenarioOf(issue) != "detached" {
+		return time.Time{}
+	}
+	var answered time.Time
+	for _, r := range c.runs.list() {
+		if r.Issue == issue && r.Signal == signalChangesRequested {
+			answered = r.SignalAt
+		}
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.requested == nil {
+		c.requested = map[int]time.Time{}
+	}
+	if _, asked := c.requested[issue]; !asked {
+		c.requested[issue] = time.Now()
+		if !answered.IsZero() {
+			c.requested[issue] = answered
+		}
+	}
+	return c.requested[issue]
+}
+
+// scenarioOf is the scripted worker of a canned issue.
+func scenarioOf(issue int) string {
+	for _, c := range cannedIssues {
+		if c.number == issue {
+			return c.scenario
+		}
+	}
+	return ""
+}
 
 // cannedCI is what the ci stage reads of the pull request of a scenario, one reading after the other;
-// the last one stands from then on. The ready worker's pull request waits on its checks, fails them
-// and is green after the fix session; the detached worker's conflicts with its base first. Every other
-// scenario's is green at once.
+// the last one stands from then on. The ready worker's pull request waits on its checks, fails them,
+// then has review comments after the fix session and is green once they are answered; the detached
+// worker's conflicts with its base first. Every other scenario's is green at once.
 var cannedCI = map[string][]string{
-	"ready":    {ciWaiting, ciFailed, ciGreen},
+	"ready":    {ciWaiting, ciFailed, ciComments, ciGreen},
 	"detached": {ciConflicts, ciGreen},
 }
+
+// cannedThread is the id of the review thread fake mode's pull requests carry while they have review
+// comments, which the scripted address-reviews session replies to.
+const cannedThread = "PRRT_canned1"
 
 // pullState answers the canned reading of the scenario that works the issue, in the shape GitHub's is
 // read in, so the verdict the dashboard shows is the one the real stage would make.
 func (c *canned) pullState(_ context.Context, held Held, _ []string) (pullReading, error) {
-	scenario := ""
-	for _, issue := range cannedIssues {
-		if issue.number == held.Number {
-			scenario = issue.scenario
-		}
-	}
+	scenario := scenarioOf(held.Number)
 	c.mu.Lock()
 	if c.reads == nil {
 		c.reads = map[string]int{}
 	}
 	n := c.reads[held.key()]
 	c.reads[held.key()] = n + 1
+	_, requested := c.requested[held.Number]
+	unanswered := requested && !c.answered[held.Number]
 	c.mu.Unlock()
 	script := cannedCI[scenario]
 	state := ciGreen
@@ -102,7 +147,7 @@ func (c *canned) pullState(_ context.Context, held Held, _ []string) (pullReadin
 	gate := check{Name: "gate", URL: "https://github.com/" + held.Repository + "/actions/runs/1/job/1", State: checkPass,
 		CompletedAt: c.started}
 	read := pullReading{Mergeable: "MERGEABLE", Head: fmt.Sprintf("canned-%d", n), HeadAt: c.started, Bots: 1,
-		Objections: []string{}, Threads: []string{}}
+		Objections: []objection{}, Threads: []thread{}}
 	switch state {
 	case ciWaiting:
 		gate.State, gate.CompletedAt = checkPending, time.Time{}
@@ -112,12 +157,36 @@ func (c *canned) pullState(_ context.Context, held Held, _ []string) (pullReadin
 		read.Mergeable = "CONFLICTING"
 	}
 	read.Checks = []check{gate}
+	if state == ciComments || unanswered {
+		pull := fmt.Sprintf("https://github.com/%s/pull/%d", held.Repository, cannedPull(held.Number))
+		read.Objections = []objection{{Login: "maintainer", URL: pull + "#pullrequestreview-1",
+			Body: "The retry gives up without saying so. Log the attempt it gave up on."}}
+		read.Threads = []thread{{ID: cannedThread, Path: "upload/retry.go", Line: 42, Login: "chatgpt-codex-connector",
+			URL: pull + "#discussion_r1", Body: "This backoff never resets after a successful upload."}}
+	}
 	return read, nil
 }
 
 // failedLogs is the log a failed gate prints.
 func (c *canned) failedLogs(context.Context, string, []check) string {
 	return "gate\tRun make check\t--- FAIL: TestCalibrationFileAge (0.02s)\n    calibration_test.go:41: want a warning, got none\nFAIL"
+}
+
+// replyToThread and resolveThread take the reply and the resolution: the canned pull request's thread
+// is only there while its reading says so.
+func (c *canned) replyToThread(context.Context, string, string) error { return nil }
+func (c *canned) resolveThread(context.Context, string) error         { return nil }
+
+// commentOnPull answers the review the maintainer of fake mode asked for changes with, so the pull
+// request of that issue has no review comments from then on.
+func (c *canned) commentOnPull(_ context.Context, _ string, pull int, _ string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.answered == nil {
+		c.answered = map[int]bool{}
+	}
+	c.answered[pull-100] = true
+	return nil
 }
 
 // openPull answers that no branch has a pull request open: fake mode opens none.
@@ -151,10 +220,10 @@ func cannedQueue(repositories []Connected, now time.Time) []Issue {
 
 // scriptedWorker stands in for `claude -p --output-format stream-json --verbose`. It is a subcommand
 // of the factory's own binary, so fake mode needs nothing installed on the host.
-// Usage: factory scripted-worker <ready|blocked|failed|silent|detached|fix|hang|child|daemon> <owner/name> <issue>
+// Usage: factory scripted-worker <ready|blocked|failed|silent|detached|fix|address|hang|child|daemon> <owner/name> <issue>
 func scriptedWorker(args []string, stdout, stderr io.Writer) int {
 	if len(args) < 3 {
-		fmt.Fprintln(stderr, "error: usage: factory scripted-worker <ready|blocked|failed|silent|detached|fix|hang|child|daemon> <owner/name> <issue>")
+		fmt.Fprintln(stderr, "error: usage: factory scripted-worker <ready|blocked|failed|silent|detached|fix|address|hang|child|daemon> <owner/name> <issue>")
 		return 2
 	}
 	scenario, repository := args[0], args[1]
@@ -194,6 +263,20 @@ func scriptedWorker(args []string, stdout, stderr io.Writer) int {
 		s.tool("Bash", map[string]any{"command": "git commit -am 'fix: warn on an old calibration file' && git push", "description": "Commit and push the fix"},
 			"To github.com:acme/edge-sensors.git")
 		s.result("success", "", false, "completed", map[string]any{"outcome": resultComplete, "summary": "Fixed and pushed."})
+		return 0
+	case "address":
+		// The address-reviews session: it fixes the thread, declines the review's point with a reason,
+		// pushes, and leaves the replies to the factory.
+		s.say("One thread and one review summary. The backoff is a bug; the review's logging is already there.")
+		s.tool("Edit", map[string]any{"file_path": "upload/retry.go"}, "The file has been updated.")
+		s.tool("Bash", map[string]any{"command": "git commit -am 'fix: reset the backoff after a successful upload' && git push", "description": "Commit and push the fix"},
+			"To github.com:acme/edge-sensors.git")
+		s.result("success", "", false, "completed", map[string]any{"outcome": resultComplete,
+			"replies":  []map[string]any{{"thread": cannedThread, "body": "Fixed: the backoff resets after every successful upload."}},
+			"answer":   "The attempt the retry gives up on is logged already, at warn level in upload/retry.go:57, so nothing changed for it.",
+			"fixed":    []string{"upload/retry.go:42: the backoff resets after a successful upload"},
+			"declined": []string{"the log of the last attempt: it is written already"},
+			"summary":  "Fixed one thread, declined one point, pushed."})
 		return 0
 	case "hang":
 		s.thinkAndSay("The calibration procedure is spread over three files.", fmt.Sprintf("worker process %d", os.Getpid()))

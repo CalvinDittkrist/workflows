@@ -15,16 +15,16 @@
 # Which round this is, however, is not the session's to judge: the count is the one bound on an
 # unattended repair loop, and a stage that could start it again whenever it read itself as asked for
 # would be no bound at all. WF_REVIEW_MANDATE is the driver's word that this session was started to
-# answer a review — the factory sets it on a follow-up run, the one run it dispatches for a review
-# that asks for changes — and without it reset keeps the count and says so, so the address-reviews
-# skill may call it either way and the script decides.
+# answer a review — a driver that starts a session for a review that asks for changes sets it —
+# and without it reset keeps the count and says so, so the address-reviews skill may call it either
+# way and the script decides.
 #
-# The word names the review it stands for (the factory passes the time it was submitted), because one
-# review is one new mandate and not one per round: the record keeps the mandate its count was started
-# for, and a reset that names that same mandate again keeps the count. The session inside a follow-up
-# run therefore has the rounds of that one review and no way to grant itself more — the CI stage of
-# that very run invokes this skill again on the next review comments, and each of those rounds is the
-# pipeline's own.
+# The word names the review it stands for (the time it was submitted), because one review is one new
+# mandate and not one per round: the record keeps the mandate its count was started for, and a reset
+# that names that same mandate again keeps the count. The session started for a review therefore has
+# the rounds of that one review and no way to grant itself more — the CI stage of that very session
+# invokes this skill again on the next review comments, and each of those rounds is the pipeline's
+# own.
 set -euo pipefail
 # shellcheck source=lib.sh
 . "$(dirname "$0")/lib.sh"
@@ -104,7 +104,7 @@ case "$command" in
     # is on the whole value and not line by line, which is what a grep of a multi-line value would be.
     case "$asked" in
       *[!A-Za-z0-9:._+-]*)
-        wf_die "WF_REVIEW_MANDATE='$asked' is no name for the review this session answers; the factory passes the time it was submitted, e.g. WF_REVIEW_MANDATE=2026-09-22T10:00:00Z" ;;
+        wf_die "WF_REVIEW_MANDATE='$asked' is no name for the review this session answers; the driver passes the time it was submitted, e.g. WF_REVIEW_MANDATE=2026-09-22T10:00:00Z" ;;
     esac
     if [ -z "$asked" ]; then
       report

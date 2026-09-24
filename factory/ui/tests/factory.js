@@ -8,14 +8,15 @@ import { remember } from './where.js'
 
 // The browser test watches the real thing: this builds the factory binary with the dashboard it
 // embeds and starts it twice in fake mode. The first works its canned queue down to the state the
-// tests read — five runs done and the last entry, whose scripted worker hangs, still running, which
-// holds until the deadline. The second is paused, so the whole queue stays in its order.
-// Its data directory is written before it starts, so it reads what a factory that was stopped while
-// it worked an issue finds there: the run it holds is resumed, and stands in the line as such.
+// tests read — six runs done, one of them the follow-up run a canned review asks for, and the last
+// entry, whose scripted worker hangs, still running, which holds until the deadline. The second is
+// paused, so the whole queue stays in its order. Its data directory is written before it starts, so
+// it reads what a factory that was stopped while it worked an issue finds there: the run it holds is
+// resumed, and stands in the line as such.
 
 const factoryDir = fileURLToPath(new URL('../..', import.meta.url))
 
-const CANNED_DONE = 5
+const CANNED_DONE = 6
 const CANNED_QUEUE = 6
 const READY = 60_000
 

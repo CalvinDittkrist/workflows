@@ -16,7 +16,7 @@ import (
 
 // The follow-up run. A run that ended ready leaves a pull request, and the maintainer reads it on
 // GitHub: requesting changes there is the gesture that hands the objection back to the factory,
-// which queues a run in the worktree of the claim that starts at the worker's address-reviews stage
+// which queues a run in the worktree of the claim that starts at the factory's address-reviews stage
 // ([ADR 0023]). Nothing else is needed of the maintainer — no checkout, no comment on the issue —
 // and nothing of it is a state of the factory: the review is read from GitHub on every poll and what
 // has been answered is read from the run records, exactly as a release is ([ADR 0025]).
@@ -104,6 +104,7 @@ type ghReview struct {
 	State       string    `json:"state"`
 	SubmittedAt time.Time `json:"submitted_at"`
 	HTMLURL     string    `json:"html_url"` // where a person reads it, which a blocked ci stage names
+	Body        string    `json:"body"`     // what it says, which an address-reviews session is shown
 }
 
 // The review states this factory reads. A review that asks for changes is the maintainer's gesture;
@@ -249,19 +250,25 @@ func (g *gitHub) newestRequest(ctx context.Context, repository string, pull int)
 // that user and not the association GitHub puts on the review, which says that somebody is a member
 // of the organisation or was invited to the repository — neither of which is write access to it.
 func (g *gitHub) mayWrite(ctx context.Context, repository string, review ghReview) (bool, error) {
+	return g.mayPush(ctx, repository, review.User.Login, "review "+strconv.FormatInt(review.ID, 10))
+}
+
+// mayPush says whether login may push to the repository, asked once per key: the review or the
+// review thread the login wrote, which is written once.
+func (g *gitHub) mayPush(ctx context.Context, repository, login, key string) (bool, error) {
 	g.mu.Lock()
-	known, seen := g.writers[review.ID]
+	known, seen := g.writers[key]
 	g.mu.Unlock()
 	if seen {
 		return known, nil
 	}
-	raw, err := gh(ctx, "api", permissionRequest(repository, review.User.Login), "--jq", ".user.permissions.push")
+	raw, err := gh(ctx, "api", permissionRequest(repository, login), "--jq", ".user.permissions.push")
 	if err != nil {
-		return false, fmt.Errorf("whether %s may write to %s could not be read: %w", review.User.Login, repository, err)
+		return false, fmt.Errorf("whether %s may write to %s could not be read: %w", login, repository, err)
 	}
 	may := strings.TrimSpace(string(raw)) == "true"
 	g.mu.Lock()
-	g.writers[review.ID] = may
+	g.writers[key] = may
 	g.mu.Unlock()
 	return may, nil
 }
