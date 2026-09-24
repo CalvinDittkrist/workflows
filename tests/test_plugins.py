@@ -379,7 +379,7 @@ class TestFileRuleTests(ShimTest):
         found = {}
         for plugin in ("orchestrator", "worker"):
             lib = ROOT / f"plugins/{plugin}/scripts/lib.sh"
-            r = subprocess.run(["bash", "-c", f'. "{lib}"; wf_test_files; printf "%s" "$wf_test_file_rule"'],
+            r = subprocess.run(["bash", "-c", f'. "{lib}"; git ls-files | wf_test_paths; printf "%s" "$wf_test_file_rule"'],
                                cwd=self.repo, env=self.env(), capture_output=True, text=True)
             self.assertEqual(r.returncode, 0, r.stderr)
             found[plugin] = r.stdout

@@ -246,7 +246,7 @@ wf_compact_window=312500
 # sessions compacted at, so it is the percentage that applies rather than a request Claude Code drops.
 wf_compact_pct=80
 wf_worker_settings() {
-  local mode="$1" issue="$2" env_extra="${3:-"{}"}" here compact_trigger sl
+  local mode="$1" issue="$2" env_extra="${3:-"{}"}" base="${4:-}" here compact_trigger sl
   here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
   compact_trigger=$((wf_compact_window * wf_compact_pct / 100))
   # claude runs statusLine.command through a shell, so the path is quoted: a checkout under "/Users/John Smith"
@@ -259,10 +259,12 @@ wf_worker_settings() {
   # repository's settings for this one session and leaves every other variable of theirs alone. The knobs go
   # in first, so the keys every session sets are written over them and stay what this function says they are
   # however the accepted names ever change.
-  jq -cn --arg m "$mode" --arg i "$issue" --arg sl "$sl" \
+  # A base given with --base ($4) rides along as WF_BASE_BRANCH, so the worker diffs, syncs and opens its pull
+  # request against the branch its worktree started from and not against the default it would work out.
+  jq -cn --arg m "$mode" --arg i "$issue" --arg b "$base" --arg sl "$sl" \
     --argjson w "$wf_compact_window" --arg p "$wf_compact_pct" --argjson e "$env_extra" \
     '{env:($e + {WF_MODE:$m, CLAUDE_CODE_DISABLE_BACKGROUND_TASKS:"1", CLAUDE_AUTOCOMPACT_PCT_OVERRIDE:$p}
-           + (if $i != "" then {WF_ISSUE:$i} else {} end)),
+           + (if $i != "" then {WF_ISSUE:$i} else {} end) + (if $b != "" then {WF_BASE_BRANCH:$b} else {} end)),
       enabledPlugins:{"planner@workflows":false, "orchestrator@workflows":false},
       statusLine:{type:"command", command:$sl, padding:0, refreshInterval:60},
       autoCompactWindow:$w}'
@@ -297,12 +299,11 @@ wf_start_worker() {
   agent_name="$name"
 }
 
-# The test files of the repository in the current directory, one tracked path per line, by the fixed
-# conventions of a test hunt. The worker plugin's lib.sh carries the same rule, because its hunt splits these
-# files among its hunters; a test fails when the two copies find different files.
+# The fixed conventions by which a test hunt knows a test file; hunt.sh reads the files of the base by them.
+# The worker plugin's lib.sh carries the same rule, because its hunt splits these files among its hunters; a
+# test fails when the two copies find different files.
 # shellcheck disable=SC2034  # read by hunt.sh
 wf_test_file_rule='test_*.py, *_test.py, *_test.go, *.test.* and *.spec.* (JavaScript and TypeScript), and code files in a tests or spec directory; fixtures, testdata, __snapshots__, node_modules and vendor directories are skipped'
-wf_test_files() { git -c core.quotePath=false ls-files 2>/dev/null | wf_test_paths; }
 # The paths on stdin that are test files by that rule, one per line.
 wf_test_paths() {
   awk '{

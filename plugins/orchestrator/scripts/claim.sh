@@ -55,6 +55,7 @@ wf_check_claude_args WF_WORKER_CLAUDE_ARGS
 [ "$sandbox" = 1 ] && wf_need sbx
 
 root=$(wf_main_root); cd "$root"
+given_base="$base"
 [ -n "$base" ] || base=$(wf_base_branch)
 
 json=$(gh issue view "$issue" --json number,title,state,labels,url 2>/dev/null) || wf_die "issue #$issue not found in $(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || echo 'this repo')"
@@ -151,7 +152,7 @@ env_extra='{}'
 for pair in ${env_pairs[@]+"${env_pairs[@]}"}; do
   env_extra=$(printf '%s' "$env_extra" | jq -c --arg n "${pair%%=*}" --arg v "${pair#*=}" '.[$n] = $v')
 done
-settings=$(wf_worker_settings "$mode" "$issue" "$env_extra")
+settings=$(wf_worker_settings "$mode" "$issue" "$env_extra" "$given_base")
 wf_start_worker "$sandbox" "issue-$issue" "#$issue" "$settings" /worker:work
 
 wf_kv issue "#$issue $title"

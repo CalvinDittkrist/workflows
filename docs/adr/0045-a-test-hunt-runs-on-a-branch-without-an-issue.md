@@ -9,7 +9,7 @@ A repository collects tests that prove nothing: tests that grep the source, test
 ## Decision
 `/orchestrator:hunt-tests` opens a worktree of the branch `hunt/tests-<date>` and starts a worker session with the settings of a manual claim and `/worker:hunt-tests` as its first prompt. No issue is read or created. The branch is the unit of work, and the pull request at its end is its trace.
 
-The branch carries no issue number. The worker hook stays silent on it, except to hand a waiting handoff note to a fresh context. The status line says `no issue`. The factory's branch contract does not match the branch, so the factory neither works nor resumes it. The board lists the worktree with `hunt` in the issue column, the way it lists a planning session. It is merged by its pull request number and abandoned by its branch name. One hunt is open at a time.
+The branch carries no issue number. The worker hook stays silent on it, except to hand a waiting handoff note to a fresh context. The status line says `no issue`. The factory's branch contract does not match the branch, so the factory neither works nor resumes it. The board lists the worktree with `hunt` in the issue column, the way it lists a planning session. It is merged by its pull request number and abandoned by its branch name. One hunt is open at a time, on this clone and on origin.
 
 The hunt record in the worktree's git directory stands where the issue stands for a ticket ([ADR 0018](0018-worker-stages-hand-facts-over-through-the-worktree-git-dir.md)). `hunt.sh print` prints it into the diff context that the reviewers and the pull request author read, and the scripts that print the issue print `none`. The pull request carries no closing keyword.
 

@@ -326,6 +326,17 @@ class ClaimTests(ShimTest):
         self.assertIn("error: --base needs a branch name", r.stderr)
 
 
+class ClaimBaseTests(ShimTest):
+    def test_a_claim_with_a_base_gives_it_to_the_worker(self):
+        self.git("branch", "dev")
+        r = self.run_script(ORCH / "claim.sh", "12", "--base", "dev")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        start = [c for c in self.argv_calls() if c[1:3] == ["agent", "start"]][0]
+        settings = json.loads(start[start.index("--settings") + 1])
+        # The worker diffs, syncs and opens its pull request against the base its worktree started from.
+        self.assertEqual(settings["env"]["WF_BASE_BRANCH"], "dev")
+
+
 class ClaimEnvTests(ShimTest):
     """`--env NAME=VALUE` sets a worker knob for the one session a claim starts. It rides in the env block of
     the --settings object the claim builds, so the session keeps the status line, the compact trigger and the
@@ -672,6 +683,33 @@ class PlanTests(ShimTest):
         self.assertIn("agent_status: working", r.stdout)
         # No issue is read and none is created.
         self.assertFalse([c for c in self.calls() if c.startswith("gh issue")])
+
+    def test_a_hunt_on_another_base_reads_that_base_and_gives_it_to_the_worker(self):
+        # The tests are on dev only: the checkout, which is main, has none.
+        self.git("checkout", "-qb", "dev")
+        self.with_tests()
+        self.git("checkout", "-q", "main")
+        r, _ = self.hunt()
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("error: no test file on main", r.stderr)
+        r, branches = self.hunt("--base", "dev")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("test_files: 1 in 1 directories", r.stdout)
+        start = [c for c in self.argv_calls() if c[1:3] == ["agent", "start"]][0]
+        settings = json.loads(start[start.index("--settings") + 1])
+        self.assertEqual(settings["env"]["WF_BASE_BRANCH"], "dev")
+
+    def test_a_hunt_open_on_origin_is_refused_before_anything_exists(self):
+        self.with_tests()
+        remote = self.base / "remote.git"
+        self.git("init", "-q", "--bare", str(remote), cwd=self.base)
+        self.git("remote", "add", "origin", str(remote))
+        self.git("push", "-q", "origin", "main:main", "main:hunt/tests-2026-09-01")
+        r, _ = self.hunt()
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("already open on origin as hunt/tests-2026-09-01", r.stderr)
+        self.assertEqual(self.git("branch", "--list", "hunt/*"), "")
+        self.assertFalse([c for c in self.calls() if "worktree create" in c])
 
     def test_a_sandboxed_hunt_runs_the_hunt_skill_in_the_sandbox(self):
         self.with_tests()

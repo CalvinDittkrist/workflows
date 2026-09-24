@@ -32,18 +32,25 @@ if [ -n "$existing_branch" ]; then
   exit 0
 fi
 
-# Refused before anything is created: a repository whose files follow none of the conventions gives the
-# hunters nothing to read, and the board would carry a hunt for nothing.
-files=$(wf_test_files)
-[ -n "$files" ] || wf_die "no test file in $root matches the conventions of a test hunt: $wf_test_file_rule. There is nothing to hunt here."
-count=$(printf '%s\n' "$files" | wc -l | tr -d ' ')
-dirs=$(printf '%s\n' "$files" | awk '{ if (!sub(/\/[^\/]*$/, "")) $0 = "."; print }' | sort -u | wc -l | tr -d ' ')
-
+given_base="$base"
 [ -n "$base" ] || base=$(wf_base_branch)
 branch="hunt/tests-$(date +%Y-%m-%d)"
 
+# A hunt another clone or machine runs is on origin as its branch, which this clone's worktrees do not show.
+# A repository without origin, or one that cannot be reached, has none this clone can see.
+remote_hunt=$( (git ls-remote --heads origin 'refs/heads/hunt/*' 2>/dev/null || true) | sed -nE 's#^[0-9a-f]+[[:space:]]+refs/heads/##p' | head -n1)
+[ -z "$remote_hunt" ] || wf_die "a test hunt is already open on origin as $remote_hunt, from another clone or machine; finish it there, or delete the branch on origin when it was dropped, then hunt again"
+
 git fetch -q origin "$base" 2>/dev/null || wf_warn "could not fetch origin/$base; branching from local $base"
 baseref="origin/$base"; git rev-parse -q --verify "$baseref" >/dev/null 2>&1 || baseref="$base"
+
+# Refused before anything is created: a base whose files follow none of the conventions gives the hunters
+# nothing to read, and the board would carry a hunt for nothing. The files are the base's, which the worktree
+# starts from, not those of this checkout.
+files=$(git -c core.quotePath=false ls-tree -r --name-only "$baseref" 2>/dev/null | wf_test_paths)
+[ -n "$files" ] || wf_die "no test file on $baseref matches the conventions of a test hunt: $wf_test_file_rule. There is nothing to hunt here."
+count=$(printf '%s\n' "$files" | wc -l | tr -d ' ')
+dirs=$(printf '%s\n' "$files" | awk '{ if (!sub(/\/[^\/]*$/, "")) $0 = "."; print }' | sort -u | wc -l | tr -d ' ')
 
 wf_create_worktree "$branch" "$baseref" "hunt tests"
 if [ "${WF_DRY_RUN:-0}" = 1 ]; then
@@ -52,7 +59,7 @@ fi
 
 # The session of a manual claim, without an issue: the branch is the unit of work, and the pull request at
 # its end is the hunt's trace (ADR 0045).
-settings=$(wf_worker_settings manual "" '{}')
+settings=$(wf_worker_settings manual "" '{}' "$given_base")
 wf_start_worker "$sandbox" "hunt-tests" "hunt tests" "$settings" /worker:hunt-tests
 
 wf_kv hunt "tests"
