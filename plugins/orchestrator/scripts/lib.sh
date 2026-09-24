@@ -296,3 +296,20 @@ wf_start_worker() {
   # shellcheck disable=SC2034  # read by the caller
   agent_name="$name"
 }
+
+# The test files of the repository in the current directory, one tracked path per line, by the fixed
+# conventions of a test hunt. The worker plugin's lib.sh carries the same rule, because its hunt splits these
+# files among its hunters; a test fails when the two copies find different files.
+# shellcheck disable=SC2034  # read by hunt.sh
+wf_test_file_rule='test_*.py, *_test.py, *_test.go, *.test.* and *.spec.* (JavaScript and TypeScript), and code files in a tests or spec directory; fixtures, testdata, __snapshots__, node_modules and vendor directories are skipped'
+wf_test_files() {
+  git -c core.quotePath=false ls-files 2>/dev/null | awk '{
+    n = split($0, part, "/"); name = part[n]; indir = 0
+    for (i = 1; i < n; i++) {
+      if (part[i] ~ /^(fixtures|testdata|__snapshots__|node_modules|vendor)$/) next
+      if (part[i] == "tests" || part[i] == "spec") indir = 1
+    }
+    if (name ~ /^test_.*\.py$/ || name ~ /_test\.py$/ || name ~ /_test\.go$/ || name ~ /\.(test|spec)\.(js|jsx|ts|tsx|mjs|cjs|mts|cts)$/) { print; next }
+    if (indir && name ~ /\.(py|go|js|jsx|ts|tsx|mjs|cjs|mts|cts|rb|sh|bash|java|kt|rs|php|cs|swift|ex|exs)$/) print
+  }'
+}
