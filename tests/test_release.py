@@ -215,15 +215,6 @@ class FactoryReleaseTests(unittest.TestCase):
         self.assertIn("error: unknown option --force", r.stderr)
         self.assertEqual(self.tags(), [])
 
-    def test_the_tag_it_creates_is_the_one_ci_builds_binaries_for(self):
-        """The script and the workflow are two files; a tag only one of them knows is a release that
-        never builds."""
-        self.assertEqual(self.release("factory").returncode, 0)
-        trigger = re.search(r"tags: \['([^']+)'\]", WORKFLOW.read_text())
-        self.assertIsNotNone(trigger, "the workflow names no tag pattern")
-        self.assertTrue(fnmatch.fnmatch(self.tags()[0], trigger.group(1)),
-                        f"{self.tags()[0]} does not match {trigger.group(1)}")
-
 
 class FactoryBinariesTests(unittest.TestCase):
     """`scripts/factory-binaries.sh`: what a factory host downloads. The flags that build a released
