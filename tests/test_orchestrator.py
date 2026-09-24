@@ -3,6 +3,7 @@ import shlex
 import shutil
 import subprocess
 import unittest
+from datetime import date
 from pathlib import Path
 
 from helpers import ORCH, ShimTest
@@ -325,6 +326,17 @@ class ClaimTests(ShimTest):
         self.assertIn("error: --base needs a branch name", r.stderr)
 
 
+class ClaimBaseTests(ShimTest):
+    def test_a_claim_with_a_base_gives_it_to_the_worker(self):
+        self.git("branch", "dev")
+        r = self.run_script(ORCH / "claim.sh", "12", "--base", "dev")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        start = [c for c in self.argv_calls() if c[1:3] == ["agent", "start"]][0]
+        settings = json.loads(start[start.index("--settings") + 1])
+        # The worker diffs, syncs and opens its pull request against the base its worktree started from.
+        self.assertEqual(settings["env"]["WF_BASE_BRANCH"], "dev")
+
+
 class ClaimEnvTests(ShimTest):
     """`--env NAME=VALUE` sets a worker knob for the one session a claim starts. It rides in the env block of
     the --settings object the claim builds, so the session keeps the status line, the compact trigger and the
@@ -636,6 +648,107 @@ class PlanTests(ShimTest):
         r = self.run_script(ORCH / "plan.sh", "Offline mode", HERDR_ENV="")
         self.assertNotEqual(r.returncode, 0); self.assertIn("HERDR_ENV", r.stderr)
 
+    # The test hunt opens a worktree of a branch without an issue, as a planning session does, and starts the
+    # session a manual claim starts.
+    def with_tests(self):
+        (self.repo / "tests").mkdir()
+        (self.repo / "tests/test_login.py").write_text("def test_login():\n    assert True\n")
+        self.git("add", "."); self.git("commit", "-qm", "test: login")
+
+    def hunt(self, *args, **env):
+        days = {date.today().isoformat()}
+        r = self.run_script(ORCH / "hunt.sh", *args, **env)
+        days.add(date.today().isoformat())
+        return r, {f"hunt/tests-{d}" for d in days}
+
+    def test_hunt_opens_a_hunt_worktree_and_starts_the_worker_on_the_hunt_skill(self):
+        self.with_tests()
+        r, branches = self.hunt()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        branch = self.git("branch", "--list", "hunt/*", "--format=%(refname:short)").strip()
+        self.assertIn(branch, branches)
+        self.assertIn(f"branch: {branch}", r.stdout)
+        self.assertIn("test_files: 1 in 1 directories", r.stdout)
+        self.assertTrue((self.repo / ".claude/worktrees" / branch.replace("/", "-") / "tests/test_login.py").exists())
+        start = [c for c in self.argv_calls() if c[1:3] == ["agent", "start"]][0]
+        self.assertEqual(start[start.index("--agent") + 1], "worker")
+        self.assertEqual(start[-1], "/worker:hunt-tests")
+        settings = json.loads(start[start.index("--settings") + 1])
+        # A manual claim's session, with no issue in it: the branch names none, and the status line says so.
+        self.assertEqual(settings["env"], {"WF_MODE": "manual", "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1",
+                                           "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "80"})
+        self.assertEqual(settings["enabledPlugins"], {"planner@workflows": False, "orchestrator@workflows": False})
+        self.assertEqual(shlex.split(settings["statusLine"]["command"]), [str(ORCH / "statusline.sh"), "250000"])
+        self.assertEqual(settings["autoCompactWindow"], 312500)
+        self.assertIn("agent_status: working", r.stdout)
+        # No issue is read and none is created.
+        self.assertFalse([c for c in self.calls() if c.startswith("gh issue")])
+
+    def test_a_hunt_on_another_base_reads_that_base_and_gives_it_to_the_worker(self):
+        # The tests are on dev only: the checkout, which is main, has none.
+        self.git("checkout", "-qb", "dev")
+        self.with_tests()
+        self.git("checkout", "-q", "main")
+        r, _ = self.hunt()
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("error: no test file on main", r.stderr)
+        r, branches = self.hunt("--base", "dev")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("test_files: 1 in 1 directories", r.stdout)
+        start = [c for c in self.argv_calls() if c[1:3] == ["agent", "start"]][0]
+        settings = json.loads(start[start.index("--settings") + 1])
+        self.assertEqual(settings["env"]["WF_BASE_BRANCH"], "dev")
+
+    def test_a_hunt_open_on_origin_is_refused_before_anything_exists(self):
+        self.with_tests()
+        remote = self.base / "remote.git"
+        self.git("init", "-q", "--bare", str(remote), cwd=self.base)
+        self.git("remote", "add", "origin", str(remote))
+        self.git("push", "-q", "origin", "main:main", "main:hunt/tests-2026-09-01")
+        r, _ = self.hunt()
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("already open on origin as hunt/tests-2026-09-01", r.stderr)
+        self.assertEqual(self.git("branch", "--list", "hunt/*"), "")
+        self.assertFalse([c for c in self.calls() if "worktree create" in c])
+
+    def test_a_sandboxed_hunt_runs_the_hunt_skill_in_the_sandbox(self):
+        self.with_tests()
+        r, _ = self.hunt("--sandbox", "--base", "main")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("sandbox: docker", r.stdout)
+        words = shlex.split([c for c in self.argv_calls() if c[1:3] == ["pane", "run"]][0][-1])
+        self.assertEqual(words[0], str(ORCH / "sbx-worker.sh"))
+        self.assertEqual(words[-1], "/worker:hunt-tests")
+
+    def test_a_second_hunt_is_already_open_and_creates_nothing(self):
+        self.with_tests()
+        self.hunt()
+        self.reset_calls()
+        r, _ = self.hunt()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("status: already-open", r.stdout)
+        self.assertIn("abandon.sh hunt/tests-", r.stdout)
+        self.assertFalse([c for c in self.calls() if "worktree create" in c or "agent start" in c])
+
+    def test_a_repository_without_test_files_is_refused_with_the_patterns_before_anything_exists(self):
+        (self.repo / "tests/fixtures").mkdir(parents=True)
+        (self.repo / "tests/fixtures/test_data.py").write_text("x = 1\n")
+        self.git("add", "."); self.git("commit", "-qm", "fixture")
+        r, _ = self.hunt()
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("error: no test file", r.stderr)
+        self.assertIn("test_*.py", r.stderr); self.assertIn("*_test.go", r.stderr); self.assertIn("*.spec.*", r.stderr)
+        self.assertEqual(self.git("branch", "--list", "hunt/*"), "")
+        self.assertFalse([c for c in self.calls() if "worktree create" in c])
+
+    def test_hunt_refuses_outside_herdr_and_an_issue_argument(self):
+        self.with_tests()
+        r, _ = self.hunt(HERDR_ENV="")
+        self.assertNotEqual(r.returncode, 0); self.assertIn("HERDR_ENV", r.stderr)
+        r, _ = self.hunt("12")
+        self.assertNotEqual(r.returncode, 0); self.assertIn("takes no issue", r.stderr)
+        self.assertEqual(self.git("branch", "--list", "hunt/*"), "")
+
 
 class MergeTests(ShimTest):
     def pr_fixture(self, **over):
@@ -875,6 +988,12 @@ class BoardAndAbandonTests(ShimTest):
         r = self.run_script(ORCH / "board.sh")
         self.assertIn("worktrees[2]", r.stdout)
         self.assertIn("plan,plan/offline-mode,", r.stdout)
+        (self.repo / "test_app.py").write_text("def test_app():\n    assert 1\n")
+        self.git("add", "."); self.git("commit", "-qm", "test")
+        self.run_script(ORCH / "hunt.sh")
+        r = self.run_script(ORCH / "board.sh")
+        self.assertIn("worktrees[3]", r.stdout)
+        self.assertRegex(r.stdout, r"\n  hunt,hunt/tests-\d{4}-\d{2}-\d{2},")
 
     def test_board_shows_the_frontier_of_unblocked_unclaimed_ready_issues(self):
         fixture = self.base / "ready.json"

@@ -48,3 +48,5 @@ One file per decision, numbered, never edited after acceptance (supersede instea
 | [0042](0042-the-factory-carries-its-own-prompts-and-updates-no-plugin.md) | The factory carries its own prompts and updates no plugin | accepted |
 | [0043](0043-the-migration-runs-from-the-last-stage-to-the-first.md) | The migration runs from the last stage to the first, through a temporary stop-after knob | accepted |
 | [0044](0044-the-quota-check-reads-the-scope-of-every-model-a-run-spends.md) | The quota check reads the scope of every model a run spends | accepted |
+| [0045](0045-a-test-hunt-runs-on-a-branch-without-an-issue.md) | A test hunt runs on a branch without an issue | accepted |
+| [0046](0046-a-test-is-removed-at-high-confidence-without-approval-before-the-pull-request.md) | A test is removed at high confidence without a person's approval before the pull request | accepted |

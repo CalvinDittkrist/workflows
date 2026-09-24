@@ -21,7 +21,7 @@ while IFS= read -r line; do
   case "$line" in worktree\ *) path="${line#worktree }";; branch\ *) branch="${line#branch refs/heads/}"
     [ "$path" = "$root" ] && continue
     issue=$(wf_issue_from_branch "$branch")
-    case "$branch" in plan/*) issue="plan";; esac
+    case "$branch" in plan/*) issue="plan";; hunt/*) issue="hunt";; esac
     [ -n "$issue" ] || continue
     ws=$(printf '%s' "$workspaces" | jq -r --arg p "$path" '.[] | select(.worktree.checkout_path == $p) | .workspace_id' | head -n1)
     agent=$(printf '%s' "$agents" | jq -r --arg p "$path" '[.[] | select(.cwd == $p)] | first | .agent_status // empty')

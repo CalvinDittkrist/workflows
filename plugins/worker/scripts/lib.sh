@@ -119,3 +119,33 @@ wf_pr_for_branch() {
   }
   printf '%s' "$answer"
 }
+
+# A test hunt works on a branch hunt/tests-<date>, which names no issue (ADR 0045): the hunt record in this
+# worktree's git directory stands where the issue stands for a ticket.
+wf_is_hunt_branch() { case "$(wf_branch)" in hunt/*) return 0 ;; *) return 1 ;; esac; }
+# The issue as a brief prints it: the number, or `none` for a branch that works none.
+wf_issue_label() {
+  local issue; issue=$(wf_issue)
+  if [ -n "$issue" ]; then printf '#%s\n' "$issue"
+  elif wf_is_hunt_branch; then printf 'none (a test hunt: the hunt record stands for the issue)\n'
+  else printf 'none\n'; fi
+}
+
+# The test files of the repository in the current directory, one tracked path per line, by the fixed
+# conventions of a test hunt. The orchestrator plugin's lib.sh carries the same rule, because it refuses a
+# hunt in a repository without test files; a test fails when the two copies find different files.
+# shellcheck disable=SC2034  # read by hunt.sh
+wf_test_file_rule='test_*.py, *_test.py, *_test.go, *.test.* and *.spec.* (JavaScript and TypeScript), and code files in a tests or spec directory; fixtures, testdata, __snapshots__, node_modules and vendor directories are skipped'
+wf_test_files() { git -c core.quotePath=false ls-files 2>/dev/null | wf_test_paths; }
+# The paths on stdin that are test files by that rule, one per line.
+wf_test_paths() {
+  awk '{
+    n = split($0, part, "/"); name = part[n]; indir = 0
+    for (i = 1; i < n; i++) {
+      if (part[i] ~ /^(fixtures|testdata|__snapshots__|node_modules|vendor)$/) next
+      if (part[i] == "tests" || part[i] == "spec") indir = 1
+    }
+    if (name ~ /^test_.*\.py$/ || name ~ /_test\.py$/ || name ~ /_test\.go$/ || name ~ /\.(test|spec)\.(js|jsx|ts|tsx|mjs|cjs|mts|cts)$/) { print; next }
+    if (indir && name ~ /\.(py|go|js|jsx|ts|tsx|mjs|cjs|mts|cts|rb|sh|bash|java|kt|rs|php|cs|swift|ex|exs)$/) print
+  }'
+}
