@@ -99,13 +99,20 @@ var stages = map[string]string{
 	"worker:address-reviews": stageAddressReviews,
 }
 
-// ingest reads one line of the worker's stream into the run: its events, its stage, the totals the
-// factory counts from the assistant lines, and on the result line the worker's own totals, which
-// replace them. read is the reader of the session's structured output, readResult when it is nil.
-func (f *Factory) ingest(r *Run, line []byte, read func(json.RawMessage) (result, error)) {
+// ingest reads one line of a session's stream into the run and into the session's reading: its
+// events, its stage, the totals the factory counts from the assistant lines, and on the result line
+// the session's own totals, which replace them, and its structured result. The events of a session
+// that runs beside others carry its label, so the one log tells them apart.
+func (f *Factory) ingest(r *Run, session *heard, line []byte) {
+	event := func(e Event) {
+		if session.label != "" {
+			e.Title = session.label + ": " + e.Title
+		}
+		f.runs.event(r, e)
+	}
 	var m streamLine
 	if json.Unmarshal(line, &m) != nil || m.Type == "" {
-		f.runs.event(r, Event{Kind: "error", Title: "the worker printed a line that is not the stream format", Body: string(line)})
+		event(Event{Kind: "error", Title: "the worker printed a line that is not the stream format", Body: string(line)})
 		return
 	}
 	// A subagent's events carry the tool-use id of the Agent call that started them; the worker's own
@@ -113,10 +120,12 @@ func (f *Factory) ingest(r *Run, line []byte, read func(json.RawMessage) (result
 	sub := m.Parent != nil
 	switch {
 	case m.Type == "system" && m.Subtype == "hook_response":
-		f.runs.event(r, Event{Kind: "hook", Title: m.HookName + " " + m.Outcome, Sub: sub})
+		event(Event{Kind: "hook", Title: m.HookName + " " + m.Outcome, Sub: sub})
 	case m.Type == "system" && m.Subtype == "init":
-		f.runs.update(r, func() { r.Model, r.SessionID = m.Model, m.SessionID })
-		f.runs.event(r, Event{Kind: "init", Title: "session " + m.Model + ", permission mode " + m.PermissionMode, Body: m.SessionID})
+		if session.label == "" { // the model and the session of the run are those of the session that runs alone
+			f.runs.update(r, func() { r.Model, r.SessionID = m.Model, m.SessionID })
+		}
+		event(Event{Kind: "init", Title: "session " + m.Model + ", permission mode " + m.PermissionMode, Body: m.SessionID})
 	case m.Type == "system" && m.Subtype == "permission_denied":
 		// The session goes on after a denial, which the model is told of in the tool result, so the
 		// denial is logged as an error event and not taken as the reason the run ended. A denial in a
@@ -125,71 +134,72 @@ func (f *Factory) ingest(r *Run, line []byte, read func(json.RawMessage) (result
 		if !ok {
 			denier = "a permission check"
 		}
-		f.runs.event(r, Event{Kind: "error", Title: denier + " denied " + m.ToolName,
+		event(Event{Kind: "error", Title: denier + " denied " + m.ToolName,
 			Body: strings.TrimSpace(m.DecisionReason + "\n" + blockText(m.Message)), Sub: sub || m.AgentID != ""})
 	case m.Type == "system" && !quietSubtypes[m.Subtype]:
-		f.runs.event(r, Event{Kind: "system", Title: "system: " + m.Subtype, Body: string(line), Sub: sub})
+		event(Event{Kind: "system", Title: "system: " + m.Subtype, Body: string(line), Sub: sub})
 	case m.Type == "assistant":
 		msg := body(m.Message)
-		f.runs.count(r, msg, sub)
+		f.runs.count(r, session, msg, sub)
 		for _, b := range blocks(msg.Content) {
 			switch b.Type {
 			case "text":
-				f.runs.event(r, Event{Kind: "text", Title: firstLine(b.Text), Body: b.Text, Sub: sub})
+				event(Event{Kind: "text", Title: firstLine(b.Text), Body: b.Text, Sub: sub})
 			case "thinking":
-				f.runs.event(r, Event{Kind: "thinking", Title: "thinking", Body: b.Thinking, Sub: sub})
+				event(Event{Kind: "thinking", Title: "thinking", Body: b.Thinking, Sub: sub})
 			case "tool_use":
 				if stage, ok := stages[text(b.Input["skill"])]; ok && b.Name == "Skill" && !sub {
 					f.runs.update(r, func() { r.stage(stage) })
 				}
 				input, _ := json.MarshalIndent(b.Input, "", "  ")
-				f.runs.event(r, Event{Kind: "tool", Title: strings.TrimSpace(b.Name + " " + toolLabel(b)), Body: string(input), Sub: sub})
+				event(Event{Kind: "tool", Title: strings.TrimSpace(b.Name + " " + toolLabel(b)), Body: string(input), Sub: sub})
 			}
 		}
 	case m.Type == "user":
 		for _, b := range blocks(body(m.Message).Content) {
 			if b.Type == "tool_result" && b.IsError {
-				f.error(r, Event{Kind: "error", Title: "tool error", Body: blockText(b.Content), Sub: sub})
+				f.error(r, session, Event{Kind: "error", Title: "tool error", Body: blockText(b.Content), Sub: sub})
 			}
 		}
 	case m.Type == "result":
 		final := text(m.Result)
 		f.runs.update(r, func() {
-			r.report(m.NumTurns, m.TotalCostUSD,
+			r.report(session, m.NumTurns, m.TotalCostUSD,
 				Tokens{Input: m.Usage.Input, Output: m.Usage.Output, CacheCreation: m.Usage.CacheCreation, CacheRead: m.Usage.CacheRead})
 		})
-		event := Event{Kind: "result", Title: "result: " + m.Subtype, Body: final}
+		line := Event{Kind: "result", Title: "result: " + m.Subtype, Body: final}
 		if m.TerminalReason != "" {
-			event.Title += " (" + m.TerminalReason + ")"
+			line.Title += " (" + m.TerminalReason + ")"
 		}
 		if m.IsError {
 			// The result line says that a session ended in an error, never why: the cause is in the
 			// lines before it. So it is the reason of last resort and never overwrites one of them.
-			event.Kind = "error"
-			f.runs.update(r, func() { r.resultSummary = event.Title })
-			f.runs.event(r, event)
+			line.Kind = "error"
+			f.runs.update(r, func() { session.resultSummary = line.Title })
+			event(line)
 			return
 		}
 		// The outcome, the pull request and the summary are the structured result's and never the
 		// report's words ([ADR 0039]).
 		//
 		// [ADR 0039]: ../docs/adr/0039-every-session-reports-through-a-structured-result.md
+		read := session.read
 		if read == nil {
 			read = readResult
 		}
 		got, err := read(m.StructuredOutput)
 		f.runs.update(r, func() {
 			if err != nil {
-				r.result, r.misfit = nil, err.Error()
+				session.result, session.misfit = nil, err.Error()
 				return
 			}
-			r.result, r.misfit = &got, ""
+			session.result, session.misfit = &got, ""
 		})
 		if err != nil {
-			event.Kind = "error"
-			event.Body = strings.TrimSpace(err.Error() + "\n" + final)
+			line.Kind = "error"
+			line.Body = strings.TrimSpace(err.Error() + "\n" + final)
 		}
-		f.runs.event(r, event)
+		event(line)
 	}
 }
 

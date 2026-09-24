@@ -106,9 +106,9 @@ test('a run is selected through the URL and the selection survives a reload', as
 test('the stage line and the outcome box show the scripted states', async ({ page }) => {
   await page.goto(working(`/#run=${READY_RUN}`))
   const stages = detail(page).locator('.steps li')
-  await expect(stages).toHaveText(['implement', 'review', 'pr', 'ci', 'address-reviews'])
-  // The ready run went through every stage: in ci the reviewers asked for changes, an address-reviews
-  // session answered them, and the run ended back in ci.
+  // The ready run went through every stage: its panel took two rounds, in ci the reviewers asked for
+  // changes, an address-reviews session answered them, and the run ended back in ci.
+  await expect(stages).toHaveText(['implement', 'review, round 2', 'pr', 'ci', 'address-reviews'])
   await expect(stages.nth(0)).toHaveClass('done')
   await expect(stages.nth(3)).toHaveClass(/at/)
   await expect(stages.nth(4)).toHaveClass('done')
@@ -119,9 +119,9 @@ test('the stage line and the outcome box show the scripted states', async ({ pag
   )
 
   await page.goto(working(`/#run=${BLOCKED_RUN}`))
-  // The blocked run stopped in the review stage and never reached the ones after it.
-  await expect(detail(page).locator('.steps .at')).toHaveText('review')
-  await expect(detail(page).locator('.steps li').nth(2)).toHaveClass('')
+  // The blocked run stopped in its work session and never reached the review after it.
+  await expect(detail(page).locator('.steps .at')).toHaveText('implement')
+  await expect(detail(page).locator('.steps li').nth(1)).toHaveClass('')
   await expect(detail(page).locator('.outcome')).toContainText('blocked')
   await expect(detail(page).locator('.outcome')).toContainText('supersede ADR 0012')
 
@@ -143,10 +143,11 @@ test('the selected run shows what it cost, how full its context came and what it
   page,
 }) => {
   await page.goto(working(`/#run=${WARNED_RUN}`))
-  // Its three sessions, the work session, the author session of its pr stage and the fix session of
-  // its conflict, are summed.
-  await expect(detail(page).locator('.facts').first()).toContainText('$12.54')
-  await expect(detail(page).locator('.facts').first()).toContainText('69 turns')
+  // Its fourteen sessions are summed: the work session, seven reviewers over three rounds, the fix
+  // sessions of those rounds and of its gate, the author session of its pr stage and the fix session of
+  // its conflict.
+  await expect(detail(page).locator('.facts').first()).toContainText('$58.52')
+  await expect(detail(page).locator('.facts').first()).toContainText('322 turns')
   await expect(detail(page).locator('.facts').first()).not.toContainText('counted')
   await expect(detail(page).locator('.facts').first()).toContainText(/\d+\.\dk context peak/)
   await expect(detail(page).locator('.warnings li')).toContainText('left a process behind')
@@ -163,10 +164,10 @@ test('the selected run shows what it cost, how full its context came and what it
 test('the live log sets the events of the worker’s subagents in', async ({ page }) => {
   await page.goto(working(`/#run=${READY_RUN}`))
   const log = detail(page).locator('.log')
-  // The ready run had four sessions, its work session, the author session of its pr stage, the fix
-  // session of one repair round and the address-reviews session of the other, and each ended in a
-  // result line.
-  await expect(log.locator('.ev-result')).toHaveCount(4)
+  // The ready run had twelve sessions, its work session, seven reviewers over two rounds and the fix
+  // session between them, the author session of its pr stage, the fix session of one repair round
+  // and the address-reviews session of the other, and each ended in a result line.
+  await expect(log.locator('.ev-result')).toHaveCount(12)
   await expect(log.locator('.ev-result').last()).toContainText('result: success')
   const subagent = log.locator('.ev-sub').first()
   await expect(subagent).toContainText('Read the diff under review')

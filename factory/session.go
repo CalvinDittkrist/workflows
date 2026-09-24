@@ -41,22 +41,33 @@ type session struct {
 	// (--tools), which is what makes it read-only; the tools limit what it can do, not which files it
 	// reads, and it is held to schema rather than to resultSchema.
 	readOnly bool
-	schema   string
+	// schema is the JSON schema the session's result is held to, resultSchema when it is empty.
+	schema string
+	// agent and agents are the inline agent a read-only session runs as (--agents, --agent): a reviewer
+	// of the panel, whose prompt, tools and model the definition carries. model is that definition's
+	// model; a session whose agent inherits it runs on the model worker_args names.
+	agent, agents, model string
+	// commits is a session the factory briefs to commit its work on the branch, which the factory then
+	// pushes or gates by its commit: one that reports complete with changes it did not commit has not
+	// done what it reports (Factory.session).
+	commits bool
 	// read reads the session's structured output, readResult when it is nil.
 	read func(json.RawMessage) (result, error)
+	// began is called once the session's process is up, or once it is known that it never will be.
+	began func()
 }
 
 // The work session is the one a local claim starts and the one a first and a resumed run of an issue
 // start with, the resumed one when its branch has no pull request open yet and is not waiting at the
 // pr stage: it derives where the work stands from git and GitHub as any worker does, and it stops once
-// the review has recorded its panel summary, where the factory's pr stage takes over. A follow-up run
+// the gate has recorded its result, where the factory's review stage takes over. A follow-up run
 // starts no work session: the maintainer has read the pull request and asked for changes, so it starts
 // at the ci stage's address-reviews session.
 //
 // The timeouts are fixed here and not in the host's configuration. They are a backstop above the
 // run's deadline, which stays the limit an operator sets and which ends a run with the outcome
 // timeout; a session that outruns its own timeout has failed, and the run says in which stage.
-var workSession = session{stage: stages["worker:work"], prompt: "/worker:work", timeout: 4 * time.Hour, stopAfter: stageReview}
+var workSession = session{stage: stages["worker:work"], prompt: "/worker:work", timeout: 4 * time.Hour, stopAfter: stageGate}
 
 // fixTimeout is how long one fix session of the ci stage may run, addressTimeout one address-reviews
 // session, and authorTimeout the session that writes the pull request's title and body.
@@ -72,7 +83,7 @@ var sessionTimeoutOverride string
 
 // fixSession is the session of one repair round of the ci stage, given the brief of that round.
 func fixSession(brief string) session {
-	return session{stage: stageCI, prompt: brief, timeout: fixTimeout, scripted: "fix"}.overridden()
+	return session{stage: stageCI, prompt: brief, timeout: fixTimeout, scripted: "fix", commits: true}.overridden()
 }
 
 // authorSession is the session of the pr stage, given its brief: read-only, held to authorSchema and
@@ -90,7 +101,7 @@ const readTools = "Read,Grep,Glob"
 
 // addressSession is the session that answers what the reviewers ask for, given the brief of its round.
 func addressSession(brief string) session {
-	return session{stage: stageAddressReviews, prompt: brief, timeout: addressTimeout, scripted: "address"}.overridden()
+	return session{stage: stageAddressReviews, prompt: brief, timeout: addressTimeout, scripted: "address", commits: true}.overridden()
 }
 
 func (s session) overridden() session {
@@ -139,13 +150,17 @@ func (f *Factory) command(ctx context.Context, s session, entry Entry, claim cla
 	if err != nil {
 		return nil, err
 	}
+	schema := s.schema
+	if schema == "" {
+		schema = resultSchema
+	}
 	args := []string{
 		"--agent", "worker",
 		"--output-format", "stream-json", "--verbose",
 		"--permission-mode", "auto",
 		"--strict-mcp-config",
 		"--settings", settings,
-		"--json-schema", resultSchema,
+		"--json-schema", schema,
 	}
 	args = append(args, f.settings.WorkerArgs...)
 	args = append(args, "-p", s.prompt)
@@ -184,7 +199,15 @@ func (f *Factory) readOnlyCommand(ctx context.Context, s session, claim claimed)
 		"--settings", string(settings),
 		"--json-schema", s.schema,
 	}
-	args = append(args, readOnlyArgs(f.settings.WorkerArgs)...)
+	if s.agent != "" {
+		// The session runs as the inline agent its definition names; --tools stays, so the session is
+		// read-only whatever the definition says (https://code.claude.com/docs/en/cli-reference.md and
+		// https://code.claude.com/docs/en/sub-agents.md, checked on 2026-09-24).
+		args = append(args, "--agents", s.agents, "--agent", s.agent)
+	}
+	if s.agent == "" || s.model == "inherit" {
+		args = append(args, readOnlyArgs(f.settings.WorkerArgs)...)
+	}
 	args = append(args, "-p", s.prompt)
 	cmd := exec.CommandContext(ctx, "claude", args...)
 	cmd.Dir = claim.worktree
@@ -223,10 +246,11 @@ const (
 // checked on 2026-09-23). The descriptions are what the session reads to fill it in: the worker skill
 // still ends in a report that opens with ready: or blocked:, and this is that report as data.
 //
-// The panel summary, the gate result and the commits are what a session reports when it was told to
-// stop after an earlier stage than the last ([ADR 0043]): the worker's stop.sh prints them in its final
-// report, and the stage that follows on the factory's side reads them here and not from the worktree's
-// records. A session that ran the whole pipeline leaves them out.
+// The gate result and the commits are what a session reports when it was told to stop after an
+// earlier stage than the last ([ADR 0043]): the worker's stop.sh prints them in its final report, and
+// the stage that follows on the factory's side reads them here and not from the worktree's records. A
+// session that ran the whole pipeline leaves them out. The panel summary is not among them: the
+// factory derives it from the rounds it recorded, and no session writes it.
 //
 // The replies, the answer and the lists of what was fixed and declined are what an address-reviews
 // session reports: the factory posts the replies and the answer itself (postAnswers), so a session
@@ -236,7 +260,6 @@ const (
 const resultSchema = `{"type":"object","additionalProperties":false,"required":["outcome","summary"],"properties":{` +
 	`"outcome":{"type":"string","enum":["complete","blocked"],"description":"complete when the final report opens with ready:, blocked when it opens with blocked:"},` +
 	`"pullRequest":{"type":"string","description":"the URL of the pull request the session opened or worked on; empty when there is none"},` +
-	`"panelSummary":{"type":"string","description":"the panel_summary_block of the final report, its lines as written; empty when the report has none"},` +
 	`"gateResult":{"type":"string","description":"the gate_result line of the final report, as written; empty when the report has none"},` +
 	`"commits":{"type":"array","items":{"type":"string"},"description":"the lines under commits: in the final report, each a short hash and a subject, as written; empty when the report lists none"},` +
 	`"replies":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["thread","body"],"properties":{` +
@@ -250,20 +273,23 @@ const resultSchema = `{"type":"object","additionalProperties":false,"required":[
 
 // result is a session's structured result as the factory reads it.
 type result struct {
-	Outcome      string   `json:"outcome"`
-	PullRequest  string   `json:"pullRequest"`
-	PanelSummary string   `json:"panelSummary"`
-	GateResult   string   `json:"gateResult"`
-	Commits      []string `json:"commits"`
-	Replies      []reply  `json:"replies"`
-	Answer       string   `json:"answer"`
-	Fixed        []string `json:"fixed"`
-	Declined     []string `json:"declined"`
-	Summary      string   `json:"summary"`
+	Outcome     string   `json:"outcome"`
+	PullRequest string   `json:"pullRequest"`
+	GateResult  string   `json:"gateResult"`
+	Commits     []string `json:"commits"`
+	Replies     []reply  `json:"replies"`
+	Answer      string   `json:"answer"`
+	Fixed       []string `json:"fixed"`
+	Declined    []string `json:"declined"`
+	Summary     string   `json:"summary"`
 	// Title and Body are the pull request an author session wrote, read by readAuthored; the work
 	// session's schema has neither, so its reader refuses them as fields it does not know.
 	Title string `json:"-"`
 	Body  string `json:"-"`
+	// Verdict is a reviewer's report, read by readVerdict, and Repair a review fix session's, read by
+	// readRepair.
+	Verdict *Verdict `json:"-"`
+	Repair  *Repair  `json:"-"`
 }
 
 // reply is an address-reviews session's reply to one review thread, named by its id.

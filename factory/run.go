@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -124,10 +125,14 @@ type Run struct {
 	// budget is held against (ci.repair_rounds). A resumed run on the same pull request carries the
 	// count on.
 	RepairRounds int `json:"repairRounds"`
-	// Review is what the review stage handed on to the pr stage: the panel summary and the gate result
-	// the work session reported, and the commit the branch was at when it did. A resumed run whose
-	// branch is still at that commit and has no pull request open starts at the pr stage with it.
+	// Review is what the review stage handed on to the pr stage: the panel summary it derived from its
+	// recorded rounds, the gate result on the final head, and the commit the branch was at then. A
+	// resumed run whose branch is still at that commit and has no pull request open starts at the pr
+	// stage with it.
 	Review *Review `json:"review,omitempty"`
+	// Panel is what the review stage recorded: its rounds, the verdicts and fixes of each, and the gate
+	// on the final head. A resumed run goes on from it.
+	Panel *Panel `json:"panel,omitempty"`
 	// Answered is the reviews asking for changes on that pull request whose summaries the run
 	// answered, by their URL. A review stands on GitHub until its author approves, so every later run
 	// on the pull request reads these to leave them alone.
@@ -152,11 +157,14 @@ type Run struct {
 	// WorkerGroup is the process group the worker session ran in, which is the process group this
 	// host ends to end the session. It is recorded so that a factory the host killed rather than
 	// stopped can be started again and end the worker that outlived it.
-	WorkerGroup int      `json:"workerGroup"`
-	ExitCode    *int     `json:"exitCode"`
-	EventCount  int      `json:"eventCount"`
-	Warnings    []string `json:"warnings"`
-	Versions    Versions `json:"versions"`
+	WorkerGroup int `json:"workerGroup"`
+	// Groups is the process groups of the sessions that are running, which are more than one while the
+	// reviewers of a round run beside each other: every one of them is ended the way WorkerGroup is.
+	Groups     []int    `json:"groups,omitempty"`
+	ExitCode   *int     `json:"exitCode"`
+	EventCount int      `json:"eventCount"`
+	Warnings   []string `json:"warnings"`
+	Versions   Versions `json:"versions"`
 	// Notified is what this ending owes the maintainer on GitHub: pending while the notification is
 	// still owed and done once the factory has tried it — done says it was made, not that GitHub
 	// took it, and a call GitHub refused is a warning on the run and done all the same. It is
@@ -165,18 +173,15 @@ type Run struct {
 	// logins to notify, a record written before this field — carries none of it.
 	Notified string `json:"notified,omitempty"`
 
-	// What the stream said, kept for the moment the run ends. Not part of the record.
-	result         *result          // the session's structured result, when its result line carried one that fits
-	misfit         string           // why the result line's structured output does not fit the schema
-	lastError      string           // the last error the session printed, which is why a failed run failed
-	resultSummary  string           // what the result line called an error, when the session printed no cause
+	// What the streams said, kept for the moment the run ends. Not part of the record: what one session
+	// said is its session's (heard), since the reviewers of a round run beside each other.
 	counted        map[string]usage // the usage the factory counted per message id
 	unpricedModels map[string]bool  // the models of counted messages that have no price here
-	// A run starts a session per stage that needs one, and its totals are the sum of theirs: prior is
-	// what the sessions before this one came to, and reported says this one's result line has given
-	// its own totals, after which its assistant lines count nothing more.
-	prior    totals
-	reported bool
+	// A run starts a session per stage that needs one, and its totals are the sum of theirs. open is how
+	// many of the running ones have not given their own totals yet, and short says one ended without
+	// them: the totals are the worker's own only once every session has given its own (provenance).
+	open  int
+	short bool
 	// lock is the factory's copy of the run's lock while the run lasts, which every session's process
 	// group inherits (Store.lock).
 	lock *os.File
@@ -191,33 +196,71 @@ func (r *Run) release() {
 	}
 }
 
-// totals is what a run's sessions came to so far.
-type totals struct {
-	turns  int
-	cost   float64
-	tokens Tokens
-	from   string // Totals as it stood
+// heard is what the stream of one session said, apart from the run it adds to: its structured
+// result, why it has none, the error it ended in, and what the factory counted of it until its result
+// line gave the session's own totals, which replace that count. Callers of its fields hold the lock
+// of the store.
+type heard struct {
+	// label names the session in the run's log when others run beside it, as a reviewer does, and is
+	// empty for a session that runs alone.
+	label         string
+	read          func(json.RawMessage) (result, error) // readResult when nil
+	result        *result                               // the structured result, when the result line carried one that fits
+	misfit        string                                // why the result line's structured output does not fit the schema
+	lastError     string                                // the last error the session printed, which is why a failed session failed
+	resultSummary string                                // what the result line called an error, when the session printed no cause
+	reported      bool                                  // the result line gave the session's own totals
+	turns         int                                   // what the factory counted of this session until then
+	cost          float64
+	tokens        Tokens
 }
 
-// nextSession readies the record for one more session: what the sessions so far came to is kept, and
-// what the last one reported is read anew. Callers hold the lock.
-func (r *Run) nextSession() {
-	r.prior = totals{turns: r.Turns, cost: r.CostUSD, tokens: r.Tokens, from: r.Totals}
-	r.reported = false
-	r.result, r.misfit, r.lastError, r.resultSummary = nil, "", "", ""
+// ungrouped takes a process group that has ended out of Groups. It makes a new slice rather than
+// deleting in place: the copies of the record the store hands out (list, get) share the old one and
+// are read without the lock. Callers hold the lock.
+func (r *Run) ungrouped(pid int) {
+	r.Groups = slices.DeleteFunc(slices.Clone(r.Groups), func(g int) bool { return g == pid })
 }
 
-// report takes the totals a session's result line gave. They are the worker's own when every session
-// so far gave its own, and the factory's when one of them ended without it. Callers hold the lock.
-func (r *Run) report(turns int, cost float64, tokens Tokens) {
-	r.Turns, r.CostUSD = r.prior.turns+turns, r.prior.cost+cost
-	r.Tokens = Tokens{Input: r.prior.tokens.Input + tokens.Input, Output: r.prior.tokens.Output + tokens.Output,
-		CacheCreation: r.prior.tokens.CacheCreation + tokens.CacheCreation, CacheRead: r.prior.tokens.CacheRead + tokens.CacheRead}
-	r.Totals = totalsWorker
-	if r.prior.from == totalsFactory {
-		r.Totals = totalsFactory
+// opened readies the record for one more session. Callers hold the lock.
+func (r *Run) opened() { r.open++ }
+
+// closed is the end of a session: one that never gave its own totals leaves the factory's count in
+// the run's. Callers hold the lock.
+func (r *Run) closed(s *heard) {
+	if !s.reported {
+		r.open--
+		r.short = true
 	}
-	r.reported = true
+	if r.Totals != "" {
+		r.Totals = r.provenance()
+	}
+}
+
+// report takes the totals a session's result line gave in place of what the factory counted of that
+// session. Callers hold the lock.
+func (r *Run) report(s *heard, turns int, cost float64, tokens Tokens) {
+	r.Turns += turns - s.turns
+	r.CostUSD += cost - s.cost
+	r.Tokens = Tokens{Input: r.Tokens.Input + tokens.Input - s.tokens.Input, Output: r.Tokens.Output + tokens.Output - s.tokens.Output,
+		CacheCreation: r.Tokens.CacheCreation + tokens.CacheCreation - s.tokens.CacheCreation,
+		CacheRead:     r.Tokens.CacheRead + tokens.CacheRead - s.tokens.CacheRead}
+	if !s.reported {
+		r.open--
+	}
+	s.reported = true
+	r.Totals = r.provenance()
+}
+
+// provenance is where the totals come from now: the worker's own once every session gave its own, and
+// the factory's while one of them is still being counted or ended without them. It is decided again
+// whenever a session reports or ends, so sessions that run beside each other leave the same answer in
+// whichever order they do. Callers hold the lock.
+func (r *Run) provenance() string {
+	if r.short || r.open > 0 {
+		return totalsFactory
+	}
+	return totalsWorker
 }
 
 // Where the totals of a run come from.
@@ -427,11 +470,11 @@ func (s *Store) update(r *Run, change func()) {
 // is, so only the worker's own messages raise the peak. The record is written with every line, so a
 // run that ends without a result line — even with the factory killed under it — keeps what was
 // counted.
-func (s *Store) count(r *Run, msg message, sub bool) {
+func (s *Store) count(r *Run, session *heard, msg message, sub bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !r.reported {
-		r.tally(msg.ID, msg.Model, sub, msg.Usage)
+	if !session.reported {
+		r.tally(session, msg.ID, msg.Model, sub, msg.Usage)
 	}
 	if u := msg.Usage; !sub && u.Input+u.CacheCreation+u.CacheRead > r.ContextPeak {
 		r.ContextPeak = u.Input + u.CacheCreation + u.CacheRead

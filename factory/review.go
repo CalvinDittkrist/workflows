@@ -32,8 +32,9 @@ import (
 // review is answered after the run it arrived during — and what keeps the factory from asking
 // GitHub about a pull request while its worker is writing to it.
 func (f *Factory) refreshRequested(ctx context.Context) {
-	requested := map[string]time.Time{}
+	requested, early := map[string]time.Time{}, false
 	for key, held := range holdings(f.runs.list()) {
+		early = early || !held.idle
 		pull, watched := held.pull()
 		if !watched {
 			continue
@@ -47,7 +48,7 @@ func (f *Factory) refreshRequested(ctx context.Context) {
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.requested = requested
+	f.requested, f.requestedEarly = requested, early
 }
 
 // pull is the pull request of this issue that the factory watches, and whether there is one at all.

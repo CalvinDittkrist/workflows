@@ -20,7 +20,7 @@ import (
 const failedPanel = "review_rounds: 3\npanel: code=PASS security=PASS docs=FIX→PASS tests=FIX→FIX→FIX senior=FIX→FIX→BLOCK\n" +
 	"fixed: 5 (S1 1, S2 3, S3 1)\ndisputed: senior S2 factory/pr.go:40 the naming of the stage"
 
-// The first run's work session stops after the review, and the factory opens the pull request from the
+// The first run's work session stops after the gate, the factory's reviewers pass, and it opens the pull request from the
 // author session's title and body, appends the gate result and the panel summary word for word, and
 // opens it against the base the branch was cut from, not as a draft. The ci stage follows.
 func TestTheFactoryOpensThePullRequestFromTheAuthorsTitleAndBody(t *testing.T) {
@@ -36,8 +36,8 @@ func TestTheFactoryOpensThePullRequestFromTheAuthorsTitleAndBody(t *testing.T) {
 	if run.Outcome != outcomeReady || run.PullRequest != pullOfTheClaim {
 		t.Fatalf("the run ended as %q with %q (%s), want ready with %s; the factory's log:\n%s", run.Outcome, run.PullRequest, run.Reason, pullOfTheClaim, f.output(t))
 	}
-	if !equal(run.Stages, []string{"implement", "pr", "ci"}) {
-		t.Errorf("the run went through the stages %v, want implement, pr and ci", run.Stages)
+	if !equal(run.Stages, []string{"implement", "review", "pr", "ci"}) {
+		t.Errorf("the run went through the stages %v, want implement, review, pr and ci", run.Stages)
 	}
 
 	pulls := gh.opened(t, "acme/edge-sensors")
@@ -49,8 +49,8 @@ func TestTheFactoryOpensThePullRequestFromTheAuthorsTitleAndBody(t *testing.T) {
 		t.Errorf("the factory opened %q from %s against %s with draft %v, want the author's title from %s against main, not a draft",
 			p.Title, p.Head, p.Base, p.Draft, claimedBranch)
 	}
-	// The body is the author's as it is, and the verification section carries what the work session
-	// reported, word for word: the shim's default panel that passed and its gate.
+	// The body is the author's as it is, and the verification section carries the run's facts word for
+	// word: the gate the work session reported and the panel of the shim's reviewers, who all pass.
 	wantPanel := "review_rounds: 1\npanel: code=PASS security=PASS docs=PASS tests=PASS senior=PASS\nfixed: 0 (S1 0, S2 0, S3 0)\ndisputed: none"
 	for _, want := range []string{authored["body"].(string) + "\n\n## Verification\n", wantPanel, "gate_result: pass (exit 0) at c0ffee0"} {
 		if !strings.Contains(p.Body, want) {
@@ -61,14 +61,14 @@ func TestTheFactoryOpensThePullRequestFromTheAuthorsTitleAndBody(t *testing.T) {
 		t.Errorf("the body of a pull request whose panel passed says it did not:\n%s", p.Body)
 	}
 
-	// The work session ran with the worker plugin and stopped after the review; the author session ran
+	// The work session ran with the worker plugin and stopped after the gate; the author session ran
 	// read-only, as no agent, in the same worktree, briefed with the range, the commits and the issue.
 	workers, authors := gh.workers(t), gh.authorSessions(t)
 	if len(workers) != 1 || len(authors) != 1 {
 		t.Fatalf("the factory started %d work sessions and %d author sessions, want one of each", len(workers), len(authors))
 	}
-	if stop := workers[0].settings(t).Env["WF_STOP_AFTER"]; stop != "review" {
-		t.Errorf("the work session ran with WF_STOP_AFTER=%q, want review", stop)
+	if stop := workers[0].settings(t).Env["WF_STOP_AFTER"]; stop != "gate" {
+		t.Errorf("the work session ran with WF_STOP_AFTER=%q, want gate", stop)
 	}
 	author := authors[0]
 	if !author.started("--tools", "Read,Grep,Glob") || !author.started("--strict-mcp-config") || slices.Contains(author.args, "--agent") {
@@ -90,35 +90,6 @@ func TestTheFactoryOpensThePullRequestFromTheAuthorsTitleAndBody(t *testing.T) {
 		if !strings.Contains(brief, want) {
 			t.Errorf("the author's brief does not carry %q:\n%s", want, brief)
 		}
-	}
-}
-
-// A panel that did not pass is said in the body with the reviewers that did not pass, and the pull
-// request is opened all the same, not as a draft: the maintainer decides on it.
-func TestAPanelThatDidNotPassIsNamedInThePullRequestWhichIsStillNoDraft(t *testing.T) {
-	t.Parallel()
-	gh, data := ciClaim(t)
-	gh.workerResults(t, map[string]any{"outcome": "complete", "panelSummary": failedPanel,
-		"gateResult": "gate_result: pass (exit 0) at c0ffee0", "summary": "stopped after review"})
-	gh.ciReads(t, "acme/edge-sensors", claimedIssue, ciPull{})
-
-	f := gh.work(t, ciConfig(data, nil))
-	run := f.ended(t, 1)
-	if run.Outcome != outcomeReady {
-		t.Fatalf("the run ended as %q (%s), want ready; the factory's log:\n%s", run.Outcome, run.Reason, f.output(t))
-	}
-	pulls := gh.opened(t, "acme/edge-sensors")
-	if len(pulls) != 1 || pulls[0].Draft == nil || *pulls[0].Draft {
-		t.Fatalf("the factory opened %+v, want one pull request that is not a draft", pulls)
-	}
-	body := pulls[0].Body
-	for _, want := range []string{failedPanel, "did not pass", "tests, senior"} {
-		if !strings.Contains(body, want) {
-			t.Errorf("the body does not carry %q:\n%s", want, body)
-		}
-	}
-	if strings.Contains(body, "docs, ") || strings.Contains(body, "code, ") {
-		t.Errorf("the body names a reviewer that passed among those that did not:\n%s", body)
 	}
 }
 
@@ -341,7 +312,7 @@ func TestThePanelThatDidNotPassIsReadFromItsLastVerdicts(t *testing.T) {
 		"review_rounds: 2\npanel: code=PASS docs=FIX->PASS":           "",
 		"panel: code=PASS tests=FIX→FIX senior=BLOCK":                 "the reviewers that did not pass are tests, senior.",
 		"panel: code=FIX→PASS (S3 accepted) security=FIX":             "the reviewers that did not pass are security.",
-		"review_rounds: 1\nfixed: 0":                                  "the work session reported no panel: line, so no reviewer's verdict is known.",
+		"review_rounds: 1\nfixed: 0":                                  "the run recorded no panel: line, so no reviewer's verdict is known.",
 		"panel: none":                                                 "the panel: line names no reviewer, so no reviewer's verdict is known.",
 		"panel: code=PASS\nunreviewed: 1 commit after the last round": "every reviewer passed, but commits landed after the last round that no reviewer read.",
 	} {

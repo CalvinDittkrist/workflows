@@ -112,6 +112,8 @@ type apiRun struct {
 		ClaudeCode string `json:"claudeCode"`
 		Factory    string `json:"factory"`
 	} `json:"versions"`
+	Review *Review    `json:"review"`
+	Panel  *Panel     `json:"panel"`
 	Events []apiEvent `json:"events"`
 }
 
@@ -141,11 +143,12 @@ type apiLine struct {
 func TestFakeModeWorksTheCannedQueueOneRunAtATime(t *testing.T) {
 	t.Parallel()
 	// The deadline has to be far above what a scripted run costs — a binary built with the race
-	// detector pays about a second on every exit — or a quick run would be read as a timeout.
-	f := start(t, config{"deadline": "15s", "poll": "100ms"})
+	// detector pays about a second on every exit, and the detached run has fourteen sessions, most
+	// of them one after the other — or a quick run would be read as a timeout.
+	f := start(t, config{"deadline": "30s", "poll": "100ms"})
 
 	var line apiLine
-	f.eventually(t, 60*time.Second, "the whole canned queue to be done", func() bool {
+	f.eventually(t, 150*time.Second, "the whole canned queue to be done", func() bool {
 		line = apiLine{}
 		f.get(t, "/api/line", &line)
 		return len(line.Queue) == 0 && len(line.Now) == 0 && len(line.Done) == cannedRuns
@@ -184,16 +187,24 @@ func TestFakeModeWorksTheCannedQueueOneRunAtATime(t *testing.T) {
 	if got, want := strings.Join(ready.Stages, " "), "implement review pr ci address-reviews ci"; got != want {
 		t.Errorf("run 1 went through the stages %q, want %q", got, want)
 	}
-	// Its work session stopped after the review, a read-only author session wrote the pull request the
-	// factory opened, and the factory waited on CI: the checks pending, then failed, one repair round with
+	// Its work session stopped after the gate, the factory's reviewers asked for a fix its review fix
+	// session made, a read-only author session wrote the pull request the factory opened, and the factory
+	// waited on CI: the checks pending, then failed, one repair round with
 	// a fix session given the failed log, then review comments answered by an address-reviews session in
 	// a second round, then green.
 	var readyLog apiRun
 	f.get(t, "/api/runs/1", &readyLog)
 	if got := factoryTitles(readyLog, "ci: ", "repair round", "worker started", "replied", "answered"); strings.Join(got, " | ") !=
-		"worker started | worker started | ci: waiting | ci: checks-failed | repair round 1 of 3 | worker started | ci: review-comments | repair round 2 of 3 | "+
+		"worker started | worker started | worker started | ci: waiting | ci: checks-failed | repair round 1 of 3 | worker started | ci: review-comments | repair round 2 of 3 | "+
 			"worker started | replied to the thread on upload/retry.go:42 and resolved it | answered the review summaries on https://github.com/acme/edge-sensors/pull/204 | ci: green" {
-		t.Errorf("run 1 logged the ci stage as %q, want the work and author sessions, then a wait, one repair of the failed checks with a fix session, an answer to the review comments with an address-reviews session and green", got)
+		t.Errorf("run 1 logged the ci stage as %q, want the work, review fix and author sessions, then a wait, one repair of the failed checks with a fix session, an answer to the review comments with an address-reviews session and green", got)
+	}
+	// Its first round had the code and tests reviewers ask for fixes, and its second ran those two alone,
+	// who passed; the summary the pr stage carried says so, with the dispute as the fix session wrote it.
+	if readyLog.Panel == nil || len(readyLog.Panel.Rounds) != 2 || len(readyLog.Panel.Rounds[1].Verdicts) != 2 || readyLog.Review == nil ||
+		!strings.Contains(readyLog.Review.PanelSummary, "panel: code=FIX→PASS security=PASS docs=PASS tests=FIX→PASS senior=PASS") ||
+		!strings.Contains(readyLog.Review.PanelSummary, "the sleep is the fake clock's, which returns at once") {
+		t.Errorf("run 1 recorded the panel %+v and handed the pr stage %+v, want two rounds, the second of code and tests, and the dispute", readyLog.Panel, readyLog.Review)
 	}
 	if !strings.Contains(fmt.Sprint(readyLog.Events), "--- FAIL: TestCalibrationFileAge") {
 		t.Errorf("run 1 never gave its fix session the failed log")
@@ -202,18 +213,19 @@ func TestFakeModeWorksTheCannedQueueOneRunAtATime(t *testing.T) {
 		t.Errorf("run 1 took %d repair rounds, want 2: the fix of the checks and the answer to the review comments", ready.RepairRounds)
 	}
 	// The context peak is the fullest one message of the worker itself came. The scripted session
-	// hands the review to a fresh context halfway through, so the peak stands at the message
+	// hands the rest of its stage to a fresh context after the gate, so the peak stands at the message
 	// before that handover: neither the last message, which carries less, nor the far larger context
-	// its subagents report, which says nothing about the worker's.
-	const readyPeak = 87_400 // the eleventh message of the worker, the one before the handover
+	// its subagent reports, which says nothing about the worker's.
+	const readyPeak = 52_600 // the fifth message of the work session, the gate's, the one before the handover
 	if ready.ContextPeak != readyPeak {
 		t.Errorf("run 1 peaked at %d tokens of context, want %d: the fullest message of the worker itself, taken before the handover dropped it and never from the %d a subagent reported",
 			ready.ContextPeak, readyPeak, subagentContext)
 	}
-	// Four sessions, the work, the author, the fix and the address-reviews, each of which reported its
-	// own totals: the run's are their sum.
-	if ready.Turns != 4*23 || math.Abs(ready.CostUSD-4*4.18) > 1e-9 || ready.Tokens.Output != 4*24800 || ready.Tokens.CacheRead != 4*1204000 || ready.Totals != "worker" {
-		t.Errorf("run 1 has turns %d, cost %v and tokens %+v from %q, want the sum of the result lines of its four sessions, from the worker",
+	// Twelve sessions, the work, five reviewers in the first round and two in the second, the review
+	// fix, the author, the ci fix and the address-reviews, each of which reported its own totals: the
+	// run's are their sum, even of the reviewers that ran beside each other.
+	if ready.Turns != 12*23 || math.Abs(ready.CostUSD-12*4.18) > 1e-9 || ready.Tokens.Output != 12*24800 || ready.Tokens.CacheRead != 12*1204000 || ready.Totals != "worker" {
+		t.Errorf("run 1 has turns %d, cost %v and tokens %+v from %q, want the sum of the result lines of its twelve sessions, from the worker",
 			ready.Turns, ready.CostUSD, ready.Tokens, ready.Totals)
 	}
 	// A scripted run is this binary and no Claude Code at all: there is no plugin in it to update and
@@ -322,6 +334,12 @@ func TestFakeModeWorksTheCannedQueueOneRunAtATime(t *testing.T) {
 	if !strings.Contains(fmt.Sprint(full.Events), "docs/preview.md") {
 		t.Errorf("run 5 never gave its fix session the conflicted file")
 	}
+	// Its tests reviewer asked for a fix in every round, so the review spent its three rounds and the
+	// panel did not pass; the gate on the final head failed once and passed after a fix session.
+	if full.Panel == nil || len(full.Panel.Rounds) != 3 || full.Panel.GateRounds != 1 || full.Review == nil ||
+		!strings.Contains(full.Review.PanelSummary, "tests=FIX→FIX→FIX") || !strings.HasPrefix(full.Review.GateResult, "gate_result: pass") {
+		t.Errorf("run 5 recorded the panel %+v and handed the pr stage %+v, want three rounds with tests on FIX in each and a gate that passed after one fix", full.Panel, full.Review)
+	}
 
 	// follow-up: the maintainer asked for changes on run 5's pull request after it ended, and the
 	// follow-up run answered that review in the address-reviews stage, with a repair count started
@@ -343,7 +361,7 @@ func TestFakeModeWorksTheCannedQueueOneRunAtATime(t *testing.T) {
 	}
 
 	// timeout: the deadline passed and the whole process group was ended.
-	if timeout.Outcome != "timeout" || !strings.Contains(timeout.Reason, "deadline of 15s") {
+	if timeout.Outcome != "timeout" || !strings.Contains(timeout.Reason, "deadline of 30s") {
 		t.Errorf("run 7 ended %q because %q, want timeout on the deadline", timeout.Outcome, timeout.Reason)
 	}
 	full = apiRun{} // a field the interface omits would keep the value of the run read before
@@ -419,8 +437,8 @@ func TestFakeModeWorksTheCannedQueueOneRunAtATime(t *testing.T) {
 			agents++
 		}
 	}
-	if agents != 5 || subs != agents {
-		t.Errorf("run 1 logged %d Agent calls and %d subagent events, want the five reviewers and one event each", agents, subs)
+	if agents != 1 || subs != agents {
+		t.Errorf("run 1 logged %d Agent calls and %d subagent events, want the docs lookup and its one event", agents, subs)
 	}
 	if len(full.Events) != full.EventCount {
 		t.Errorf("run 1 served %d events for an event count of %d", len(full.Events), full.EventCount)
@@ -721,17 +739,24 @@ func TestAnInvalidConfigurationIsRefusedWithTheFix(t *testing.T) {
 		// worker_env sets the knobs a worker reads for itself and nothing else: what a run is (its
 		// mode, its issue, its base) is the factory's, and the host's shell is not a setting of the
 		// workflow. The error lists the names, because the operator reads it in the journal.
-		{"worker variable that is the run's own", `{"data_dir":"data","repositories":["a/b"],"worker_env":{"WF_MODE":"yolo"}}`, `worker_env carries WF_MODE, which is not a worker knob; the names are WF_REVIEWERS, WF_REVIEW_ROUNDS`},
+		{"worker variable that is the run's own", `{"data_dir":"data","repositories":["a/b"],"worker_env":{"WF_MODE":"yolo"}}`, `worker_env carries WF_MODE, which is not a worker knob; the names are WF_HANDOFF_TOKENS, WF_CONTEXT_MAX_AGE`},
 		{"worker variable that is the base branch", `{"data_dir":"data","repositories":["a/b"],"worker_env":{"WF_BASE_BRANCH":"dev"}}`, `worker_env carries WF_BASE_BRANCH, which is not a worker knob`},
 		{"worker variable of the shell", `{"data_dir":"data","repositories":["a/b"],"worker_env":{"PATH":"/tmp"}}`, `worker_env carries PATH, which is not a worker knob`},
 		{"worker variable that is not a string", `{"data_dir":"data","repositories":["a/b"],"worker_env":{"WF_PR_REVIEW_WAIT":600}}`, `see factory/factory.example.json`},
-		{"repository object with an unknown field", `{"data_dir":"data","repositories":[{"name":"a/b","branch":"dev"}]}`, `a repository is "owner/name" or {"name": "owner/name", "base": "dev", "ci": {"repair_rounds": 2}}`},
+		{"repository object with an unknown field", `{"data_dir":"data","repositories":[{"name":"a/b","branch":"dev"}]}`, `a repository is "owner/name" or {"name": "owner/name", "base": "dev", "ci": {"repair_rounds": 2}, "review": {"rounds": 2}}`},
 		// The knobs of the ci stage are the factory's own, at the top of the file or on a repository.
 		{"unknown ci knob", `{"data_dir":"data","repositories":["a/b"],"ci":{"repair_round":2}}`, `json: unknown field "repair_round"; the ci knobs are repair_rounds, bot_reviewers, review_wait, checks_grace`},
 		{"unknown ci knob of a repository", `{"data_dir":"data","repositories":[{"name":"a/b","ci":{"grace":"1m"}}]}`, `the ci knobs are repair_rounds, bot_reviewers, review_wait, checks_grace`},
 		{"no repair round", `{"data_dir":"data","repositories":["a/b"],"ci":{"repair_rounds":0}}`, `ci: repair_rounds`},
 		{"a ci knob of a repository that is no duration", `{"data_dir":"data","repositories":[{"name":"a/b","ci":{"review_wait":"soon"}}]}`, `the ci of a/b: review_wait`},
 		{"a ci knob in worker_env", `{"data_dir":"data","repositories":["a/b"],"worker_env":{"WF_CI_REPAIR_ROUNDS":"2"}}`, `worker_env carries WF_CI_REPAIR_ROUNDS, which is a knob of the ci stage the factory runs itself; write it as "ci": {"repair_rounds": ...}`},
+		// So are the knobs of the review stage.
+		{"unknown review knob", `{"data_dir":"data","repositories":["a/b"],"review":{"round":2}}`, `json: unknown field "round"; the review knobs are rounds, reviewers, gate_rounds`},
+		{"no review round", `{"data_dir":"data","repositories":["a/b"],"review":{"rounds":0}}`, `review: rounds 0 is not a positive number of review rounds`},
+		{"a reviewer the panel does not have", `{"data_dir":"data","repositories":[{"name":"a/b","review":{"reviewers":["code","style"]}}]}`, `the review of a/b: reviewers carries "style", which is no reviewer; the reviewers are code, security, docs, tests, senior`},
+		{"a reviewer named twice", `{"data_dir":"data","repositories":["a/b"],"review":{"reviewers":["code","code"]}}`, `reviewers names "code" twice`},
+		{"no reviewer", `{"data_dir":"data","repositories":["a/b"],"review":{"reviewers":[]}}`, `reviewers is empty`},
+		{"a review knob in worker_env", `{"data_dir":"data","repositories":["a/b"],"worker_env":{"WF_REVIEWERS":"code"}}`, `worker_env carries WF_REVIEWERS, which is a knob of the review stage the factory runs itself; write it as "review": {"reviewers": ...}`},
 		// The quota check runs the binary the operator installed, never a name PATH or npx resolves.
 		{"quota tool by name", `{"data_dir":"data","repositories":["a/b"],"quota_axi":"quota-axi"}`, `quota_axi "quota-axi" is not an absolute path`},
 		{"quota tool through npx", `{"data_dir":"data","repositories":["a/b"],"quota_axi":"npx -y quota-axi"}`, `is not an absolute path`},
@@ -1331,7 +1356,8 @@ func (f *factory) waitForTheHangingWorker(t *testing.T, id int) []int {
 	t.Helper()
 	hanging := hangingIssue(t)
 	var run apiRun
-	f.eventually(t, 60*time.Second, fmt.Sprintf("the hanging worker of run %d and its child", id), func() bool {
+	// Every run of the canned queue before it is worked first, some forty sessions.
+	f.eventually(t, 120*time.Second, fmt.Sprintf("the hanging worker of run %d and its child", id), func() bool {
 		run = apiRun{}
 		response, err := http.Get(fmt.Sprintf("http://%s/api/runs/%d", f.address, id))
 		if err != nil || response.StatusCode != http.StatusOK {

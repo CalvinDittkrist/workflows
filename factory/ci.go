@@ -79,11 +79,14 @@ var defaultCI = ciSettings{
 	ChecksGrace:  10 * time.Minute,
 }
 
-// movedKnobs are the worker knobs the ci stage took over, by the ci knob each one is now.
-var movedKnobs = map[string]string{
-	"WF_CI_REPAIR_ROUNDS": "repair_rounds",
-	"WF_PR_BOT_REVIEWERS": "bot_reviewers",
-	"WF_PR_REVIEW_WAIT":   "review_wait",
+// movedKnobs are the worker knobs the stages the factory runs itself took over, by the object and the
+// knob each one is now.
+var movedKnobs = map[string][2]string{
+	"WF_CI_REPAIR_ROUNDS": {"ci", "repair_rounds"},
+	"WF_PR_BOT_REVIEWERS": {"ci", "bot_reviewers"},
+	"WF_PR_REVIEW_WAIT":   {"ci", "review_wait"},
+	"WF_REVIEW_ROUNDS":    {"review", "rounds"},
+	"WF_REVIEWERS":        {"review", "reviewers"},
 }
 
 // over is these settings with the knobs a ci object names written over them.
@@ -505,7 +508,7 @@ func (f *Factory) repair(parent, ctx context.Context, r *Run, entry Entry, claim
 		f.runs.event(r, Event{Kind: "factory", Title: "the merge of " + claim.base + " conflicts", Body: strings.Join(conflicted, "\n")})
 		brief = fmt.Sprintf("Merging origin/%s into the branch conflicted in these files, and the merge is still in progress in this worktree:\n%s\n\n"+
 			"Resolve every conflict so that the work of both sides stays, commit the merge and push the branch.",
-			claim.base, fenced(listed(conflicted, maxConflicted)))
+			claim.base, fenced(listed(conflicted, maxListed, "git diff --name-only --diff-filter=U")))
 	} else {
 		failing := read.failing()
 		brief = fmt.Sprintf("These checks failed on the head of the pull request:\n%s\n\n"+
@@ -1105,16 +1108,18 @@ var actionsRun = regexp.MustCompile(`/actions/runs/([0-9]+)`)
 const (
 	maxLogPerRun = 12000
 	maxLogRuns   = 4
-	// maxConflicted is how many conflicted files a brief names; the rest are counted.
-	maxConflicted = 200
+	// maxListed is how many files a brief or a reason names, the conflicted or the uncommitted; the
+	// rest are counted.
+	maxListed = 200
 )
 
-// listed is the lines of a list, the first n of them and a count of the rest.
-func listed(lines []string, n int) string {
+// listed is the lines of a list, the first n of them and a count of the rest, with the command that
+// lists them all.
+func listed(lines []string, n int, all string) string {
 	if len(lines) <= n {
 		return strings.Join(lines, "\n")
 	}
-	return strings.Join(lines[:n], "\n") + fmt.Sprintf("\nand %d more; git diff --name-only --diff-filter=U lists them all", len(lines)-n)
+	return strings.Join(lines[:n], "\n") + fmt.Sprintf("\nand %d more; %s lists them all", len(lines)-n, all)
 }
 
 // failedLogs is the failed logs of the checks that failed, from GitHub Actions; a check of another

@@ -196,7 +196,7 @@ func TestTheHostsWorkerKnobsReachTheSessionBesideWhatTheRunIs(t *testing.T) {
 	gh.cloneInto(t, data, "acme/edge-sensors")
 	f := gh.work(t, config{"poll": "50ms", "deadline": "90s", "data_dir": data,
 		"repositories": []string{"acme/edge-sensors"},
-		"worker_env":   map[string]string{"WF_REVIEW_ROUNDS": "2"},
+		"worker_env":   map[string]string{"WF_HANDOFF_TOKENS": "150000"},
 		"ci":           map[string]any{"bot_reviewers": []string{}, "review_wait": "5s"}})
 	run := f.ended(t, 1)
 
@@ -208,13 +208,13 @@ func TestTheHostsWorkerKnobsReachTheSessionBesideWhatTheRunIs(t *testing.T) {
 		t.Fatalf("the factory started %d workers, want one", len(workers))
 	}
 	env := workers[0].settings(t).Env
-	for _, moved := range []string{"WF_PR_BOT_REVIEWERS", "WF_PR_REVIEW_WAIT", "WF_CI_REPAIR_ROUNDS", "WF_CHECKS_GRACE", "WF_REVIEW_MANDATE"} {
+	for _, moved := range []string{"WF_PR_BOT_REVIEWERS", "WF_PR_REVIEW_WAIT", "WF_CI_REPAIR_ROUNDS", "WF_CHECKS_GRACE", "WF_REVIEW_MANDATE", "WF_REVIEWERS", "WF_REVIEW_ROUNDS"} {
 		if value, set := env[moved]; set {
-			t.Errorf("the worker's settings carry %s=%q; no session runs the worker's ci stage, whose knob that is", moved, value)
+			t.Errorf("the worker's settings carry %s=%q; no session runs the worker's stage whose knob that is", moved, value)
 		}
 	}
-	if rounds := env["WF_REVIEW_ROUNDS"]; rounds != "2" {
-		t.Errorf("the worker's settings carry WF_REVIEW_ROUNDS=%q, want the host's 2", rounds)
+	if tokens := env["WF_HANDOFF_TOKENS"]; tokens != "150000" {
+		t.Errorf("the worker's settings carry WF_HANDOFF_TOKENS=%q, want the host's 150000", tokens)
 	}
 	if env["WF_MODE"] != "manual" || env["WF_ISSUE"] != strconv.Itoa(claimedIssue) || env["WF_BASE_BRANCH"] != "main" {
 		t.Errorf("the worker's settings carry %v; the mode, the issue and the base are the run's own and stay beside the host's knobs", env)
@@ -1085,6 +1085,7 @@ func inProcess(t *testing.T, gh *ghShim) {
 type workerStart struct {
 	cwd, branch, head string
 	pid, pgid         int
+	longest           int // the size of the longest argument in bytes
 	args              []string
 	env               []string
 }
@@ -1143,6 +1144,25 @@ func (g *ghShim) workers(t *testing.T) []workerStart {
 	return sessionsIn(t, g.worker)
 }
 
+// reviewerSessions is every reviewer session of the panel the claude shim was started as, in order.
+func (g *ghShim) reviewerSessions(t *testing.T) []workerStart {
+	t.Helper()
+	return sessionsIn(t, g.reviewer)
+}
+
+// verdict has the claude shim answer the reviewer's run with this result: the n-th time it runs, or
+// every time for 0.
+func (g *ghShim) verdict(t *testing.T, reviewer string, n int, result string) {
+	t.Helper()
+	name := reviewer
+	if n > 0 {
+		name += "." + strconv.Itoa(n)
+	}
+	if err := os.WriteFile(filepath.Join(g.verdicts, name), []byte(result), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // authorSessions is every author session of the pr stage the claude shim was started as, in order.
 func (g *ghShim) authorSessions(t *testing.T) []workerStart {
 	t.Helper()
@@ -1160,10 +1180,12 @@ func sessionsIn(t *testing.T, log string) []workerStart {
 		t.Fatal(err)
 	}
 	started := []workerStart{}
+	last := ""
 	for _, line := range strings.Split(string(raw), "\n") {
 		field, value, _ := strings.Cut(line, " ")
 		if field == "call" {
 			started = append(started, workerStart{})
+			last = field
 			continue
 		}
 		if len(started) == 0 {
@@ -1171,21 +1193,34 @@ func sessionsIn(t *testing.T, log string) []workerStart {
 		}
 		w := &started[len(started)-1]
 		switch field {
+		case "cwd", "branch", "head", "pid", "pgid", "longest", "arg", "env":
+			last = field
+		default:
+			// A line of no field is the next line of an argument that has more than one, a brief's.
+			if last == "arg" {
+				w.args[len(w.args)-1] += "\n" + line
+			}
+			continue
+		}
+		switch field {
 		case "cwd":
 			w.cwd = value
 		case "branch":
 			w.branch = value
 		case "head":
 			w.head = value
-		case "pid", "pgid":
+		case "pid", "pgid", "longest":
 			number, err := strconv.Atoi(value)
 			if err != nil {
 				t.Fatalf("the worker wrote %q as its %s", value, field)
 			}
-			if field == "pid" {
+			switch field {
+			case "pid":
 				w.pid = number
-			} else {
+			case "pgid":
 				w.pgid = number
+			default:
+				w.longest = number
 			}
 		case "arg":
 			w.args = append(w.args, value)

@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -241,10 +242,10 @@ func cannedQueue(repositories []Connected, now time.Time) []Issue {
 
 // scriptedWorker stands in for `claude -p --output-format stream-json --verbose`. It is a subcommand
 // of the factory's own binary, so fake mode needs nothing installed on the host.
-// Usage: factory scripted-worker <ready|blocked|failed|silent|detached|fix|author|address|hang|child|daemon> <owner/name> <issue>
+// Usage: factory scripted-worker <ready|blocked|failed|silent|detached|fix|author|address|hang|child|daemon|review:<reviewer>:<round>|review-fix:<round>> <owner/name> <issue>
 func scriptedWorker(args []string, stdout, stderr io.Writer) int {
 	if len(args) < 3 {
-		fmt.Fprintln(stderr, "error: usage: factory scripted-worker <ready|blocked|failed|silent|detached|fix|author|address|hang|child|daemon> <owner/name> <issue>")
+		fmt.Fprintln(stderr, "error: usage: factory scripted-worker <ready|blocked|failed|silent|detached|fix|author|address|hang|child|daemon|review:<reviewer>:<round>|review-fix:<round>> <owner/name> <issue>")
 		return 2
 	}
 	scenario, repository := args[0], args[1]
@@ -256,6 +257,12 @@ func scriptedWorker(args []string, stdout, stderr io.Writer) int {
 	s := &script{out: stdout, context: contextStart}
 	if scenario == "author" {
 		return scriptedAuthor(s, issue)
+	}
+	if name, round, ok := scriptedRound(scenario, "review:"); ok {
+		return scriptedReviewer(s, scenarioOf(issue), name, round)
+	}
+	if _, round, ok := scriptedRound(scenario, "review-fix:"); ok {
+		return scriptedRepair(s, scenarioOf(issue), round)
 	}
 
 	// The child of a hanging worker: it prints which process it is and then waits to be ended with
@@ -360,38 +367,129 @@ func scriptedWorker(args []string, stdout, stderr io.Writer) int {
 	}
 
 	s.tool("Edit", map[string]any{"file_path": "plugins/worker/skills/work/SKILL.md"}, "The file has been updated.")
-	s.tool("Bash", map[string]any{"command": "plugins/worker/scripts/gate.sh run", "description": "Run the gate and record it"}, "gate: pass")
-	s.say("The gate is green. Starting the reviewer panel.")
-	s.skill("worker:review")
-	for _, reviewer := range []string{"code", "security", "docs", "tests", "senior"} {
-		s.subagent("worker:"+reviewer+"-reviewer", "Review the branch diff", "verdict: PASS\nfindings: 0")
-	}
-
 	if scenario == "blocked" {
-		s.say("The senior reviewer is right: the brief contradicts ADR 0012.")
+		s.say("The brief contradicts ADR 0012.")
 		summary := fmt.Sprintf("the brief asks the worker to tag the release itself, and ADR 0012 keeps releases manual.\n\n"+
 			"decision needed: drop the tagging step from issue #%d, or supersede ADR 0012.", issue)
 		s.result("success", "", false, "completed", map[string]any{"outcome": resultBlocked, "summary": summary})
 		return 0
 	}
-
-	// The review's checkpoint hands the rest of the stage to a fresh context, so what the worker carries
-	// drops back to a loaded session: the peak of this run stands before the handover, not at its end.
+	s.subagent("worker:docs-lookup", "Look up the stop-after flag", "WF_STOP_AFTER=gate ends the session once the gate has recorded a pass.")
+	s.tool("Bash", map[string]any{"command": "plugins/worker/scripts/gate.sh run", "description": "Run the gate and record it"}, "gate: pass")
+	// The gate hands the rest of the stage to a fresh context, so what the worker carries drops back
+	// to a loaded session: the peak of this run stands before the handover, not at its end.
 	s.compact()
-	s.say("The panel summary is recorded. Stopping after the review.")
-	// The session stops after the review (WF_STOP_AFTER=review), and the factory opens the pull request.
-	// The detached worker's panel ends with the tests reviewer on FIX, which the pull request says.
-	panel := "review_rounds: 1\npanel: code=PASS security=PASS docs=PASS tests=PASS senior=PASS\nfixed: 0 (S1 0, S2 0, S3 0)\ndisputed: none"
-	if scenario == "detached" {
-		panel = "review_rounds: 3\npanel: code=PASS security=PASS docs=PASS tests=FIX→FIX→FIX senior=PASS\nfixed: 4 (S1 0, S2 3, S3 1)\n" +
-			"disputed: tests S2 docs/preview.md:12 a browser test of the preview; the device has no browser to run one in"
-	}
+	s.say("The gate is green. Stopping after the gate.")
+	// The session stops after the gate (WF_STOP_AFTER=gate), and the factory runs the reviewers.
 	gate := "gate_result: pass (exit 0) at f00d5ed"
+	commits := []string{"f00d5ed feat: the change the canned issue asks for"}
 	s.tool("Bash", map[string]any{"command": "plugins/worker/scripts/stop.sh", "description": "Report the stage the session stops after"},
-		"ready: stopped after review\npanel_summary_block:\n"+panel+"\n"+gate)
-	s.result("success", "", false, "completed", map[string]any{"outcome": resultComplete, "panelSummary": panel, "gateResult": gate,
-		"summary": "stopped after review"})
+		"ready: stopped after gate\n"+gate)
+	s.result("success", "", false, "completed", map[string]any{"outcome": resultComplete, "gateResult": gate, "commits": commits,
+		"summary": "stopped after gate"})
 	return 0
+}
+
+// scriptedRound reads a scripted session of the review stage, review:<reviewer>:<round> or
+// review-fix:<round>, into its reviewer and its round.
+func scriptedRound(scenario, prefix string) (string, int, bool) {
+	rest, ok := strings.CutPrefix(scenario, prefix)
+	if !ok {
+		return "", 0, false
+	}
+	name, number := "", rest
+	if i := strings.LastIndex(rest, ":"); i >= 0 {
+		name, number = rest[:i], rest[i+1:]
+	}
+	round, err := strconv.Atoi(number)
+	return name, round, err == nil
+}
+
+// cannedFindings is what a scripted reviewer finds in a round of the issue's scenario. The ready
+// issue's code and tests reviewers ask for fixes in the first round and pass in the second; the
+// detached issue's tests reviewer asks for one in every round, so its panel spends the rounds and does
+// not pass. Every other reviewer passes.
+func cannedFindings(scenario, reviewer string, round int) []map[string]any {
+	finding := func(severity, path string, line int, claim, why, fix string) map[string]any {
+		return map[string]any{"severity": severity, "path": path, "line": line, "claim": claim, "why": why, "fix": fix}
+	}
+	switch {
+	case scenario == "ready" && round == 1 && reviewer == "code":
+		return []map[string]any{finding("S2", "upload/retry.go", 42, "The backoff is not reset after a successful upload.",
+			"The next failure waits as long as the last one did.", "Reset the backoff when an upload succeeds.")}
+	case scenario == "ready" && round == 1 && reviewer == "tests":
+		return []map[string]any{
+			finding("S2", "upload/retry_test.go", 18, "The test sleeps for the backoff.", "A slow host makes it flaky.", "Inject the clock."),
+			finding("S3", "upload/retry_test.go", 30, "The helper's name says nothing.", "It reads as a test of its own.", "Name it after what it builds."),
+		}
+	case scenario == "detached" && reviewer == "tests":
+		return []map[string]any{finding("S2", "docs/preview.md", 12, "The preview has no browser test.",
+			"A regression of the page goes unseen.", "Add a browser test of the preview.")}
+	}
+	return nil
+}
+
+// reviewerStagger is how far apart the scripted reviewers of one round report.
+const reviewerStagger = 100 * time.Millisecond
+
+// scriptedReviewer is one reviewer of the panel in one round: it reads the change and reports its
+// verdict and its findings, and nothing else, because it can do nothing else.
+func scriptedReviewer(s *script, scenario, name string, round int) int {
+	// The reviewers of a round run beside each other; each one reports a moment after the one before it
+	// in the panel, so the log of a scripted run reads the same every time it is worked.
+	time.Sleep(time.Duration(slices.Index(defaultReview.Reviewers, name)+1) * reviewerStagger)
+	s.init()
+	s.say(fmt.Sprintf("Round %d. Reading the change the brief names.", round))
+	s.tool("Read", map[string]any{"file_path": "upload/retry.go"}, "1  package upload")
+	findings := cannedFindings(scenario, name, round)
+	verdict := verdictPass
+	for _, finding := range findings {
+		if finding["severity"] != "S3" {
+			verdict = verdictFix
+		}
+	}
+	if findings == nil {
+		findings = []map[string]any{}
+	}
+	s.result("success", "", false, "completed", map[string]any{"verdict": verdict, "findings": findings})
+	return 0
+}
+
+// scriptedRepair is the fix session of a review round: it fixes what it agrees with, disputes what it
+// does not and skips the nit, by the ids the factory gave the findings.
+func scriptedRepair(s *script, scenario string, round int) int {
+	s.init()
+	s.say("The brief carries the findings of the round. Fixing what stands.")
+	s.tool("Edit", map[string]any{"file_path": "upload/retry.go"}, "The file has been updated.")
+	s.tool("Bash", map[string]any{"command": "git commit -am 'fix: address the review'", "description": "Commit the fixes"}, "[feat 1a2b3c4] fix: address the review")
+	report := map[string]any{"outcome": resultComplete, "fixed": []string{}, "disputed": []map[string]any{}, "skipped": []map[string]any{}}
+	switch {
+	case scenario == "ready":
+		report["fixed"] = []string{"F1"}
+		report["disputed"] = []map[string]any{{"finding": "F2", "reason": "the test takes the clock already; the sleep is the fake clock's, which returns at once"}}
+		report["skipped"] = []map[string]any{{"finding": "F3", "reason": "the helper is used once and named after the test"}}
+		report["summary"] = "Fixed the backoff, disputed the flaky test, left the helper's name."
+	case scenario == "detached" && round == 2:
+		report["disputed"] = []map[string]any{{"finding": "F1", "reason": "the device has no browser to run one in"}}
+		report["summary"] = "Disputed the browser test."
+	default:
+		report["fixed"] = []string{"F1"}
+		report["summary"] = "Fixed what the round found."
+	}
+	s.result("success", "", false, "completed", report)
+	return 0
+}
+
+// cannedGate is the gate on the final head in fake mode: the detached issue's fails on its first run,
+// which a fix session repairs; every other one passes.
+func cannedGate(scenario string, panel Panel) gateRun {
+	head := fakeHead(panel)
+	if scenario == "detached" && panel.GateRounds == 0 {
+		return gateRun{head: head, result: "gate_result: fail (exit 2) at " + head + "\ngate_command: make check\ngate_duration: 41 s",
+			tail: "--- FAIL: TestPreviewServes (0.02s)\n    preview_test.go:31: the preview answered 404\nFAIL\nmake: *** [check] Error 1"}
+	}
+	return gateRun{passed: true, head: head, result: "gate_result: pass (exit 0) at " + head + "\ngate_command: make check\ngate_duration: 38 s",
+		tail: "ok  \tpreview\t0.4s"}
 }
 
 // scriptedAuthor is the author session of the pr stage: it reads the change and reports the title and
@@ -526,11 +624,6 @@ func (s *script) failingTool(name string, input map[string]any, result string) {
 	id := fmt.Sprintf("toolu_%d", s.tools)
 	s.message("assistant", "", []map[string]any{{"type": "tool_use", "id": id, "name": name, "input": input}})
 	s.message("user", "", []map[string]any{{"type": "tool_result", "tool_use_id": id, "content": result, "is_error": true}})
-}
-
-// skill is how a worker enters a stage: the factory reads the stage from this call.
-func (s *script) skill(name string) {
-	s.call("", "Skill", map[string]any{"skill": name}, "Launching skill: "+name)
 }
 
 // subagent is an Agent call and the work it does: its events carry the tool-use id of the call, which

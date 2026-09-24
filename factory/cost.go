@@ -59,9 +59,10 @@ func (p price) cost(u usage) float64 {
 // tally counts one assistant line into the run's totals. A message comes as one assistant line per
 // content block, all with its id, and a later line carries at least what an earlier one did: a
 // message the run has not seen is one more turn when it is the worker's own, and one it has seen adds
-// only what its usage grew by. A model with no price here is noted, for the run's end to say whether
-// the cost it records leaves one out. Callers hold the lock.
-func (r *Run) tally(id, model string, sub bool, u usage) {
+// only what its usage grew by. What it adds is added to the session's count as well, which its result
+// line's totals replace. A model with no price here is noted, for the run's end to say whether the
+// cost it records leaves one out. Callers hold the lock.
+func (r *Run) tally(session *heard, id, model string, sub bool, u usage) {
 	if r.counted == nil {
 		r.counted = map[string]usage{}
 	}
@@ -74,18 +75,22 @@ func (r *Run) tally(id, model string, sub bool, u usage) {
 		r.counted[id] = now
 	}
 	grown := now.minus(before)
-	r.Tokens.Input += grown.Input
-	r.Tokens.Output += grown.Output
-	r.Tokens.CacheCreation += grown.CacheCreation
-	r.Tokens.CacheRead += grown.CacheRead
+	for _, t := range []*Tokens{&r.Tokens, &session.tokens} {
+		t.Input += grown.Input
+		t.Output += grown.Output
+		t.CacheCreation += grown.CacheCreation
+		t.CacheRead += grown.CacheRead
+	}
 	if !seen && !sub {
 		r.Turns++
+		session.turns++
 	}
 	r.Totals = totalsFactory
 	// A message Claude Code writes itself, such as an API error, names no model the API has and
 	// carries no usage: there is nothing to price.
 	if p, ok := priceOf(model); ok {
 		r.CostUSD += p.cost(grown)
+		session.cost += p.cost(grown)
 	} else if grown != (usage{}) {
 		if r.unpricedModels == nil {
 			r.unpricedModels = map[string]bool{}
