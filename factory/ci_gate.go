@@ -32,8 +32,8 @@ import (
 // blocked naming it, so a typo never reads as a pass. A gate that reads every check passes only on two
 // readings a poll apart that show the same checks, all passed, because GitHub registers the checks of a
 // head one workflow at a time and a quick one can end before a slow one is there. Checks still running
-// are waited for within the run's deadline. The result is a gate run like one in the worktree, with the failed logs of the checks
-// that failed as its tail.
+// are waited for within the run's deadline. The result is a gate run like one in the worktree, with
+// the failed logs of the checks that failed as its tail.
 func (f *Factory) ciGate(parent, ctx context.Context, r *Run, entry Entry, claim claimed, panel *Panel, classed Classed) gateRun {
 	head, ok := f.gatePushed(parent, ctx, r, claim, *panel)
 	if !ok {

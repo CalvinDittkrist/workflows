@@ -16,10 +16,10 @@ import (
 // name, the path patterns it covers, the gate command it runs before the pull request and, optionally,
 // the reviewers it asks. The factory determines the class from the files changed between the merge base
 // and the head: the first class whose patterns cover every changed file applies, and when none does the
-// built-in class full applies, the repository's single gate command (gate.command) and the review's panel. It determines it
-// before the review, whose reviewers it decides, and again before the gate on the final head, because a
-// fix can add a file the first class does not cover. CI runs the full gate on every pull request all
-// the same, so what a class leaves out is caught in the ci stage.
+// built-in class full applies, the repository's single gate command (gate.command) and the review's
+// panel. It determines it before the review, whose reviewers it decides, and again before the gate on
+// the final head, because a fix can add a file the first class does not cover. CI runs the full gate
+// on every pull request all the same, so what a class leaves out is caught in the ci stage.
 //
 // [ADR 0041]: ../docs/adr/0041-a-change-class-decides-the-gate-and-the-reviewers-before-the-pull-request.md
 
