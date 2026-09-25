@@ -115,10 +115,10 @@ type quotaReport struct {
 // out of its answer. An expired credential is renewed on the way: quota-axi runs Claude Code's own
 // `claude doctor` for that, which spends no quota, and no session of the factory reads the credential
 // while a check runs, because the factory works one run at a time and checks only between sessions
-// ([ADR 0048]). With the flag that forbade the renewal, every run after a quiet night started without
-// a reading, which is when the maintainer's share of the window is most likely in use.
+// ([ADR 0037], amended). With the flag that forbade the renewal, every run after a quiet night
+// started without a reading, which is when the maintainer's share of the window is most likely in use.
 //
-// [ADR 0048]: ../docs/adr/0048-the-quota-check-renews-an-expired-credential.md
+// [ADR 0037]: ../docs/adr/0037-the-quota-check-waits-below-12-percent-of-the-workers-scope.md
 func (f *Factory) readQuota(ctx context.Context, models []string) (quota, error) {
 	ctx, cancel := context.WithTimeout(ctx, quotaTimeout)
 	defer cancel()

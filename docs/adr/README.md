@@ -40,7 +40,7 @@ One file per decision, numbered, never edited after acceptance (supersede instea
 | [0034](0034-the-compact-trigger-is-raised-through-the-window.md) | The compact trigger is 200 000, and the window is what raises it | accepted |
 | [0035](0035-every-category-the-apply-phase-scaffolds-is-answerable.md) | Every category the apply phase scaffolds is answerable | accepted |
 | [0036](0036-the-factory-updates-the-worker-plugin-and-nothing-else.md) | The factory updates the worker plugin and nothing else | superseded by [0042](0042-the-factory-carries-its-own-prompts-and-updates-no-plugin.md) |
-| [0037](0037-the-quota-check-waits-below-12-percent-of-the-workers-scope.md) | The quota check waits below 12 % of the worker's scope | accepted; amended by [0048](0048-the-quota-check-renews-an-expired-credential.md): the check renews an expired credential |
+| [0037](0037-the-quota-check-waits-below-12-percent-of-the-workers-scope.md) | The quota check waits below 12 % of the worker's scope | accepted; amended 2026-09-25: the check renews an expired credential |
 | [0038](0038-the-local-workflow-and-the-factory-are-peers.md) | The local workflow and the factory are peers | accepted |
 | [0039](0039-every-session-reports-through-a-structured-result.md) | Every session reports through a structured result and never through prose | accepted |
 | [0040](0040-the-factory-owns-the-delivery-lifecycle-in-go.md) | The factory owns the delivery lifecycle in Go and starts one fresh session per stage | accepted |
@@ -51,4 +51,3 @@ One file per decision, numbered, never edited after acceptance (supersede instea
 | [0045](0045-a-test-hunt-runs-on-a-branch-without-an-issue.md) | A test hunt runs on a branch without an issue | accepted |
 | [0046](0046-a-test-is-removed-at-high-confidence-without-approval-before-the-pull-request.md) | A test is removed at high confidence without a person's approval before the pull request | accepted; amended by [0047](0047-a-test-hunt-reads-its-shares-whole-and-hunts-while-it-finds-something.md): the worker checks a `medium` candidate instead of keeping it unread |
 | [0047](0047-a-test-hunt-reads-its-shares-whole-and-hunts-while-it-finds-something.md) | A test hunt reads its shares whole and hunts while it finds something new | accepted |
-| [0048](0048-the-quota-check-renews-an-expired-credential.md) | The quota check renews an expired credential | accepted |

@@ -3,7 +3,7 @@
 Date: 2026-09-22
 Status: accepted
 Amends: [0028](0028-the-quota-check-is-a-courtesy-not-a-guard.md) (the default minimum, which scope is the worker's, and when a run ran out of quota)
-Amended by: [0048](0048-the-quota-check-renews-an-expired-credential.md) (the check renews an expired credential instead of passing `--no-credential-refresh`)
+Amended 2026-09-25: the check runs without `--no-credential-refresh` (see the end)
 
 ## Context
 [ADR 0028](0028-the-quota-check-is-a-courtesy-not-a-guard.md) decided the check: before every run, the smaller remaining percentage of the all-models scope and the worker's model scope, a configured minimum, a wait until the reported reset, and a check that fails open. Building it left four questions that ADR did not answer.
@@ -33,3 +33,6 @@ The factory never writes a credential. A check that meets an expired one fails o
 The reading is written against quota-axi 0.1.49, not 0.1.50, which was first named here. 0.1.50 reports in the same schema version but reads the `utilization` of Claude's usage endpoint, the percentage used, as the percentage remaining ([kunchenguid/quota-axi#209](https://github.com/kunchenguid/quota-axi/issues/209) led to that change). The schema check cannot tell the two apart, and with 0.1.50 the check would wait while the window is fresh and start runs when it is nearly used up. The pin moves to a later version only after its Claude percentages are compared with Claude Code's `/usage`.
 
 Telling a quota stop from a failure by the quota after the error means a session that failed for another reason while the quota happened to be used up is resumed after the reset instead of waiting for a person. That costs one more run, which ends `failed` if the error was the issue's. An issue whose sessions use up a whole window each, because it is too large or because its text steers the worker into spending, costs two windows and then waits; without the limit it would take every window of the shared subscription. The other way round, a real quota stop read as `failed`, would leave a held issue waiting for a person who has nothing to decide.
+
+## Amendment of 2026-09-25
+The factory runs `quota-axi --provider claude --json`, without `--no-credential-refresh`. The ground for the flag, that the checks run beside a worker's Claude Code, did not hold: the factory works one run at a time, and it checks before a run starts and after a session has ended, never beside a session. What the flag did was make the check fail open whenever the host had been quiet for longer than the credential's life, about eight hours, so on the Pi host every run after a quiet night started without a reading, which is when the maintainer's share of the window is most likely in use. quota-axi renews an expired credential through `claude doctor`, Claude Code's smallest non-interactive command: no quota spent, no browser, two to three seconds on the Pi, inside the check's 30 seconds. A renewal that fails leaves the reading stale and the check fails open as before. The factory itself still writes no credential.
