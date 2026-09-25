@@ -98,23 +98,6 @@ func (f *factory) waitsForQuota(t *testing.T) time.Time {
 	return *status.QuotaUntil
 }
 
-// The scope the check reads is the one of the model the worker runs on, and without a --model in
-// worker_args that is the worker agent's own. The factory restates that model, so this holds it to
-// the agent's frontmatter: a worker moved to another model would otherwise be checked against the
-// quota of one it no longer spends.
-func TestTheWorkerModelAgreesWithTheWorkerAgent(t *testing.T) {
-	t.Parallel()
-	agent := readFile(t, abs(t, filepath.Join("..", "plugins", "worker", "agents", "worker.md")))
-	frontmatter, _, _ := strings.Cut(strings.TrimPrefix(agent, "---\n"), "\n---")
-	found := regexp.MustCompile(`(?m)^model:\s*(\S+)\s*$`).FindStringSubmatch(frontmatter)
-	if found == nil {
-		t.Fatal("the worker agent names no model in its frontmatter; the factory's quota check reads the scope of that model")
-	}
-	if found[1] != workerModel {
-		t.Errorf("the factory checks the quota of %s for a worker whose agent runs on %s", workerModel, found[1])
-	}
-}
-
 // Enough quota left: the run starts, as if there were no check at all. What counts is the smallest of
 // the all-models scope and the scopes of the models the run spends; a scope of a model no session of
 // the run runs on that is nearly used up is none of this run's business.

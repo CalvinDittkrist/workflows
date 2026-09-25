@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-// The gate stage, which the factory runs itself ([ADR 0043], step 5): the work session stops after the
+// The gate stage, which the factory runs itself ([ADR 0043], step 5): the implement session stops after the
 // implement stage, and the factory merges the base, runs the gate of the change class and hands a
 // failure to a fix session within the gate's budget.
 //
@@ -24,7 +24,7 @@ func linesGate(test string) string {
 	return `@lines=$$(wc -l < worked.md | tr -d ' '); echo "worked.md has $$lines lines"; test $$lines ` + test
 }
 
-// A gate that fails on the work session's commit goes to a fix session of the gate stage with the end
+// A gate that fails on the implement session's commit goes to a fix session of the gate stage with the end
 // of its output, and the gate runs again on the commit that session leaves; the pass is what the
 // reviewers and the pull request are given.
 func TestAFailingGateGoesToAFixSessionAndRunsAgainOnItsCommit(t *testing.T) {
@@ -40,7 +40,7 @@ func TestAFailingGateGoesToAFixSessionAndRunsAgainOnItsCommit(t *testing.T) {
 	}
 	workers := gh.workers(t)
 	if len(workers) != 2 {
-		t.Fatalf("the factory started %d worker sessions, want the work session and one fix session of the gate", len(workers))
+		t.Fatalf("the factory started %d worker sessions, want the implement session and one fix session of the gate", len(workers))
 	}
 	brief := strings.Join(workers[1].args, "\n")
 	for _, want := range []string{"after the implementation, and it failed", "gate_result: fail (exit 2) at " + short(workers[1].head), "worked.md has 1 lines"} {
@@ -52,7 +52,7 @@ func TestAFailingGateGoesToAFixSessionAndRunsAgainOnItsCommit(t *testing.T) {
 	if len(run.Gates) != 2 || run.Gates[0].Passed || run.Gates[0].Exit != 2 || run.Gates[0].Head != workers[1].head ||
 		!strings.Contains(run.Gates[0].Tail, "worked.md has 1 lines") || !run.Gates[1].Passed || run.Gates[1].Head != head ||
 		run.Gates[1].Command != "make check" || run.Gates[1].Class != classFull {
-		t.Errorf("the run recorded the gates %+v, want a failure with exit 2 on the work session's commit and a pass of make check on %s", run.Gates, short(head))
+		t.Errorf("the run recorded the gates %+v, want a failure with exit 2 on the implement session's commit and a pass of make check on %s", run.Gates, short(head))
 	}
 	pass := "gate_result: pass (exit 0) at " + short(head)
 	if reviewers := strings.Join(factoryBodies(run, "briefed the reviewers"), "\n"); !strings.Contains(reviewers, pass) {
@@ -95,7 +95,7 @@ func TestAGateThatFailsPastItsBudgetBlocksTheRunNamingTheFailure(t *testing.T) {
 				}
 			}
 			if workers := gh.workers(t); len(workers) != 1+c.fixes {
-				t.Errorf("the factory started %d worker sessions, want the work session and %d fix sessions", len(workers), c.fixes)
+				t.Errorf("the factory started %d worker sessions, want the implement session and %d fix sessions", len(workers), c.fixes)
 			}
 			if len(run.Gates) != 1+c.fixes {
 				t.Errorf("the run recorded %d gates, want %d", len(run.Gates), 1+c.fixes)
@@ -152,7 +152,7 @@ func TestAGatePastItsTimeoutIsEndedWithItsProcessGroupAndFails(t *testing.T) {
 func TestTheGateStageMergesTheBaseAndAConflictGoesToAFixSession(t *testing.T) {
 	t.Parallel()
 	for name, c := range map[string]struct {
-		file     string // the file main takes a change to while the work session runs
+		file     string // the file main takes a change to while the implement session runs
 		sessions int
 		abort    bool // the fix session gives the merge up and commits something else
 	}{
@@ -163,7 +163,7 @@ func TestTheGateStageMergesTheBaseAndAConflictGoesToAFixSession(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			gh, data := panelClaim(t, "@echo the gate ran")
-			// The work session stays a while after it committed, and main moves on meanwhile.
+			// The implement session stays a while after it committed, and main moves on meanwhile.
 			gh.env = append(gh.env, "CLAUDE_SHIM_SLEEP=5", "CLAUDE_SHIM_THEN_SLEEP=0")
 			if c.abort {
 				gh.env = append(gh.env, "CLAUDE_SHIM_THEN_ABORT_MERGE=1", "CLAUDE_SHIM_THEN_COMMIT=elsewhere.md")
@@ -214,10 +214,10 @@ func TestTheGateStageMergesTheBaseAndAConflictGoesToAFixSession(t *testing.T) {
 	}
 }
 
-// A resumed run whose run before got past the work session, and whose branch carries commits beyond the
-// base and no pass of the gate for them, starts at the gate stage on them and starts no work session;
-// one whose branch carries none starts with the work session. So does one whose run before ended in the
-// work session after a commit of its own: that session never reported its implementation complete, and
+// A resumed run whose run before got past the implement session, and whose branch carries commits beyond the
+// base and no pass of the gate for them, starts at the gate stage on them and starts no implement session;
+// one whose branch carries none starts with the implement session. So does one whose run before ended in the
+// implement session after a commit of its own: that session never reported its implementation complete, and
 // gating what it left would review and open a pull request of half an implementation.
 func TestAResumeWithCommitsBeyondTheBaseStartsAtTheGateStage(t *testing.T) {
 	t.Parallel()
@@ -227,7 +227,7 @@ func TestAResumeWithCommitsBeyondTheBaseStartsAtTheGateStage(t *testing.T) {
 	}{
 		"with commits":    {committed: true, gating: true, stages: []string{"implement", "gate"}},
 		"without commits": {committed: false, gating: false, stages: []string{"implement", "gate"}},
-		"with commits of a work session that ended": {committed: true, gating: false, stages: []string{"implement"}},
+		"with commits of a implement session that ended": {committed: true, gating: false, stages: []string{"implement"}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -261,16 +261,16 @@ func TestAResumeWithCommitsBeyondTheBaseStartsAtTheGateStage(t *testing.T) {
 			if c.gating {
 				if len(workers) != 0 || len(gating) != 1 || !equal(resumed.Stages, []string{"gate", "review", "pr", "ci"}) ||
 					len(resumed.Gates) != 1 || resumed.Gates[0].Head != head {
-					t.Errorf("the resume started %d work sessions, said %v, went through %v and ran the gates %+v, want it to start at the gate stage on %s",
+					t.Errorf("the resume started %d implement sessions, said %v, went through %v and ran the gates %+v, want it to start at the gate stage on %s",
 						len(workers), gating, resumed.Stages, resumed.Gates, short(head))
 				}
 				return
 			}
 			if len(workers) != 1 || len(gating) != 0 || !equal(resumed.Stages, []string{"implement", "gate", "review", "pr", "ci"}) {
-				t.Errorf("the resume started %d work sessions, said %v and went through %v, want it to start with the work session", len(workers), gating, resumed.Stages)
+				t.Errorf("the resume started %d implement sessions, said %v and went through %v, want it to start with the implement session", len(workers), gating, resumed.Stages)
 			}
 			if len(resumed.Gates) == 0 || resumed.Gates[0].Head == head {
-				t.Errorf("the resume ran the gates %+v, want the first on the commit of its own work session and not on %s", resumed.Gates, short(head))
+				t.Errorf("the resume ran the gates %+v, want the first on the commit of its own implement session and not on %s", resumed.Gates, short(head))
 			}
 		})
 	}
@@ -339,7 +339,7 @@ func TestAResumedGateCommitsAMergeWhoseConflictsAreResolved(t *testing.T) {
 		t.Errorf("the merge the resume committed has shared.md as %q, want the resolution %q", kept, resolution)
 	}
 	if workers := gh.workers(t); len(workers) != 0 {
-		t.Errorf("the resume started %d work sessions, want none: the merge was resolved already", len(workers))
+		t.Errorf("the resume started %d implement sessions, want none: the merge was resolved already", len(workers))
 	}
 }
 

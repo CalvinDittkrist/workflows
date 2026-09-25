@@ -90,7 +90,7 @@ func TestAReleasedIssueIsAssignedAgainAndResumedInTheSameWorktree(t *testing.T) 
 
 	// The resumed run itself: the same worktree, and on the commit the work there had reached. That
 	// commit is beyond the base with no pass of the gate for it, so the run starts at the gate stage
-	// and starts no work session.
+	// and starts no implement session.
 	if workers := gh.workers(t); len(workers) != 1 {
 		t.Fatalf("the factory started %d workers, want the first run's alone", len(workers))
 	}
@@ -411,10 +411,10 @@ func TestAResumeWhoseWorktreeIsGoneIsMadeAgainFromTheBranch(t *testing.T) {
 			resumed.Issue, resumed.Signal, resumed.Outcome, resumed.Reason, claimedIssue, f.output(t))
 	}
 	// The run went on where the record says, on the branch, and on the commits the remote carries: the
-	// run before got past its work session and those are beyond the base, so it started at the gate
+	// run before got past its implement session and those are beyond the base, so it started at the gate
 	// stage, gated them and had them reviewed there.
 	if workers := gh.workers(t); len(workers) != 0 {
-		t.Errorf("the factory started %d work sessions, want none: the branch carries the work", len(workers))
+		t.Errorf("the factory started %d implement sessions, want none: the branch carries the work", len(workers))
 	}
 	if len(resumed.Gates) == 0 || resumed.Gates[0].Head != work {
 		t.Errorf("the resumed run ran the gates %+v, want one on %s", resumed.Gates, work)
@@ -466,12 +466,12 @@ func TestAWorktreeMadeAgainMovesALocalBranchBehindTheRemoteUpToIt(t *testing.T) 
 		t.Fatalf("run 2 ended as %q (%s), want the resume to end ready; the factory's log:\n%s",
 			resumed.Outcome, resumed.Reason, f.output(t))
 	}
-	if len(resumed.Gates) == 0 || resumed.Gates[0].Head != work {
-		t.Errorf("the resumed run ran the gates %+v, want one on %s: a worktree made again carries what the remote holds now", resumed.Gates, work)
+	if workers := gh.workers(t); len(workers) == 0 || workers[0].head != work {
+		t.Errorf("the resumed run started its implement session as %+v, want it on %s: a worktree made again carries what the remote holds now", workers, work)
 	}
-	if at := gh.git(t, clone, "rev-parse", "refs/heads/"+claimedBranch); at != work {
-		t.Errorf("the branch %s of %s is at %s, want %s: a name that holds nothing the remote does not is moved up to it", claimedBranch, clone, at, work)
-	}
+	// A name that holds nothing the remote does not is moved up to it: the branch of the clone carries
+	// the remote's commit (git fails the test when it does not).
+	gh.git(t, clone, "merge-base", "--is-ancestor", work, "refs/heads/"+claimedBranch)
 }
 
 // The one automatic resume per issue, in every shape an issue can reach it in. A run of the factory

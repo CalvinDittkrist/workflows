@@ -119,7 +119,7 @@ func TestAReviewRequestThatStallsStillReachesTheLoginsBehindIt(t *testing.T) {
 
 // A run that ends ready and names no pull request has nothing to ask a review of, and is an issue
 // the factory still holds and is done with: the maintainer hears of it on the issue, like every
-// other ending that waits for a person. No run of this factory ends so any more — the work session
+// other ending that waits for a person. No run of this factory ends so any more — the implement session
 // stops after the review and the factory opens the pull request itself, and a follow-up run answers
 // the review in its own address-reviews stage — so such a run is one a factory before it recorded,
 // whose session ran the pipeline to its end and named a pull request of another repository, and

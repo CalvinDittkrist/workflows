@@ -23,8 +23,12 @@ func TestASessionWithoutAResultThatFitsTheSchemaFailsTheRunAndSaysSo(t *testing.
 	}{
 		{"no result line", nil, "without a result line"},
 		{"an outcome the schema does not have", map[string]any{"outcome": "ready", "summary": "done"}, `the outcome "ready"`},
-		{"no summary", map[string]any{"outcome": "complete", "pullRequest": "https://github.com/acme/edge-sensors/pull/104"}, "no summary"},
+		{"no summary", map[string]any{"outcome": "complete", "commits": []string{"3f2a9c1 feat: retry the upload"}}, "no summary"},
 		{"a field the schema does not have", map[string]any{"outcome": "complete", "summary": "done", "merged": true}, "not an object of the schema"},
+		// The fields a session of the worker plugin reported when the factory stopped it after a stage
+		// are no fields of a session any more.
+		{"a pull request of its own", map[string]any{"outcome": "complete", "summary": "done", "pullRequest": "https://github.com/acme/edge-sensors/pull/104"}, "not an object of the schema"},
+		{"a gate result of its own", map[string]any{"outcome": "complete", "summary": "done", "gateResult": "gate_result: pass (exit 0) at 3f2a9c1"}, "not an object of the schema"},
 		{"not an object", "ready: https://github.com/acme/edge-sensors/pull/104", "not an object of the schema"},
 		{"blocked with nothing to say", map[string]any{"outcome": "blocked", "summary": " "}, "empty summary"},
 	} {
@@ -57,33 +61,27 @@ func TestASessionWithoutAResultThatFitsTheSchemaFailsTheRunAndSaysSo(t *testing.
 	}
 }
 
-// A session told to stop after an earlier stage than the last reports what it reached as fields of its
-// result: the pull request, the gate result and the commits ([ADR 0043]). The schema
-// the session is held to declares them, and a result that carries every one of them is a result that
-// fits: the run is ready with its pull request.
-//
-// [ADR 0043]: ../docs/adr/0043-the-migration-runs-from-the-last-stage-to-the-first.md
-func TestAResultCarriesWhatAStoppedSessionReached(t *testing.T) {
+// The implement session reports its commits as a field of its result, which the schema it is held to
+// declares as a list of strings, and a result that carries them fits: the run goes on through the
+// factory's stages to ready.
+func TestTheImplementSessionReportsItsCommits(t *testing.T) {
 	t.Parallel()
 	gh := newGhShim(t)
 	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
 	gh.loggedInAs(t, "factory-bot")
 	gh.assigns(t, "acme/edge-sensors", claimedIssue, "factory-bot")
-	pullRequest := "https://github.com/acme/edge-sensors/pull/104"
 	gh.workerResults(t, map[string]any{
-		"outcome":     "complete",
-		"pullRequest": pullRequest,
-		"gateResult":  "gate_result: pass (exit 0) at 3f2a9c1",
-		"commits":     []string{"3f2a9c1 feat: retry the upload", "8b01d2e test: the broker drops"},
-		"summary":     "stopped after implement",
+		"outcome": "complete",
+		"commits": []string{"3f2a9c1 feat: retry the upload", "8b01d2e test: the broker drops"},
+		"summary": "Retried the upload and tested a broker that drops the connection.",
 	})
 	data := filepath.Join(t.TempDir(), "data")
 	gh.cloneInto(t, data, "acme/edge-sensors")
 	f := gh.work(t, config{"poll": "50ms", "deadline": "90s", "data_dir": data, "repositories": []string{"acme/edge-sensors"}})
 	run := f.ended(t, 1)
-	if run.Outcome != "ready" || run.PullRequest != pullRequest {
-		t.Fatalf("the run ended as %q with %q because %q, want ready with %s; the factory's log:\n%s",
-			run.Outcome, run.PullRequest, run.Reason, pullRequest, f.output(t))
+	if run.Outcome != "ready" || !equal(run.Stages, []string{"implement", "gate", "review", "pr", "ci"}) {
+		t.Fatalf("the run ended as %q through %v because %q, want ready through implement, gate, review, pr and ci; the factory's log:\n%s",
+			run.Outcome, run.Stages, run.Reason, f.output(t))
 	}
 
 	workers := gh.workers(t)
@@ -106,11 +104,8 @@ func TestAResultCarriesWhatAStoppedSessionReached(t *testing.T) {
 			}
 		}
 	}
-	for name, want := range map[string]string{"pullRequest": "string", "gateResult": "string", "commits": "array"} {
-		got, ok := schema.Properties[name]
-		if !ok || got.Type != want {
-			t.Errorf("the session's schema declares %s as %+v, want a field of type %s", name, got, want)
-		}
+	if got := schema.Properties["commits"]; got.Type != "array" {
+		t.Errorf("the session's schema declares the commits as %+v, want a list", got)
 	}
 	if items := schema.Properties["commits"].Items; items == nil || items.Type != "string" {
 		t.Errorf("the session's schema declares the commits as %+v, want a list of strings", items)
@@ -188,5 +183,30 @@ func TestASessionThatRunsPastItsStageTimeoutIsEndedAndFailsNamingTheStage(t *tes
 	}
 	if err := syscall.Kill(-workers[0].pgid, 0); err == nil {
 		t.Errorf("the process group %d of the session survived its timeout", workers[0].pgid)
+	}
+}
+
+// An implement session that reports complete and committed nothing leaves the gate, the reviewers and
+// the pull request no change to work on: the run fails there, saying so with what the session said,
+// and no later stage runs.
+func TestAnImplementSessionThatCommitsNothingFailsTheRun(t *testing.T) {
+	t.Parallel()
+	gh := newGhShim(t)
+	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
+	gh.loggedInAs(t, "factory-bot")
+	gh.assigns(t, "acme/edge-sensors", claimedIssue, "factory-bot")
+	gh.workerCommits(t, "")
+	gh.workerResults(t, map[string]any{"outcome": "complete", "summary": "The issue is done on main already."})
+	data := filepath.Join(t.TempDir(), "data")
+	gh.cloneInto(t, data, "acme/edge-sensors")
+	f := gh.work(t, config{"poll": "50ms", "deadline": "90s", "data_dir": data, "repositories": []string{"acme/edge-sensors"}})
+	run := f.ended(t, 1)
+	if run.Outcome != "failed" || !strings.Contains(run.Reason, "carries no commit beyond origin/main") ||
+		!strings.Contains(run.Reason, "The issue is done on main already.") {
+		t.Fatalf("the run ended as %q because %q, want failed naming the missing commit and what the session said; the factory's log:\n%s",
+			run.Outcome, run.Reason, f.output(t))
+	}
+	if !equal(run.Stages, []string{"implement"}) || len(run.Gates) != 0 || len(gh.reviewerSessions(t)) != 0 {
+		t.Errorf("the run went through %v, ran the gates %+v and %d reviewers, want the implement stage alone", run.Stages, run.Gates, len(gh.reviewerSessions(t)))
 	}
 }

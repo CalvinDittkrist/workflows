@@ -4,12 +4,10 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"maps"
 	"net"
 	"os"
 	"path/filepath"
 	"regexp"
-	"slices"
 	"strings"
 	"time"
 )
@@ -23,11 +21,6 @@ type Config struct {
 	Poll       string   `json:"poll"`
 	DataDir    string   `json:"data_dir"`
 	WorkerArgs []string `json:"worker_args"`
-	// WorkerEnv is the worker knobs every run of this host is given: the variables the worker
-	// plugin's scripts read for themselves, such as WF_REVIEW_ROUNDS, by name and value. They are
-	// the knobs a local claim takes with --env and nothing else: what a run is — its mode, its
-	// issue, its base — is the factory's, and a name outside the list is refused (workerKnobs).
-	WorkerEnv map[string]string `json:"worker_env"`
 	// Paused is a pointer because its default is not the zero value: a file that does not name it
 	// runs paused, so working a line unattended is always something the operator wrote down.
 	Paused *bool `json:"paused"`
@@ -104,7 +97,6 @@ type Settings struct {
 	Poll         time.Duration
 	DataDir      string
 	WorkerArgs   []string
-	WorkerEnv    map[string]string
 	Paused       bool // as the file said when it was read; a running factory asks Factory.Paused
 	Notify       []string
 	Repositories []Connected
@@ -128,7 +120,7 @@ const (
 	defaultPoll         = 60 * time.Second
 	defaultQuotaMinimum = 12
 
-	configFields = "listen, label, deadline, poll, data_dir, worker_args, worker_env, paused, notify, repositories, quota_axi, quota_minimum, ci, review, gate"
+	configFields = "listen, label, deadline, poll, data_dir, worker_args, paused, notify, repositories, quota_axi, quota_minimum, ci, review, gate"
 )
 
 // A repository is named as owner/name; the factory never takes a URL or a local path, because the
@@ -170,15 +162,14 @@ func validBase(name string) bool {
 	return true
 }
 
-// workerFlags are the arguments of the worker command the run itself is defined by: the agent, the
-// prompt, the shape of the output the factory reads the run from, the permission mode being
-// unattended costs, and the settings object that carries the mode, the issue, the base branch and
+// workerFlags are the arguments of the worker command the run itself is defined by: the agent and its
+// definition, the prompt, the shape of the output the factory reads the run from, the permission mode
+// being unattended costs, and the settings object that switches the workflow's plugins off and carries
 // the compact pin. worker_args is added to that command, so an operator's own copy of one of them
 // would be a second value for something the factory has decided — and a worker started with someone
-// else's --settings would review and open its pull request against the wrong branch, or merge what
-// it built. What Claude Code makes of two of the same flag is not what the factory rests on: it is
+// else's --settings or --agents could carry a plugin that merges what it built. What Claude Code makes of two of the same flag is not what the factory rests on: it is
 // refused before a run is started (README, Configuration).
-var workerFlags = []string{"--settings", "--agent", "--permission-mode", "--output-format", "-p", "--print"}
+var workerFlags = []string{"--settings", "--agents", "--agent", "--permission-mode", "--output-format", "-p", "--print"}
 
 // factoryOwns names the flag of the worker command an argument would be a second value for, or "".
 func factoryOwns(arg string) string {
@@ -188,29 +179,6 @@ func factoryOwns(arg string) string {
 		}
 	}
 	return ""
-}
-
-// workerKnobs are the names worker_env may set: the variables the worker plugin's scripts read for
-// themselves, which is the list the orchestrator's claim.sh accepts for --env (env_accepted), and a
-// drift test holds the two together. An empty value is a setting of its own, as it is on a claim.
-// What a run is stays out of the list: WF_MODE, WF_ISSUE and WF_BASE_BRANCH are the factory's
-// (workerVariables), WF_REVIEW_MANDATE is the word of a driver that starts a worker session on a
-// review, which the factory, answering reviews itself, never is, and a variable of the host's shell
-// is not a setting of the workflow.
-//
-// The knobs of the review and of the wait for CI are the factory's own since it runs those stages
-// itself, so worker_env refuses them and names the knob each one moved to (movedKnobs).
-var workerKnobs = []string{"WF_REVIEWERS", "WF_REVIEW_ROUNDS", "WF_CI_REPAIR_ROUNDS", "WF_PR_BOT_REVIEWERS", "WF_PR_REVIEW_WAIT", "WF_HANDOFF_TOKENS", "WF_CONTEXT_MAX_AGE", "WF_HANDOFF_SESSION_MS", "WF_HANDOFF_POLL_SECONDS", "WF_DOCS_TIMEOUT"}
-
-// hostKnobs is the names worker_env takes: the worker knobs without the ones the factory's stages took.
-func hostKnobs() []string {
-	out := []string{}
-	for _, name := range workerKnobs {
-		if _, moved := movedKnobs[name]; !moved {
-			out = append(out, name)
-		}
-	}
-	return out
 }
 
 // modelOf is the model a worker started with these arguments runs on: the last --model among them, as
@@ -249,6 +217,11 @@ func Load(path string) (Settings, error) {
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&c); err != nil {
+		if strings.Contains(err.Error(), `unknown field "worker_env"`) {
+			return bad("%v; worker_env set knobs of the worker plugin, which no session of the factory runs any more; remove it, and write a knob it carried as the factory's own, "+
+				"at the top of the file or on the repository: \"ci\": {\"repair_rounds\", \"bot_reviewers\", \"review_wait\", \"checks_grace\"}, "+
+				"\"review\": {\"rounds\", \"reviewers\", \"gate_rounds\", \"classes\"} or \"gate\": {\"rounds\", \"timeout\"}", err)
+		}
 		return bad("%v; the fields are %s, see factory/factory.example.json", err, configFields)
 	}
 	if decoder.More() {
@@ -305,16 +278,6 @@ func Load(path string) (Settings, error) {
 			return bad("worker_args carries %s, which the factory gives the worker itself; remove it — worker_args adds arguments to a run, it cannot replace the ones the run is defined by", flag)
 		}
 	}
-	// The names are read in order, so the one the error names is the same on every start.
-	for _, name := range slices.Sorted(maps.Keys(c.WorkerEnv)) {
-		if moved, ok := movedKnobs[name]; ok {
-			return bad("worker_env carries %s, which is a knob of the %s stage the factory runs itself; write it as \"%s\": {\"%s\": ...} at the top of the file or on the repository", name, moved[0], moved[0], moved[1])
-		}
-		if !slices.Contains(workerKnobs, name) {
-			return bad("worker_env carries %s, which is not a worker knob; the names are %s, and an empty value is a setting of its own", name, strings.Join(hostKnobs(), ", "))
-		}
-	}
-	s.WorkerEnv = c.WorkerEnv
 	named := map[string]bool{}
 	for _, who := range c.Notify {
 		// The login reaches gh as an argument and a comment as a mention, so a spelling GitHub does

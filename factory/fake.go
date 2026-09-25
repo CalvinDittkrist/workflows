@@ -281,10 +281,11 @@ func scriptedWorker(args []string, stdout, stderr io.Writer) int {
 		return 0
 	}
 
+	// A hook of the repository's own settings, which a session that writes on the branch loads.
 	s.hook("SessionStart:startup", "success")
 	s.init()
-	s.say(fmt.Sprintf("The hook loaded issue #%d of %s. I'll read the code the brief names before changing anything.", issue, repository))
-	s.tool("Read", map[string]any{"file_path": "plugins/worker/skills/work/SKILL.md"}, "1  ---\n2  name: work")
+	s.say(fmt.Sprintf("The brief names issue #%d of %s. I'll read the repository's instructions before changing anything.", issue, repository))
+	s.tool("Read", map[string]any{"file_path": "AGENTS.md"}, "1  # edge-sensors\n2  \n3  ## Commands")
 
 	switch scenario {
 	case "fix":
@@ -366,7 +367,8 @@ func scriptedWorker(args []string, stdout, stderr io.Writer) int {
 		s.say(fmt.Sprintf("worker detached process %d", daemon.Process.Pid))
 	}
 
-	s.tool("Edit", map[string]any{"file_path": "plugins/worker/skills/work/SKILL.md"}, "The file has been updated.")
+	s.tool("Bash", map[string]any{"command": fmt.Sprintf("gh issue view %d --repo %s --comments", issue, repository), "description": "Read the issue and its comments"},
+		"title:\tthe canned issue\nstate:\tOPEN")
 	if scenario == "blocked" {
 		s.say("The brief contradicts ADR 0012.")
 		summary := fmt.Sprintf("the brief asks the worker to tag the release itself, and ADR 0012 keeps releases manual.\n\n"+
@@ -374,19 +376,19 @@ func scriptedWorker(args []string, stdout, stderr io.Writer) int {
 		s.result("success", "", false, "completed", map[string]any{"outcome": resultBlocked, "summary": summary})
 		return 0
 	}
-	s.subagent("worker:docs-lookup", "Look up the stop-after flag", "WF_STOP_AFTER=implement ends the session once the implementation is committed.")
+	s.subagent("Explore", "Find the code the issue names", "The upload retries live in upload/retry.go.")
+	s.tool("Edit", map[string]any{"file_path": "upload/retry.go"}, "The file has been updated.")
+	s.tool("Bash", map[string]any{"command": "go test ./upload -run TestRetry", "description": "Run the test of the change"},
+		"ok  \tgithub.com/acme/edge-sensors/upload\t0.412s")
 	s.tool("Bash", map[string]any{"command": "git commit -am 'feat: the change the canned issue asks for'", "description": "Commit the implementation"},
 		"[feat f00d5ed] feat: the change the canned issue asks for")
-	// The implementation hands the rest of the stage to a fresh context, so what the worker carries
-	// drops back to a loaded session: the peak of this run stands before the handover, not at its end.
+	// A compaction drops what the worker carries back to a loaded session: the peak of this run stands
+	// before it, not at its end.
 	s.compact()
-	s.say("The implementation is committed. Stopping after the implement stage.")
-	// The session stops after the implement stage (WF_STOP_AFTER=implement), and the factory runs the gate.
+	s.say("The change is committed and its test passes. The factory runs the gate.")
 	commits := []string{"f00d5ed feat: the change the canned issue asks for"}
-	s.tool("Bash", map[string]any{"command": "plugins/worker/scripts/stop.sh", "description": "Report the stage the session stops after"},
-		"ready: stopped after implement\ncommits:\n"+commits[0])
 	s.result("success", "", false, "completed", map[string]any{"outcome": resultComplete, "commits": commits,
-		"summary": "stopped after implement"})
+		"summary": "Made the change the issue asks for in one commit; its test passes."})
 	return 0
 }
 
@@ -622,7 +624,7 @@ func (s *script) usage(sub bool) map[string]any {
 		"cache_creation": map[string]any{"ephemeral_5m_input_tokens": 400, "ephemeral_1h_input_tokens": 800}}
 }
 
-// compact is what a handoff does to the worker's context: it starts from a loaded session again,
+// compact is what a compaction does to the worker's context: it starts from a loaded session again,
 // and every message after it carries less than the run already reached.
 func (s *script) compact() {
 	s.context = contextStart
@@ -659,8 +661,7 @@ func (s *script) subagent(kind, description, report string) {
 	id := fmt.Sprintf("toolu_%d", s.tools)
 	s.message("assistant", "", []map[string]any{{"type": "tool_use", "id": id, "name": "Agent",
 		"input": map[string]any{"subagent_type": kind, "description": description}}})
-	s.call(id, "Bash", map[string]any{"command": "git diff origin/main...HEAD", "description": "Read the diff under review"},
-		"diff --git a/plugins/worker/skills/work/SKILL.md")
+	s.call(id, "Grep", map[string]any{"pattern": "retry", "path": "upload"}, "upload/retry.go")
 	s.message("user", "", []map[string]any{{"type": "tool_result", "tool_use_id": id, "content": report, "is_error": false}})
 }
 

@@ -10,7 +10,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
-	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -55,9 +54,10 @@ func TestAClaimCutsTheBranchFromTheFreshlyFetchedBaseAndRunsTheWorkerInItsWorktr
 		t.Errorf("the run carries the pull request %q, want %q", run.PullRequest, want)
 	}
 
-	// The claim itself: the branch is on the remote, at the head the base has now.
-	if head := gh.head(t, "acme/edge-sensors", claimedBranch); head != moved {
-		t.Errorf("%s of the remote is at %q, want the head of the base after the fetch (%s)", claimedBranch, head, moved)
+	// The claim itself: the branch is on the remote, cut at the head the base has now (the implement
+	// session below ran on that commit, and what the run pushed stands on it).
+	if !gh.cutFrom(t, "acme/edge-sensors", claimedBranch, moved) {
+		t.Errorf("%s of the remote is at %q, want it cut from the head of the base after the fetch (%s)", claimedBranch, gh.head(t, "acme/edge-sensors", claimedBranch), moved)
 	}
 	// The issue is assigned to the user this host is logged in as, and exactly once.
 	assigned := fmt.Sprintf("issue edit %d --repo acme/edge-sensors --add-assignee factory-bot", claimedIssue)
@@ -90,15 +90,15 @@ func TestAClaimCutsTheBranchFromTheFreshlyFetchedBaseAndRunsTheWorkerInItsWorktr
 		t.Errorf("the worker ran on %s at %s, want %s at %s", worker.branch, worker.head, claimedBranch, moved)
 	}
 
-	// How it was started: the worker agent, the work skill as its prompt, the stream on its output,
-	// the auto permission mode, the schema of its result and the configured extra arguments.
+	// How it was started: the factory's own worker agent, defined inline, the brief of the implement
+	// stage as its prompt, the stream on its output, the auto permission mode, the schema of its result
+	// and the configured extra arguments.
 	for _, want := range [][]string{
-		{"--agent", "worker"},
+		{"--agent", workerAgent},
 		{"--output-format", "stream-json"},
 		{"--permission-mode", "auto"},
 		{"--json-schema", resultSchema},
 		{"--model", "opus"},
-		{"-p", "/worker:work"},
 	} {
 		if !worker.started(want...) {
 			t.Errorf("the worker was started as %v, want %v in it", worker.args, want)
@@ -109,18 +109,35 @@ func TestAClaimCutsTheBranchFromTheFreshlyFetchedBaseAndRunsTheWorkerInItsWorktr
 			t.Errorf("the worker was started as %v, want %s in it", worker.args, want)
 		}
 	}
+	// The agent is the factory's: its prompt, its tools and its model travel with the call, and no
+	// plugin is asked for one.
+	agent := worker.agentDefinition(t, workerAgent)
+	if agent.Prompt != workerPrompt || agent.Model != workerModel || strings.Join(agent.Tools, ",") != workerTools {
+		t.Errorf("the worker agent is defined as %+v, want the factory's prompt, the tools %s and the model %s", agent, workerTools, workerModel)
+	}
+	// The prompt is the brief of the implement stage: the issue, the branch, its base and the order
+	// never to push, and no slash command of a plugin.
+	prompt := worker.arg("-p")
+	for _, want := range []string{fmt.Sprintf("Implement issue #%d of acme/edge-sensors", claimedIssue),
+		fmt.Sprintf("gh issue view %d --repo acme/edge-sensors --comments", claimedIssue), claimedBranch, "origin/main", "never push"} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("the implement session was briefed with\n%s\nwant %q in it", prompt, want)
+		}
+	}
+	if strings.HasPrefix(prompt, "/") {
+		t.Errorf("the implement session was given the slash command %q, want the factory's brief", prompt)
+	}
 	settings := worker.settings(t)
-	if settings.Env["WF_ISSUE"] != strconv.Itoa(claimedIssue) || settings.Env["WF_MODE"] != "manual" {
-		t.Errorf("the worker's settings carry %v, want the issue number and the manual mode: the factory never merges", settings.Env)
+	// No workflow variable reaches the session: no plugin of it reads one.
+	for name := range settings.Env {
+		if strings.HasPrefix(name, "WF_") {
+			t.Errorf("the worker's settings carry %s; a factory session reads no workflow variable", name)
+		}
 	}
-	// The base the branch was cut from is the base the worker works against: its review range, its
-	// hand-over note and the pull request it opens all ask the pipeline for it.
-	if settings.Env["WF_BASE_BRANCH"] != "main" {
-		t.Errorf("the worker's settings carry WF_BASE_BRANCH=%q, want main, the base the claim cut the branch from", settings.Env["WF_BASE_BRANCH"])
-	}
-	// The planner and the orchestrator are switched off, as a local claim switches them off: an
-	// unattended session carries no /orchestrator:merge.
-	for _, plugin := range []string{"planner@workflows", "orchestrator@workflows"} {
+	// Every plugin of the workflow is switched off, the worker's with the others: a host that still
+	// carries one changes nothing about what the session is told, and an unattended session carries no
+	// /orchestrator:merge.
+	for _, plugin := range []string{"worker@workflows", "planner@workflows", "orchestrator@workflows"} {
 		if on, named := settings.EnabledPlugins[plugin]; !named || on {
 			t.Errorf("the worker's settings leave %s enabled (%v); a factory session must not carry it", plugin, settings.EnabledPlugins)
 		}
@@ -142,8 +159,8 @@ func TestAClaimCutsTheBranchFromTheFreshlyFetchedBaseAndRunsTheWorkerInItsWorktr
 }
 
 // A repository that does not branch off its default branch: the base of the configuration decides
-// where the branch is cut, and the worker is told the same base, because the pipeline inside the
-// worktree asks for it again — for the range its reviewers read and for the pull request it opens.
+// where the branch is cut, and the implement session is briefed with the same base, which is the range
+// of the commits it goes on from.
 func TestAClaimOfARepositoryWithItsOwnBaseCutsAndWorksFromThatBase(t *testing.T) {
 	t.Parallel()
 	gh := newGhShim(t)
@@ -167,81 +184,20 @@ func TestAClaimOfARepositoryWithItsOwnBaseCutsAndWorksFromThatBase(t *testing.T)
 	if run.Base != "dev" {
 		t.Errorf("the run records the base %q, want dev, the base its repository is configured with", run.Base)
 	}
-	if head := gh.head(t, "acme/edge-sensors", claimedBranch); head != dev {
-		t.Errorf("%s of the remote is at %q, want the head of dev (%s) and not of main", claimedBranch, head, dev)
-	}
 	workers := gh.workers(t)
 	if len(workers) != 1 {
 		t.Fatalf("the factory started %d workers, want one", len(workers))
 	}
-	if base := workers[0].settings(t).Env["WF_BASE_BRANCH"]; base != "dev" {
-		t.Errorf("the worker's settings carry WF_BASE_BRANCH=%q; it would review against %[1]s a branch cut from dev, and open its pull request against it", base)
+	if !gh.cutFrom(t, "acme/edge-sensors", claimedBranch, dev) || workers[0].head != dev {
+		t.Errorf("%s was cut at %s, want the head of dev (%s) and not of main", claimedBranch, workers[0].head, dev)
 	}
-}
-
-// A host sets the worker knobs of its runs in its configuration, and they reach the session the way
-// a local claim's --env does: in the env block of --settings, where they win over the repository's
-// own settings for that session. The knobs of the ci stage are the factory's own, written under "ci",
-// and reach no session: the work session stops after the pull request, and the factory counts the
-// repair rounds and answers the reviews itself. What the run is stays the factory's whatever the file
-// says.
-func TestTheHostsWorkerKnobsReachTheSessionBesideWhatTheRunIs(t *testing.T) {
-	t.Parallel()
-	gh := newGhShim(t)
-	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
-	gh.loggedInAs(t, "factory-bot")
-	gh.assigns(t, "acme/edge-sensors", claimedIssue, "factory-bot")
-
-	data := filepath.Join(t.TempDir(), "data")
-	gh.cloneInto(t, data, "acme/edge-sensors")
-	f := gh.work(t, config{"poll": "50ms", "deadline": "90s", "data_dir": data,
-		"repositories": []string{"acme/edge-sensors"},
-		"worker_env":   map[string]string{"WF_HANDOFF_TOKENS": "150000"},
-		"ci":           map[string]any{"bot_reviewers": []string{}, "review_wait": "5s"}})
-	run := f.ended(t, 1)
-
-	if run.Outcome != "ready" {
-		t.Fatalf("the run ended as %q (%s), want ready; the factory's log:\n%s", run.Outcome, run.Reason, f.output(t))
-	}
-	workers := gh.workers(t)
-	if len(workers) != 1 {
-		t.Fatalf("the factory started %d workers, want one", len(workers))
-	}
-	env := workers[0].settings(t).Env
-	for _, moved := range []string{"WF_PR_BOT_REVIEWERS", "WF_PR_REVIEW_WAIT", "WF_CI_REPAIR_ROUNDS", "WF_CHECKS_GRACE", "WF_REVIEW_MANDATE", "WF_REVIEWERS", "WF_REVIEW_ROUNDS"} {
-		if value, set := env[moved]; set {
-			t.Errorf("the worker's settings carry %s=%q; no session runs the worker's stage whose knob that is", moved, value)
-		}
-	}
-	if tokens := env["WF_HANDOFF_TOKENS"]; tokens != "150000" {
-		t.Errorf("the worker's settings carry WF_HANDOFF_TOKENS=%q, want the host's 150000", tokens)
-	}
-	if env["WF_MODE"] != "manual" || env["WF_ISSUE"] != strconv.Itoa(claimedIssue) || env["WF_BASE_BRANCH"] != "main" {
-		t.Errorf("the worker's settings carry %v; the mode, the issue and the base are the run's own and stay beside the host's knobs", env)
-	}
-}
-
-// The knobs a host may set are the ones a local claim may set, and no other: the list is the
-// orchestrator's (env_accepted in claim.sh), read out of the script, so a knob added to one driver
-// fails here until the other follows ([ADR 0022]).
-//
-// [ADR 0022]: ../docs/adr/0022-the-factory-is-a-second-driver-over-the-worker-pipeline.md
-func TestTheWorkerKnobsAgreeWithTheOrchestratorsClaim(t *testing.T) {
-	t.Parallel()
-	script := readFile(t, abs(t, filepath.Join("..", "plugins", "orchestrator", "scripts", "claim.sh")))
-	found := regexp.MustCompile(`(?m)^env_accepted="([A-Z0-9_ ]+)"$`).FindStringSubmatch(script)
-	if found == nil {
-		t.Fatalf("the orchestrator's claim.sh names no env_accepted; the factory restates that list and cannot be held to it")
-	}
-	if accepted := strings.Fields(found[1]); !slices.Equal(accepted, workerKnobs) {
-		t.Errorf("worker_env accepts %v, the local claim's --env accepts %v; the two drivers set the same knobs of the one worker", workerKnobs, accepted)
-	}
+	workers[0].briefedOn(t, "dev")
 }
 
 // A repository moves its line of work after this host cloned it: it declares another base in its own
 // settings, the file a local session is given WF_BASE_BRANCH by. The claim reads what the repository
 // says now — the clone's working tree is the day it was written and is never checked out again — so
-// the branch is cut from the base the repository names today and the worker is told that base.
+// the branch is cut from the base the repository names today and the implement session is briefed with it.
 func TestAClaimReadsTheBaseTheRepositoryDeclaresNowAndNotTheOneItsCloneWasWrittenWith(t *testing.T) {
 	t.Parallel()
 	gh := newGhShim(t)
@@ -268,16 +224,14 @@ func TestAClaimReadsTheBaseTheRepositoryDeclaresNowAndNotTheOneItsCloneWasWritte
 	if run.Base != "dev" {
 		t.Errorf("the run records the base %q, want dev, the base the repository declares on the remote now", run.Base)
 	}
-	if head := gh.head(t, "acme/edge-sensors", claimedBranch); head != dev {
-		t.Errorf("%s of the remote is at %q, want the head of dev (%s): the clone's old working tree still says main", claimedBranch, head, dev)
-	}
 	workers := gh.workers(t)
 	if len(workers) != 1 {
 		t.Fatalf("the factory started %d workers, want one", len(workers))
 	}
-	if base := workers[0].settings(t).Env["WF_BASE_BRANCH"]; base != "dev" {
-		t.Errorf("the worker's settings carry WF_BASE_BRANCH=%q, want dev: it would review against %[1]s a branch cut from dev", base)
+	if !gh.cutFrom(t, "acme/edge-sensors", claimedBranch, dev) || workers[0].head != dev {
+		t.Errorf("%s was cut at %s, want the head of dev (%s): the clone's old working tree still says main", claimedBranch, workers[0].head, dev)
 	}
+	workers[0].briefedOn(t, "dev")
 }
 
 // The remote moves its default branch after this host cloned it: a repository that adopts a line of
@@ -310,8 +264,8 @@ func TestAClaimFollowsTheRemoteWhenItMovesItsDefaultBranch(t *testing.T) {
 	if run.Base != "dev" {
 		t.Errorf("the run records the base %q, want dev, the branch the remote points at now", run.Base)
 	}
-	if head := gh.head(t, "acme/edge-sensors", claimedBranch); head != dev {
-		t.Errorf("%s of the remote is at %q, want the head of dev (%s)", claimedBranch, head, dev)
+	if workers := gh.workers(t); len(workers) != 1 || workers[0].head != dev || !gh.cutFrom(t, "acme/edge-sensors", claimedBranch, dev) {
+		t.Errorf("%s was cut at %v, want the head of dev (%s)", claimedBranch, workers, dev)
 	}
 	// The shim has no answer for `repo view`, so a run that reached the rule's third step would have
 	// failed: the head above is the one the remote was asked for, not GitHub's default branch.
@@ -319,9 +273,7 @@ func TestAClaimFollowsTheRemoteWhenItMovesItsDefaultBranch(t *testing.T) {
 	if len(workers) != 1 {
 		t.Fatalf("the factory started %d workers, want one", len(workers))
 	}
-	if base := workers[0].settings(t).Env["WF_BASE_BRANCH"]; base != "dev" {
-		t.Errorf("the worker's settings carry WF_BASE_BRANCH=%q, want dev, the base its branch was cut from", base)
-	}
+	workers[0].briefedOn(t, "dev")
 }
 
 // A claim that fails after the branch was created is the one failure that leaves something on the
@@ -726,8 +678,8 @@ func TestTwoClaimersRacingForOneIssueLeaveExactlyOneWinner(t *testing.T) {
 		t.Fatalf("the two claimers ended as %v, want one ready and one lost; the logs:\n%s\n%s",
 			outcomes, claimers[0].output(t), claimers[1].output(t))
 	}
-	if head := gh.head(t, "acme/edge-sensors", claimedBranch); head != base {
-		t.Errorf("%s of the remote is at %q, want the head of the base (%s)", claimedBranch, head, base)
+	if !gh.cutFrom(t, "acme/edge-sensors", claimedBranch, base) {
+		t.Errorf("%s of the remote is at %q, want it cut from the head of the base (%s)", claimedBranch, gh.head(t, "acme/edge-sensors", claimedBranch), base)
 	}
 	if workers := gh.workers(t); len(workers) != 1 {
 		t.Errorf("%d workers were started for one issue, want the winner's alone", len(workers))
@@ -1102,6 +1054,49 @@ func (w workerStart) started(args ...string) bool {
 	return false
 }
 
+// arg is the value the command line gives the flag, the last one when it is given twice.
+func (w workerStart) arg(flag string) string {
+	value := ""
+	for i, arg := range w.args {
+		if arg == flag && i+1 < len(w.args) {
+			value = w.args[i+1]
+		}
+	}
+	return value
+}
+
+// agentDefinition is one agent of the definitions the session was given with --agents.
+func (w workerStart) agentDefinition(t *testing.T, name string) agentDefinition {
+	t.Helper()
+	var defs map[string]agentDefinition
+	if err := json.Unmarshal([]byte(w.arg("--agents")), &defs); err != nil {
+		t.Fatalf("the session's --agents is not a JSON object of agents: %v: %v", err, w.args)
+	}
+	def, ok := defs[name]
+	if !ok {
+		t.Fatalf("the session's --agents defines no agent %s: %v", name, w.args)
+	}
+	return def
+}
+
+// agentDefinition is an inline agent as --agents takes it.
+type agentDefinition struct {
+	Description string   `json:"description"`
+	Prompt      string   `json:"prompt"`
+	Tools       []string `json:"tools"`
+	Model       string   `json:"model"`
+}
+
+// briefedOn says that the implement session was briefed with the base its branch was cut from, and
+// with no other.
+func (w workerStart) briefedOn(t *testing.T, base string) {
+	t.Helper()
+	prompt := w.arg("-p")
+	if !strings.Contains(prompt, "cut from origin/"+base+".") || strings.Count(prompt, "origin/") != strings.Count(prompt, "origin/"+base) {
+		t.Errorf("the implement session was briefed with\n%s\nwant the base origin/%s its branch was cut from, and no other", prompt, base)
+	}
+}
+
 // carries says whether the environment holds a variable of that name.
 func (w workerStart) carries(name string) bool {
 	for _, entry := range w.env {
@@ -1112,16 +1107,16 @@ func (w workerStart) carries(name string) bool {
 	return false
 }
 
-// sessionSettings is what a worker was started with in --settings: the session's own variables, the
+// startedSettings is what a worker was started with in --settings: the session's own variables, the
 // plugins it carries and the window it compacts at.
-type sessionSettings struct {
+type startedSettings struct {
 	Env               map[string]string `json:"env"`
 	EnabledPlugins    map[string]bool   `json:"enabledPlugins"`
 	AutoCompactWindow int               `json:"autoCompactWindow"`
 }
 
 // settings is the session settings the worker was started with.
-func (w workerStart) settings(t *testing.T) sessionSettings {
+func (w workerStart) settings(t *testing.T) startedSettings {
 	t.Helper()
 	raw := ""
 	for i, arg := range w.args {
@@ -1132,7 +1127,7 @@ func (w workerStart) settings(t *testing.T) sessionSettings {
 	if raw == "" {
 		t.Fatalf("the worker was started without --settings: %v", w.args)
 	}
-	var settings sessionSettings
+	var settings startedSettings
 	if err := json.Unmarshal([]byte(raw), &settings); err != nil {
 		t.Fatalf("the worker's --settings is not JSON: %v: %s", err, raw)
 	}
@@ -1306,8 +1301,8 @@ func TestAFactoryThatLostItsDataDirectoryTakesUpItsOwnOrphanedBranch(t *testing.
 	if created := gh.asked(t, "api --method POST repos/acme/edge-sensors/git/refs"); created != 0 {
 		t.Errorf("the factory tried to create a branch %d times, want none: the branch of its own claim is there", created)
 	}
-	if head := gh.head(t, "acme/edge-sensors", claimedBranch); head != work {
-		t.Errorf("%s of the remote is at %q, want the work that was there (%s)", claimedBranch, head, work)
+	if !gh.cutFrom(t, "acme/edge-sensors", claimedBranch, work) {
+		t.Errorf("%s of the remote is at %q, want the work that was there (%s) and what the run added to it", claimedBranch, gh.head(t, "acme/edge-sensors", claimedBranch), work)
 	}
 	assigned := fmt.Sprintf("issue edit %d --repo acme/edge-sensors --add-assignee factory-bot", claimedIssue)
 	if made := gh.made(t, assigned); made != 1 {
