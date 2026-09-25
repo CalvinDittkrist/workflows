@@ -1,7 +1,7 @@
 # 0028. The quota check is a courtesy, not a guard
 
 Date: 2026-09-21
-Status: accepted
+Status: accepted, amended
 Amended by: [0037](0037-the-quota-check-waits-below-12-percent-of-the-workers-scope.md) (the default minimum is 12, the worker's scope is read from its model name, and a run that ran out of quota is told apart by a check after its error)
 
 ## Context
