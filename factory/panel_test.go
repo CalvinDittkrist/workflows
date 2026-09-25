@@ -255,7 +255,7 @@ func TestAFixVerdictThatOutlastsTheRoundsIsNamedInThePullRequest(t *testing.T) {
 	if len(pulls) != 1 || pulls[0].Draft == nil || *pulls[0].Draft {
 		t.Fatalf("the factory opened %+v, want one pull request that is not a draft", pulls)
 	}
-	for _, want := range []string{"tests=FIX→FIX", "disputed: the device has no browser", "**The reviewer panel did not pass:**", "tests"} {
+	for _, want := range []string{"tests=FIX→FIX", "; reason: the device has no browser", "**The reviewer panel did not pass:**", "tests"} {
 		if !strings.Contains(pulls[0].Body, want) {
 			t.Errorf("the body does not carry %q:\n%s", want, pulls[0].Body)
 		}
