@@ -8,9 +8,9 @@ I develop projects locally and through a factory (for example https://github.com
 The local workflow works through GitHub issues and has a planning mode that creates them.
 
 ## Every repository on one standard
-The workflow has to apply to every repository of mine. They differ: some carry a lot of AI slop, each runs different tests, some are private and some public, some need other branch settings (for example `staging` and `main`). So an independent workflow puts an existing repository on a conventional standard:
+The workflow has to apply to every repository of mine. They differ: some carry a lot of AI slop, and each runs different tests. Some are private and some public, and some need other branch settings, such as `staging` and `main`. So an independent workflow puts an existing repository on a conventional standard:
 
-- it removes unnecessary files and AI slop without mercy and reduces the repository to a minimum
+- it removes unnecessary files and AI slop and reduces the repository to a minimum
 - it installs the plugins the workflow needs and removes every other skill
 - it puts the GitHub side on the standard as well: milestones, project, branch rules
 - each check runs in its own independent subagent
