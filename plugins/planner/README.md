@@ -53,6 +53,7 @@ Model: the agent file names `fable`; the root README explains why. `spec-checker
 | `WF_PLANNER_LANGUAGE` | empty | conversation language, such as `german`, passed as claude's `language` setting for this session; what the planner writes stays English; a control character or an overlong value is refused |
 | `WF_CLAUDE_ARGS` | empty | extra flags for every worker and planner, such as `--model` |
 | `WF_PLANNER_CLAUDE_ARGS` | empty | extra flags for planner sessions; `--model opus` moves the session and its subagents together |
+| `WF_PLAN`, `WF_PLAN_ISSUE` | set by `/plan` | slug and issue of the planner session |
 
 ## Develop
 `claude --plugin-dir plugins/planner` loads the plugin without installing it. `make check` runs the gate.

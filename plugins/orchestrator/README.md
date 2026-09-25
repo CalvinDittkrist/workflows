@@ -49,6 +49,7 @@ Hook: `SessionStart`, on startup only, prints the gh-axi dashboard of repository
 | `WF_CLAUDE_ARGS` | empty | extra flags for every worker and planner start |
 | `WF_PLANNER_CLAUDE_ARGS`, `WF_WORKER_CLAUDE_ARGS` | empty | extra flags for one kind of session; a `--settings` here replaces the scripts' object, and they warn |
 | `WF_PLANNER_PERMISSION_MODE` | `auto` | the planner's permission mode |
+| `WF_WORKER_PERMISSION_MODE` | `auto` | a worker session's permission mode |
 | `WF_PLANNER_LANGUAGE` | empty | the planner's conversation language, such as `german`, through claude's `language` setting; issues stay English |
 | `WF_MODE`, `WF_ISSUE` | set by the claim | mode (`manual` or `yolo`) and issue of the worker session |
 

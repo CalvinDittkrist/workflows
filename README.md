@@ -96,7 +96,7 @@ A claim sets a worker knob for its one session: `/orchestrator:claim 38 --env WF
 - Any other name, a malformed argument and a repeated name are refused before anything is created. An empty value is a setting of its own.
 - The value enters the `env` block of the claim's `--settings`, which wins per variable over the repository's settings ([settings](https://code.claude.com/docs/en/settings.md)).
 - It holds for the whole run of that pane, because a handover clears the session and does not restart the process.
-- Claude Code takes the last `--settings` and does not merge. A `--settings` in `WF_CLAUDE_ARGS` or `WF_PLANNER_CLAUDE_ARGS` replaces the scripts' object, so `plan.sh` and `claim.sh` warn.
+- Claude Code takes the last `--settings` and does not merge. A `--settings` in `WF_CLAUDE_ARGS`, `WF_PLANNER_CLAUDE_ARGS` or `WF_WORKER_CLAUDE_ARGS` replaces the scripts' object, so `plan.sh` and `claim.sh` warn.
 
 A session takes its model from the first that is set:
 
