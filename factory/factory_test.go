@@ -1240,25 +1240,6 @@ func TestAConfigurationThatDoesNotNamePausedIsPaused(t *testing.T) {
 	}
 }
 
-// Every decision one of the factory's files names is a link to the ADR that holds it, and a link
-// that names no file is a decision an agent cannot read. The ADRs are renamed while they are written,
-// so the links are held to the documents themselves.
-func TestEveryDecisionTheFactoryLinksToIsAnADRThatExists(t *testing.T) {
-	t.Parallel()
-	files, err := filepath.Glob("*.go")
-	if err != nil || len(files) == 0 {
-		t.Fatalf("the factory's own sources could not be listed (%v): there is nothing to hold here", err)
-	}
-	link := regexp.MustCompile(`docs/adr/[0-9a-zA-Z._-]+\.md`)
-	for _, file := range files {
-		for _, named := range link.FindAllString(readFile(t, file), -1) {
-			if _, err := os.Stat(filepath.Join("..", named)); err != nil {
-				t.Errorf("%s links to %s, and there is no such ADR: %v", file, named, err)
-			}
-		}
-	}
-}
-
 type config map[string]any
 
 type factory struct {

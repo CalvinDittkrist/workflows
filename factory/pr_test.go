@@ -316,6 +316,7 @@ func TestAResumeWhoseBranchMovedAfterTheReviewStartsAtTheGateStage(t *testing.T)
 // reviewer's chain is the one that counts, and a summary that says no verdict, or that commits landed
 // after the last round, is no panel that passed.
 func TestThePanelThatDidNotPassIsReadFromItsLastVerdicts(t *testing.T) {
+	t.Parallel()
 	for summary, want := range map[string]string{
 		"panel: code=PASS docs=FIX→PASS":                              "",
 		"review_rounds: 2\npanel: code=PASS docs=FIX->PASS":           "",

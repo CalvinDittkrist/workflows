@@ -3,7 +3,7 @@
 set -uo pipefail
 . "$(dirname "$0")/lib.sh"
 wf_kv mode "${WF_MODE:-manual}"
-wf_kv issue "#$(wf_issue)"
+wf_kv issue "$(wf_issue_label)"
 wf_kv base "$(wf_base_branch)"
 wf_kv reviewers "$(wf_reviewers)"
 # The one fact a reader compares rather than prints, so an unusable limit stops the session here, with the

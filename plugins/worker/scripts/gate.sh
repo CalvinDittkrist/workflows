@@ -66,13 +66,18 @@ started_at() { ps -p "$1" -o lstart= 2>/dev/null; }
 # process group of its own under that shell (the factory's Linux host does), so the session is what names
 # the call: its leader's parent is the worker. Where ps knows no session (macOS), the call's shell leads
 # the process group instead. The gate is in no group of the worker's, so a signal to the worker's group does
-# not reach it. Empty when the call has no such parent.
+# not reach it. Empty when the call has no such parent: a leader that is the host's first process, whose
+# parent is 0 (a container), or whose parent is that first process.
+#
+# Only a number is an answer of ps: the ps of macOS refuses the keyword sid and prints the keywords it
+# knows on its standard output, which read as a leader would bind the gate to no worker at all.
 call_owner() {
   local leader owner
-  leader=$(ps -o sid= -p $$ 2>/dev/null | tr -d ' ')
-  [ -n "$leader" ] && [ "$leader" != 0 ] || leader=$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ')
-  owner=$(ps -o ppid= -p "$leader" 2>/dev/null | tr -d ' ')
-  [ -n "$owner" ] && [ "$owner" != 1 ] && printf '%s' "$owner"
+  leader=$(ps -o sid= -p $$ 2>/dev/null | tr -d ' ') || leader=""
+  case "$leader" in '' | 0 | *[!0-9]*) leader=$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ') || leader="" ;; esac
+  owner=$(ps -o ppid= -p "$leader" 2>/dev/null | tr -d ' ') || owner=""
+  case "$owner" in '' | 0 | 1 | *[!0-9]*) return 1 ;; esac
+  printf '%s' "$owner"
 }
 
 # Signal a process and every process under it.

@@ -95,6 +95,7 @@ func TestNoFactoryOutlivesTheTestProcess(t *testing.T) {
 // TestAFactoryWhoseTestNeverEnds is the test process of the test above: it starts a factory, says
 // which, and waits for the end the test above gives it. Run by itself, it does nothing.
 func TestAFactoryWhoseTestNeverEnds(t *testing.T) {
+	// Serial: in the suite it only skips, and as the test process above it is the one test that runs.
 	if os.Getenv(orphanHelper) == "" {
 		t.Skip("the test process of TestNoFactoryOutlivesTheTestProcess")
 	}

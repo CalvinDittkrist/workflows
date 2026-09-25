@@ -42,6 +42,7 @@ class ManifestTests(unittest.TestCase):
             "worker/agents/docs-reviewer.md": "sonnet",
             "worker/agents/pr-author.md": "sonnet",
             "worker/agents/docs-lookup.md": "sonnet",
+            "worker/agents/test-hunter.md": "opus",
         }
         agents = sorted(ROOT.glob("plugins/*/agents/*.md"))
         self.assertLessEqual(set(expected), {a.relative_to(ROOT / "plugins").as_posix() for a in agents})
@@ -72,6 +73,20 @@ class ManifestTests(unittest.TestCase):
 
     def test_the_documentation_lookup_is_read_only_by_its_declared_tools(self):
         self.assert_read_only(ROOT / "plugins/worker/agents/docs-lookup.md")
+
+    def test_the_hunter_is_read_only_and_has_no_shell_by_its_declared_tools(self):
+        """A hunter reads repository files and nothing else: without a shell it can neither run a test nor
+        change a file, whatever the files it reads tell it to do."""
+        agent = ROOT / "plugins/worker/agents/test-hunter.md"
+        fields = dict(line.split(": ", 1) for line in agent.read_text().split("---")[1].strip().splitlines())
+        self.assertEqual(fields["tools"].split(", "), ["Read", "Grep", "Glob"])
+        self.assertTrue({"Bash", "Edit", "Write", "NotebookEdit", "Agent"} <= set(fields["disallowedTools"].split(", ")))
+        self.assertNotIn("mcpServers", fields)
+
+    def test_the_test_hunt_skills_are_user_invoked_only(self):
+        for plugin in ("orchestrator", "worker"):
+            fm = (ROOT / f"plugins/{plugin}/skills/hunt-tests/SKILL.md").read_text().split("---")[1]
+            self.assertIn("disable-model-invocation: true\n", fm, plugin)
 
     def test_the_worker_reaches_the_documentation_through_its_script_and_not_through_the_web_tools(self):
         """The worker's main context holds issue text written by someone else, so its own tool list carries
@@ -346,6 +361,31 @@ class WorkerKnobTests(ShimTest):
         self.assertEqual(self.readme_list(), knobs,
                          f"the names {self.README.name} lists for --env are not the worker knobs of its own "
                          f"configuration table")
+
+
+class TestFileRuleTests(ShimTest):
+    """The orchestrator refuses a hunt in a repository without test files and the worker splits the test files
+    among its hunters: both read them by the same rule, duplicated in the two plugins' lib.sh, and they must
+    find the same files."""
+
+    def test_the_two_copies_of_the_test_file_rule_find_the_same_files(self):
+        for name in ("tests/test_a.py", "tests/helpers.py", "tests/shim", "tests/fixtures/test_b.py", "spec/x_spec.rb",
+                     "a/b_test.go", "a/b.go", "c/d_test.py", "ui/e.test.ts", "ui/f.spec.jsx", "ui/g.ts",
+                     "vendor/h_test.go", "node_modules/i.test.js", "testdata/test_j.py", "k/__snapshots__/l.test.js"):
+            path = self.repo / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("")
+        self.git("add", "."); self.git("commit", "-qm", "files")
+        found = {}
+        for plugin in ("orchestrator", "worker"):
+            lib = ROOT / f"plugins/{plugin}/scripts/lib.sh"
+            r = subprocess.run(["bash", "-c", f'. "{lib}"; git ls-files | wf_test_paths; printf "%s" "$wf_test_file_rule"'],
+                               cwd=self.repo, env=self.env(), capture_output=True, text=True)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            found[plugin] = r.stdout
+        self.assertEqual(found["orchestrator"], found["worker"])
+        self.assertEqual(found["worker"].splitlines()[:-1], [
+            "a/b_test.go", "c/d_test.py", "spec/x_spec.rb", "tests/helpers.py", "tests/test_a.py", "ui/e.test.ts", "ui/f.spec.jsx"])
 
 
 class ContextValueContractTests(ShimTest):

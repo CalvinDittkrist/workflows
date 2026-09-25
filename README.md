@@ -20,7 +20,7 @@ flowchart LR
 
 | Plugin | What it gives you | Runs where |
 | --- | --- | --- |
-| [orchestrator](plugins/orchestrator/README.md) | `/plan`, `/claim`, `/yolo-claim`, `/merge`, `/board` (with frontier and the specs ready for acceptance), `/abandon`, `/herdr` | main checkout, inside [Herdr](https://herdr.dev) |
+| [orchestrator](plugins/orchestrator/README.md) | `/plan`, `/claim`, `/yolo-claim`, `/hunt-tests`, `/merge`, `/board` (with frontier and the specs ready for acceptance), `/abandon`, `/herdr` | main checkout, inside [Herdr](https://herdr.dev) |
 | [planner](plugins/planner/README.md) | `/grill`, `/spec`, `/tickets`, `/triage`, `/accept`, `/research`, `/prototype`, `/finish`; writes agent-ready issues and accepts a finished spec, never code | each planning worktree |
 | [worker](plugins/worker/README.md) | `/work` pipeline, five read-only reviewer agents, fresh-context PR author, CI and review-thread loop, SessionStart hook that loads and assigns the issue | each issue worktree |
 | [repo-standards](plugins/repo-standards/README.md) | `/standardize` (six read-only auditors, one findings report, approval per category), `/apply` (backup tag, skill catalogue, cleanup pull request, issues, GitHub workspace), `/adr`, `/docs-check`; templates for README.md, AGENTS.md, CLAUDE.md, Makefile, the CI job `check`, architecture.md, ADRs, glossary, PR template, Dependabot, settings | any repository |
@@ -54,6 +54,7 @@ cd my-repo && claude --agent orchestrator       # inside a Herdr pane
 /orchestrator:board              # who is doing what, PR and CI state
 /orchestrator:merge 45           # squash-merge, remove worktree, workspace and branch
 /orchestrator:yolo-claim 124     # worker merges itself when green
+/orchestrator:hunt-tests         # worker removes the tests that prove nothing, one PR
 /orchestrator:release v1.2.0     # milestone done: promote dev, tag, release notes, close it
 ```
 
