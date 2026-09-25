@@ -15,7 +15,7 @@ A spec with tickets is closed by an acceptance in the planner, never by a worker
 - The board lists an open `spec` with native sub-issues, none of them open, as ready for acceptance.
 - `accept-facts.sh` prints the facts: the spec, its tickets and their merged pull requests, the changed files, and each accepted deviation.
 - A read-only checker with a fresh context judges each checkable statement against the base branch.
-- Per gap the maintainer files a `ready-for-agent` sub-issue, records an accepted deviation as a comment, or reports no finding.
+- Per gap the maintainer files a `ready-for-agent` sub-issue, records an accepted deviation as a comment by someone with write access, or reports no finding.
 - The stage closes the spec only when nothing is open, with a comment on what was checked.
 - Gaps go through the pipeline as tickets. An accepted deviation is not reported again.
 - An acceptance costs one session per spec and needs native sub-issues; the facts script takes ticket numbers otherwise.

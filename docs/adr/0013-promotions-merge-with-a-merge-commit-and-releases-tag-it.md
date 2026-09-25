@@ -15,7 +15,7 @@ Status: accepted
 ## Consequences
 - The planner asks once per ticket batch for a milestone; the board shows each frontier issue's milestone.
 - `release.sh` refuses a missing or closed milestone, open issues or an existing tag. With `main` alone it tags the head of `main`.
-- With `dev` plus `main` it opens or finds the PR `chore(release): vX.Y.Z` and stops with `status: waiting` until it merges.
+- With `dev` plus `main` it opens or finds the PR `chore(release): vX.Y.Z` and stops with `status: waiting` until it merges. Pull requests from forks are ignored.
 - `gh release create --target <sha> --generate-notes` tags; then the milestone closes, or the script says to close it by hand.
 - The two-level model allows merge commits on `main`; `dev` keeps linear history and feature PRs are squashed.
 - A release keeps no state; running the command again after the merge resumes it, and the orchestrator session stays usable meanwhile.

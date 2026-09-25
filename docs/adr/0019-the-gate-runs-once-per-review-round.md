@@ -5,7 +5,7 @@ Status: accepted; amended 2026-09-22 (once per review, not per round; CI gates t
 Amends: [0004](0004-reviewers-as-fresh-read-only-subagents.md) (reviewers stay fresh, read-only contexts; only their most expensive command becomes a briefing fact)
 
 ## Context
-- Every reviewer and the pull request author ran the gate: 16 runs in one session of pull request #40.
+- Every reviewer and the pull request author ran the gate on its own.
 - Parallel gates in one worktree compete for CPU and disturb each other's tests.
 - The worker has the result before the review starts, so reviewers re-derived facts it had.
 
