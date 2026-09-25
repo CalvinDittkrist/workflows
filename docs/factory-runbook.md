@@ -67,16 +67,15 @@ Run the following as root unless it says otherwise.
 
 2. **The gate's tools.** The factory runs each connected repository's `make check`, unless its gate runs on CI (`gate.command`).
    - So the host needs the tools that gate runs, at the versions the repository's CI pins.
-
    - Read them from its CI workflow (for this repository `.github/workflows/ci.yml`) and from the error lines of its `Makefile`, not from the distribution.
    - A distribution's version finds other things than CI's. The gate then fails on the host on files the change never touched, which no worker can fix.
    - For this repository that is shellcheck 0.11.0, Go 1.26, Node 24 and staticcheck 2026.2.1.
    - Python is the distribution's `python3`, which CI does not pin.
    - One host has one version of each tool.
    - When two connected repositories pin different versions of one, the host runs the newest pin. The repository that is behind moves its CI to it.
-   - The gate's tests call two more tools that a minimal Debian image lacks and CI's runner has.
-   - One is a C compiler (`build-essential`), because `go test -race` builds with cgo.
-   - The other is `file`, with which the release test checks that the factory's binaries are static.
+   - The gate's tests call two more tools that a minimal Debian image lacks and CI's runner has:
+     - a C compiler (`build-essential`), because `go test -race` builds with cgo
+     - `file`, with which the release test checks that the factory's binaries are static
 
    ```sh
    cd "$(mktemp -d)"
@@ -231,8 +230,10 @@ The factory is configured by one JSON file and nothing else: no environment vari
 `gate`:
 
 - `command` (default `["make", "check"]`): the gate of the class `full`, in one of four forms. Anything else is refused with the forms.
-- The forms are a list of arguments run in the worktree without a shell, or `[]` for no gate.
-- Or `"ci"` for every check of the pull request on GitHub, or `{"ci": ["check", "browser"]}` for the named checks only ([A gate on CI](#a-gate-on-ci)).
+  - a list of arguments, run in the worktree without a shell
+  - `[]`, for no gate
+  - `"ci"`, for every check of the pull request on GitHub ([A gate on CI](#a-gate-on-ci))
+  - `{"ci": ["check", "browser"]}`, for the named checks only
 - `rounds` (default `3`): the fix sessions a gate that fails in the gate stage may take; `0` blocks on the first failure.
 - `timeout` (default `45m`): how long one run of the gate may take, in the gate stage and on the final head, as a Go duration.
 - Past `timeout` the gate's process group is ended and the run counts as a failure.
@@ -329,13 +330,13 @@ What the settings rest on:
 
 - **A user of its own.** `User=factory` is the user that holds the `gh` login and the Claude Code login; the service runs nothing as root.
 - **Restart on failure.** A factory that exits with an error is started again after 30 seconds.
-- A configuration it refuses exits with an error as well. So read a unit that keeps restarting in the journal, where the first `error:` line names the fix.
+  - A configuration it refuses exits with an error as well. So read a unit that keeps restarting in the journal, where the first `error:` line names the fix.
 - **Time to end the worker on stop.** On SIGTERM the factory sends SIGTERM to its worker's process group.
-- It kills what is left of the group once the worker has exited, or after 10 seconds if it has not.
-- It reads the worker's last output for up to 3 seconds and shuts its interface down within 5.
-- `KillMode=mixed` sends the first signal to the factory alone. So the factory ends the worker and records it, and systemd does not end it at the same moment.
-- `TimeoutStopSec=60s` leaves room for all of it. Then systemd kills what is left, including a process a worker started outside its group ([ADR 0027](adr/0027-the-factorys-isolation-boundary-is-the-host.md)).
-- The run is recorded as interrupted, and the next start resumes it once by itself.
+  - It kills what is left of the group once the worker has exited, or after 10 seconds if it has not.
+  - It reads the worker's last output for up to 3 seconds and shuts its interface down within 5.
+  - `KillMode=mixed` sends the first signal to the factory alone. So the factory ends the worker and records it, and systemd does not end it at the same moment.
+  - `TimeoutStopSec=60s` leaves room for all of it. Then systemd kills what is left, including a process a worker started outside its group ([ADR 0027](adr/0027-the-factorys-isolation-boundary-is-the-host.md)).
+  - The run is recorded as interrupted, and the next start resumes it once by itself.
 - **One factory per host.** A second one fails on start, on the address or on the data directory's lock.
 
 ## Access
@@ -427,15 +428,15 @@ Every run of the gate is recorded on the run under `gates`:
 
 The pass is the gate result the reviewers are briefed with and the pull request carries.
 
-A resumed run with no review to go on from:
+A resumed run with no review to go on from starts in one of three ways:
 
-- starts at this stage with a fresh budget, when the run before it got past its implement session
-- That holds only when its branch carries commits beyond the base.
-- starts with an implement session again when the run before it ended in its implement session
-- That run was interrupted or out of quota, even after a commit of its own.
-- That run never reported its implementation complete. The new implement session reads the commits already on the branch and goes on from them.
-- takes up a merge of the base it finds in progress in the worktree, rather than starting it again
-- Files still in conflict go to a fix session, and a merge whose conflicts are all resolved is committed as it stands.
+- **At this stage.** The run before it got past its implement session, and its branch carries commits beyond the base. The gate starts with a fresh budget.
+- **With an implement session.** The run before it ended in its implement session, interrupted or out of quota, even after a commit of its own.
+  - That run never reported its implementation complete.
+  - The new implement session reads the commits already on the branch and goes on from them.
+- **With the merge in progress.** It takes up a merge of the base it finds in the worktree, rather than starting it again.
+  - Files still in conflict go to a fix session.
+  - A merge whose conflicts are all resolved is committed as it stands.
 
 ### A gate on CI
 A repository whose gate runs on CI rather than on the host sets `gate.command` to `"ci"`, or to `{"ci": ["check", "browser"]}`. The first reads every check of the pull request, the second the named checks alone. A change class may do the same with its `gate`. The host then needs none of the gate's tools.
@@ -461,7 +462,7 @@ A check that fails is a failed gate:
 - A draft that conflicts with the base gets the base merged in, as in the gate stage, and the new head is read.
 - A fix session of that merge on the final head comes after the last round. So the verification section names its commits as ones no reviewer read.
 
-The draft's branch is in the repository itself. Its workflows run with the repository's Actions secrets on commits no reviewer has read yet. The gate in the worktree runs them on the host the same way. Keep secrets that matter behind an environment with required reviewers, or run the gate in the worktree.
+The draft's branch is in the repository itself. Its workflows run with the repository's Actions secrets on commits no reviewer has read yet. The gate in the worktree runs the branch's code on the host the same way, on commits no reviewer has read. Keep secrets that matter behind an environment with required reviewers, or run the gate in the worktree.
 
 A run whose gates all run in the worktree opens no draft. A run whose class changes on the final head to one whose gate is on CI opens the draft there.
 
@@ -515,7 +516,7 @@ When any reviewer says `fix`, one fix session in the worktree is given every fin
 
 When the fixes moved the branch off the commit the gate passed at, the gate runs again on the final head ([Change classes](#change-classes)).
 
-- It is the gate of the change class.
+It is the gate of the change class:
 
 - That is `make check` unless a class or `gate.command` says otherwise.
 - It runs in the worktree, in a process group of its own and for at most `gate.timeout`, or on CI ([A gate on CI](#a-gate-on-ci)).
@@ -578,8 +579,9 @@ The pull request goes against the base the branch was cut from. It is never left
 - A draft a gate on CI opened gets the title and the body, and the factory marks it ready ([A gate on CI](#a-gate-on-ci)).
 - A pull request on the branch that the run did not open ends the run `blocked`, with a comment on the issue naming it.
 - An author session that fails, or reports a result that does not fit its schema, ends the run `failed` with the branch pushed.
-- The ended review is recorded on the run. A resumed run starts at the pr stage and reviews nothing again when two things hold.
-- The branch is still at the commit the review ended at, and no pull request but the run's draft is open.
+- The ended review is recorded on the run. A resumed run starts at the pr stage and reviews nothing again when two things hold:
+  - the branch is still at the commit the review ended at
+  - no pull request but the run's draft is open
 - A branch that moved since starts at the gate stage.
 
 ### The ci stage
@@ -637,12 +639,12 @@ Update them between runs. Stopping the factory interrupts the run that is going,
 
 - **Claude Code**, as the user `factory`: `claude update`, then `claude --version`. Every run records the version it was made with.
 - **The factory binary**: download and check it as in [Installation](#installation), then `systemctl stop factory`.
-- Then `install -m 0755 factory-linux-$arch /usr/local/bin/factory` and `systemctl start factory`, and look for the new version in the journal's first line.
+  - Then `install -m 0755 factory-linux-$arch /usr/local/bin/factory` and `systemctl start factory`, and look for the new version in the journal's first line.
 - **quota-axi**: the factory reads the output of the pinned version. Move the pin only after reading the new version's changelog.
-- Compare its Claude percentages with Claude Code's `/usage` first; 0.1.50 reports the used percentage as remaining.
-- Then run `npm install -g quota-axi@<version>` and restart nothing.
-- If the factory cannot read its answer, every run carries a warning that the check could not answer and starts regardless ([ADR 0028](adr/0028-the-quota-check-is-a-courtesy-not-a-guard.md)).
-- Then install the pinned version again.
+  - Compare its Claude percentages with Claude Code's `/usage` first; 0.1.50 reports the used percentage as remaining.
+  - Then run `npm install -g quota-axi@<version>` and restart nothing.
+  - If the factory cannot read its answer, every run carries a warning that the check could not answer and starts regardless ([ADR 0028](adr/0028-the-quota-check-is-a-courtesy-not-a-guard.md)).
+  - Then install the pinned version again.
 
 ### Moving a host off the plugin
 A host set up for an earlier factory carries the `worker` plugin, and its configuration may carry `worker_env`. The factory now refuses to start on `worker_env`, with an error that names the factory's own knobs to write instead:
