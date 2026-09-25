@@ -81,11 +81,11 @@ if [ -n "$dep" ]; then ok ".github/$dep"; else warn ".github/dependabot.yml miss
 # the word caps. A word is a whitespace-separated token that is not punctuation alone. With WF_WRITING_LENIENT
 # set, which a repository that is not rewritten yet sets in its Makefile, each finding warns instead.
 writing() { if [ -n "${WF_WRITING_LENIENT:-}" ]; then warn "$@"; else bad "$@"; fi; }
-existing() { # the files of the list on stdin that exist, NUL separated and prefixed ./, so no name reads as an option or an awk assignment
-  while IFS= read -r f; do if [ -n "$f" ] && [ -f "$root/$f" ]; then printf './%s\0' "$f"; fi; done
+existing_nul() { # the regular files of the list on stdin, no symlinks, NUL separated and prefixed ./, so no name reads as an option or an awk assignment
+  while IFS= read -r f; do if [ -n "$f" ] && [ -f "$root/$f" ] && [ ! -L "$root/$f" ]; then printf './%s\0' "$f"; fi; done
 }
 emdash=$(printf '\342\200\224')
-dashes=$(printf '%s\n' "$all" | existing | (cd "$root" && LC_ALL=C xargs -0 grep -oIHF -- "$emdash" /dev/null 2>/dev/null) \
+dashes=$(printf '%s\n' "$all" | existing_nul | (cd "$root" && LC_ALL=C xargs -0 grep -oIHF -- "$emdash" /dev/null 2>/dev/null) \
   | LC_ALL=C awk '{ sub(/:[^:]*$/, ""); sub(/^\.\//, ""); n[$0]++ } END { for (f in n) printf "%d\t%s\n", n[f], f }' | LC_ALL=C sort -t "$(printf '\t')" -k2)
 if [ -z "$dashes" ]; then ok "no em dash"
 else
@@ -131,7 +131,7 @@ fence != "" { t = $0; gsub(/[ \t\r]/, "", t); if (substr(t, 1, 3) == fence && t 
 /^[ \t]*([-*+]|[0-9]+[.)])[ \t]/ { flush(); kind = "b"; start = FNR; line = $0; sub(/^[ \t]*([-*+]|[0-9]+[.)])[ \t]+/, "", line); cnt = words(line); total += cnt; next }
 { if (kind == "") { kind = "p"; start = FNR }; n = words($0); cnt += n; total += n }
 END { if (f != "") finish() }'
-found=$({ printf '%s\n' "$all" | grep -Ei '\.md$'; [ -z "$readme" ] || printf '%s\n' "$readme"; } | LC_ALL=C sort -u | existing \
+found=$({ printf '%s\n' "$all" | grep -Ei '\.md$'; [ -z "$readme" ] || printf '%s\n' "$readme"; } | LC_ALL=C sort -u | existing_nul \
   | (cd "$root" && LC_ALL=C xargs -0 awk -v readme="$readme" "$count" /dev/null))
 tab=$(printf '\t')
 while IFS="$tab" read -r group msg; do

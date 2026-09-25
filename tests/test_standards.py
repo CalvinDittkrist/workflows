@@ -328,7 +328,7 @@ class StandardsTests(ShimTest):
 
     # The writing rules: the check counts the em dash and the word caps, fails on each finding, and warns
     # instead with WF_WRITING_LENIENT set.
-    EM = "—"
+    EM = "\u2014"
     WRITING_OK = ("ok: no em dash", "ok: paragraphs, bullets and glossary entries within their word caps",
                   "ok: documents within their word caps")
 

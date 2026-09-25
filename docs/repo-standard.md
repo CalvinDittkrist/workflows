@@ -1,6 +1,11 @@
 # Repository standard
 
-The baseline every repository that runs this workflow is held to. `plugins/repo-standards/scripts/check.sh` (or `/repo-standards:docs-check`) verifies the file rules and the [writing rules](#writing-rules) offline and in CI; `/repo-standards:standardize` audits a repository with six read-only auditors, one per area, and records the maintainer's approval per category of the findings; on an empty repository every finding is a create action. `plugins/repo-standards/scripts/workspace.sh` brings the GitHub workspace and its milestones to the standard, and the check reports its differences as warnings when GitHub is reachable. `/repo-standards:apply` applies the approved findings: backup, cleanup pull request, issues, then the workspace and the check. Terms are defined in the [glossary](glossary.md).
+The baseline every repository that runs this workflow is held to. Terms are defined in the [glossary](glossary.md).
+
+- `plugins/repo-standards/scripts/check.sh` (or `/repo-standards:docs-check`) verifies the file rules and the [writing rules](#writing-rules) offline and in CI.
+- `/repo-standards:standardize` audits a repository with six read-only auditors, one per area, and records the maintainer's approval per category. On an empty repository every finding is a create action.
+- `plugins/repo-standards/scripts/workspace.sh` brings the GitHub workspace and its milestones to the standard. The check reports its differences as warnings when GitHub is reachable.
+- `/repo-standards:apply` applies the approved findings: backup, cleanup pull request, issues, then the workspace and the check.
 
 ## Profile
 A repository's profile is its visibility plus its branch model. Both are derived from GitHub, never configured per repository ([ADR 0009](adr/0009-profile-derived-from-github-with-two-branch-models.md)).
@@ -55,9 +60,10 @@ The check counts the em dash in every text file and the word caps in Markdown. S
 
 - A word is a whitespace-separated token that is not punctuation alone.
 - A bullet is a list item, numbered or not; a glossary entry is a table row of `docs/glossary.md`.
+- A plugin README is `plugins/<name>/README.md`, so its cap applies in a repository of plugins.
 - Code blocks, front matter and tables are no paragraphs; a document's count skips code blocks and front matter.
 
-Each finding fails the check. A repository not rewritten yet sets `WF_WRITING_LENIENT=1` for the check in its `Makefile`, which turns them into warnings. An accepted ADR may be shortened in wording; its decision is never edited ([ADR 0049](adr/0049-an-accepted-adr-may-be-shortened-in-wording-its-decision-is-never-edited.md)).
+Each finding fails the check. A repository not rewritten yet sets `WF_WRITING_LENIENT=1` for the check in its `Makefile`, which turns them into warnings. The check at the end of `/repo-standards:apply` warns on them too, because rewriting the documents is an issue of its own. An accepted ADR may be shortened in wording; its decision is never edited ([ADR 0049](adr/0049-an-accepted-adr-may-be-shortened-in-wording-its-decision-is-never-edited.md)).
 
 The templates in `plugins/repo-standards/templates/` are the fixed form of each document: `README.md.tpl`, `plugin-README.md`, `architecture.md`, `adr-template.md` and `glossary.md`.
 
