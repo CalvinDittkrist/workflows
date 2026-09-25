@@ -29,7 +29,7 @@ One file per decision, numbered. An accepted ADR may be shortened in wording in 
 | [0023](0023-github-is-the-only-control-surface-of-the-factory.md) | GitHub is the only control surface of the factory | accepted |
 | [0024](0024-a-claim-is-the-creation-of-the-branch-through-the-api.md) | A claim is the creation of the branch through the GitHub API | accepted |
 | [0025](0025-one-queue-one-worker-work-in-progress-first.md) | One queue, one worker, and work in progress before new work | accepted |
-| [0026](0026-the-factory-never-deletes-work-on-its-own.md) | The factory never deletes work on its own | accepted |
+| [0026](0026-the-factory-never-deletes-work-on-its-own.md) | The factory never deletes work on its own | amended |
 | [0027](0027-the-factorys-isolation-boundary-is-the-host.md) | The factory's isolation boundary is the host | accepted |
 | [0028](0028-the-quota-check-is-a-courtesy-not-a-guard.md) | The quota check is a courtesy, not a guard | amended by [0037](0037-the-quota-check-waits-below-12-percent-of-the-workers-scope.md) |
 | [0029](0029-a-worker-resets-its-context-by-a-handoff-not-by-compaction.md) | A worker resets its context by a handoff at a checkpoint, not by compaction | amended by [0032](0032-the-stage-measures-the-context-on-entry-and-a-handoff-grants-one-skip.md) |
