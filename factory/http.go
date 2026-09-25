@@ -116,7 +116,9 @@ func (f *Factory) repositories(w http.ResponseWriter, _ *http.Request) {
 
 // line is the one line of work across all connected repositories: what runs now, what waits in which
 // order (the work the factory holds and resumes before the issues nobody has worked yet), and what
-// is done, oldest first.
+// is done, oldest first. Beside it stands the running process: its version, whether it drains and
+// the auto_update it last read, so the operator and the host's update tick read the state of what
+// runs and never that of the binary on disk.
 func (f *Factory) line(w http.ResponseWriter, _ *http.Request) {
 	now, done := []Run{}, []Run{}
 	for _, run := range f.runs.list() {
@@ -126,7 +128,8 @@ func (f *Factory) line(w http.ResponseWriter, _ *http.Request) {
 			done = append(done, run)
 		}
 	}
-	writeJSON(w, map[string]any{"now": now, "queue": f.waiting(), "done": done})
+	writeJSON(w, map[string]any{"version": version, "draining": f.Draining(), "auto_update": f.AutoUpdate(),
+		"now": now, "queue": f.waiting(), "done": done})
 }
 
 // run is one run with its record and its events. after skips the events the reader already has, so

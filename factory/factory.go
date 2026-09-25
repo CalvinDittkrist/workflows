@@ -90,9 +90,20 @@ type Factory struct {
 	// no longer interrupts the run that is going. brake is -paused, which no configuration undoes, and
 	// unread the error the last reading of the file failed with, so the log says it once.
 	paused atomic.Bool
-	config string
-	brake  bool
-	unread string
+	// autoUpdate is the other one: the file's auto_update, read on the same polls and reported on the
+	// line, so the host's update tick reads it from the running process.
+	autoUpdate atomic.Bool
+	config     string
+	brake      bool
+	unread     string
+
+	// draining says the factory answers a SIGHUP (Drain): it starts and polls nothing more, lets the
+	// run that is going end with its own outcome and then exits with the drain code. drain is closed
+	// when it begins, so the working loop hears of it at once, and repeated says a second SIGHUP was
+	// logged, so the journal says it once.
+	draining atomic.Bool
+	drain    chan struct{}
+	repeated atomic.Bool
 
 	mu    sync.Mutex
 	queue []Issue
@@ -207,9 +218,10 @@ func New(settings Settings, fake bool) (*Factory, error) {
 		return nil, fmt.Errorf("the factory cannot find its own binary: %w", err)
 	}
 	f := &Factory{settings: settings, fake: fake, runs: runs, started: time.Now(), self: self,
-		wake: make(chan struct{}, 1), held: map[string]bool{}, cancelling: map[int]context.CancelCauseFunc{},
+		wake: make(chan struct{}, 1), drain: make(chan struct{}), held: map[string]bool{}, cancelling: map[int]context.CancelCauseFunc{},
 		askedHeld: map[string]time.Time{}, delivered: map[int]bool{}}
 	f.paused.Store(settings.Paused)
+	f.autoUpdate.Store(settings.AutoUpdate)
 	f.source = newGitHub(settings.Repositories, settings.Label)
 	if fake {
 		f.source = &canned{repositories: settings.Repositories, started: f.started, runs: runs}
@@ -237,10 +249,14 @@ func (f *Factory) Connect(ctx context.Context) {
 }
 
 // Work derives the queue, starts the run at its head, and does so again on every poll and whenever a
-// run ends. It returns when the context is done and the run that was active has ended.
+// run ends. It returns when the context is done or the factory drains, and the run that was active
+// has ended.
 func (f *Factory) Work(ctx context.Context) {
-	for ctx.Err() == nil {
+	for ctx.Err() == nil && !f.Draining() {
 		f.followPause(ctx)
+		if f.Draining() {
+			break
+		}
 		read := f.refreshQueue(ctx)
 		f.letIssuesGo(ctx, read.letGo)
 		f.refreshRequested(ctx)
@@ -253,12 +269,40 @@ func (f *Factory) Work(ctx context.Context) {
 		}
 		select {
 		case <-ctx.Done():
+		case <-f.drain:
 		case <-f.wake:
 		case <-time.After(next):
 		}
 	}
 	f.active.Wait()
 }
+
+// Drain is the factory's answer to SIGHUP. It claims, resumes, follows up and polls nothing from
+// now on, and Work returns once the run that is going has ended with its own outcome and delivered
+// what it owes, so the process exits with the drain code and the service manager starts the binary
+// on disk. The run is not interrupted, so it spends no resume. A SIGTERM during a drain still
+// interrupts that run, as it always does. A second SIGHUP changes nothing, and the log says so once.
+func (f *Factory) Drain() {
+	if f.draining.Swap(true) {
+		if !f.repeated.Swap(true) {
+			log.Printf("SIGHUP again: the factory is draining already, and another SIGHUP changes nothing")
+		}
+		return
+	}
+	log.Printf("draining on SIGHUP: nothing new is claimed, resumed or followed up, the run that is going ends with its own outcome, and then the factory exits with code %d", drainExit)
+	close(f.drain)
+}
+
+// Draining says whether the factory drains (Drain).
+func (f *Factory) Draining() bool { return f.draining.Load() }
+
+// AutoUpdate says whether the configuration lets the host install factory releases, as the last
+// reading of the file said.
+func (f *Factory) AutoUpdate() bool { return f.autoUpdate.Load() }
+
+// drainExit is the code the process exits with after a drain: the service unit restarts on it
+// (RestartForceExitStatus=75), and it is EX_TEMPFAIL, a stop that asks to be run again.
+const drainExit = 75
 
 // Follow has the factory read paused from its configuration file again on every poll, with -paused
 // as the brake that holds whatever the file says. Without it the pause is what the factory started
@@ -271,10 +315,10 @@ func (f *Factory) Follow(config string, brake bool) {
 // nothing is claimed, resumed, followed up or let go, and a run that is going finishes.
 func (f *Factory) Paused() bool { return f.paused.Load() }
 
-// followPause reads the configuration file again and takes paused from it; every other setting stays
-// the one the factory started with and needs a restart (docs/factory-runbook.md). A file that cannot
-// be read or is refused changes nothing: the factory goes on as it is and says so once, until the file
-// reads again. Only the working loop calls it, so config and unread are its own.
+// followPause reads the configuration file again and takes paused and auto_update from it; every
+// other setting stays the one the factory started with and needs a restart (docs/factory-runbook.md).
+// A file that cannot be read or is refused changes nothing: the factory goes on as it is and says so
+// once, until the file reads again. Only the working loop calls it, so config and unread are its own.
 func (f *Factory) followPause(ctx context.Context) {
 	if f.config == "" {
 		return
@@ -288,6 +332,9 @@ func (f *Factory) followPause(ctx context.Context) {
 		return
 	}
 	f.unread = ""
+	if f.autoUpdate.Swap(read.AutoUpdate) != read.AutoUpdate {
+		log.Printf("auto_update is %v by the configuration", read.AutoUpdate)
+	}
 	paused := read.Paused || f.brake
 	if f.paused.Swap(paused) == paused {
 		return
@@ -490,7 +537,7 @@ func (f *Factory) warn(r *Run, title, warning string) {
 // reset nothing starts either. The quota is checked when there is a run to start and not otherwise:
 // an idle line asks nothing of the provider.
 func (f *Factory) dispatch(ctx context.Context) {
-	if f.Paused() || ctx.Err() != nil {
+	if f.Paused() || f.Draining() || ctx.Err() != nil {
 		return
 	}
 	for _, r := range f.runs.list() {
@@ -660,7 +707,7 @@ func (f *Factory) waiting() []Entry {
 // factory that is already stopping records nothing: the run would count as worked without ever
 // having run. A warning is what the run starts with, such as a quota check that could not answer.
 func (f *Factory) start(ctx context.Context, entry Entry, warning string) {
-	if ctx.Err() != nil {
+	if ctx.Err() != nil || f.Draining() {
 		return
 	}
 	r := &Run{
