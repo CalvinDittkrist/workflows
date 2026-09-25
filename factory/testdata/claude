@@ -66,7 +66,9 @@
 # get past it. With CLAUDE_SHIM_REVIEW_LINGER set, a reviewer stays that many seconds after its result
 # line before it exits, as a session does while Claude Code shuts down.
 #
-# The structured result is the one thing a session owes the factory (ADR 0039).
+# The structured result is the one thing a session owes the factory (ADR 0039). A session started as
+# an agent whose tools list leaves out StructuredOutput prints no structured_output, as Claude Code
+# does.
 #
 # Before a session the factory asks this same command for the version of Claude Code. That call is
 # answered here and logged apart from the sessions, because the worker log is read as one record per
@@ -98,10 +100,17 @@ esac
 log="${CLAUDE_SHIM_LOG:-/dev/null}"
 # The author session of the pr stage is the one started with --tools: it is logged apart and answers
 # apart, so the worker log and every variable above stay about the sessions that work the branch.
-author="" agents="" reviewer="" repair="" previous=""
+author="" agents="" reviewer="" repair="" previous="" structured=1
 for argument in "$@"; do
   [ "$argument" = --tools ] && author=1
   [ "$argument" = --agents ] && agents=1
+  # Claude Code hands the result of --json-schema over through its StructuredOutput tool. An agent
+  # whose tools list leaves that tool out ends with text alone and no structured_output (tried with
+  # Claude Code 2.1.282 on 2026-09-25). The factory passes one agent per call.
+  [ "$previous" = --agents ] && case "$argument" in
+    *'"StructuredOutput"'*) ;;
+    *'"tools":'*) structured="" ;;
+  esac
   [ "$previous" = --agent ] && case "$argument" in *-reviewer) reviewer="${argument%-reviewer}" ;; esac
   [ "$previous" = --json-schema ] && case "$argument" in *'"disputed"'*) repair=1 ;; esac
   previous="$argument"
@@ -165,6 +174,10 @@ if [ -n "$reviewer" ]; then
       echo "the $reviewer reviewer failed" >&2
       exit 1
     fi
+  fi
+  if [ -z "$structured" ]; then
+    printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"terminal_reason":"completed","num_turns":4,"total_cost_usd":0.5,"result":"I read the change and found nothing to fix.","usage":{"input_tokens":200,"cache_creation_input_tokens":300,"cache_read_input_tokens":5000,"output_tokens":400}}'
+    exit 0
   fi
   text=$(printf '%s' "$output" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')
   printf '{"type":"result","subtype":"success","is_error":false,"terminal_reason":"completed","num_turns":4,"total_cost_usd":0.5,"result":"%s","structured_output":%s,"usage":{"input_tokens":200,"cache_creation_input_tokens":300,"cache_read_input_tokens":5000,"output_tokens":400}}\n' \
@@ -246,6 +259,11 @@ fi
 if [ -n "${CLAUDE_SHIM_ERROR_SUBTYPE:-}" ]; then
   printf '{"type":"result","subtype":"%s","is_error":true,"num_turns":12,"total_cost_usd":1.5,"usage":{"input_tokens":900,"cache_creation_input_tokens":1200,"cache_read_input_tokens":40000,"output_tokens":3000}}\n' \
     "$CLAUDE_SHIM_ERROR_SUBTYPE"
+  exit "${CLAUDE_SHIM_EXIT:-0}"
+fi
+
+if [ -z "$structured" ]; then
+  printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"terminal_reason":"completed","num_turns":12,"total_cost_usd":1.5,"result":"I implemented the issue and committed the work.","usage":{"input_tokens":900,"cache_creation_input_tokens":1200,"cache_read_input_tokens":40000,"output_tokens":3000}}'
   exit "${CLAUDE_SHIM_EXIT:-0}"
 fi
 
