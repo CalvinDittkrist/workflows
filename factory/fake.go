@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -431,15 +432,24 @@ func cannedFindings(scenario, reviewer string, round int) []map[string]any {
 	return nil
 }
 
-// reviewerStagger is how far apart the scripted reviewers of one round report.
-const reviewerStagger = 100 * time.Millisecond
+// reviewerStagger is how far apart the scripted reviewers of one round report. It is wide enough that
+// a loaded host, which starts the processes of one round and reads their output some way apart,
+// still logs the reviewers in the order of the panel.
+const reviewerStagger = 250 * time.Millisecond
 
 // scriptedReviewer is one reviewer of the panel in one round: it reads the change and reports its
 // verdict and its findings, and nothing else, because it can do nothing else.
 func scriptedReviewer(s *script, scenario, name string, round int) int {
 	// The reviewers of a round run beside each other; each one reports a moment after the one before it
-	// in the panel, so the log of a scripted run reads the same every time it is worked.
-	time.Sleep(time.Duration(slices.Index(defaultReview.Reviewers, name)+1) * reviewerStagger)
+	// in the panel, and all at once, so no line of one falls between two of another and the log of a
+	// scripted run reads the same every time it is worked.
+	out := s.out
+	var report bytes.Buffer
+	s.out = &report
+	defer func() {
+		time.Sleep(time.Duration(slices.Index(defaultReview.Reviewers, name)+1) * reviewerStagger)
+		_, _ = out.Write(report.Bytes())
+	}()
 	s.init()
 	s.say(fmt.Sprintf("Round %d. Reading the change the brief names.", round))
 	s.tool("Read", map[string]any{"file_path": "upload/retry.go"}, "1  package upload")
