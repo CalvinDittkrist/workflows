@@ -302,10 +302,13 @@ func TestAResumedGateCommitsAMergeWhoseConflictsAreResolved(t *testing.T) {
 	gh.git(t, clone, "fetch", "-q", "origin")
 	worktree := worktreePath(clone, claimedBranch)
 	gh.git(t, clone, "worktree", "add", "-q", "-b", claimedBranch, worktree, "origin/"+claimedBranch)
-	merge := exec.Command("git", "merge", "-q", "--no-edit", "origin/main")
+	merge := exec.Command("git", "-c", "user.email=t@example.com", "-c", "user.name=t", "merge", "-q", "--no-edit", "origin/main")
 	merge.Dir, merge.Env = worktree, gitIsolation()
 	if err := merge.Run(); err == nil {
 		t.Fatal("the merge of main into the branch was clean, want a conflict in shared.md")
+	}
+	if conflicted := gh.git(t, worktree, "diff", "--name-only", "--diff-filter=U"); conflicted != "shared.md" {
+		t.Fatalf("the merge of main into the branch conflicts in %q, want shared.md", conflicted)
 	}
 	resolution := "the branch's line\nthe base's line\n"
 	writeFile(t, filepath.Join(worktree, "shared.md"), resolution)
