@@ -20,7 +20,7 @@ import (
 // What a run's record says about the notification its ending owes. It is written before the call
 // and again after it, so an ending survives a host that is cut off in between: the next start makes
 // it. GitHub taking the call and the host being cut off before the second write is the one case that
-// says it twice, which is the side of the trade the maintainer can live with — a notification that
+// says it twice, which is the side of the trade the maintainer can live with: a notification that
 // came twice is read once, one that never came is an issue nobody answers.
 const (
 	notifyPending = "pending"
@@ -36,7 +36,7 @@ const (
 // The logins of a ready run are asked one after another rather than at once, so a stop that lands on
 // a GitHub that answers nothing waits one deadline per login. That is the slow side of the trade: the
 // factory cannot tell whether GitHub reads two additions of one pull request's reviewers as a union,
-// and two concurrent ones that do not would lose a reviewer — the very thing the call per login is
+// and two concurrent ones that do not would lose a reviewer, the very thing the call per login is
 // there to prevent. Nothing is lost to the wait either way: a host that kills the factory first
 // leaves the ending pending, and the next start makes it.
 const notifyTimeout = 30 * time.Second
@@ -49,8 +49,8 @@ const maxNotifyReason = 2000
 // notifies says whether an ending owes the maintainer a word.
 //
 // ready and the three endings that wait for a person do. lost does not: another claimer owns the
-// issue and this factory touched nothing. Neither does an interruption the factory answers itself —
-// the one automatic resume — because nothing waits on the maintainer there; a second interruption
+// issue and this factory touched nothing. Neither does an interruption the factory answers itself
+// (the one automatic resume), because nothing waits on the maintainer there; a second interruption
 // has spent that resume and waits, exactly as a failure does ([ADR 0026]). quota does not either: a
 // run the quota stopped keeps everything it holds and is queued again after the reset ([ADR 0037]).
 // Neither does cancelled: the routing label taken off the issue or the issue closed is the
@@ -76,8 +76,8 @@ func notifies(r Run, held holding) bool {
 //
 // A paused start marks what it owes and makes none of it: a pause writes nothing to GitHub ([ADR
 // 0023]), and -paused is the operator's brake, which has to hold for a data directory started only
-// to be looked at as well. The marks are the part that cannot wait — a run this start found active
-// is not found active by the next one — and what they mark is made once the factory works: by the
+// to be looked at as well. The marks are the part that cannot wait (a run this start found active
+// is not found active by the next one), and what they mark is made once the factory works: by the
 // poll that reads the pause gone from the configuration, or by the first start that works.
 //
 // [ADR 0023]: ../docs/adr/0023-github-is-the-only-control-surface-of-the-factory.md
@@ -196,13 +196,13 @@ func (f *Factory) deliver(r *Run) {
 //
 // A ready run whose result named no pull request of this repository is commented on like an ending
 // that waits, and not passed over: there is nothing to ask a review of, but the issue is still held
-// by a factory that is done with it, and the run's reason — which says that the result named none —
+// by a factory that is done with it, and the run's reason (which says that the result named none)
 // is what tells the maintainer where to look.
 func (f *Factory) deliverTo(r *Run) error {
 	if r.Outcome == outcomeReady && r.PullRequest != "" {
 		// One call per login, and not one that names them all: GitHub refuses a whole review
-		// request that carries a login it will not take — somebody who cannot review that
-		// repository, or the author of the pull request, which the factory's own login can be —
+		// request that carries a login it will not take (somebody who cannot review that
+		// repository, or the author of the pull request, which the factory's own login can be),
 		// and the maintainers it would have taken would then hear nothing of the run.
 		var refused []error
 		for _, who := range f.settings.Notify {
@@ -221,19 +221,19 @@ func (f *Factory) deliverTo(r *Run) error {
 }
 
 // notifyBody is the comment on the issue: who it is for, what became of the run, why, and what the
-// maintainer can do about it. The gesture is the one [ADR 0026] gives them — the assignee off the
-// issue hands it back to the factory — and it is worth saying, because an unattended run is read
+// maintainer can do about it. The gesture is the one [ADR 0026] gives them (the assignee off the
+// issue hands it back to the factory), and it is worth saying, because an unattended run is read
 // weeks after it ended and nothing else on the issue says how to answer it.
 //
 // It is only the gesture of an issue the factory still holds, and whether it holds one is read from
 // the records as a whole, not from the run: a release resume that failed before it took the issue
 // back holds nothing itself, while the claim under it still does, and the next removal of an
 // assignee is taken up again. That run is told the gesture as it stands for an issue with nobody on
-// it — an assignee put on and taken off again — because that is the one way left to hand it back.
+// it (an assignee put on and taken off again), because that is the one way left to hand it back.
 // A run that ended while the factory holds nothing of the issue is told what it is instead of what
 // it cannot do. Such a run has still left something behind more
-// often than not — a claim that created the branch and failed at the assignee, a release resume that
-// could not take the issue back over the worktree of the claim under it — and what that is, the run's
+// often than not (a claim that created the branch and failed at the assignee, a release resume that
+// could not take the issue back over the worktree of the claim under it), and what that is, the run's
 // own reason says a paragraph above; the comment does not say it a second time and must not say the
 // opposite of it.
 //
@@ -267,8 +267,8 @@ func notifyBody(r Run, held holding, logins []string) string {
 }
 
 // verbatim is a text of the run's quoted into the comment as the text it is. The reason of a run
-// carries what a model wrote — the blocker's text is the worker's own report, and the text of an
-// issue can steer what a worker writes — so it is fenced rather than let into the comment as
+// carries what a model wrote (the blocker's text is the worker's own report, and the text of an
+// issue can steer what a worker writes), so it is fenced rather than let into the comment as
 // markdown: nothing in it becomes a heading, a link or a mention of somebody the factory was never
 // asked to notify. The fence is longer than the longest run of backticks in the text, which is what
 // keeps the text from ending it ([CommonMark 4.5]).

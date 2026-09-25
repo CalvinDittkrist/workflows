@@ -18,15 +18,15 @@ import (
 
 // The remote claim: the factory takes an issue by creating its branch on GitHub, and only the
 // claimer GitHub answers 201 to owns it ([ADR 0024]). Everything here is the workflow's shell
-// restated in Go — the branch contract, the base branch rule — and every restatement is bound to
+// restated in Go (the branch contract, the base branch rule), and every restatement is bound to
 // its original by a drift test ([ADR 0022]).
 //
 // [ADR 0022]: ../docs/adr/0022-the-factory-is-a-second-driver-over-the-worker-pipeline.md
 // [ADR 0024]: ../docs/adr/0024-a-claim-is-the-creation-of-the-branch-through-the-api.md
 
 // gitTimeout bounds one git command on a clone: a question asked of the repository on disk, which
-// answers at once or is hanging. fetchTimeout bounds the one command that is a transfer instead —
-// the whole remote, over the host's line — and it is given the room a clone of the same repository
+// answers at once or is hanging. fetchTimeout bounds the one command that is a transfer instead
+// (the whole remote, over the host's line) and it is given the room a clone of the same repository
 // has, because failing a claim for a slow line costs the issue its place in the line.
 const (
 	gitTimeout   = 60 * time.Second
@@ -40,7 +40,7 @@ var errLost = errors.New("the branch exists on the remote already")
 // claimed is what a won claim leaves behind: the branch it created on the remote, the base it was
 // cut from, and the worktree the worker runs in. created says the branch is on the remote, which is
 // what an operator reading a failed run needs: the claim after that point leaves it behind. holding
-// says the whole claim stands — branch, assignee and worktree — which is what makes the issue this
+// says the whole claim stands (branch, assignee and worktree), which is what makes the issue this
 // factory's to resume and to release. resumed says this run was not a claim at all but a
 // continuation under one that already stood.
 type claimed struct {
@@ -73,7 +73,7 @@ func (f *Factory) claim(ctx context.Context, r *Run, entry Entry) (claimed, erro
 	}
 	// A fetch does not touch refs/remotes/origin/HEAD. That reference is written once, when this host
 	// cloned the repository, so "the head the remote points at" would be the head it pointed at then
-	// — and a repository that moves its default branch afterwards would be branched off the old one
+	// A repository that moves its default branch afterwards would be branched off the old one
 	// for as long as this clone lives, or off a name the remote no longer has at all. Asking the
 	// remote for it again with every claim is what keeps the rule's second step true.
 	if _, err := git(ctx, clone, "remote", "set-head", "origin", "--auto"); err != nil {
@@ -81,8 +81,8 @@ func (f *Factory) claim(ctx context.Context, r *Run, entry Entry) (claimed, erro
 	}
 	// A branch of this issue on the remote is a claim somebody has made already, whatever slug its
 	// title spelled at the time. GitHub refuses the second creation of one reference, not the second
-	// claim of one issue, so two claimers on opposite sides of an edited title — or of an edited
-	// label, which decides the branch type — would each create a branch of their own and both believe
+	// claim of one issue, so two claimers on opposite sides of an edited title (or of an edited
+	// label, which decides the branch type) would each create a branch of their own and both believe
 	// they won. The issue number in the branch is what both of them share, and reading it back is the
 	// local driver's own rule (wf_remote_branch_for_issue in the orchestrator's lib.sh) asked of the
 	// references this claim has just fetched.
@@ -94,7 +94,7 @@ func (f *Factory) claim(ctx context.Context, r *Run, entry Entry) (claimed, erro
 		//
 		// Which branch that is takes more than its name. The name of an issue's branch is the same
 		// for every claimer, so a branch another claimer cut in the seconds between this factory's
-		// reading of the line and this fetch carries it too — and two claimers on one branch is the
+		// reading of the line and this fetch carries it too. Two claimers on one branch is the
 		// one thing the claim exists to make impossible. What the two cannot share is a commit: a
 		// branch is left on the remote only when it carries work the base does not have
 		// (removeRemoteBranch), and a branch somebody has just cut from the base carries none. So a
@@ -145,7 +145,7 @@ func (f *Factory) claim(ctx context.Context, r *Run, entry Entry) (claimed, erro
 		return claimed{branch: branch, base: base}, err
 	}
 	// From here on the branch is on the remote whatever else fails, and every claimer after this one
-	// loses the issue to it. Nothing rolls it back — work is never deleted ([ADR 0026]) — so a failure
+	// loses the issue to it. Nothing rolls it back (work is never deleted, [ADR 0026]), so a failure
 	// below says the branch is left behind and the operator decides.
 	//
 	// [ADR 0026]: ../docs/adr/0026-the-factory-never-deletes-work-on-its-own.md
@@ -191,7 +191,7 @@ func worktreePath(clone, branch string) string {
 // orphaned recognised. The branch is still on the remote and carries its commits, so there is
 // nothing to claim: this host is assigned again and the worktree is made from that branch, which is
 // where the run continues ([ADR 0026]). A branch that is gone from the remote never reaches here,
-// and neither does one that carries no work — the issue is then claimed anew, as a first run of it,
+// and neither does one that carries no work: the issue is then claimed anew, as a first run of it,
 // and the claim decides against whoever else may hold the name. why is the line of the run's log
 // that says which of the two this is.
 //
@@ -246,7 +246,7 @@ func carriesWork(ctx context.Context, clone, branch, base string) (bool, error) 
 //
 //   - it carries work beyond the base, because a branch another claimer has just cut from the base
 //     carries none, and that is the claim this reading must never take;
-//   - the latest activity GitHub records on it — its creation, a push — was made by the login this
+//   - the latest activity GitHub records on it (its creation, a push) was made by the login this
 //     host's gh is signed in as, which nobody else can act as;
 //   - no pull request of it is open, because work that is in review is with a person, and taking
 //     it up again would start a second session on a branch somebody is reading.
@@ -302,7 +302,7 @@ func (f *Factory) orphaned(ctx context.Context, r *Run, repository, clone, branc
 // makeWorktree puts the worktree of a branch this factory holds back into the clone, on the commits
 // the remote carries. It is how a run continues when the worktree of its claim is not there: the
 // issue was let go and routed again, or the data directory was moved or lost. The branch on the
-// remote is the work — everything this factory removes is pushed there first ([ADR 0026]) — so a
+// remote is the work (everything this factory removes is pushed there first, [ADR 0026]), so a
 // branch that is gone from the remote is the one case nothing can be made again from.
 //
 // The caller has fetched: what is made here is what the remote holds now, not what this clone last
@@ -495,7 +495,7 @@ func defaultBranch(ctx context.Context, connected Connected, clone string) strin
 // declaredBase is the base branch a repository declares for itself: WF_BASE_BRANCH in the env block
 // of the .claude/settings.json its checkout carries (README, Configuration). That file is where a
 // local session gets the variable wf_base_branch reads, so this is the same explicit setting and not
-// a second one — and reading it here is what keeps the branch the factory cuts and the base the
+// a second one. Reading it here is what keeps the branch the factory cuts and the base the
 // worker reviews and opens its pull request against the same branch.
 //
 // It is read out of the fetched reference and not out of the clone's working tree: that tree is

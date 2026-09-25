@@ -3,7 +3,7 @@
 # Usage: handoff-resume.sh <pane> <session-id-before> <stage> <driver-command> [note-record]
 # Started by handoff.sh with nohup, because the session it clears is the one that started it: a worker
 # cannot clear itself from inside a turn. It waits for that worker's turn to settle and sends `/clear` into
-# that session and no other, never before its turn has ended — a pane that has moved on, waits on a dialog or
+# that session and no other, never before its turn has ended: a pane that has moved on, waits on a dialog or
 # is still working keeps its context and the maintainer is told. The driver command follows two signals and
 # no guess: the pane reports a session id other than the one it was given, so a fresh context really started,
 # and the record is marked, so that context really has the note. Nothing it does is silent: a pane that starts
@@ -28,15 +28,15 @@ attempts=2  # the first /clear, and one retry for the pane that swallowed it
 
 session() { wf_agent_session "$pane"; }
 # The hook marks the record as it injects the note, so a marked record says a context somewhere has the note
-# already. That context is not necessarily the one this handover is starting — any session started in this
-# worktree fires the hook — so a marked record is never a reason to drive the pane; it is a reason to stop,
+# already. That context is not necessarily the one this handover is starting (any session started in this
+# worktree fires the hook), so a marked record is never a reason to drive the pane; it is a reason to stop,
 # because clearing again would throw the note away and the driver command would reach a context without it.
 taken() { [ -n "$record" ] && [ -f "$record" ] && [ -n "$(wf_record_field "$record" injected)" ]; }
 stop() { wf_notify "$1" "$2 The note is on disk: clear the pane by hand if it still holds the old context, then send $cmd there to resume at the $stage stage." alert; exit 1; }
 # Everything this script sends is keystrokes, and keystrokes carry an Enter: typed into a permission dialog
 # they answer a question the maintainer has not read, typed into a working turn they queue behind work nobody
 # asked for. herdr's wait ends on `blocked` and on its timeout too, so the pane's state is read immediately
-# before every prompt and never once for all of them — between two of them a minute passes, and the keystroke
+# before every prompt and never once for all of them: between two of them a minute passes, and the keystroke
 # before may be what opened the dialog the next would answer.
 require_ended() {
   status=$(wf_agent_status "$pane")
@@ -48,7 +48,7 @@ require_ended() {
 
 # The worker that asked for the handoff is still finishing its turn. `/clear` typed into a working agent
 # would land in the queue of that turn, so the wait is first and everything else follows it. Without
-# `--until` herdr waits for the first of its settled states — `idle`, `done` or `blocked` — and a worker that
+# `--until` herdr waits for the first of its settled states (`idle`, `done` or `blocked`), and a worker that
 # ends its turn settles as `done`: a wait for `idle` alone sat through the whole timeout and the pane was
 # never cleared (measured in the live run of this change).
 herdr agent wait "$pane" --timeout 600000 >/dev/null 2>&1 || true
@@ -87,7 +87,7 @@ done
 # busy with its own start-up gets the moment it needs.
 herdr agent wait "$pane" --timeout 60000 >/dev/null 2>&1 || true
 # That the note reached it is the second signal, and it is read rather than assumed: a hook that produced
-# nothing — no `jq`, an unwritable git dir — leaves a context without the issue and without its stage, and the
+# nothing (no `jq`, an unwritable git dir) leaves a context without the issue and without its stage, and the
 # driver command would start it at stage 1 on a branch that already carries the work. The mark is the hook's
 # own, so waiting for it is waiting for the hook to have run.
 if [ -n "$record" ]; then
@@ -101,7 +101,7 @@ fi
 # The driver command is a keystroke like the `/clear` was, and the wait above ends on `blocked` too: a fresh
 # context that opened a trust dialog, or a maintainer who took the pane while the note was landing, must not
 # have this Enter answer it. The pane is asked once more, as late as possible, and it must still be the
-# context this handover started — not a third one that came up after it.
+# context this handover started, not a third one that came up after it.
 require_ended resume
 fresh=$(session)
 [ -n "$fresh" ] && [ "$fresh" = "$now" ] ||

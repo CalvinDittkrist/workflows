@@ -65,8 +65,8 @@ func TestAClaimCutsTheBranchFromTheFreshlyFetchedBaseAndRunsTheWorkerInItsWorktr
 		t.Errorf("the factory made `gh %s` %d times, want once after it won the claim", assigned, made)
 	}
 
-	// The worktree is in this host's clone, under the path the local workflow uses — .claude/worktrees
-	// and the branch with its slashes turned into hyphens — and it is what the worker ran in, on the
+	// The worktree is in this host's clone, under the path the local workflow uses (.claude/worktrees
+	// and the branch with its slashes turned into hyphens), and it is what the worker ran in, on the
 	// branch the claim created and at the commit it was cut from.
 	worktree := filepath.Join(clone, ".claude", "worktrees", "feat-104-retry-the-upload-when-the-broker-drops")
 	if _, err := os.Stat(filepath.Join(worktree, "README.md")); err != nil {
@@ -196,7 +196,7 @@ func TestAClaimOfARepositoryWithItsOwnBaseCutsAndWorksFromThatBase(t *testing.T)
 
 // A repository moves its line of work after this host cloned it: it declares another base in its own
 // settings, the file a local session is given WF_BASE_BRANCH by. The claim reads what the repository
-// says now — the clone's working tree is the day it was written and is never checked out again — so
+// says now: the clone's working tree is the day it was written and is never checked out again, so
 // the branch is cut from the base the repository names today and the implement session is briefed with it.
 func TestAClaimReadsTheBaseTheRepositoryDeclaresNowAndNotTheOneItsCloneWasWrittenWith(t *testing.T) {
 	t.Parallel()
@@ -236,7 +236,7 @@ func TestAClaimReadsTheBaseTheRepositoryDeclaresNowAndNotTheOneItsCloneWasWritte
 
 // The remote moves its default branch after this host cloned it: a repository that adopts a line of
 // its own, or renames the one it had. A clone remembers the head it was written with and a fetch
-// never touches that memory, so the claim asks the remote for it again — the branch is cut from the
+// never touches that memory, so the claim asks the remote for it again: the branch is cut from the
 // base the remote points at now, and a repository whose old default is gone is still a repository
 // this factory works.
 func TestAClaimFollowsTheRemoteWhenItMovesItsDefaultBranch(t *testing.T) {
@@ -314,7 +314,7 @@ func TestAClaimThatFailsAfterTheBranchWasCreatedSaysWhatItLeftBehind(t *testing.
 }
 
 // A claim that fails before it created anything took nothing: the run says so, so that an operator
-// reading it knows there is no branch to remove, and the failure is never read as a lost race — an
+// reading it knows there is no branch to remove, and the failure is never read as a lost race. An
 // issue nobody claimed would otherwise be given away by a factory that could not reach GitHub.
 func TestAClaimThatFailsBeforeTheBranchExistsSaysNothingWasClaimed(t *testing.T) {
 	t.Parallel()
@@ -407,7 +407,7 @@ func TestARepositoryWhoseClaimTouchedNothingIsHeldInsteadOfSpendingItsLine(t *te
 
 // An issue whose repository has no clone on this host cannot be worked at all: the worktree a worker
 // runs in is made in that clone. A run is what takes an issue out of the line for good, so the issue
-// keeps its place instead — a host that could not reach one repository when it started would
+// keeps its place instead: a host that could not reach one repository when it started would
 // otherwise spend that repository's whole line on runs that never touched GitHub.
 func TestAnIssueOfARepositoryWithoutACloneKeepsItsPlaceInTheLine(t *testing.T) {
 	t.Parallel()
@@ -532,7 +532,7 @@ func TestAClaimAnotherClaimerWonIsRecordedAsLostAndTouchesNothingElse(t *testing
 	}
 
 	// And it does not try the issue again while the branch is there: the run is that record. The
-	// issue stays routed and unassigned, which is also what a released issue looks like — and it was
+	// issue stays routed and unassigned, which is also what a released issue looks like. It was
 	// unassigned after this run began, so the one thing that keeps this factory away from a claim
 	// that is not its own is that it holds nothing here. The label is the one the lost run answered;
 	// only setting it again would queue the issue once more.
@@ -555,7 +555,7 @@ func TestAClaimAnotherClaimerWonIsRecordedAsLostAndTouchesNothingElse(t *testing
 }
 
 // A claimer loses an issue to the branch another claimer created, not to the name that branch
-// happens to spell: a title edited between two polls — or a label that decides the branch type —
+// happens to spell: a title edited between two polls, or a label that decides the branch type,
 // would otherwise give the two claimers two branch names, and GitHub, which refuses the second
 // creation of one reference and knows nothing of issues, would answer both of them 201.
 func TestAClaimerThatMeetsABranchOfTheIssueUnderAnotherTitleHasLost(t *testing.T) {
@@ -601,7 +601,7 @@ func TestAClaimerThatMeetsABranchOfTheIssueUnderAnotherTitleHasLost(t *testing.T
 // A won claim is one act on GitHub and then two more: the branch exists from the moment GitHub
 // confirms it, and the assignment and the worktree follow. A host that loses power in that gap is
 // read afterwards from the run record alone, so the record names the branch before the gap and not
-// after it — nothing else on this host says what was left on the remote ([ADR 0026]).
+// after it: nothing else on this host says what was left on the remote ([ADR 0026]).
 //
 // [ADR 0026]: ../docs/adr/0026-the-factory-never-deletes-work-on-its-own.md
 func TestTheRunNamesTheBranchAsSoonAsTheRemoteHasIt(t *testing.T) {
@@ -1248,7 +1248,7 @@ func resolved(t *testing.T, path string) string {
 	return out
 }
 
-// pushedBy is who GitHub says acted last on a branch of the shim's GitHub — its creation or a push —
+// pushedBy is who GitHub says acted last on a branch of the shim's GitHub (its creation or a push)
 // which is how the factory tells a branch of its own that no record names from somebody else's.
 func (g *ghShim) pushedBy(t *testing.T, repository, branch, login string) {
 	t.Helper()
@@ -1270,8 +1270,8 @@ func activityCall(repository, branch string) string {
 // A factory whose data directory was lost knows nothing of the issues it held. One of them was
 // released and is routed and unassigned again, and its branch is on the remote with the work of the
 // runs before: the factory pushed it last, and no pull request of it is open. That is this factory's
-// own claim and not a foreign one, so it is taken up again — assigned, its worktree made from the
-// branch, and the worker run on the commits there — rather than recorded as lost ([ADR 0024]).
+// own claim and not a foreign one, so it is taken up again (assigned, its worktree made from the
+// branch, and the worker run on the commits there) rather than recorded as lost ([ADR 0024]).
 //
 // [ADR 0024]: ../docs/adr/0024-a-claim-is-the-creation-of-the-branch-through-the-api.md
 func TestAFactoryThatLostItsDataDirectoryTakesUpItsOwnOrphanedBranch(t *testing.T) {

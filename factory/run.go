@@ -19,7 +19,7 @@ import (
 
 // The outcomes of the vocabulary. A run in fake mode reaches ready, blocked, failed, timeout and
 // interrupted; lost is the race another claimer won ([ADR 0024]), cancelled is a run a decision on
-// GitHub ended — the routing label taken off its issue, or the issue closed ([ADR 0023]) — and quota
+// GitHub ended (the routing label taken off its issue, or the issue closed, [ADR 0023]), and quota
 // a session that ended in an error on a used-up quota ([ADR 0037]).
 //
 // [ADR 0023]: ../docs/adr/0023-github-is-the-only-control-surface-of-the-factory.md
@@ -94,19 +94,19 @@ type Run struct {
 	// Holding says this factory owns the issue on the remote: its claim created the branch, assigned
 	// the issue to this host and made the worktree. Only an issue the factory holds is resumed and
 	// only such an issue can be released, so a lost claim and a claim that failed half way are left
-	// alone — including the branch of another claimer, which this factory never works.
+	// alone, including the branch of another claimer, which this factory never works.
 	Holding bool `json:"holding"`
 	// LetGoAt is when this factory gave the issue back, and nil for as long as it holds it: the
 	// commits pushed, the worktree and the local branch removed, the assignee taken off unless a
-	// pull request stands, and every record and log of the issue kept. Holding stays as it was — it
+	// pull request stands, and every record and log of the issue kept. Holding stays as it was; it
 	// is the history that says this factory's claim made that branch, which is what a later routing
 	// of the same issue is read against ([ADR 0026]).
 	//
 	// [ADR 0026]: ../docs/adr/0026-the-factory-never-deletes-work-on-its-own.md
 	LetGoAt *time.Time `json:"letGoAt"`
 	// Signal is what queued this run: routed, interruption, quota, release or changes-requested.
-	// SignalAt is when that signal happened — the routing, the interruption, the end of the run that
-	// ran out of quota, the moment the assignee came off, or the moment the review was submitted. It
+	// SignalAt is when that signal happened (the routing, the interruption, the end of the run that
+	// ran out of quota, the moment the assignee came off, or the moment the review was submitted). It
 	// is the answer this run is: a signal of an issue is acted on once, and a signal no later than the
 	// one its records already carry has been answered already.
 	// That is what keeps the factory from resuming the same release, or answering the same review, for
@@ -159,9 +159,9 @@ type Run struct {
 	CostUSD   float64    `json:"costUsd"`
 	Tokens    Tokens     `json:"tokens"`
 	// Totals says where turns, cost and tokens come from: worker when the session's result line
-	// reported them, factory while the factory counts them from the assistant lines — during the run,
+	// reported them, factory while the factory counts them from the assistant lines (during the run,
 	// and at its end when the session ended without a result line, as it does whenever the factory
-	// ends it. Empty on a record that has none and on one written before this field.
+	// ends it). Empty on a record that has none and on one written before this field.
 	Totals      string `json:"totals"`
 	ContextPeak int    `json:"contextPeak"` // the largest context one message of the worker carried
 	// WorkerGroup is the process group the worker session ran in, which is the process group this
@@ -176,11 +176,11 @@ type Run struct {
 	Warnings   []string `json:"warnings"`
 	Versions   Versions `json:"versions"`
 	// Notified is what this ending owes the maintainer on GitHub: pending while the notification is
-	// still owed and done once the factory has tried it — done says it was made, not that GitHub
+	// still owed and done once the factory has tried it: done says it was made, not that GitHub
 	// took it, and a call GitHub refused is a warning on the run and done all the same. It is
 	// written before the call and again after it, so a host cut off in between makes it on its next
-	// start. A run that owes nobody anything — an outcome that notifies nobody, a factory with no
-	// logins to notify, a record written before this field — carries none of it.
+	// start. A run that owes nobody anything (an outcome that notifies nobody, a factory with no
+	// logins to notify, a record written before this field) carries none of it.
 	Notified string `json:"notified,omitempty"`
 
 	// What the streams said, kept for the moment the run ends. Not part of the record: what one session
@@ -291,7 +291,7 @@ type Tokens struct {
 
 // Versions is what a run ran with. Factory is the version of the binary that recorded the run, whose
 // prompts the sessions ran on; ClaudeCode is read from the host before the first session starts. It is
-// empty in fake mode, which runs no Claude Code, and when it could not be read — then the run carries
+// empty in fake mode, which runs no Claude Code, and when it could not be read, and then the run carries
 // a warning saying so.
 type Versions struct {
 	ClaudeCode string `json:"claudeCode"`
@@ -357,7 +357,7 @@ func OpenStore(dir string) (*Store, error) {
 		if r.ID <= 0 {
 			return nil, fmt.Errorf("the run record %s has no id; move it aside to start without it", file)
 		}
-		// A record that names no kind — one written before the kind was part of it, or by hand — says
+		// A record that names no kind (one written before the kind was part of it, or by hand) says
 		// what it was in its signal, which every record carries.
 		if r.Kind == "" {
 			r.Kind = kindOf(r.Signal)
@@ -400,7 +400,7 @@ func (s *Store) eventsPath(id int) string {
 
 // The lock of a run says whether its worker is still there. It is taken before the worker starts and
 // handed to it, so it is held by that one process group and by nothing else, and the kernel gives it
-// back when the last process of the group is gone — whatever ended them, and whether or not the
+// back when the last process of the group is gone, whatever ended them, and whether or not the
 // factory that started them is still alive to notice ([ADR 0027]).
 //
 // [ADR 0027]: ../docs/adr/0027-the-factorys-isolation-boundary-is-the-host.md
@@ -480,7 +480,7 @@ func (s *Store) update(r *Run, change func()) {
 // a message started from is its input plus everything read from the cache: the context it was
 // answered with. A subagent has a context of its own, which says nothing about how full the worker's
 // is, so only the worker's own messages raise the peak. The record is written with every line, so a
-// run that ends without a result line — even with the factory killed under it — keeps what was
+// run that ends without a result line (even with the factory killed under it) keeps what was
 // counted.
 func (s *Store) count(r *Run, session *heard, msg message, sub bool) {
 	s.mu.Lock()

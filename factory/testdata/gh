@@ -39,7 +39,7 @@ named=$(printf '%s' "$request" | tr -c 'A-Za-z0-9' '-')
 
 # A call that reads its body from standard input: it is kept where the test reads it, under the name
 # of the request. It is read here, before any answer is decided, so that gh never leaves a body in a
-# pipe nobody empties — a call that fails or stalls reads it as the one that is answered does.
+# pipe nobody empties: a call that fails or stalls reads it as the one that is answered does.
 input=""
 case " $request " in
   *" --body-file - "*|*" --input - "*)
@@ -84,7 +84,7 @@ if [ "${1:-}" = repo ] && [ "${2:-}" = clone ]; then
 fi
 
 # The claim: POST repos/<owner>/<name>/git/refs -f ref=refs/heads/<branch> -f sha=<commit>. It is
-# `git update-ref <ref> <sha> ""`, which creates a reference and fails when it exists already —
+# `git update-ref <ref> <sha> ""`, which creates a reference and fails when it exists already:
 # git's ref lock decides the race here as GitHub's 422 decides it there.
 path="${4:-}"
 if [ "${1:-}" = api ] && [ "${2:-}" = --method ] && [ "${3:-}" = POST ] && [ "$path" != "${path#repos/}" ] && [ "$path" != "${path%/git/refs}" ]; then
@@ -141,9 +141,9 @@ fi
 answer="${GH_SHIM_DIR:-/nowhere}/$named"
 [ -f "$answer" ] && exec cat "$answer"
 
-# The reads of the ci stage a test did not answer: every pull request is green — mergeable, of the
+# The reads of the ci stage a test did not answer: every pull request is green (mergeable, of the
 # branch of its number on the local repository and at the commit that branch is at there, one check
-# passed long ago, no review, no thread — and a branch has no open pull request; a reply in a thread
+# passed long ago, no review, no thread), and a branch has no open pull request; a reply in a thread
 # and its resolution go through. A test of the ci stage answers them otherwise, and a test of a gate
 # on CI writes the rollup of one head into "checks-<number>-<commit>" in GH_SHIM_DIR, and the one of
 # every other head into "checks-<number>"; "mergeable-<number>-<commit>" holds the mergeability of one

@@ -15,7 +15,7 @@ import (
 
 // The quota check, tested the way the rest of the factory is: the real binary, claiming a real issue
 // against the gh shim, with the scripted quota-axi of testdata as the tool the configuration names.
-// What the check decided is read from the interface — whether the factory waits and until when —
+// What the check decided is read from the interface (whether the factory waits and until when)
 // from when the runs started, and from the calls the scripted tool logged.
 
 // quotaShim is the scripted quota-axi: the plan it answers from, one line per call, and the log of
@@ -151,7 +151,7 @@ func TestARunStartsWhenEnoughQuotaIsLeft(t *testing.T) {
 
 // Too little left: nothing starts, the interface says the factory waits for quota and until when,
 // and after that reset the check runs again and the run starts. The worker runs on the model
-// worker_args names, so that model's scope is the one read — here the one that is short.
+// worker_args names, so that model's scope is the one read: here the one that is short.
 func TestTooLittleQuotaWaitsForTheResetAndStartsAfterIt(t *testing.T) {
 	t.Parallel()
 	q := newQuotaShim(t, "all=80 opus=90 sonnet=11 reset=+3", "all=80 opus=90 sonnet=60 reset=+3600")
@@ -327,7 +327,7 @@ func TestAQuotaCheckThatHangsIsEndedWithItsChild(t *testing.T) {
 
 // A run that ends in an error while the worker's quota is used up has not failed: it ran out. The
 // branch, the worktree and the assignee stay, and after the reset the factory resumes the issue in
-// that worktree by itself — the resume is the quota's, so the one after an interruption is still
+// that worktree by itself: the resume is the quota's, so the one after an interruption is still
 // there (TestTheAutomaticResumeIsOnePerIssueAndOnlyAReleaseGivesItBack).
 func TestARunThatRanOutOfQuotaIsResumedAfterTheReset(t *testing.T) {
 	t.Parallel()

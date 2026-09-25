@@ -28,7 +28,7 @@ printf '%s' "$threshold" | grep -Eq '^[1-9][0-9]*$' || wf_die "WF_HANDOFF_TOKENS
 printf '%s' "$max_age" | grep -Eq '^[1-9][0-9]*$' || wf_die "WF_CONTEXT_MAX_AGE='$max_age' is not a positive number of seconds, e.g. WF_CONTEXT_MAX_AGE=900"
 
 # What a `handoff: yes` asks the reader to do. It is printed by the script and not by the skill, because a
-# context that entered the stage on its own — a session restarted by hand, a `/worker:work` after a crash —
+# context that entered the stage on its own (a session restarted by hand, a `/worker:work` after a crash)
 # never read the driver's text and would otherwise find the answer without the procedure.
 procedure() {
   cat <<PROCEDURE
@@ -82,8 +82,8 @@ claim_skip() {
   [ -n "$(wf_record_field "$record" injected)" ] || return 1
   [ -z "$(wf_record_field "$record" skip_used)" ] || return 1
   # Which session the hook gave the note to, and which session this is. The skip is taken away only from a
-  # session that is provably a different one — restarted by hand, typed after a crash, a forced claim that
-  # adopted the branch — so that its first entry into a stage is measured. When either id is missing the two
+  # session that is provably a different one (restarted by hand, typed after a crash, a forced claim that
+  # adopted the branch), so that its first entry into a stage is measured. When either id is missing the two
   # cannot be compared: a record written by a worker plugin from before `injected_session:`, a hook that
   # reported no session, a Herdr that names no agent for this pane. Denying the skip there would measure the
   # stale value of the context that is gone and start the very loop the skip exists to prevent, and an

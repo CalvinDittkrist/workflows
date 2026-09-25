@@ -121,7 +121,7 @@ func routed(issue ghIssue, routingLabel string) bool {
 }
 
 // ghPull is what the factory reads of a pull request: whether it was merged, and whether it is still
-// open. Both are one decision — the maintainer is done with the issue behind it — and the merge is
+// open. Both are one decision (the maintainer is done with the issue behind it), and the merge is
 // asked for separately because GitHub calls a merged pull request closed as well.
 type ghPull struct {
 	State  string `json:"state"`
@@ -178,7 +178,7 @@ type gitHub struct {
 	finished map[string]bool
 	// refused is what an issue carries that the factory reads and will not act on, with the thing it
 	// was about: a pull request a record names that is not of the branch this factory holds. It is
-	// no failed reading — the issue answered — and it is said once and again when what it is about
+	// no failed reading (the issue answered), and it is said once and again when what it is about
 	// changes, because it stands for as long as that record does.
 	refused map[string]string
 }
@@ -244,7 +244,7 @@ func (g *gitHub) queue(ctx context.Context, held []Held) poll {
 // The whole pass is bounded by heldReadTimeout, and the issues it does not reach are read by a later
 // poll. It runs in the working loop, so what it waits for the line waits for: a GitHub that takes a
 // request and answers none of it would otherwise cost this poll one ghTimeout for every issue this
-// host holds — half an hour for thirty of them, in which nothing is dispatched, nothing is cancelled
+// host holds: half an hour for thirty of them, in which nothing is dispatched, nothing is cancelled
 // and nothing is let go.
 //
 // [ADR 0023]: ../docs/adr/0023-github-is-the-only-control-surface-of-the-factory.md
@@ -301,7 +301,7 @@ func (g *gitHub) readHeld(ctx context.Context, held []Held, letGo map[string]str
 //
 // The routing label alone is read and not the rest of the frontier rule: routing is what hands an
 // issue to this factory and taking that label off is what takes it back ([ADR 0023]), while
-// ready-for-agent says the issue is ready to be worked at all — an issue already in work is past
+// ready-for-agent says the issue is ready to be worked at all: an issue already in work is past
 // that question, and a maintainer who wants this run to end says so with the label that named the
 // host.
 //
@@ -553,8 +553,8 @@ func issuesRequest(repository, routingLabel string) string {
 // routing is when the maintainer handed the issue over, so an old issue routed today stands behind
 // one routed yesterday.
 //
-// An issue whose events do not name the label — it fell out of what GitHub keeps, the label came
-// with the issue, or the timeline is still catching up with the list that already carries it —
+// An issue whose events do not name the label (it fell out of what GitHub keeps, the label came
+// with the issue, or the timeline is still catching up with the list that already carries it),
 // counts from when it was opened. It keeps its place in the line that way, where an empty time
 // would put it at the head of every queue. An event list that could not be read at all counts from
 // then too, which is earlier than the routing and moves the issue towards the head.
@@ -656,7 +656,7 @@ func connect(ctx context.Context, settings Settings) {
 		}
 		log.Printf("cloning %s into %s", repository, dir)
 		// The clone lands beside its place and is moved in when gh is done, so a clone that was cut
-		// off — the host rebooted, the factory was stopped — leaves no half repository that the next
+		// off (the host rebooted, the factory was stopped), leaves no half repository that the next
 		// start would take for a finished one and hand to a worker.
 		// A staging directory of an earlier start is a clone nobody finished: it is swept, not kept,
 		// because a host that was rebooted mid-clone would otherwise collect half repositories.
@@ -743,7 +743,7 @@ func ghInput(ctx context.Context, timeout time.Duration, input string, args ...s
 
 // command is how the factory runs another program: under a deadline of its own and in a process group of
 // its own, answering with its output and, when it failed, with the first line it said. gh and git
-// both start children — git for a clone, git for a fetch over the line — so the deadline and the stop
+// both start children (git for a clone, git for a fetch over the line), so the deadline and the stop
 // have to reach those too: the group is what is ended. WaitDelay closes the pipes after that, because
 // a process that outlived the group still holds the output pipe it inherited, and waiting on that
 // pipe would hold the factory past its own deadline. The reason falls back to the error itself, for a

@@ -7,8 +7,8 @@ import (
 	"time"
 )
 
-// The HTTP interface is read-only. The factory is steered on GitHub — routed by a label, released by
-// an assignee, cancelled by a label — so its own interface has no endpoint that writes anything, and
+// The HTTP interface is read-only. The factory is steered on GitHub (routed by a label, released by
+// an assignee, cancelled by a label), so its own interface has no endpoint that writes anything, and
 // it needs no login of its own: it binds to one address, by default the loopback, and is reached
 // over the tailnet.
 func (f *Factory) Handler() http.Handler {
@@ -26,7 +26,7 @@ func (f *Factory) Handler() http.Handler {
 
 // browserSafe is for the reader the dashboard added: a browser. The page needs nothing but what this
 // binary serves, so everything it may load is narrowed to the binary itself, and what a factory
-// serves — a worker's tool calls, with the content of private repositories in them — can then not be
+// serves (a worker's tool calls, with the content of private repositories in them) can then not be
 // read by a script some other page brought along.
 func browserSafe(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -115,7 +115,7 @@ func (f *Factory) repositories(w http.ResponseWriter, _ *http.Request) {
 }
 
 // line is the one line of work across all connected repositories: what runs now, what waits in which
-// order — the work the factory holds and resumes before the issues nobody has worked yet — and what
+// order (the work the factory holds and resumes before the issues nobody has worked yet), and what
 // is done, oldest first.
 func (f *Factory) line(w http.ResponseWriter, _ *http.Request) {
 	now, done := []Run{}, []Run{}

@@ -29,7 +29,7 @@ wf_merge_base() {
   git merge-base "$ref" HEAD 2>/dev/null || printf '%s\n' "$ref"
 }
 # The stages a checkpoint hands over before, and the stages a handoff resumes at: one list, because the two
-# are the same contract read from both ends — the checkpoint accepts the stage, handoff.sh has to accept the
+# are the same contract read from both ends: the checkpoint accepts the stage, handoff.sh has to accept the
 # word the model then pipes the note with. Both are a stage boundary at which everything the next context
 # needs is in git, in GitHub or in a record of this worktree.
 wf_handoff_stages() { printf 'review ci\n'; }
@@ -62,7 +62,7 @@ wf_review_rounds() {
   printf '%s\n' "$n"
 }
 # The uncommitted changes of this worktree, indented for a refusal that lists them, and empty when there are
-# none. Three writes refuse a dirty tree — a handoff, a round record and the summary — because each of them
+# none. Three writes refuse a dirty tree (a handoff, a round record and the summary), because each of them
 # describes a commit; what the three share is the listing, not the sentence that says why.
 wf_dirty_tree() {
   local dirty; dirty=$(git status --porcelain)
@@ -105,7 +105,7 @@ wf_pr_for_branch() {
   branch=$(wf_branch)
   answer=$(gh pr list --head "$branch" --state open --json number -q '.[0].number') || {
     status=$?
-    wf_die "gh could not list the open pull requests of branch $branch (gh exit $status); fix gh itself — 'gh auth status' for exit 4, the network otherwise — and run this again"
+    wf_die "gh could not list the open pull requests of branch $branch (gh exit $status); fix gh itself ('gh auth status' for exit 4, the network otherwise) and run this again"
   }
   printf '%s' "$answer"
 }

@@ -1151,7 +1151,7 @@ func (g *ghShim) remotePath(repository string) string {
 }
 
 // head is the commit a branch of the shim's GitHub points at, and an empty string when there is no
-// such branch — which is what a claim that nobody won looks like from outside.
+// such branch, which is what a claim that nobody won looks like from outside.
 func (g *ghShim) head(t *testing.T, repository, branch string) string {
 	t.Helper()
 	out, err := exec.Command("git", "-C", g.remotePath(repository), "rev-parse", "--verify", "--quiet", "refs/heads/"+branch).Output()
@@ -1402,7 +1402,7 @@ func equal[T comparable](got, want []T) bool {
 
 // ---- small helpers ----
 
-// gitIsolation keeps the host's git configuration — a global ignore file, hooks, a signing key — out
+// gitIsolation keeps the host's git configuration (a global ignore file, hooks, a signing key) out
 // of what these tests do.
 func gitIsolation() []string {
 	env := []string{}

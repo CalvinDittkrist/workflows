@@ -27,8 +27,8 @@ import (
 // They read the interface as a reader of it does, by its field names, not through the Go types.
 //
 // Every test declares itself parallel: each has its own port, temporary directory and gh shim, and
-// the binary is built once. A test that changes state of the whole test process — its environment,
-// the package logger — cannot, says which state in a comment, and runs alone before the others.
+// the binary is built once. A test that changes state of the whole test process (its environment,
+// the package logger) cannot, says which state in a comment, and runs alone before the others.
 
 // binary is the factory as a host runs it; hurried is the same factory linked with a session timeout
 // of seconds, which a test of that timeout cannot wait out otherwise.
@@ -144,9 +144,9 @@ type apiLine struct {
 
 func TestFakeModeWorksTheCannedQueueOneRunAtATime(t *testing.T) {
 	t.Parallel()
-	// The deadline has to be far above what a scripted run costs — a binary built with the race
+	// The deadline has to be far above what a scripted run costs (a binary built with the race
 	// detector pays about a second on every exit, and the detached run has sixteen sessions, most
-	// of them one after the other — or a quick run would be read as a timeout.
+	// of them one after the other), or a quick run would be read as a timeout.
 	// The runs of acme/edge-sensors change a document, which is the class docs; the ready run's fixes
 	// move its change to the class upload, which has no gate, and the detached run's out of every class,
 	// from the fix of its merge in the gate stage on.
@@ -408,8 +408,8 @@ func TestFakeModeWorksTheCannedQueueOneRunAtATime(t *testing.T) {
 		}
 	}
 	// Ended on the deadline, the worker printed no result line, so the totals are the factory's own
-	// count of the stream: one turn per message of the worker — its first thought and text are one
-	// message on two lines — the tokens of those and of its one subagent message, and the cost of the
+	// count of the stream: one turn per message of the worker (its first thought and text are one
+	// message on two lines), the tokens of those and of its one subagent message, and the cost of the
 	// worker's messages at the list price of the scripted model. Every message of the worker writes
 	// 400 tokens to the five-minute cache and 800 to the hour's, and reads the context it grew to.
 	turns := 0
@@ -951,7 +951,7 @@ func says(yes bool) string {
 // Two factories on one host share nothing, and the data directory is what they would share first:
 // the run ids, the records and the clones a worker branches off are written there as if one process
 // were alone with them. The address is no guard for that, because a second configuration names a
-// second address, so the directory itself is held — and it is held by the kernel, so a factory that
+// second address, so the directory itself is held, and it is held by the kernel, so a factory that
 // was killed leaves none of it behind for the next start.
 func TestASecondFactoryOnTheSameDataDirectoryStartsNothing(t *testing.T) {
 	t.Parallel()
@@ -1060,7 +1060,7 @@ func TestARestartKeepsTheRunsAndInterruptsWhatWasActive(t *testing.T) {
 // A factory the host kills ends nothing: its worker keeps running, with nobody reading its stream,
 // and the data directory is free the moment the process dies. The next start finds that run
 // interrupted and resumes the issue, so the worker that outlived the factory has to be ended before
-// the new session opens the same worktree — two unattended sessions committing side by side is the
+// the new session opens the same worktree: two unattended sessions committing side by side is the
 // one thing a restart may not produce.
 func TestARestartEndsTheWorkerThatOutlivedTheFactory(t *testing.T) {
 	t.Parallel()
@@ -1196,7 +1196,7 @@ func TestOnlyThePullRequestOfTheRunIsTakenFromAResult(t *testing.T) {
 
 // A configuration that does not name paused is paused. The factory spends tokens and pushes branches
 // with nobody watching, so working a line is something an operator wrote down and never what a file
-// that forgot the key does by itself — the command line can add the brake and never take it away.
+// that forgot the key does by itself: the command line can add the brake and never take it away.
 func TestAConfigurationThatDoesNotNamePausedIsPaused(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -1438,7 +1438,7 @@ func (f *factory) do(t *testing.T, method, path string) *http.Response {
 }
 
 // never fails when something happens within the time given. It is for the things the factory must
-// not do by itself — a second automatic resume above all — which no single reading can prove.
+// not do by itself (a second automatic resume above all), which no single reading can prove.
 func (f *factory) never(t *testing.T, within time.Duration, what string, happened func() bool) {
 	t.Helper()
 	for deadline := time.Now().Add(within); time.Now().Before(deadline); {

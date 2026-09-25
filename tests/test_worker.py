@@ -778,7 +778,7 @@ class ReviewRoundTests(PanelRecordCalls, ShimTest):
         keys = self.keys(self.rounds())
         self.assertEqual(keys["review_round"], "2 of at most 3")
         self.assertEqual(keys["review_reviewers"], "code")
-        # Once that commit is gone — the branch rebased, the commit it was recorded at dropped — the records
+        # Once that commit is gone (the branch rebased, the commit it was recorded at dropped), the records
         # describe other work, and the panel starts again.
         self.git("reset", "-q", "--hard", "HEAD~3")
         self.commit("rebased.txt")
@@ -910,7 +910,7 @@ class ReviewRoundTests(PanelRecordCalls, ShimTest):
     def test_the_disputes_of_a_round_reach_the_context_that_continues_the_review(self):
         """A dispute is the one thing the records hold that nothing derives: the summary carries only the
         lines its caller writes, so a context that did not run the round has to be able to read them."""
-        dispute = "disputed: code S2 'rename the field' — the name is the one the ADR uses"
+        dispute = "disputed: code S2 'rename the field': the name is the one the ADR uses"
         self.record_rounds(f"panel: code=FIX\nfixed: 0 (S1 0, S2 0, S3 0)\n{dispute}")
         self.assertIn("    " + dispute, self.rounds())
         self.assertIn(dispute, self.skill_brief("worker", "review", WF_BASE_BRANCH="main"))
@@ -963,7 +963,7 @@ class PanelSummaryTests(PanelRecordCalls, ShimTest):
         self.assertIn("panel_verdict: ready", brief)
 
     def test_the_disputes_are_the_one_thing_the_worker_still_writes(self):
-        disputed = "disputed: code S2 'rename the field' — the name is the one the ADR uses"
+        disputed = "disputed: code S2 'rename the field': the name is the one the ADR uses"
         r = self.summary(ROUND_ONE, ROUND_TWO, disputed=disputed)
         self.assertEqual(r.returncode, 0, r.stderr)
         brief = self.print_brief().stdout
@@ -995,7 +995,7 @@ class PanelSummaryTests(PanelRecordCalls, ShimTest):
         self.record_rounds("panel: code=PASS security=PASS docs=PASS tests=PASS senior=PASS\n"
                            "fixed: 0 (S1 0, S2 0, S3 0)\ndisputed: none")
         self.commit("late.txt")
-        self.passing_gate()  # gated, so the head is recordable — but no reviewer has read it
+        self.passing_gate()  # gated, so the head is recordable, but no reviewer has read it
         r = self.record()
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("panel_verdict: draft", r.stdout, "a passed panel says nothing about this commit")
@@ -1033,7 +1033,7 @@ class PanelSummaryTests(PanelRecordCalls, ShimTest):
 
     def test_a_summary_at_a_commit_the_gate_has_not_passed_on_is_refused(self):
         """The rounds may name an earlier commit, but the summary names the head it is recorded at, and
-        `panel.sh verdict` calls that head ready — which is the word the yolo finish stage merges on."""
+        `panel.sh verdict` calls that head ready, which is the word the yolo finish stage merges on."""
         self.record_rounds(ROUND_ONE, ROUND_TWO)
         self.commit("late.txt")  # a commit no reviewer read and no gate ran on
         r = self.record()
@@ -1056,7 +1056,7 @@ class PanelSummaryTests(PanelRecordCalls, ShimTest):
 
     def test_a_round_record_with_an_unreadable_fix_count_is_warned_about_and_counts_zero(self):
         """The sibling of an unreadable `panel:` line, which is refused outright. A count is degraded
-        instead — the verdicts of that round are still readable — but a summary that understates what the
+        instead (the verdicts of that round are still readable), but a summary that understates what the
         review fixed says so, because the pull request body quotes those counts."""
         self.record_rounds(ROUND_ONE, ROUND_TWO)
         record = Path(self.git("rev-parse", "--path-format=absolute", "--git-dir").strip()) / "worker/round.1"
@@ -1082,8 +1082,8 @@ class PanelSummaryTests(PanelRecordCalls, ShimTest):
         self.assertEqual(self.run_script(WORKER / "panel.sh", "verdict").stdout, "ready\n")
 
     def test_a_summary_a_commit_has_outrun_is_no_longer_a_ready_one(self):
-        # A summary describes the commit it was recorded at. The review stage is skippable since ADR 0029 —
-        # a `/worker:work` resuming at the ci stage goes straight to the merge — so a panel that never saw
+        # A summary describes the commit it was recorded at. The review stage is skippable since ADR 0029:
+        # a `/worker:work` resuming at the ci stage goes straight to the merge. So a panel that never saw
         # what would be merged has to read as draft, and `verdict` is what scripts ask.
         self.summary()
         self.assertEqual(self.run_script(WORKER / "panel.sh", "verdict").stdout, "ready\n")
@@ -1324,7 +1324,7 @@ class CheckpointEntryTests(ShimTest):
                 self.assertEqual(self.keys(self.checkpoint("review", **env).stdout)["handoff"], "yes")
 
     def test_a_record_that_cannot_be_marked_grants_the_skip_and_says_so(self):
-        # Failing closed on the mark would re-create the same loop, so it fails open — and the answer carries
+        # Failing closed on the mark would re-create the same loop, so it fails open, and the answer carries
         # the warning too, because a skill injection may show the model stdout alone.
         self.context(150000)
         self.handoff_record()
@@ -1871,8 +1871,8 @@ class HandoffTests(ShimTest):
                       "and the note is still there for the next context")
 
     def test_the_mark_names_the_session_the_note_reached_and_that_session_skips_its_stage(self):
-        # The hook marks the record with the session it injected the note into, and that session — and no
-        # other — passes its stage's entry checkpoint once without handing over again (ADR 0032).
+        # The hook marks the record with the session it injected the note into, and that session (and no
+        # other) passes its stage's entry checkpoint once without handing over again (ADR 0032).
         self.assertEqual(self.handoff().returncode, 0)
         self.hook(session_id="fresh-context")
         self.assertIn("injected_session: fresh-context\n", self.record.read_text())
@@ -1997,7 +1997,7 @@ class HandoffResumeTests(ShimTest):
 
     def test_a_note_taken_while_the_pane_keeps_its_session_is_reported_after_the_clear(self):
         # The same race one step later: the `/clear` went out, the pane never reported a fresh session, and
-        # the note was marked meanwhile — by a session this handover did not start.
+        # the note was marked meanwhile by a session this handover did not start.
         record = self.note_record(injected=False)
         r = self.resume(record=record, SHIM_CLEAR_KEEPS_SESSION="1", SHIM_CLEAR_MARKS_RECORD=record)
         self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
@@ -2049,7 +2049,7 @@ class HandoffResumeTests(ShimTest):
     def test_a_fresh_context_that_never_got_the_note_is_reported_instead_of_driven(self):
         # The new session id says a context started, not that its hook ran. One that produced nothing has
         # neither the issue nor its stage, so the driver command would start it at stage 1 on a branch that
-        # already carries the work — the one outcome the handoff exists to prevent.
+        # already carries the work: the one outcome the handoff exists to prevent.
         r = self.resume(record=self.note_record(injected=False))
         self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
         self.assertEqual(self.sequence(), ["agent wait", "agent prompt /clear", "agent wait"])

@@ -335,7 +335,7 @@ esac
 
     def test_a_release_that_already_carries_its_binaries_is_never_overwritten(self):
         """What a host downloaded under a version stays what it downloaded. A re-run of a finished
-        release — a moved tag, a re-run months later — would replace those files with others, so the
+        release (a moved tag, a re-run months later), would replace those files with others, so the
         job fails instead and a person decides."""
         r = self.run_step(assets=len(self.ASSETS))
         self.assertNotEqual(r.returncode, 0, "it overwrote a published release")

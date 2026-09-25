@@ -11,7 +11,7 @@ import (
 
 // Resuming work the factory holds, tested the way the rest of it is: the real binary, against the gh
 // shim and a local bare repository that stands in for the remote. The release signal is a gesture on
-// GitHub — somebody takes the assignee off — so it is driven through that shim, and what the factory
+// GitHub (somebody takes the assignee off), so it is driven through that shim, and what the factory
 // answers with is read from the run records, from how the worker was started and from the line it
 // serves.
 
@@ -47,7 +47,7 @@ func TestAReleasedIssueIsAssignedAgainAndResumedInTheSameWorktree(t *testing.T) 
 	committed := gh.git(t, worktree, "rev-parse", "HEAD")
 
 	// The release: somebody takes the assignee off the issue, so it matches the routing rule again.
-	// The issue is touched by that, which is what makes the factory read its events anew — so the
+	// The issue is touched by that, which is what makes the factory read its events anew, so the
 	// events are put there first: an issue that says it was touched while its timeline is still the
 	// old one would be remembered without the release in it.
 	released := first.EndedAt.Add(time.Second)
@@ -166,7 +166,7 @@ func TestTheLineResumesWhatTheFactoryHoldsBeforeItClaimsAnythingNew(t *testing.T
 
 // Answering a release is taking the issue back, and the factory can be stopped in between: the run
 // that stands for the release is recorded before the assignee is put on again. Such a run holds
-// nothing, and the next start reads the release as the unanswered gesture it still is — rather than
+// nothing, and the next start reads the release as the unanswered gesture it still is, rather than
 // as an interruption to resume, which would start a worker on an issue GitHub says is nobody's and
 // leave it lying in every other claimer's line ([ADR 0026]).
 //
@@ -210,8 +210,8 @@ func TestAReleaseThatWasCutOffBeforeTheTakeBackIsStillAnswered(t *testing.T) {
 
 // A release the factory took up and could not carry through is answered all the same: the run that
 // was made of it is the answer, whether the take-back landed or not. A factory that read such a
-// release as unanswered would find it again on every poll — the issue lies unassigned exactly as the
-// person left it, and nothing about that changes — and would work the same failing resume for as
+// release as unanswered would find it again on every poll (the issue lies unassigned exactly as the
+// person left it, and nothing about that changes), and would work the same failing resume for as
 // long as it stands, with a run record and a notification on the issue every few seconds. The issue
 // waits for a person instead, like every other ending that cannot go on.
 func TestAReleaseResumeThatFailedIsAnsweredAndTheIssueWaitsForAPerson(t *testing.T) {
@@ -310,7 +310,7 @@ func TestHeldWorkStaysInTheLineWhenTheConfigurationRespellsTheRepository(t *test
 // A resume whose worktree is gone is made again from the branch (the test below), and when nothing
 // of that branch is on the remote either there is nothing to continue: no directory, no commits, no
 // work. This is what that failure must cost: the issue's one automatic resume, and nothing else. The
-// repository keeps its place — the next issue in the line is claimed and worked — and the issue
+// repository keeps its place (the next issue in the line is claimed and worked), and the issue
 // itself waits for a person, with its branch, its worktree and its assignee untouched ([ADR 0026]).
 //
 // [ADR 0026]: ../docs/adr/0026-the-factory-never-deletes-work-on-its-own.md
@@ -434,7 +434,7 @@ func TestAResumeWhoseWorktreeIsGoneIsMadeAgainFromTheBranch(t *testing.T) {
 }
 
 // A worktree is made again on the commits the remote carries now. The name of the branch may still
-// be in this host's clone while its directory is gone — somebody removed that directory by hand —
+// be in this host's clone while its directory is gone (somebody removed that directory by hand)
 // and the remote may have moved on since; a worker put on the old name would work on commits the
 // remote is past and could never push what it wrote on them.
 func TestAWorktreeMadeAgainMovesALocalBranchBehindTheRemoteUpToIt(t *testing.T) {
@@ -496,7 +496,7 @@ func TestTheAutomaticResumeIsOnePerIssueAndOnlyAReleaseGivesItBack(t *testing.T)
 			run(1, signalRouted, outcomeInterrupted, true),
 			run(2, signalInterruption, outcomeInterrupted, true)}, never},
 		// The resume is spent by the run it queued, whatever became of that run: a resume that could
-		// not start — a worktree that is not on the host — is not tried again by itself either.
+		// not start (a worktree that is not on the host) is not tried again by itself either.
 		{"an automatic resume that ended in something else", []Run{
 			run(1, signalRouted, outcomeInterrupted, true),
 			run(2, signalInterruption, outcomeFailed, true)}, never},
@@ -565,7 +565,7 @@ func TestTheAutomaticResumeIsOnePerIssueAndOnlyAReleaseGivesItBack(t *testing.T)
 // The release signal, in the shapes a poll can meet it in. What it is read from is one issue of the
 // line GitHub answers with, beside the records of that issue: the gesture itself is driven end to
 // end in TestAReleasedIssueIsAssignedAgainAndResumedInTheSameWorktree, and what is read here is the
-// rule that decides whether a given poll is a release at all — above all that a release is answered
+// rule that decides whether a given poll is a release at all, above all that a release is answered
 // once, because the poll that queued it repeats for as long as the re-assignment takes to land.
 func TestAReleaseIsTheRemovedAssigneeOfAHeldIssueAndIsAnsweredOnce(t *testing.T) {
 	t.Parallel()

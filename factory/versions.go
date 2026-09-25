@@ -72,7 +72,7 @@ func versionOf(printed string) string {
 
 // versionUnread says that the version could not be read. It is a warning, and the run goes on: a run
 // nobody can trace to what it ran with is the thing this record exists to prevent, and no reason to
-// give the issue back. A factory that is stopping says nothing — the run's own end is the reason then.
+// give the issue back. A factory that is stopping says nothing: the run's own end is the reason then.
 func (f *Factory) versionUnread(ctx context.Context, r *Run, said string) {
 	if ctx.Err() != nil {
 		return

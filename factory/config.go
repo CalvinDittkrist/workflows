@@ -48,7 +48,7 @@ type Config struct {
 // Connected is one repository the factory works: its name on GitHub and, optionally, the branch a
 // run of it branches off. The base is the explicit setting of the base branch rule, and it belongs
 // to the repository rather than to the factory, because a host connects repositories that do not
-// agree on one — one on main, the next on dev ([ADR 0022]).
+// agree on one: one on main, the next on dev ([ADR 0022]).
 //
 // [ADR 0022]: ../docs/adr/0022-the-factory-is-a-second-driver-over-the-worker-pipeline.md
 type Connected struct {
@@ -166,7 +166,7 @@ func validBase(name string) bool {
 // definition, the prompt, the shape of the output the factory reads the run from, the permission mode
 // being unattended costs, and the settings object that switches the workflow's plugins off and carries
 // the compact pin. worker_args is added to that command, so an operator's own copy of one of them
-// would be a second value for something the factory has decided — and a worker started with someone
+// would be a second value for something the factory has decided, and a worker started with someone
 // else's --settings or --agents could carry a plugin that merges what it built. --plugin-dir is refused
 // for the same reason: the plugins the settings switch off are the workflow's by name, and a plugin
 // loaded from a directory would reach the session anyway ([ADR 0042]). What Claude Code makes of two of the same flag is not what the factory rests on: it is
@@ -278,9 +278,9 @@ func Load(path string) (Settings, error) {
 	}
 	for _, arg := range c.WorkerArgs {
 		if flag := factoryOwns(arg); flag == "--plugin-dir" {
-			return bad("worker_args carries --plugin-dir, which would load a plugin into the sessions that write on the branch; remove it — they run on the factory's own prompts and no plugin")
+			return bad("worker_args carries --plugin-dir, which would load a plugin into the sessions that write on the branch; remove it, since they run on the factory's own prompts and no plugin")
 		} else if flag != "" {
-			return bad("worker_args carries %s, which the factory gives the worker itself; remove it — worker_args adds arguments to a run, it cannot replace the ones the run is defined by", flag)
+			return bad("worker_args carries %s, which the factory gives the worker itself; remove it, since worker_args adds arguments to a run, it cannot replace the ones the run is defined by", flag)
 		}
 	}
 	named := map[string]bool{}
