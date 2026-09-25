@@ -263,8 +263,7 @@ func TestAFixVerdictThatOutlastsTheRoundsIsNamedInThePullRequest(t *testing.T) {
 }
 
 // A reviewer whose result does not fit its schema fails the run, which names the reviewer, and no
-// pull request is opened: a verdict that contradicts its findings is no verdict. So does a fix session
-// that leaves an S1 or S2 neither fixed nor disputed.
+// pull request is opened. So does a fix session that leaves an S1 or S2 neither fixed nor disputed.
 func TestAResultOfTheReviewThatDoesNotFitFailsTheRunNamingIt(t *testing.T) {
 	t.Parallel()
 	blocking := findings(t, Finding{Severity: "S1", Path: "a.go", Line: 1, Claim: "It panics.", Why: "Nil map.", Fix: "Make it."})
@@ -272,13 +271,10 @@ func TestAResultOfTheReviewThatDoesNotFitFailsTheRunNamingIt(t *testing.T) {
 		prepare func(*ghShim, *testing.T)
 		reason  []string
 	}{
-		"a reviewer": {func(gh *ghShim, t *testing.T) {
-			gh.verdict(t, "security", 1, strings.Replace(blocking, `"verdict":"fix"`, `"verdict":"pass"`, 1))
+		"a reviewer with more findings than it reports": {func(gh *ghShim, t *testing.T) {
 			// Every reviewer reports once all five run, and stays a moment after it has, so each reports
 			// while the others are still running and the round is the last thing the run does.
 			gh.env = append(gh.env, "CLAUDE_SHIM_REVIEW_BARRIER=5", "CLAUDE_SHIM_REVIEW_LINGER=1")
-		}, []string{"the security reviewer: ", "the verdict is pass with an S1 or S2 finding standing"}},
-		"a reviewer with more findings than it reports": {func(gh *ghShim, t *testing.T) {
 			found := []Finding{}
 			for range maxFindings + 1 {
 				found = append(found, Finding{Severity: "S3", Path: "a.go", Line: 1, Claim: "A nit.", Why: "Taste.", Fix: "Change it."})
@@ -312,6 +308,40 @@ func TestAResultOfTheReviewThatDoesNotFitFailsTheRunNamingIt(t *testing.T) {
 				t.Errorf("the run's totals come from %q, want %s: every session reported its own", run.Totals, totalsWorker)
 			}
 		})
+	}
+}
+
+// A verdict that contradicts its reviewer's findings is read from the findings, and the run warns:
+// a pass with an S1 standing is a fix, and a fix with nits alone is a pass. Run 41 on chef (#179) was
+// thrown away after 217 turns on a docs reviewer that reported fix with one S3.
+func TestAVerdictThatContradictsItsFindingsIsReadFromThem(t *testing.T) {
+	t.Parallel()
+	gh, data := panelClaim(t, "@true")
+	blocking := findings(t, Finding{Severity: "S1", Path: "a.go", Line: 1, Claim: "It panics.", Why: "Nil map.", Fix: "Make it."})
+	nit := findings(t, Finding{Severity: "S3", Path: "README.md", Line: 3, Claim: "A long sentence.", Why: "Taste.", Fix: "Split it."})
+	gh.verdict(t, "security", 1, strings.Replace(blocking, `"verdict":"fix"`, `"verdict":"pass"`, 1))
+	gh.verdict(t, "docs", 1, strings.Replace(nit, `"verdict":"pass"`, `"verdict":"fix"`, 1))
+	gh.repairs(t, map[string]any{"outcome": "complete", "fixed": []string{"F1"}, "disputed": []map[string]any{}, "skipped": []map[string]any{}, "summary": "Made the map."})
+
+	f := gh.work(t, ciConfig(data, nil))
+	run := f.ended(t, 1)
+	if run.Outcome != outcomeReady {
+		t.Fatalf("the run ended as %q (%s), want ready; the factory's log:\n%s", run.Outcome, run.Reason, f.output(t))
+	}
+	if titles := factoryTitles(run, "security: pass", "security: fix"); !equal(titles, []string{"security: fix, 1 finding(s)", "security: pass, 0 finding(s)"}) {
+		t.Errorf("the factory logged the security reviewer as %v, want a fix and a pass in the second round", titles)
+	}
+	if titles := factoryTitles(run, "docs: pass", "docs: fix"); !equal(titles, []string{"docs: pass, 1 finding(s)"}) {
+		t.Errorf("the factory logged the docs reviewer as %v, want one pass and no second round", titles)
+	}
+	if workers := gh.workers(t); len(workers) != 2 {
+		t.Errorf("the factory started %d worker sessions, want the implement session and the fix session of the security finding", len(workers))
+	}
+	for _, want := range []string{"the security reviewer reported pass in round 1, and its findings make it fix",
+		"the docs reviewer reported fix in round 1, and its findings make it pass"} {
+		if !slices.Contains(run.Warnings, want) {
+			t.Errorf("the run warns %q, want %q among them", run.Warnings, want)
+		}
 	}
 }
 

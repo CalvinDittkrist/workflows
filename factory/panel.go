@@ -235,8 +235,10 @@ type Round struct {
 // Verdict is one reviewer's report in a round.
 type Verdict struct {
 	Reviewer string    `json:"reviewer"`
-	Verdict  string    `json:"verdict"` // pass or fix
+	Verdict  string    `json:"verdict"` // pass or fix, as the findings decide it
 	Findings []Finding `json:"findings"`
+	// Reported is the verdict the reviewer reported when its findings said the other one.
+	Reported string `json:"reported,omitempty"`
 }
 
 // Finding is one review finding. The factory numbers the findings of a round (F1, F2, …), which is how
@@ -288,9 +290,8 @@ const reviewSchema = `{"type":"object","additionalProperties":false,"required":[
 // brief within its bound (repairBrief).
 const maxFindings = 50
 
-// readVerdict reads a reviewer's result: a verdict that agrees with its findings, each of them of a
-// known severity with a claim. A result that is not of that shape does not fit, and the run fails
-// naming the reviewer.
+// readVerdict reads a reviewer's result: a verdict and its findings, each of them of a known severity
+// with a claim. A result that is not of that shape does not fit, and the run fails naming the reviewer.
 func readVerdict(raw json.RawMessage) (result, error) {
 	if len(bytes.TrimSpace(raw)) == 0 || string(bytes.TrimSpace(raw)) == "null" {
 		return result{}, fmt.Errorf("the result line carries no structured output")
@@ -324,15 +325,20 @@ func readVerdict(raw json.RawMessage) (result, error) {
 		}
 		blocking = blocking || finding.Severity != "S3"
 	}
-	switch {
-	case *read.Verdict != verdictPass && *read.Verdict != verdictFix:
+	if *read.Verdict != verdictPass && *read.Verdict != verdictFix {
 		return result{}, fmt.Errorf("the verdict %q is neither %s nor %s", *read.Verdict, verdictPass, verdictFix)
-	case *read.Verdict == verdictPass && blocking:
-		return result{}, fmt.Errorf("the verdict is pass with an S1 or S2 finding standing, which is a fix")
-	case *read.Verdict == verdictFix && !blocking:
-		return result{}, fmt.Errorf("the verdict is fix without an S1 or S2 finding, which is a pass")
 	}
-	return result{Outcome: resultComplete, Verdict: &Verdict{Verdict: *read.Verdict, Findings: *read.Findings}}, nil
+	// The findings decide the verdict: fix when an S1 or S2 stands, pass otherwise. A reviewer that
+	// reports the other verdict is read by its findings and the run warns, since a slip of the model
+	// is no reason to throw a run away.
+	v := Verdict{Verdict: verdictPass, Findings: *read.Findings}
+	if blocking {
+		v.Verdict = verdictFix
+	}
+	if *read.Verdict != v.Verdict {
+		v.Reported = *read.Verdict
+	}
+	return result{Outcome: resultComplete, Verdict: &v}, nil
 }
 
 // repairSchema is the result of a round's fix session.
@@ -646,6 +652,9 @@ func (f *Factory) round(parent, ctx context.Context, r *Run, entry Entry, claim 
 			v.Findings[j].ID = "F" + strconv.Itoa(id)
 		}
 		round.Verdicts = append(round.Verdicts, v)
+		if v.Reported != "" {
+			f.warn(r, "verdict read from the findings", fmt.Sprintf("the %s reviewer reported %s in round %d, and its findings make it %s", name, v.Reported, number, v.Verdict))
+		}
 		f.runs.event(r, Event{Kind: "factory", Title: fmt.Sprintf("%s: %s, %d finding(s)", name, v.Verdict, len(v.Findings)), Body: listFindings(v.Findings)})
 	}
 	return round, true
