@@ -40,12 +40,11 @@ Reply with finding lines only, one per proposed action, nothing else:
 finding: agent-config | <target> | <action> | <reason> | <confidence>
 ```
 - target: a path relative to the repository root (a directory when the whole folder goes).
-- action: one of these.
+- action: one of these four. `configure` is not among them: GitHub settings are the `workspace` auditor's.
   - `delete`: the path goes.
   - `replace`: the path stays with the standard's content.
   - `create`: a baseline file is missing.
   - `issue`: work that needs judgement about code. It becomes an agent-ready issue and goes through the normal review pipeline.
-  - GitHub settings are the `workspace` auditor's; `configure` is not yours.
 - reason: one line, concrete, no `|` character.
 - confidence: `high`, `medium` or `low`. Use `low` when you are unsure instead of leaving the finding out.
 
