@@ -77,70 +77,20 @@ if [ -f "$root/docs/glossary.md" ]; then ok "docs/glossary.md"; else warn "docs/
 dep=$(first_of "$root/.github" dependabot.yml dependabot.yaml)
 if [ -n "$dep" ]; then ok ".github/$dep"; else warn ".github/dependabot.yml missing; add grouped version updates per package manager"; fi
 
-# The writing rules the check counts (docs/repo-standard.md, writing rules): no em dash in any text file, and
-# the word caps. A word is a whitespace-separated token that is not punctuation alone. With WF_WRITING_LENIENT
-# set, which a repository that is not rewritten yet sets in its Makefile, each finding warns instead.
+# The writing rules the check counts (writing.sh): no em dash in any text file, and the word caps. With
+# WF_WRITING_LENIENT set, which a repository that is not rewritten yet sets in its Makefile, each finding warns instead.
 writing() { if [ -n "${WF_WRITING_LENIENT:-}" ]; then warn "$@"; else bad "$@"; fi; }
-existing_nul() { # the regular files of the list on stdin, no symlinks, NUL separated and prefixed ./, so no name reads as an option or an awk assignment
-  while IFS= read -r f; do if [ -n "$f" ] && [ -f "$root/$f" ] && [ ! -L "$root/$f" ]; then printf './%s\0' "$f"; fi; done
-}
-emdash=$(printf '\342\200\224')
-dashes=$(printf '%s\n' "$all" | existing_nul | (cd "$root" && LC_ALL=C xargs -0 grep -oIHF -- "$emdash" /dev/null 2>/dev/null) \
-  | LC_ALL=C awk '{ sub(/:[^:]*$/, ""); sub(/^\.\//, ""); n[$0]++ } END { for (f in n) printf "%d\t%s\n", n[f], f }' | LC_ALL=C sort -t "$(printf '\t')" -k2)
-if [ -z "$dashes" ]; then ok "no em dash"
-else
-  while IFS="$(printf '\t')" read -r n f; do # the count first, so a tab in a file name stays in the name
-    if [ "$n" = 1 ]; then writing "$f has 1 em dash; use a comma, a colon or two sentences"
-    else writing "$f has $n em dashes; use a comma, a colon or two sentences"; fi
+if found=$(printf '%s\n' "$all" | bash "$(dirname "$0")/writing.sh" "$root"); then
+  while IFS="$(printf '\t')" read -r group msg; do
+    [ -z "$group" ] || writing "$msg"
   done <<EOF
-$dashes
-EOF
-fi
-# Markdown, one pass: a paragraph at most 80 words, a bullet (a list item, numbered or not) at most 30, a row of
-# docs/glossary.md at most 40; code blocks, front matter and tables are no paragraphs. Documents are counted
-# whole but for code blocks and front matter: the README 1200, docs/architecture.md 2000, an ADR 250 and a
-# plugin README 800. Each finding is one line, `words` or `docs` and the message, tab separated.
-# shellcheck disable=SC2016 # an awk program
-count='
-function words(s,   t, i, n, c) { n = split(s, t, /[ \t\r]+/); for (i = 1; i <= n; i++) if (t[i] != "" && t[i] !~ /^[[:punct:]]+$/) c++; return c + 0 }
-function flush() {
-  if (kind == "p" && cnt > 80) printf "words\t%s:%d: paragraph of %d words (>80); split it or make it bullets\n", f, start, cnt
-  if (kind == "b" && cnt > 30) printf "words\t%s:%d: bullet of %d words (>30); shorten it or split it\n", f, start, cnt
-  kind = ""; cnt = 0
-}
-function finish(   cap, what) {
-  flush()
-  if (f == readme) { cap = 1200; what = "the README" }
-  else if (f == "docs/architecture.md") { cap = 2000; what = "the architecture map" }
-  else if (f ~ /^docs\/adr\/[0-9][0-9][0-9][0-9]-[^\/]*\.md$/) { cap = 250; what = "an ADR" }
-  else if (f ~ /^plugins\/[^\/]+\/README\.md$/) { cap = 800; what = "a plugin README" }
-  if (cap && total > cap) printf "docs\t%s has %d words (>%d for %s); shorten it\n", f, total, cap, what
-}
-FNR == 1 { if (f != "") finish(); f = FILENAME; sub(/^\.\//, "", f); total = 0; fence = ""; table = 0; front = ($0 ~ /^---[ \t\r]*$/); if (front) next }
-front { if ($0 ~ /^---[ \t\r]*$/) front = 0; next }
-fence != "" { t = $0; gsub(/[ \t\r]/, "", t); if (substr(t, 1, 3) == fence && t ~ /^(```+|~~~+)$/) fence = ""; next }
-/^[ \t]*(```|~~~)/ { flush(); table = 0; fence = ($0 ~ /^[ \t]*~/) ? "~~~" : "```"; next }
-/^[ \t]*\|/ {
-  flush(); n = words($0); total += n
-  if (f == "docs/glossary.md" && table && $0 !~ /^[ \t|:-]+$/ && n > 40) printf "words\t%s:%d: glossary entry of %d words (>40); shorten it\n", f, FNR, n
-  table = 1; next
-}
-{ table = 0 }
-/^[ \t\r]*$/ { flush(); next }
-/^[ \t]*#+([ \t]|$)/ { flush(); total += words($0); next }
-/^[ \t]*([-*+]|[0-9]+[.)])[ \t]/ { flush(); kind = "b"; start = FNR; line = $0; sub(/^[ \t]*([-*+]|[0-9]+[.)])[ \t]+/, "", line); cnt = words(line); total += cnt; next }
-{ if (kind == "") { kind = "p"; start = FNR }; n = words($0); cnt += n; total += n }
-END { if (f != "") finish() }'
-found=$({ printf '%s\n' "$all" | grep -Ei '\.md$'; [ -z "$readme" ] || printf '%s\n' "$readme"; } | LC_ALL=C sort -u | existing_nul \
-  | (cd "$root" && LC_ALL=C xargs -0 awk -v readme="$readme" "$count" /dev/null))
-tab=$(printf '\t')
-while IFS="$tab" read -r group msg; do
-  [ -z "$group" ] || writing "$msg"
-done <<EOF
 $found
 EOF
-case "$found" in *"words$tab"*) ;; *) ok "paragraphs, bullets and glossary entries within their word caps" ;; esac
-case "$found" in *"docs$tab"*) ;; *) ok "documents within their word caps" ;; esac
+  groups=$(printf '%s\n' "$found" | cut -f1)
+  printf '%s\n' "$groups" | grep -qx dash || ok "no em dash"
+  printf '%s\n' "$groups" | grep -qx words || ok "paragraphs, bullets and glossary entries within their word caps"
+  printf '%s\n' "$groups" | grep -qx docs || ok "documents within their word caps"
+else bad "the writing rules were not counted; fix the error above"; fi
 
 # Public repositories add a licence and a security policy. Visibility needs GitHub, so offline this is skipped.
 vis=""

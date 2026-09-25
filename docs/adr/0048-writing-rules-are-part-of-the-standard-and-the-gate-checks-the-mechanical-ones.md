@@ -9,7 +9,7 @@ Status: accepted
 - Refined in #175, built in #176.
 
 ## Decision
-The repository standard states fixed [writing rules](../repo-standard.md#writing-rules); the standard check fails on the em dash and on every word cap, and the docs reviewer judges the rest.
+The repository standard states fixed [writing rules](../repo-standard.md#writing-rules). The standard check fails on the em dash and on every word cap. The docs reviewer judges the rest.
 
 ## Consequences
 - The gate of every repository that runs the workflow fails on an em dash or an oversized paragraph, bullet or document.

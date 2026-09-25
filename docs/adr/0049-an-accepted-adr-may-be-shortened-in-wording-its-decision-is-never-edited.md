@@ -8,7 +8,7 @@ Status: accepted
 - The index said an ADR is never edited after acceptance, so the only way to shorten one was a superseding ADR per decision.
 
 ## Decision
-An accepted ADR may be rewritten in place to shorter wording, as long as it states the same decision; a change of decision still needs a superseding ADR.
+An accepted ADR may be rewritten in place to shorter wording if it states the same decision. A change of decision still needs a superseding ADR.
 
 ## Consequences
 - The ADRs can be brought under the cap without a second ADR per decision.

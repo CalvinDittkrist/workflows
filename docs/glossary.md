@@ -3,7 +3,7 @@
 | Term | Meaning |
 | --- | --- |
 | standard | The written baseline a repository is checked against: [repo-standard.md](repo-standard.md). |
-| writing rules | The fixed rule set for prose in documents, prompts and comments ([repo-standard.md](repo-standard.md#writing-rules)); the standard check counts the mechanical ones, the docs reviewer judges the rest. |
+| writing rules | The fixed rule set for prose in documents, prompts and comments ([repo-standard.md](repo-standard.md#writing-rules)). The standard check counts the mechanical ones; the docs reviewer judges the rest. |
 | profile | Visibility plus branch model (`main` alone, or `dev` plus `main`), derived from GitHub, never configured. |
 | gate | `make check`, the one command that must pass before a merge; CI runs it in the job named `check`, and it is the gate command of the change class `full`. The gate a factory run runs before its pull request is the gate command of the change class that applies ([ADR 0041](adr/0041-a-change-class-decides-the-gate-and-the-reviewers-before-the-pull-request.md)). |
 | auditor | A read-only subagent that judges one area of a repository during standardisation and returns findings. |

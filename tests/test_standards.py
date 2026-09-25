@@ -402,6 +402,36 @@ class StandardsTests(ShimTest):
                              "docs/notes.md:8: bullet of 31 words (>30); shorten it or split it"])
         self.assertNotIn(self.WRITING_OK[1], self.strict().stdout)
 
+    def test_indented_code_a_table_without_the_leading_pipe_and_a_thematic_break_are_no_paragraphs(self):
+        self.scaffold()
+        long = " ".join(["word"] * 81)
+        self.write("docs/notes.md", f"---\n\nIntro.\n\n    {long}\n\n\tcode {long}\n\nText.\n\n"
+                                    f"a | b\n:-- | --:\n{long} | x\n\n- item\n\n      {long}\n")
+        r = self.strict()
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertIn(self.WRITING_OK[1], r.stdout)
+        # Four spaces under a list item are its paragraph, not code; a pipe in prose is no table.
+        self.write("docs/notes.md", f"- item\n\n    {long}\n\nThe a | b case {long}\n")
+        self.assert_writing(["docs/notes.md:3: paragraph of 81 words (>80); split it or make it bullets",
+                             "docs/notes.md:5: paragraph of 85 words (>80); split it or make it bullets"])
+
+    def test_front_matter_is_skipped_only_with_its_closing_line(self):
+        self.scaffold()
+        long = " ".join(["word"] * 81)
+        self.write("docs/notes.md", f"---\ntitle: {long}\n---\n\nShort.\n")
+        self.assertEqual(self.strict().returncode, 0)
+        self.write("docs/notes.md", f"---\n\n{long}\n")
+        self.assert_writing(["docs/notes.md:3: paragraph of 81 words (>80); split it or make it bullets"])
+
+    def test_every_markdown_extension_is_scanned_and_a_readme_in_another_format_is_counted_whole(self):
+        self.scaffold()
+        (self.repo / "README.md").unlink()
+        self.write("README.rst", f"{' '.join(['word'] * 1201)}\n")
+        self.write("docs/notes.markdown", f"{' '.join(['word'] * 81)}\n")
+        self.assert_writing(["docs/notes.markdown:1: paragraph of 81 words (>80); split it or make it bullets",
+                             "README.rst has 1201 words (>1200 for the README); shorten it"])
+        self.assertNotIn("README.rst:1", self.strict().stdout, "a README in another format has no paragraphs")
+
     def test_each_document_fails_over_its_word_cap_and_is_named_with_its_count(self):
         self.scaffold()
         # Each document one word over its cap: the heading and the Status line count too, a code block does not.

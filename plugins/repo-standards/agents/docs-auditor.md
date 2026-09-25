@@ -20,8 +20,8 @@ The standard:
 - `.github/PULL_REQUEST_TEMPLATE.md`: closes, what and why, verification, limits.
 - Public repositories only (`visibility: public` in the facts): `LICENSE` and `SECURITY.md`. With another or an unknown visibility, do not propose them.
 - Operational docs that describe the present state (runbooks, local setup) stay.
-- The writing rules: no em dash in a text file, and word caps on paragraphs, bullets and documents.
-- When the documents break the writing rules, propose one `issue` with target `docs` that asks to rewrite them.
+- The writing rules: no em dash in a text file, and word caps on paragraphs, bullets and documents. `writing-findings` in the facts lists what the check counts.
+- When `writing-findings` is not `none`, propose one `issue` with target `docs` that asks to rewrite those files. Do not count words yourself.
 
 Propose `create` for each missing baseline file, `replace` for a stub or a template that was never filled in, and `issue` for a doc that contradicts the code and needs someone who knows the code to fix it (name the contradiction). `AGENTS.md`, `CLAUDE.md` and settings belong to the `agent-config` auditor; planning material and stale reports belong to the `files` auditor.
 

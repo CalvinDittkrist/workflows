@@ -61,7 +61,8 @@ The check counts the em dash in every text file and the word caps in Markdown. S
 - A word is a whitespace-separated token that is not punctuation alone.
 - A bullet is a list item, numbered or not; a glossary entry is a table row of `docs/glossary.md`.
 - A plugin README is `plugins/<name>/README.md`, so its cap applies in a repository of plugins.
-- Code blocks, front matter and tables are no paragraphs; a document's count skips code blocks and front matter.
+- Code blocks (fenced or indented), closed front matter, thematic breaks and tables are no paragraphs.
+- A document's count skips code blocks and front matter. A README that is not Markdown is counted whole.
 
 Each finding fails the check. A repository not rewritten yet sets `WF_WRITING_LENIENT=1` for the check in its `Makefile`, which turns them into warnings. The check at the end of `/repo-standards:apply` warns on them too, because rewriting the documents is an issue of its own. An accepted ADR may be shortened in wording; its decision is never edited ([ADR 0049](adr/0049-an-accepted-adr-may-be-shortened-in-wording-its-decision-is-never-edited.md)).
 

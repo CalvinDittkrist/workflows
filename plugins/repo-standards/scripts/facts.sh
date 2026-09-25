@@ -7,9 +7,10 @@
 set -euo pipefail
 export LC_ALL=C # byte order for sort, so the output is the same on every machine
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
-# The plugin's own lib.sh, resolved before the cd so a relative invocation never sources the audited repository's.
+# The plugin's own scripts, resolved before the cd so a relative invocation never runs the audited repository's.
+here=$(cd "$(dirname "$0")" && pwd)
 # shellcheck source=lib.sh
-. "$(cd "$(dirname "$0")" && pwd)/lib.sh"
+. "$here/lib.sh"
 root="${1:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
 cd "$root" 2>/dev/null || die "cannot enter $root; pass an existing repository directory"
 git rev-parse --is-inside-work-tree >/dev/null 2>&1 || die "$root is not a git repository; run git init first"
@@ -230,6 +231,15 @@ if [ "$visibility" = public ]; then # shellcheck disable=SC2086 # a list of name
   base LICENSE $WF_LICENSE_NAMES; base SECURITY.md SECURITY.md .github/SECURITY.md; fi
 kv baseline-present "$(printf '%s' "$present" | join)"
 kv baseline-missing "$(printf '%s' "$missing" | join)"
+
+# The writing rules, counted by writing.sh as check.sh counts them, so the docs auditor proposes the rewrite
+# from the findings instead of counting words itself. The first 20 are listed; a rewrite issue needs no more.
+writing=$(printf '%s\n' "$all" | bash "$here/writing.sh" . | cut -f2-) || die "cannot count the writing rules; fix the error above"
+if [ -z "$writing" ]; then kv writing-findings none
+else
+  printf 'writing-findings:\n'
+  printf '%s\n' "$writing" | awk 'NR <= 20 { print "  " $0 } END { if (NR > 20) printf "  (+%d more)\n", NR - 20 }'
+fi
 
 # File statistics over the tracked and untracked files: count, size, top directories, the largest files.
 if stat -c %s / >/dev/null 2>&1; then sizefmt=(-c '%s %n'); else sizefmt=(-f '%z %N'); fi
