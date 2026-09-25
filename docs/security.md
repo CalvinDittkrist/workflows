@@ -89,7 +89,7 @@ The reviewers of the review stage read the same text and get the same bounds:
 - `Read`, `Grep` and `Glob`, no MCP server, no workflow plugin, none of the worktree's settings.
 - Of `worker_args` the model alone, which only a reviewer whose definition inherits its model takes.
 - The inline agent they run as is the factory's own definition, with the same three tools. `--tools` stays on the command line whatever it says.
-- A verdict is read against its findings. A reviewer steered into passing a finding it rates S1 or S2 fails the run rather than passing it.
+- A verdict is read from its findings. A reviewer steered into passing a finding it rates S1 or S2 is read as `fix`, and the run carries a warning.
 - The findings are model text that quotes the diff, so the fix session given them is briefed that they are data.
 - The disputes reach the pull request as the fix session wrote them, inside the fenced panel summary.
 - The gate on the final head is `make check` in the worktree, the command the gate stage ran. It runs the branch's code with the host user's rights.
