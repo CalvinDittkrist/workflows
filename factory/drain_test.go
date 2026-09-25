@@ -37,9 +37,9 @@ func (f *factory) exited(t *testing.T, within time.Duration) int {
 	}
 }
 
-// A SIGHUP lets the run that is going end with its own outcome, starts nothing after it while issues
-// stand in the line, and then exits with the drain code. A second SIGHUP changes nothing and is said
-// once.
+// A SIGHUP lets the run that is going end with its own outcome. The factory starts nothing after it
+// while issues stand in the line, and then exits with the drain code. A second SIGHUP changes nothing
+// and is said once.
 func TestADrainLetsTheRunFinishStartsNothingAndExitsWithTheDrainCode(t *testing.T) {
 	t.Parallel()
 	// The hanging issue was interrupted once before, so it is resumed first and the rest of the canned
@@ -52,15 +52,16 @@ func TestADrainLetsTheRunFinishStartsNothingAndExitsWithTheDrainCode(t *testing.
 	const going = 2
 	f.waitForTheHangingWorker(t, going)
 
-	for range 3 {
-		if err := f.cmd.Process.Signal(syscall.SIGHUP); err != nil {
-			t.Fatalf("the factory could not be signalled: %v", err)
-		}
-	}
+	// The kernel folds a SIGHUP into one still pending, so the repeat is sent once the first is seen.
+	f.hangup(t)
 	f.eventually(t, 5*time.Second, "the line to say the factory drains", func() bool {
 		var process processLine
 		f.get(t, "/api/line", &process)
 		return process.Draining
+	})
+	f.hangup(t)
+	f.eventually(t, 5*time.Second, "the log to name the repeated SIGHUP", func() bool {
+		return strings.Contains(f.output(t), "SIGHUP again")
 	})
 	var run apiRun
 	f.get(t, fmt.Sprintf("/api/runs/%d", going), &run)
@@ -81,6 +82,45 @@ func TestADrainLetsTheRunFinishStartsNothingAndExitsWithTheDrainCode(t *testing.
 	}
 	if said := strings.Count(f.output(t), "SIGHUP again"); said != 1 {
 		t.Errorf("the log names the repeated SIGHUP %d times, want once; the log:\n%s", said, f.output(t))
+	}
+}
+
+// A SIGTERM during a drain is a stop like any other: the run that is going is interrupted, and the
+// factory exits without the drain code, so the service manager does not start it again.
+func TestASIGTERMDuringADrainInterruptsTheRunAndExitsWithoutTheDrainCode(t *testing.T) {
+	t.Parallel()
+	data := filepath.Join(t.TempDir(), "data")
+	began := time.Now().UTC().Add(-time.Hour)
+	records(t, data, in("acme/backtest", record(1, hangingIssue(t), "Document the calibration procedure",
+		signalRouted, outcomeInterrupted, true, began, began.Add(time.Minute))))
+	f := start(t, config{"deadline": "10m", "poll": "50ms", "data_dir": data})
+	const going = 2
+	f.waitForTheHangingWorker(t, going)
+
+	f.hangup(t)
+	f.eventually(t, 5*time.Second, "the line to say the factory drains", func() bool {
+		var process processLine
+		f.get(t, "/api/line", &process)
+		return process.Draining
+	})
+	if err := f.cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatalf("the factory could not be signalled: %v", err)
+	}
+	if code := f.exited(t, 30*time.Second); code == drainExit {
+		t.Errorf("the factory stopped during a drain exited with the drain code %d; its log:\n%s", code, f.output(t))
+	}
+	var ended Run
+	read(t, filepath.Join(data, fmt.Sprintf("run-%d.json", going)), &ended)
+	if ended.Outcome != outcomeInterrupted {
+		t.Errorf("the run that was going ended as %q, want %q: a SIGTERM interrupts it", ended.Outcome, outcomeInterrupted)
+	}
+}
+
+// hangup sends the factory one SIGHUP.
+func (f *factory) hangup(t *testing.T) {
+	t.Helper()
+	if err := f.cmd.Process.Signal(syscall.SIGHUP); err != nil {
+		t.Fatalf("the factory could not be signalled: %v", err)
 	}
 }
 
