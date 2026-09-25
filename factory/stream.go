@@ -90,15 +90,6 @@ type block struct {
 	IsError  bool            `json:"is_error"`
 }
 
-// The worker never reports a stage; the skill it invokes is the stage.
-var stages = map[string]string{
-	"worker:work":            stageImplement,
-	"worker:review":          stageReview,
-	"worker:pr":              stagePR,
-	"worker:ci":              stageCI,
-	"worker:address-reviews": stageAddressReviews,
-}
-
 // ingest reads one line of a session's stream into the run and into the session's reading: its
 // events, its stage, the totals the factory counts from the assistant lines, and on the result line
 // the session's own totals, which replace them, and its structured result. The events of a session
@@ -148,9 +139,6 @@ func (f *Factory) ingest(r *Run, session *heard, line []byte) {
 			case "thinking":
 				event(Event{Kind: "thinking", Title: "thinking", Body: b.Thinking, Sub: sub})
 			case "tool_use":
-				if stage, ok := stages[text(b.Input["skill"])]; ok && b.Name == "Skill" && !sub {
-					f.runs.update(r, func() { r.stage(stage) })
-				}
 				input, _ := json.MarshalIndent(b.Input, "", "  ")
 				event(Event{Kind: "tool", Title: strings.TrimSpace(b.Name + " " + toolLabel(b)), Body: string(input), Sub: sub})
 			}
@@ -250,7 +238,7 @@ func blockText(raw json.RawMessage) string {
 
 // toolLabel is what a tool call did, in one line: the most telling of its arguments.
 func toolLabel(b block) string {
-	for _, key := range []string{"skill", "description", "file_path", "command", "pattern"} {
+	for _, key := range []string{"description", "file_path", "command", "pattern"} {
 		if v := text(b.Input[key]); v != "" {
 			if key == "description" && text(b.Input["subagent_type"]) != "" {
 				return text(b.Input["subagent_type"]) + ": " + firstLine(v)

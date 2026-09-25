@@ -108,7 +108,6 @@ type apiRun struct {
 	Warnings   []string `json:"warnings"`
 	Notified   string   `json:"notified"`
 	Versions   struct {
-		Worker     string `json:"worker"`
 		ClaudeCode string `json:"claudeCode"`
 		Factory    string `json:"factory"`
 	} `json:"versions"`
@@ -189,15 +188,15 @@ func TestFakeModeWorksTheCannedQueueOneRunAtATime(t *testing.T) {
 	ready, blocked, failed := line.Done[0], line.Done[1], line.Done[2]
 	silent, detached, followUp, timeout := line.Done[3], line.Done[4], line.Done[5], line.Done[6]
 
-	// ready: the pull request comes from the structured result, the stages from the skill calls, and
-	// the totals from the result line.
+	// ready: the pull request is the one the pr stage opened, the stages are the factory's, and the
+	// totals come from the result lines.
 	if ready.Outcome != "ready" || ready.PullRequest != "https://github.com/acme/edge-sensors/pull/204" {
-		t.Errorf("run 1 ended %q with the pull request %q, want ready with the pull request of the result", ready.Outcome, ready.PullRequest)
+		t.Errorf("run 1 ended %q with the pull request %q, want ready with the pull request the pr stage opened", ready.Outcome, ready.PullRequest)
 	}
 	if got, want := strings.Join(ready.Stages, " "), "implement gate review pr ci address-reviews ci"; got != want {
 		t.Errorf("run 1 went through the stages %q, want %q", got, want)
 	}
-	// Its work session stopped after the implement stage, the factory's gate passed, its reviewers asked for a fix its review fix
+	// Its implement session committed the implementation, the factory's gate passed, its reviewers asked for a fix its review fix
 	// session made, a read-only author session wrote the pull request the factory opened, and the factory
 	// waited on CI: the checks pending, then failed, one repair round with
 	// a fix session given the failed log, then review comments answered by an address-reviews session in
@@ -231,12 +230,12 @@ func TestFakeModeWorksTheCannedQueueOneRunAtATime(t *testing.T) {
 		t.Errorf("run 1 took %d repair rounds, want 2: the fix of the checks and the answer to the review comments", ready.RepairRounds)
 	}
 	// The context peak is the fullest one message of the worker itself came. The scripted session
-	// hands the rest of its stage to a fresh context after its commit, so the peak stands at the message
-	// before that handover: neither the last message, which carries less, nor the far larger context
-	// its subagent reports, which says nothing about the worker's.
-	const readyPeak = 52_600 // the fifth message of the work session, the commit's, the one before the handover
+	// compacts its context after its commit, so the peak stands at the message before that compaction:
+	// neither the last message, which carries less, nor the far larger context its subagent reports,
+	// which says nothing about the worker's.
+	const readyPeak = 64_200 // the seventh message of the implement session, the commit's, the one before the compaction
 	if ready.ContextPeak != readyPeak {
-		t.Errorf("run 1 peaked at %d tokens of context, want %d: the fullest message of the worker itself, taken before the handover dropped it and never from the %d a subagent reported",
+		t.Errorf("run 1 peaked at %d tokens of context, want %d: the fullest message of the worker itself, taken before the compaction dropped it and never from the %d a subagent reported",
 			ready.ContextPeak, readyPeak, subagentContext)
 	}
 	// Twelve sessions, the work, five reviewers in the first round and two in the second, the review
@@ -246,10 +245,10 @@ func TestFakeModeWorksTheCannedQueueOneRunAtATime(t *testing.T) {
 		t.Errorf("run 1 has turns %d, cost %v and tokens %+v from %q, want the sum of the result lines of its twelve sessions, from the worker",
 			ready.Turns, ready.CostUSD, ready.Tokens, ready.Totals)
 	}
-	// A scripted run is this binary and no Claude Code at all: there is no plugin in it to update and
-	// no version of one to record, and fake mode changes nothing about the machine it is tried on.
-	if ready.Warnings == nil || len(ready.Warnings) != 0 || ready.Versions.Worker != "" || ready.Versions.ClaudeCode != "" {
-		t.Errorf("run 1 has warnings %v and versions %+v, want no warnings and no worker or Claude Code version: fake mode asks claude nothing",
+	// A scripted run is this binary and no Claude Code at all: there is no version of one to record,
+	// and fake mode asks nothing of the machine it is tried on.
+	if ready.Warnings == nil || len(ready.Warnings) != 0 || ready.Versions.ClaudeCode != "" {
+		t.Errorf("run 1 has warnings %v and versions %+v, want no warnings and no Claude Code version: fake mode asks claude nothing",
 			ready.Warnings, ready.Versions)
 	}
 	// The factory's own version is behaviour: every run records the version of the binary that ran it.
@@ -464,12 +463,12 @@ func TestFakeModeWorksTheCannedQueueOneRunAtATime(t *testing.T) {
 		if e.Sub {
 			subs++
 		}
-		if strings.HasPrefix(e.Title, "Agent worker:") {
+		if strings.HasPrefix(e.Title, "Agent Explore:") {
 			agents++
 		}
 	}
 	if agents != 1 || subs != agents {
-		t.Errorf("run 1 logged %d Agent calls and %d subagent events, want the docs lookup and its one event", agents, subs)
+		t.Errorf("run 1 logged %d Agent calls and %d subagent events, want the implement session's search of the code and its one event", agents, subs)
 	}
 	if len(full.Events) != full.EventCount {
 		t.Errorf("run 1 served %d events for an event count of %d", len(full.Events), full.EventCount)
@@ -764,23 +763,21 @@ func TestAnInvalidConfigurationIsRefusedWithTheFix(t *testing.T) {
 		{"worker arguments that replace the settings", `{"data_dir":"data","repositories":["a/b"],"worker_args":["--settings","{}"]}`, `worker_args carries --settings, which the factory gives the worker itself`},
 		{"worker arguments that replace the settings with one word", `{"data_dir":"data","repositories":["a/b"],"worker_args":["--settings={}"]}`, `worker_args carries --settings`},
 		{"worker arguments that replace the agent", `{"data_dir":"data","repositories":["a/b"],"worker_args":["--agent","planner"]}`, `worker_args carries --agent`},
+		{"worker arguments that load a plugin", `{"data_dir":"data","repositories":["a/b"],"worker_args":["--plugin-dir","/opt/workflows/plugins/worker"]}`, `worker_args carries --plugin-dir, which would load a plugin into the sessions that write on the branch`},
+		{"worker arguments that load a plugin with one word", `{"data_dir":"data","repositories":["a/b"],"worker_args":["--plugin-dir=/opt/workflows/plugins/worker"]}`, `worker_args carries --plugin-dir`},
 		{"worker arguments that replace the prompt", `{"data_dir":"data","repositories":["a/b"],"worker_args":["-p","/worker:pr"]}`, `worker_args carries -p`},
 		{"worker arguments that replace the permission mode", `{"data_dir":"data","repositories":["a/b"],"worker_args":["--permission-mode","plan"]}`, `worker_args carries --permission-mode`},
 		{"worker arguments that replace the output format", `{"data_dir":"data","repositories":["a/b"],"worker_args":["--output-format","text"]}`, `worker_args carries --output-format`},
-		// worker_env sets the knobs a worker reads for itself and nothing else: what a run is (its
-		// mode, its issue, its base) is the factory's, and the host's shell is not a setting of the
-		// workflow. The error lists the names, because the operator reads it in the journal.
-		{"worker variable that is the run's own", `{"data_dir":"data","repositories":["a/b"],"worker_env":{"WF_MODE":"yolo"}}`, `worker_env carries WF_MODE, which is not a worker knob; the names are WF_HANDOFF_TOKENS, WF_CONTEXT_MAX_AGE`},
-		{"worker variable that is the base branch", `{"data_dir":"data","repositories":["a/b"],"worker_env":{"WF_BASE_BRANCH":"dev"}}`, `worker_env carries WF_BASE_BRANCH, which is not a worker knob`},
-		{"worker variable of the shell", `{"data_dir":"data","repositories":["a/b"],"worker_env":{"PATH":"/tmp"}}`, `worker_env carries PATH, which is not a worker knob`},
-		{"worker variable that is not a string", `{"data_dir":"data","repositories":["a/b"],"worker_env":{"WF_PR_REVIEW_WAIT":600}}`, `see factory/factory.example.json`},
+		{"worker arguments that replace the agent's definition", `{"data_dir":"data","repositories":["a/b"],"worker_args":["--agents","{}"]}`, `worker_args carries --agents`},
+		// worker_env set knobs of the worker plugin, which no session runs any more: it is refused as
+		// unknown, naming the knobs of the factory's own that took its place.
+		{"worker variables", `{"data_dir":"data","repositories":["a/b"],"worker_env":{"WF_REVIEW_ROUNDS":"2"}}`, `json: unknown field "worker_env"; worker_env set knobs of the worker plugin, which no session of the factory runs any more; remove it, and write a knob it carried as the factory's own, at the top of the file or on the repository: ci (repair_rounds, bot_reviewers, review_wait, checks_grace), review (rounds, reviewers, gate_rounds, classes) or gate (rounds, timeout)`},
 		{"repository object with an unknown field", `{"data_dir":"data","repositories":[{"name":"a/b","branch":"dev"}]}`, `a repository is "owner/name" or {"name": "owner/name", "base": "dev", "ci": {"repair_rounds": 2}, "review": {"rounds": 2}, "gate": {"rounds": 2}}`},
 		// The knobs of the ci stage are the factory's own, at the top of the file or on a repository.
 		{"unknown ci knob", `{"data_dir":"data","repositories":["a/b"],"ci":{"repair_round":2}}`, `json: unknown field "repair_round"; the ci knobs are repair_rounds, bot_reviewers, review_wait, checks_grace`},
 		{"unknown ci knob of a repository", `{"data_dir":"data","repositories":[{"name":"a/b","ci":{"grace":"1m"}}]}`, `the ci knobs are repair_rounds, bot_reviewers, review_wait, checks_grace`},
 		{"no repair round", `{"data_dir":"data","repositories":["a/b"],"ci":{"repair_rounds":0}}`, `ci: repair_rounds`},
 		{"a ci knob of a repository that is no duration", `{"data_dir":"data","repositories":[{"name":"a/b","ci":{"review_wait":"soon"}}]}`, `the ci of a/b: review_wait`},
-		{"a ci knob in worker_env", `{"data_dir":"data","repositories":["a/b"],"worker_env":{"WF_CI_REPAIR_ROUNDS":"2"}}`, `worker_env carries WF_CI_REPAIR_ROUNDS, which is a knob of the ci stage the factory runs itself; write it as "ci": {"repair_rounds": ...}`},
 		// So are the knobs of the review stage.
 		{"unknown review knob", `{"data_dir":"data","repositories":["a/b"],"review":{"round":2}}`, `json: unknown field "round"; the review knobs are rounds, reviewers, gate_rounds`},
 		{"no review round", `{"data_dir":"data","repositories":["a/b"],"review":{"rounds":0}}`, `review: rounds 0 is not a positive number of review rounds`},
@@ -812,7 +809,6 @@ func TestAnInvalidConfigurationIsRefusedWithTheFix(t *testing.T) {
 		{"unknown gate knob", `{"data_dir":"data","repositories":["a/b"],"gate":{"round":2}}`, `json: unknown field "round"; the gate knobs are rounds, timeout`},
 		{"a negative gate budget", `{"data_dir":"data","repositories":["a/b"],"gate":{"rounds":-1}}`, `gate: rounds -1 is not a number of fix sessions; write it as 3, or 0 to block on the first failure`},
 		{"a gate timeout of a repository that is no duration", `{"data_dir":"data","repositories":[{"name":"a/b","gate":{"timeout":"0s"}}]}`, `the gate of a/b: timeout "0s" is not a positive duration; write it as "45m"`},
-		{"a review knob in worker_env", `{"data_dir":"data","repositories":["a/b"],"worker_env":{"WF_REVIEWERS":"code"}}`, `worker_env carries WF_REVIEWERS, which is a knob of the review stage the factory runs itself; write it as "review": {"reviewers": ...}`},
 		// The quota check runs the binary the operator installed, never a name PATH or npx resolves.
 		{"quota tool by name", `{"data_dir":"data","repositories":["a/b"],"quota_axi":"quota-axi"}`, `quota_axi "quota-axi" is not an absolute path`},
 		{"quota tool through npx", `{"data_dir":"data","repositories":["a/b"],"quota_axi":"npx -y quota-axi"}`, `is not an absolute path`},
@@ -1185,28 +1181,6 @@ func TestOnlyThePullRequestOfTheRunIsTakenFromAResult(t *testing.T) {
 				t.Errorf("the result %q gives the reason %q, want one exactly when there is no pull request", c.detail, reason)
 			}
 		})
-	}
-}
-
-// The stage of a run is read from the worker's skill calls, so the names the factory knows have to
-// be the skills the worker plugin has. This is the drift test that binds the two.
-func TestTheStagesAreTheSkillsOfTheWorkerPlugin(t *testing.T) {
-	t.Parallel()
-	for skill := range stages {
-		name, found := strings.CutPrefix(skill, "worker:")
-		if !found {
-			t.Errorf("the stage %q is not a skill of the worker plugin", skill)
-			continue
-		}
-		path := filepath.Join("..", "plugins", "worker", "skills", name, "SKILL.md")
-		if _, err := os.Stat(path); err != nil {
-			t.Errorf("the stage %q reads the skill %s, which is not there: %v", skill, path, err)
-		}
-	}
-	// The other direction is not a rule: the worker plugin has skills that are no stage of a run, such
-	// as the one that talks to GitHub.
-	if len(stages) != 5 {
-		t.Errorf("the factory knows %d stages, want the five the worker pipeline has", len(stages))
 	}
 }
 

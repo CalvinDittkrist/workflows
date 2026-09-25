@@ -282,14 +282,16 @@ type Tokens struct {
 	CacheRead     int `json:"cacheRead"`
 }
 
-// Versions is what a run ran with. Factory is the version of the binary that recorded the run;
-// Worker and ClaudeCode are read from the host after the plugin update and before the worker starts.
-// The two are empty in fake mode, which runs no plugin, and when a version could not be read — then
-// the run carries a warning saying so.
+// Versions is what a run ran with. Factory is the version of the binary that recorded the run, whose
+// prompts the sessions ran on; ClaudeCode is read from the host before the first session starts. It is
+// empty in fake mode, which runs no Claude Code, and when it could not be read — then the run carries
+// a warning saying so.
 type Versions struct {
-	Worker     string `json:"worker"`
 	ClaudeCode string `json:"claudeCode"`
 	Factory    string `json:"factory"`
+	// Worker is the version of the worker plugin a run of an earlier factory drove. No run records it
+	// any more; it is kept so that rewriting such a record keeps what its run ran with.
+	Worker string `json:"worker,omitempty"`
 }
 
 // Event is one line of a run's log: what the factory did, and what the worker's stream said.

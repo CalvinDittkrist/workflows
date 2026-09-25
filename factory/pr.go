@@ -9,7 +9,7 @@ import (
 	"strings"
 )
 
-// The pr stage, which the factory runs itself ([ADR 0043], step 3): the work session stops once the
+// The pr stage, which the factory runs itself ([ADR 0043], step 3): the implement session stops once the
 // review has recorded its panel summary, and the factory pushes the branch, has a read-only session
 // write the pull request's title and body from the diff, the commits and the issue, appends the
 // verification section from the run's facts as they were reported, and opens the pull request against
@@ -40,7 +40,7 @@ func (f *Factory) head(ctx context.Context, claim claimed) (string, error) {
 
 // reviewedAlready is the review the run before this resumed one recorded, when the branch is still at
 // the commit it was recorded at: the stages up to the review are done, and the run starts at the pr
-// stage. A branch that has moved since is work no reviewer read, and the run starts at the gate stage or the work session (gatingAlready).
+// stage. A branch that has moved since is work no reviewer read, and the run starts at the gate stage or the implement session (gatingAlready).
 func (f *Factory) reviewedAlready(ctx context.Context, r *Run, entry Entry, claim claimed) (Review, bool) {
 	prior := entry.resume.Review
 	if kindOf(entry.Signal) != kindResumed || prior == nil {
@@ -55,7 +55,7 @@ func (f *Factory) reviewedAlready(ctx context.Context, r *Run, entry Entry, clai
 	}
 	if head != prior.Head {
 		f.runs.event(r, Event{Kind: "factory", Title: "the recorded review is behind the branch",
-			Body: fmt.Sprintf("run %d recorded the review at %s and the branch is at %s, so the run starts at the gate stage or the work session", entry.resume.ID, short(prior.Head), short(head))})
+			Body: fmt.Sprintf("run %d recorded the review at %s and the branch is at %s, so the run starts at the gate stage or the implement session", entry.resume.ID, short(prior.Head), short(head))})
 		return Review{}, false
 	}
 	f.runs.event(r, Event{Kind: "factory", Title: "resuming at the pr stage",
@@ -74,7 +74,7 @@ func (f *Factory) pr(parent, ctx context.Context, r *Run, entry Entry, claim cla
 	if _, ok := f.pushed(parent, ctx, r, claim, "the branch"); !ok {
 		return
 	}
-	// A resumed run whose reading of the open pull request failed ran its work session again, and the
+	// A resumed run whose reading of the open pull request failed ran its implement session again, and the
 	// pull request that reading missed may stand: the run goes on with it rather than opening a second
 	// one, which GitHub refuses for the same branch.
 	if pull := f.openAlready(ctx, r, entry, claim); pull != "" {
@@ -226,7 +226,7 @@ func authorBrief(entry Entry, claim claimed, c facts) string {
 }
 
 // verification is the section the factory appends to the author's body: the gate result and the panel
-// summary as the work session reported them, word for word, and when the panel did not pass, a line
+// summary as the implement session reported them, word for word, and when the panel did not pass, a line
 // that says so and names the reviewers that did not pass. The pull request is opened all the same, and
 // never as a draft: the maintainer decides on it.
 func verification(review Review) string {
