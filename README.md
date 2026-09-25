@@ -1,6 +1,6 @@
 # workflows
 
-Claude Code plugins for high-throughput, low-token, security-conscious development with AI agents. One orchestrator session opens planning sessions that turn ideas into agent-ready issues, and claims those issues into isolated worktree sessions; each worker implements, passes an independent reviewer panel, opens a PR from a fresh context, and drives CI and review comments to green.
+Claude Code plugins for agent-driven development that put security first, then low token use, then throughput. An orchestrator session opens planning sessions that turn ideas into agent-ready issues and claims those issues into isolated worktree sessions. Each worker implements, passes an independent reviewer panel, opens a pull request from a fresh context and drives CI and review comments to green. Beside the plugins, `factory/` is a Go service that works routed issues unattended.
 
 ```mermaid
 flowchart LR
@@ -20,14 +20,14 @@ flowchart LR
 
 | Plugin | What it gives you | Runs where |
 | --- | --- | --- |
-| [orchestrator](plugins/orchestrator/README.md) | `/plan`, `/claim`, `/yolo-claim`, `/hunt-tests`, `/merge`, `/board` (with frontier and the specs ready for acceptance), `/abandon`, `/herdr` | main checkout, inside [Herdr](https://herdr.dev) |
-| [planner](plugins/planner/README.md) | `/grill`, `/spec`, `/tickets`, `/triage`, `/accept`, `/research`, `/prototype`, `/finish`; writes agent-ready issues and accepts a finished spec, never code | each planning worktree |
-| [worker](plugins/worker/README.md) | `/work` pipeline, five read-only reviewer agents, fresh-context PR author, CI and review-thread loop, SessionStart hook that loads and assigns the issue | each issue worktree |
-| [repo-standards](plugins/repo-standards/README.md) | `/standardize` (six read-only auditors, one findings report, approval per category), `/apply` (backup tag, skill catalogue, cleanup pull request, issues, GitHub workspace), `/adr`, `/docs-check`; templates for README.md, AGENTS.md, CLAUDE.md, Makefile, the CI job `check`, architecture.md, ADRs, glossary, PR template, Dependabot, settings | any repository |
+| [orchestrator](plugins/orchestrator/README.md) | `/plan`, `/claim`, `/yolo-claim`, `/hunt-tests`, `/merge`, `/board`, `/abandon`, `/herdr` | main checkout, inside [Herdr](https://herdr.dev) |
+| [planner](plugins/planner/README.md) | `/grill`, `/spec`, `/tickets`, `/triage`, `/accept`, `/research`, `/prototype`, `/finish`; writes issues and runs the acceptance, never code | each planning worktree |
+| [worker](plugins/worker/README.md) | `/work` pipeline, reviewer panel, fresh-context PR author, CI and review loop | each issue worktree |
+| [repo-standards](plugins/repo-standards/README.md) | `/standardize`, `/apply`, `/adr`, `/docs-check`; the templates of the standard | any repository |
 
 ## Install
 
-Requirements: Claude Code ≥ 2.1.270, `gh` (authenticated), `jq`, git. Herdr for the orchestrator. Optional: `sbx` (Docker Sandboxes) for sandboxed workers, `npx gh-axi` for token-efficient GitHub output, Codex as PR reviewer.
+Requirements: Claude Code 2.1.270 or later, an authenticated `gh`, `jq` and git. The orchestrator needs Herdr. Optional: `sbx` for sandboxed workers, `npx gh-axi`, Codex as PR reviewer.
 
 ```sh
 claude plugin marketplace add CalvinDittkrist/workflows
@@ -37,9 +37,13 @@ claude plugin install repo-standards@workflows
 claude plugin install orchestrator@workflows
 ```
 
-Per repository, once: run `/repo-standards:standardize` in the repo. It prints the repository's facts, lets six read-only auditors judge it against the [standard](docs/repo-standard.md), shows one findings report and records your approval per category; an empty repository gets a report of create actions only. The audit changes nothing. Then run `/repo-standards:apply`: in an empty repository it first pushes an empty first commit to the default branch; it pushes a protected `pre-standard` tag, lists removed skills in a catalogue issue, opens one cleanup pull request from `chore/standardize` (deletions, baseline files, `.claude/settings.json` with the workflow plugins enabled, the `Makefile` and the CI job `check`) and turns code findings into issues. Merge the pull request, then run `/repo-standards:apply` again: it configures the GitHub workspace and ends with the check. Teammates then only run the install commands above.
+Once per repository, bring it to the [standard](docs/repo-standard.md):
 
-Skills also work outside Claude Code: `npx skills add CalvinDittkrist/workflows --skill <name>` (Agent Skills format) or `sbx skills add CalvinDittkrist/workflows` for Docker Sandboxes.
+1. `/repo-standards:standardize` runs six read-only auditors and records your approval per category.
+2. `/repo-standards:apply` pushes a protected `pre-standard` tag, opens the catalogue issue and one cleanup pull request, and turns code findings into issues.
+3. After the merge, `/repo-standards:apply` again configures the GitHub workspace and runs the check.
+
+Teammates then only run the install commands. Skills also install outside Claude Code: `npx skills add CalvinDittkrist/workflows --skill <name>`, or `sbx skills add CalvinDittkrist/workflows` for Docker Sandboxes.
 
 ## Daily use
 
@@ -58,52 +62,49 @@ cd my-repo && claude --agent orchestrator       # inside a Herdr pane
 /orchestrator:release v1.2.0     # milestone done: promote dev, tag, release notes, close it
 ```
 
-The worker in each pane reports at decision points only. Talk to it directly in its pane when it asks something.
+The worker in each pane reports at decision points only. Answer it in its pane when it asks.
 
 ## Configuration
 
-All knobs are environment variables, set per repository in `.claude/settings.json` → `env` (the template is in `plugins/repo-standards/templates/settings.json`):
+Every knob is an environment variable in `.claude/settings.json` under `env`; the template is `plugins/repo-standards/templates/settings.json`. Repositories never override agents or skills locally: the standard check fails on them.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `WF_BASE_BRANCH` | remote default branch | base for worktrees and PRs |
 | `WF_REVIEWERS` | `code,security,docs,tests,senior` | reviewer panel members |
-| `WF_REVIEW_ROUNDS` | `3` | max fix-and-re-review rounds, counted over the rounds the review recorded, so the limit holds across a hand-over |
-| `WF_CI_REPAIR_ROUNDS` | `3` | max repair rounds per pull request in the CI stage (a fix for failed checks, a merge of the base after a conflict, a round of `/worker:address-reviews`); counted in the worktree, so the limit holds across a handover |
-| `WF_PR_BOT_REVIEWERS` | `chatgpt-codex-connector` | bot logins whose PR review the worker waits for; set to `""` in repositories without a bot reviewer |
-| `WF_PR_REVIEW_WAIT` | `1200` | seconds to wait for the bot's review after checks pass; a bot reviews a pull request once, so a review it left on an earlier commit ends the wait and a repair push does not wait again |
-| `WF_HANDOFF_TOKENS` | `100000` | context size at which a worker hands the stage it is entering to a fresh context; leave room for one review round under the compact trigger of 250 000 a claim pins, an upper bound rather than an exact size ([ADR 0031](docs/adr/0031-the-workflow-pins-the-size-at-which-a-worker-session-compacts.md), [ADR 0034](docs/adr/0034-the-compact-trigger-is-raised-through-the-window.md)) |
-| `WF_CONTEXT_MAX_AGE` | `900` | seconds after which a recorded context size is too old to answer for this turn, and the checkpoint says hand over |
-| `WF_HANDOFF_SESSION_MS` | `60000` | how long the handover waits for the pane to report a fresh session |
-| `WF_HANDOFF_POLL_SECONDS` | `1` | how often it asks the pane while it waits |
+| `WF_REVIEW_ROUNDS` | `3` | max review rounds, counted over the recorded rounds, so it holds across a handover |
+| `WF_CI_REPAIR_ROUNDS` | `3` | max repair rounds per pull request, such as a round of `/worker:address-reviews`, counted in the worktree |
+| `WF_PR_BOT_REVIEWERS` | `chatgpt-codex-connector` | bot logins whose review the worker waits for; `""` for none |
+| `WF_PR_REVIEW_WAIT` | `1200` | seconds to wait for the bot's one review after checks pass |
+| `WF_HANDOFF_TOKENS` | `100000` | context size at which a worker hands the next stage to a fresh context; keep one review round under the compact trigger of 250 000 ([ADR 0031](docs/adr/0031-the-workflow-pins-the-size-at-which-a-worker-session-compacts.md), [ADR 0034](docs/adr/0034-the-compact-trigger-is-raised-through-the-window.md)) |
+| `WF_CONTEXT_MAX_AGE` | `900` | seconds after which a recorded context size is too old, and the checkpoint says hand over |
+| `WF_HANDOFF_SESSION_MS` | `60000` | how long the handover waits for a fresh session in the pane |
+| `WF_HANDOFF_POLL_SECONDS` | `1` | how often it asks the pane |
 | `WF_WORKER_PERMISSION_MODE` | `auto` | permission mode for worker sessions |
-| `WF_DOCS_TIMEOUT` | `30` | seconds one documentation request of `claude-docs.sh` may take (`/worker:docs`) |
+| `WF_DOCS_TIMEOUT` | `30` | seconds one request of `claude-docs.sh` may take (`/worker:docs`) |
 | `WF_PLANNER_PERMISSION_MODE` | `auto` | permission mode for planner sessions |
-| `WF_PLANNER_LANGUAGE` | empty | conversation language of planner sessions (claude's `language` setting, e.g. `german`); what the planner writes stays English |
-| `WF_CLAUDE_ARGS` | empty | extra flags for every worker and planner (`--model sonnet`, `--plugin-dir …`) |
+| `WF_PLANNER_LANGUAGE` | empty | conversation language of planner sessions, such as `german`; what the planner writes stays English |
+| `WF_CLAUDE_ARGS` | empty | extra flags for every worker and planner |
 | `WF_PLANNER_CLAUDE_ARGS`, `WF_WORKER_CLAUDE_ARGS` | empty | extra flags for planner or worker sessions only |
-| `WF_MODE`, `WF_ISSUE` | set by `/claim` | per-session mode (`manual`/`yolo`) and issue |
-| `WF_REVIEW_MANDATE` | unset | set by a driver that starts a worker session to answer a review: names that review (the time it was submitted), which is what `repair.sh reset` starts the pull request's repair count again on, once per review. The factory sets it no more: its follow-up run answers the review in its own address-reviews stage and keeps the count itself |
-| `WF_PLAN`, `WF_PLAN_ISSUE` | set by `/plan` | per-session plan slug and, when planning an issue, its number |
-| `WF_PROJECT_TEMPLATE` | empty | `<owner>/<number>` of the project the standardisation run copies into a repository without one (`workspace.sh --apply`, not the orchestrator) |
+| `WF_MODE`, `WF_ISSUE` | set by `/claim` | per-session mode (`manual` or `yolo`) and issue |
+| `WF_REVIEW_MANDATE` | unset | names the review a driver starts a worker to answer; `repair.sh reset` restarts the repair count once per review. A factory follow-up run keeps its own count |
+| `WF_PLAN`, `WF_PLAN_ISSUE` | set by `/plan` | per-session plan slug and planned issue |
+| `WF_PROJECT_TEMPLATE` | empty | `<owner>/<number>` of the project `workspace.sh --apply` copies into a repository without one |
 
-A worker knob can also be set for one claimed session, on the claim itself: `/orchestrator:claim 38 --env WF_HANDOFF_TOKENS=5000`. The argument may be repeated, and it works for a manual, a yolo and a sandboxed claim alike. Accepted names: `WF_REVIEWERS`, `WF_REVIEW_ROUNDS`, `WF_CI_REPAIR_ROUNDS`, `WF_PR_BOT_REVIEWERS`, `WF_PR_REVIEW_WAIT`, `WF_HANDOFF_TOKENS`, `WF_CONTEXT_MAX_AGE`, `WF_HANDOFF_SESSION_MS`, `WF_HANDOFF_POLL_SECONDS`, `WF_DOCS_TIMEOUT` — the knobs of the table above that a worker session reads itself. Any other name, an argument without `NAME=VALUE` and a name given twice are refused before anything is created; an empty value is a setting of its own (`--env WF_PR_BOT_REVIEWERS=`). The value rides in the `env` block of the `--settings` object `claim.sh` builds, beside `WF_MODE` and `WF_ISSUE`, so the session keeps the status line, the compact trigger and the plugin isolation every claim gives it, and it reaches no other session. Claude Code merges an `env` block per variable across the settings levels and takes the command line's value for a key it sets ([settings](https://code.claude.com/docs/en/settings.md)), so the knob wins over the same variable in the repository's `.claude/settings.json` for that session and leaves every other variable of it alone. It holds for the whole run of that pane, across every handover, because a handover clears the session and does not restart the process.
+A claim sets a worker knob for its one session: `/orchestrator:claim 38 --env WF_HANDOFF_TOKENS=5000`, repeatable, for manual, yolo and sandboxed claims. Accepted names: `WF_REVIEWERS`, `WF_REVIEW_ROUNDS`, `WF_CI_REPAIR_ROUNDS`, `WF_PR_BOT_REVIEWERS`, `WF_PR_REVIEW_WAIT`, `WF_HANDOFF_TOKENS`, `WF_CONTEXT_MAX_AGE`, `WF_HANDOFF_SESSION_MS`, `WF_HANDOFF_POLL_SECONDS`, `WF_DOCS_TIMEOUT`.
 
-`WF_PLANNER_LANGUAGE` reaches the planner through the `--settings` JSON `plan.sh` builds, so it applies to that one session and writes no settings file. Claude Code takes the **last** `--settings` on the command line and does not merge: a `--settings` of your own in `WF_CLAUDE_ARGS` or `WF_PLANNER_CLAUDE_ARGS` comes after and therefore replaces the whole object, language, plugin switches, the worker's foreground-subagent switch and any knob given with `--env` included. `plan.sh` and `claim.sh` print a `warning:` when they see one, so put those keys into your own JSON. Every other flag in those variables composes normally.
+- Any other name, a malformed argument and a repeated name are refused before anything is created. An empty value is a setting of its own.
+- The value enters the `env` block of the claim's `--settings`, which wins per variable over the repository's settings ([settings](https://code.claude.com/docs/en/settings.md)).
+- It holds for the whole run of that pane, because a handover clears the session and does not restart the process.
+- Claude Code takes the last `--settings` and does not merge. A `--settings` in `WF_CLAUDE_ARGS`, `WF_PLANNER_CLAUDE_ARGS` or `WF_WORKER_CLAUDE_ARGS` replaces the scripts' object, so `plan.sh` and `claim.sh` warn.
 
-A worker or planner session takes its model from the first of these that is set:
+A session takes its model from the first that is set:
 
-1. `--model` in `WF_CLAUDE_ARGS` or, per session kind, `WF_WORKER_CLAUDE_ARGS` / `WF_PLANNER_CLAUDE_ARGS`
-2. the `model` field of the session's agent file (`fable` for `planner`, `opus` for `worker`)
+1. `--model` in `WF_CLAUDE_ARGS`, `WF_WORKER_CLAUDE_ARGS` or `WF_PLANNER_CLAUDE_ARGS`
+2. the `model` of its agent file: `fable` for `planner`, `opus` for `worker`
 3. `model` in your Claude Code settings
 
-None of those variables reaches the orchestrator: you start it by hand, so it runs on the `sonnet` of its agent file unless your own command line says otherwise.
-
-The planner runs on Fable because planning has the highest leverage in the pipeline: a wrong spec multiplies into every ticket, and a planning session is interactive and small in token volume.
-
-Subagents resolve separately: an agent file that names a model keeps it — the panel's `docs-reviewer` stays on `sonnet` — and only `model: inherit` follows the session. So `WF_CLAUDE_ARGS="--model sonnet"` pins the worker session per repository, not every reviewer. The planner's subagents inherit instead: `spec-checker` is `model: inherit`, and the research subagent is a plain Agent-tool spawn with no agent file, which follows the session unless your settings name a default subagent model. `WF_PLANNER_CLAUDE_ARGS="--model opus"` therefore moves the planner session and the subagents that inherit from it together.
-
-Repositories do not override agents or skills locally: the [repository standard](docs/repo-standard.md) keeps `.claude/` to the settings file, and its check fails on local skills, agents, commands and rules. Tune a repository with the `WF_*` variables and its `AGENTS.md`.
+The orchestrator is started by hand and runs on the `sonnet` of its agent file. The planner runs on Fable because a wrong spec multiplies into every ticket. A subagent that names a model keeps it, such as the `docs-reviewer` on `sonnet`; only `model: inherit` follows the session. The planner's subagents inherit, so `WF_PLANNER_CLAUDE_ARGS="--model opus"` moves them with the session.
 
 ## Design
 
@@ -127,12 +128,25 @@ go -C factory run . -fake -config factory.json    # the factory on a canned queu
 npm --prefix factory/ui run dev                   # the dashboard with hot reload, against a factory started beside it
 ```
 
-`factory/factory.example.json` is a host's configuration: it runs paused, keeps its clones in `/var/lib/factory` and starts as it is. A host that should work its line sets `"paused": false`, and a configuration that does not name `paused` at all is paused, so an unattended line is always something an operator wrote down; `-paused` on the command line pauses a factory whose configuration says otherwise and never unpauses one, so the operator's brake is always the stronger of the two. `paused` is the one field the factory reads again on every poll: writing it into the file pauses or unpauses a running factory without a restart, and a run that is going finishes. A run on a developer's machine wants a `factory.json` of its own — a data directory that machine can write, and no `"quota_axi"`, since the check would read that machine's own Claude quota — and `-fake` to work a canned queue without tokens, git or GitHub. A connected repository is `"owner/name"`, or `{"name": "owner/name", "base": "dev"}` when this host branches its runs off something other than the base the repository names for itself (its `WF_BASE_BRANCH`, and its default branch when it names none). `"notify"` is the GitHub logins the factory tells how a run ended, written without the `@`: a run that ends `ready` asks them for a review of its pull request, and one that waits for a person comments on the issue and mentions them. A configuration that names none notifies nobody and says so when it starts. `"quota_axi"` is the absolute path of the [quota-axi](https://github.com/kunchenguid/quota-axi) installed on the host in a pinned version (`npm install -g quota-axi@0.1.49`, not 0.1.50, which reports Claude's used percentage as remaining), and with it the factory checks the Claude quota it shares with the maintainer before every run. Below `"quota_minimum"` (default 12 %) of the all-models scope or the worker's model scope, nothing starts, and the dashboard says the factory waits for quota and until when. After the reset the check runs again. A check that cannot answer starts the run with a warning, and a session that ends in an error while that quota is used up ends as `quota` and is resumed after the reset, once in a row ([ADR 0037](docs/adr/0037-the-quota-check-waits-below-12-percent-of-the-workers-scope.md)). Without `"quota_axi"` the check is off, and the factory never fetches the tool from npm.
+`dev-orchestrator.sh` points `WF_PLANNER_CLAUDE_ARGS` and `WF_WORKER_CLAUDE_ARGS` at the checkout's plugins. Without them a started session exits with `--agent 'planner' not found`, and `plan.sh` and `claim.sh` remove the worktree and print the fix. Tests run the real scripts against the `gh` and `herdr` shims in `tests/shims/`. A plugin is released by bumping `version` in its manifest and running `scripts/release.sh <plugin> --push`.
 
-`factory/` is the factory: a Go service, not a plugin, that works the issues routed to it unattended on a host of its own, a peer of the local workflow that owns the delivery pipeline in Go ([ADR 0038](docs/adr/0038-the-local-workflow-and-the-factory-are-peers.md), [ADR 0040](docs/adr/0040-the-factory-owns-the-delivery-lifecycle-in-go.md)). It is steered on GitHub and shows what it did over a read-only HTTP interface, with a dashboard built into the binary that reads those endpoints and writes nothing ([ADR 0033](docs/adr/0033-the-dashboard-is-built-into-the-factory-binary.md)). It takes the head of its line by creating that issue's branch on GitHub — the one act with a single winner ([ADR 0024](docs/adr/0024-a-claim-is-the-creation-of-the-branch-through-the-api.md)) — assigns the issue to the user it is logged in as, makes a worktree in its own clone and runs the stages implement, gate, review, pr, ci and address-reviews there itself, with one headless session for each step that needs judgement. Every session runs on the factory's own prompts, compiled into the binary, with the workflow's plugins switched off, so a host needs Claude Code, `git`, a `gh` logged in as the machine user and the factory binary, and no plugin; the factory updates nothing, and every run records the versions of Claude Code and the factory it was made with ([ADR 0042](docs/adr/0042-the-factory-carries-its-own-prompts-and-updates-no-plugin.md)). `"worker_args"` adds arguments to the command line of the sessions that write on the branch, such as `["--model", "sonnet"]`, and never replaces what the factory decided: a `worker_args` carrying `--settings`, `--agents`, `--agent`, `--permission-mode`, `--output-format` or `-p` is refused when the factory starts, because those are the session itself — its agent, its brief and the stream the factory reads it from. The knobs of its stages are its own, under `"gate"`, `"review"` and `"ci"` ([runbook](docs/factory-runbook.md#configuration)). `"gate": {"command": ...}` says where a repository's gate runs: a list of arguments such as `["make", "check"]` (the default) runs in the worktree, `[]` runs none, and `"ci"` or `{"ci": ["check"]}` hands it to GitHub CI. The factory then pushes the branch, opens a draft pull request that closes the issue, reads its checks, and the pr stage later writes that draft and marks it ready. Bot reviewers such as Codex skip drafts and review once it is ready ([runbook](docs/factory-runbook.md#a-gate-on-ci)). Developing the dashboard needs Node: `make check` builds it, installs its dependencies with `npm ci` and the Chromium its browser test drives, and names the fix when npm itself is missing.
+`factory/` is the factory, a Go service and no plugin. It is a peer of the local workflow and owns the delivery pipeline in Go ([ADR 0038](docs/adr/0038-the-local-workflow-and-the-factory-are-peers.md), [ADR 0040](docs/adr/0040-the-factory-owns-the-delivery-lifecycle-in-go.md)).
 
-`dev-orchestrator.sh` points `WF_PLANNER_CLAUDE_ARGS` and `WF_WORKER_CLAUDE_ARGS` at the checkout's plugins, so the sessions the orchestrator opens use them too. Without that (or the plugins installed), a started session exits with `--agent 'planner' not found`; `plan.sh` and `claim.sh` detect that, remove the worktree again and print the fix. The same rollback runs when Herdr refuses the start itself (its error is printed as is) or when the pane is back at a shell prompt. Herdr agent names are derived from the branch and cut to its 32-character limit.
+- It claims the head of its line by creating the issue's branch on GitHub ([ADR 0024](docs/adr/0024-a-claim-is-the-creation-of-the-branch-through-the-api.md)).
+- It runs the stages implement, gate, review, pr, ci and address-reviews in a worktree of its own clone, one headless session per step that needs judgement.
+- Its sessions run on its own prompts with the plugins off, so a host needs Claude Code, `git`, `gh` and the binary ([ADR 0042](docs/adr/0042-the-factory-carries-its-own-prompts-and-updates-no-plugin.md)).
+- Its read-only HTTP interface serves a dashboard built into the binary ([ADR 0033](docs/adr/0033-the-dashboard-is-built-into-the-factory-binary.md)).
 
-Tests run the real scripts against `gh` and `herdr` shims (`tests/shims/`). Plugins are self-contained; bump `version` in a plugin's manifest and run `scripts/release.sh <plugin> --push` to tag a release. The factory is released by the same script: bump `factory/VERSION`, and from an up-to-date `main` run `scripts/release.sh factory --push`, and the `factory/v<version>` tag makes CI attach static linux binaries for amd64 and arm64 — the dashboard inside, no cgo — with their checksums to a GitHub release, so a factory host needs neither Go nor Node nor a checkout.
+Its configuration is in the [runbook](docs/factory-runbook.md#configuration). The facts a developer needs:
+
+- `factory/factory.example.json` is a host's configuration and runs paused. A configuration without `paused` is paused, and `-paused` never unpauses one.
+- A run on a developer's machine sets its own data directory, drops `"quota_axi"` and passes `-fake`.
+- A connected repository is `"owner/name"`, or `{"name": "owner/name", "base": "dev"}` when this host branches off another base.
+- `"notify"` names the logins, without `@`, that hear how a run ended.
+- `"worker_args"` adds flags to the writing sessions and is refused when it carries `--settings`, `--agents`, `--agent`, `--plugin-dir`, `--permission-mode`, `--output-format`, `-p` or `--print`.
+- `"gate"` runs a command in the worktree, none, or hands the gate to CI through a draft pull request ([runbook](docs/factory-runbook.md#a-gate-on-ci)).
+- `"quota_axi"` is the path of a pinned [quota-axi](https://github.com/kunchenguid/quota-axi), version 0.1.49. Below `"quota_minimum"`, default 12 %, nothing starts ([ADR 0037](docs/adr/0037-the-quota-check-waits-below-12-percent-of-the-workers-scope.md)).
+
+The factory is released by bumping `factory/VERSION` and running `scripts/release.sh factory --push` on `main`. The `factory/v<version>` tag makes CI attach static linux binaries for amd64 and arm64 with checksums to a GitHub release. Developing the dashboard needs Node; `make check` installs its dependencies and Chromium.
 
 MIT licensed.
