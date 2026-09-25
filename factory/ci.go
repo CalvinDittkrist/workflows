@@ -81,16 +81,6 @@ var defaultCI = ciSettings{
 	ChecksGrace:  10 * time.Minute,
 }
 
-// movedKnobs are the worker knobs the stages the factory runs itself took over, by the object and the
-// knob each one is now.
-var movedKnobs = map[string][2]string{
-	"WF_CI_REPAIR_ROUNDS": {"ci", "repair_rounds"},
-	"WF_PR_BOT_REVIEWERS": {"ci", "bot_reviewers"},
-	"WF_PR_REVIEW_WAIT":   {"ci", "review_wait"},
-	"WF_REVIEW_ROUNDS":    {"review", "rounds"},
-	"WF_REVIEWERS":        {"review", "reviewers"},
-}
-
 // over is these settings with the knobs a ci object names written over them.
 func (base ciSettings) over(k *ciKnobs) (ciSettings, error) {
 	out := base

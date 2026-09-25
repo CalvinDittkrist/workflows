@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-// The review stage is the factory's ([ADR 0043], step 4): the work session stops after the gate, and
+// The review stage is the factory's ([ADR 0043], step 4): the implement session stops after the gate, and
 // the factory runs the reviewers of the panel as read-only sessions of its own, a fix session for every
 // round that asks for fixes, and the gate on the final head before the pr stage.
 //
@@ -90,7 +90,7 @@ func agentOf(t *testing.T, w workerStart) (string, map[string]any) {
 	return w.args[i+1], defs[w.args[i+1]]
 }
 
-// The work session stops after the gate. The factory then starts the five reviewers beside each other,
+// The implement session stops after the gate. The factory then starts the five reviewers beside each other,
 // each read-only, as the inline agent of its own prompt with its tools and its model, in the run's
 // worktree, briefed with the gate result the gate stage recorded; they pass, and the pull request
 // carries the panel the factory derived from their verdicts. The branch did not move, so the gate does
@@ -112,10 +112,7 @@ func TestThePanelRunsTheFactorysReviewersReadOnlyBesideEachOther(t *testing.T) {
 	}
 	workers := gh.workers(t)
 	if len(workers) != 1 {
-		t.Fatalf("the factory started %d worker sessions, want the work session alone", len(workers))
-	}
-	if stop := workers[0].settings(t).Env["WF_STOP_AFTER"]; stop != "implement" {
-		t.Errorf("the work session ran with WF_STOP_AFTER=%q, want implement", stop)
+		t.Fatalf("the factory started %d worker sessions, want the implement session alone", len(workers))
 	}
 
 	reviewers := gh.reviewerSessions(t)
@@ -197,7 +194,7 @@ func TestMixedVerdictsTakeASecondRoundOfTheReviewersThatAskedForFixes(t *testing
 	}
 	workers := gh.workers(t)
 	if len(workers) != 2 || !strings.Contains(strings.Join(workers[1].args, " "), `"disputed"`) {
-		t.Fatalf("the factory started %d worker sessions, want the work session and one fix session of the review", len(workers))
+		t.Fatalf("the factory started %d worker sessions, want the implement session and one fix session of the review", len(workers))
 	}
 	repair := strings.Join(factoryBodies(run, "briefed the fix session of review round 1"), "\n")
 	for _, want := range []string{"code: F1 [S2] upload/retry.go:42 — The backoff is never reset.", "code: F2 [S3]", "tests: F3 [S1] upload/retry_test.go:18", "round 1 of 3"} {
@@ -208,7 +205,7 @@ func TestMixedVerdictsTakeASecondRoundOfTheReviewersThatAskedForFixes(t *testing
 	if brief := strings.Join(factoryBodies(run, "briefed the reviewers"), "\n"); !strings.Contains(brief, "Review round 2 of 3") {
 		t.Errorf("the second round's reviewers were not briefed as such:\n%s", brief)
 	}
-	// The gate stage ran the gate on the work session's commit, and the fix moved the branch, so the
+	// The gate stage ran the gate on the implement session's commit, and the fix moved the branch, so the
 	// gate ran again on its head.
 	head, worked := gh.head(t, "acme/edge-sensors", claimedBranch), run.Panel.Rounds[0].Head
 	if titles := factoryTitles(run, "gate_result: "); !equal(titles, []string{"gate_result: pass (exit 0) at " + short(worked), "gate_result: pass (exit 0) at " + short(head)}) {
@@ -345,7 +342,7 @@ func TestTheFixSessionOfAFullPanelGetsEveryFindingWithinTheArgumentLimit(t *test
 	}
 	workers := gh.workers(t)
 	if len(workers) != 2 {
-		t.Fatalf("the factory started %d worker sessions, want the work session and one fix session of the review", len(workers))
+		t.Fatalf("the factory started %d worker sessions, want the implement session and one fix session of the review", len(workers))
 	}
 	if longest := workers[1].longest; longest >= 128*1024 {
 		t.Errorf("the fix session's longest argument is %d bytes, which Linux refuses at 128 KiB", longest)
@@ -362,11 +359,11 @@ func TestTheFixSessionOfAFullPanelGetsEveryFindingWithinTheArgumentLimit(t *test
 // the gate runs again, within the gate's budget; over the budget the run is blocked and says why.
 func TestAGateThatFailsOnTheFinalHeadGoesToAFixSessionWithinItsBudget(t *testing.T) {
 	t.Parallel()
-	// worked.md has a line for every session that worked the branch: the work session's, the review fix
+	// worked.md has a line for every session that worked the branch: the implement session's, the review fix
 	// session's and then the gate fix session's. Both gates pass in the gate stage, on the work
 	// session's line alone, and fail on the review fix session's.
 	const gate = `@lines=$$(wc -l < worked.md | tr -d ' '); echo "worked.md has $$lines lines"; test $$lines -ne 2`
-	const never = `@lines=$$(wc -l < worked.md | tr -d ' '); echo "the gate passes on the work session's commit alone"; test $$lines -lt 2`
+	const never = `@lines=$$(wc -l < worked.md | tr -d ' '); echo "the gate passes on the implement session's commit alone"; test $$lines -lt 2`
 	for name, c := range map[string]struct {
 		recipe  string
 		knobs   map[string]any
@@ -390,7 +387,7 @@ func TestAGateThatFailsOnTheFinalHeadGoesToAFixSessionWithinItsBudget(t *testing
 			if run.Outcome != c.outcome {
 				t.Fatalf("the run ended as %q (%s), want %s; the factory's log:\n%s", run.Outcome, run.Reason, c.outcome, f.output(t))
 			}
-			// The work session, the fix session of the review and the fix session of the gate.
+			// The implement session, the fix session of the review and the fix session of the gate.
 			if workers := gh.workers(t); len(workers) != 2+c.fixes {
 				t.Errorf("the factory started %d worker sessions, want %d", len(workers), 2+c.fixes)
 			}
@@ -408,7 +405,7 @@ func TestAGateThatFailsOnTheFinalHeadGoesToAFixSessionWithinItsBudget(t *testing
 				}
 				return
 			}
-			for _, want := range []string{"the gate fails on the final head after 1 of 1 fix sessions (review.gate_rounds)", "the gate passes on the work session's commit alone"} {
+			for _, want := range []string{"the gate fails on the final head after 1 of 1 fix sessions (review.gate_rounds)", "the gate passes on the implement session's commit alone"} {
 				if !strings.Contains(run.Reason, want) {
 					t.Errorf("the run was blocked because %q, want a reason with %q", run.Reason, want)
 				}
@@ -452,7 +449,7 @@ func TestAFixSessionThatLeavesItsChangesUncommittedFailsTheRun(t *testing.T) {
 				}
 			}
 			if workers := gh.workers(t); len(workers) != 2 {
-				t.Errorf("the factory started %d worker sessions, want the work session and the fix session", len(workers))
+				t.Errorf("the factory started %d worker sessions, want the implement session and the fix session", len(workers))
 			}
 			if pulls := gh.opened(t, "acme/edge-sensors"); len(pulls) != 0 {
 				t.Errorf("the factory opened %d pull requests without the fix the session reported", len(pulls))
@@ -462,7 +459,7 @@ func TestAFixSessionThatLeavesItsChangesUncommittedFailsTheRun(t *testing.T) {
 }
 
 // A run that stopped during the review is resumed at the review stage with the rounds it recorded: no
-// work session and no recorded round runs again. A round whose fix session had not reported yet has
+// implement session and no recorded round runs again. A round whose fix session had not reported yet has
 // that session run first.
 func TestAResumeDuringTheReviewGoesOnFromTheRecordedRounds(t *testing.T) {
 	t.Parallel()
@@ -508,7 +505,7 @@ func TestAResumeDuringTheReviewGoesOnFromTheRecordedRounds(t *testing.T) {
 			}
 			wantRepairs := map[bool]int{true: 0, false: 1}[repaired]
 			if workers := gh.workers(t); len(workers) != wantRepairs {
-				t.Errorf("the resume started %d worker sessions, want %d: no work session and no fix of a round that has one", len(workers), wantRepairs)
+				t.Errorf("the resume started %d worker sessions, want %d: no implement session and no fix of a round that has one", len(workers), wantRepairs)
 			}
 			reviewers := gh.reviewerSessions(t)
 			if len(reviewers) != 1 {

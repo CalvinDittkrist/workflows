@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-// The gate stage, which the factory runs itself ([ADR 0043], step 5): the work session stops once it
+// The gate stage, which the factory runs itself ([ADR 0043], step 5): the implement session stops once it
 // has committed its implementation, and the factory merges the base into the branch when the base has
 // commits the branch lacks, determines the change class and runs the class's gate in the worktree. A
 // merge that conflicts goes to a fix session with the conflicted files, and a gate that fails to a fix
@@ -239,21 +239,21 @@ func mergeFixBrief(entry Entry, claim claimed, conflicted []string) string {
 }
 
 // gatingAlready says whether a resumed run that has no review to go on from starts at the gate stage:
-// the run before it got past the work session, which reported its implementation complete, and its
+// the run before it got past the implement session, which reported its implementation complete, and its
 // branch carries commits beyond the base without a pass of the gate recorded for them. A run before it
-// that ended in the work session, interrupted or out of quota after a commit of its own, left an
-// implementation it never reported complete, and the run starts with the work session again. Fake mode
-// has no branch, and its resumed runs start at the work session.
+// that ended in the implement session, interrupted or out of quota after a commit of its own, left an
+// implementation it never reported complete, and the run starts with the implement session again. Fake mode
+// has no branch, and its resumed runs start at the implement session.
 func (f *Factory) gatingAlready(ctx context.Context, r *Run, entry Entry, claim claimed) bool {
 	if kindOf(entry.Signal) != kindResumed || f.fake {
 		return false
 	}
 	if !pastImplement(entry.resume) {
-		f.runs.event(r, Event{Kind: "factory", Title: "resuming at the work session",
-			Body: fmt.Sprintf("run %d ended before its work session reported the implementation complete, so the work session runs again on what the branch %s carries", entry.resume.ID, claim.branch)})
+		f.runs.event(r, Event{Kind: "factory", Title: "resuming at the implement session",
+			Body: fmt.Sprintf("run %d ended before its implement session reported the implementation complete, so the implement session runs again on what the branch %s carries", entry.resume.ID, claim.branch)})
 		return false
 	}
-	out, err := git(ctx, claim.worktree, "rev-list", "--count", "origin/"+claim.base+"..HEAD")
+	out, err := commitsBeyond(ctx, claim)
 	if err != nil {
 		if ctx.Err() == nil {
 			f.warn(r, "commits not counted", "the commits of the branch beyond origin/"+claim.base+" could not be counted, so the run starts at its first stage: "+err.Error())
@@ -264,12 +264,12 @@ func (f *Factory) gatingAlready(ctx context.Context, r *Run, entry Entry, claim 
 		return false
 	}
 	f.runs.event(r, Event{Kind: "factory", Title: "resuming at the gate stage",
-		Body: fmt.Sprintf("run %d got past the work session, and the branch %s carries %s commit(s) beyond origin/%s and no pass of the gate is recorded for its head, so the gate runs on them", entry.resume.ID, claim.branch, out, claim.base)})
+		Body: fmt.Sprintf("run %d got past the implement session, and the branch %s carries %s commit(s) beyond origin/%s and no pass of the gate is recorded for its head, so the gate runs on them", entry.resume.ID, claim.branch, out, claim.base)})
 	return true
 }
 
-// pastImplement says whether a run got past its work session: it reached the gate stage, which the
-// factory enters only after a work session that reported its implementation complete or on a resume
+// pastImplement says whether a run got past its implement session: it reached the gate stage, which the
+// factory enters only after an implement session that reported its implementation complete or on a resume
 // past it, or it recorded the review that comes after the gate.
 func pastImplement(prior Run) bool {
 	return slices.Contains(prior.Stages, stageGate) || prior.Panel != nil || prior.Review != nil

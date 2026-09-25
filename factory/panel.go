@@ -424,7 +424,7 @@ func readRepair(raw json.RawMessage, findings []Finding) (result, error) {
 
 // reviewingAlready is the panel the run before this resumed one recorded, when the branch still carries
 // the commit it was last written at: the rounds it recorded are done, and the run continues the review
-// from them. A branch that no longer carries that commit is other work, and the run starts at the gate stage or the work session (gatingAlready).
+// from them. A branch that no longer carries that commit is other work, and the run starts at the gate stage or the implement session (gatingAlready).
 func (f *Factory) reviewingAlready(ctx context.Context, r *Run, entry Entry, claim claimed) (Panel, bool) {
 	prior := entry.resume.Panel
 	if kindOf(entry.Signal) != kindResumed || prior == nil || entry.resume.Review != nil {
@@ -435,7 +435,7 @@ func (f *Factory) reviewingAlready(ctx context.Context, r *Run, entry Entry, cla
 		_, err = git(ctx, claim.worktree, "merge-base", "--is-ancestor", prior.Head, head)
 		if err != nil && ctx.Err() == nil {
 			f.runs.event(r, Event{Kind: "factory", Title: "the recorded review is not in the branch",
-				Body: fmt.Sprintf("run %d recorded the review at %s, which the branch %s at %s does not carry, so the run starts at the gate stage or the work session", entry.resume.ID, short(prior.Head), claim.branch, short(head))})
+				Body: fmt.Sprintf("run %d recorded the review at %s, which the branch %s at %s does not carry, so the run starts at the gate stage or the implement session", entry.resume.ID, short(prior.Head), claim.branch, short(head))})
 			return Panel{}, false
 		}
 	}

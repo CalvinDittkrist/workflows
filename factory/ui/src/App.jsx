@@ -3,19 +3,22 @@ import { useEffect, useRef, useState } from 'react'
 // The dashboard reads the factory's read-only interface and never writes: it polls /api/status,
 // /api/repositories and /api/line for the three areas, and /api/runs/{id} for the selected run.
 
-// The stages of the pipeline in the order a run moves through them. The work session is implement;
-// the factory runs the stages after it itself, from the gate on, and a run moves between ci and address-reviews as the
-// reviewers ask for changes; this is the line those stages are shown on.
+// The stages of the pipeline in the order a run moves through them, every one of them the factory's. A
+// run moves between ci and address-reviews as the reviewers ask for changes; this is the line those
+// stages are shown on.
 const STAGES = ['implement', 'gate', 'review', 'pr', 'ci', 'address-reviews']
 
 // A stage as a run shows it: the review with the round of its panel the run is in or ended at, and the
-// change class that applied, each class the determinations moved to after an arrow.
+// change class that applied, each class the determinations moved to after a chevron. It is a chevron
+// and not an arrow because the dashboard is written in the Latin subset of JetBrains Mono it bundles,
+// which has no arrow: a glyph the subset lacks is drawn in whatever font the host falls back to, and
+// on a host whose fallback is wide the trail comes out wider than the approved screenshot.
 const stageOf = (run, stage = run.stage) => {
   if (stage !== 'review' || !run.panel) return stage
   const classes = (run.panel.classes ?? []).map((c) => c.class).filter((name, i, all) => name !== all[i - 1])
   return [
     run.panel.round ? `review, round ${run.panel.round}` : 'review',
-    classes.length > 0 && `class ${classes.join(' → ')}`,
+    classes.length > 0 && `class ${classes.join(' › ')}`,
   ]
     .filter(Boolean)
     .join(', ')
@@ -359,7 +362,6 @@ function Run({ id, now }) {
   const state = stateOf(run)
   const reached = new Set(run.stages)
   const versions = [
-    ['worker', run.versions.worker],
     ['claude code', run.versions.claudeCode],
     ['factory', run.versions.factory],
   ].filter(([, version]) => version)

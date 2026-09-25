@@ -10,17 +10,17 @@ import (
 )
 
 // The pr stage, tested against the real binary with the gh and claude shims ([ADR 0043], step 3): the
-// work session stops after the review, a read-only author session writes the title and the body, and
+// implement session stops after the review, a read-only author session writes the title and the body, and
 // the factory appends the verification section and opens the pull request.
 //
 // [ADR 0043]: ../docs/adr/0043-the-migration-runs-from-the-last-stage-to-the-first.md
 
-// failedPanel is the panel summary of a work session whose review ran out of rounds with two reviewers
+// failedPanel is the panel summary of an implement session whose review ran out of rounds with two reviewers
 // that never passed.
 const failedPanel = "review_rounds: 3\npanel: code=PASS security=PASS docs=FIX→PASS tests=FIX→FIX→FIX senior=FIX→FIX→BLOCK\n" +
 	"fixed: 5 (S1 1, S2 3, S3 1)\ndisputed: senior S2 factory/pr.go:40 the naming of the stage"
 
-// The first run's work session stops after the gate, the factory's reviewers pass, and it opens the pull request from the
+// The first run's implement session stops after the gate, the factory's reviewers pass, and it opens the pull request from the
 // author session's title and body, appends the gate result and the panel summary word for word, and
 // opens it against the base the branch was cut from, not as a draft. The ci stage follows.
 func TestTheFactoryOpensThePullRequestFromTheAuthorsTitleAndBody(t *testing.T) {
@@ -63,14 +63,11 @@ func TestTheFactoryOpensThePullRequestFromTheAuthorsTitleAndBody(t *testing.T) {
 		t.Errorf("the body of a pull request whose panel passed says it did not:\n%s", p.Body)
 	}
 
-	// The work session ran with the worker plugin and stopped after the implement stage; the author session ran
-	// read-only, as no agent, in the same worktree, briefed with the range, the commits and the issue.
+	// The author session ran read-only, as no agent, in the same worktree, briefed with the range, the
+	// commits and the issue.
 	workers, authors := gh.workers(t), gh.authorSessions(t)
 	if len(workers) != 1 || len(authors) != 1 {
-		t.Fatalf("the factory started %d work sessions and %d author sessions, want one of each", len(workers), len(authors))
-	}
-	if stop := workers[0].settings(t).Env["WF_STOP_AFTER"]; stop != "implement" {
-		t.Errorf("the work session ran with WF_STOP_AFTER=%q, want implement", stop)
+		t.Fatalf("the factory started %d implement sessions and %d author sessions, want one of each", len(workers), len(authors))
 	}
 	author := authors[0]
 	if !author.started("--tools", "Read,Grep,Glob") || !author.started("--strict-mcp-config") || slices.Contains(author.args, "--agent") {
@@ -140,7 +137,7 @@ func TestAnAuthorSessionThatFailsEndsTheRunFailedWithTheBranchPushed(t *testing.
 			}
 			pushed := gh.head(t, "acme/edge-sensors", claimedBranch)
 			if pushed == base || !strings.Contains(gh.git(t, gh.remotePath("acme/edge-sensors"), "ls-tree", "--name-only", pushed), "worked.md") {
-				t.Errorf("the remote branch is at %s, want the work session's commit pushed on it", pushed)
+				t.Errorf("the remote branch is at %s, want the implement session's commit pushed on it", pushed)
 			}
 		})
 	}
@@ -163,10 +160,10 @@ func TestTheAuthorSessionTakesOnlyTheModelOfTheWorkerArguments(t *testing.T) {
 	}
 	workers, authors := gh.workers(t), gh.authorSessions(t)
 	if len(workers) != 1 || len(authors) != 1 {
-		t.Fatalf("the factory started %d work sessions and %d author sessions, want one of each", len(workers), len(authors))
+		t.Fatalf("the factory started %d implement sessions and %d author sessions, want one of each", len(workers), len(authors))
 	}
 	if !workers[0].started("--mcp-config", "/etc/factory/servers.json") || !workers[0].started("--add-dir", "/") {
-		t.Errorf("the work session was started with %v, want every worker argument", workers[0].args)
+		t.Errorf("the implement session was started with %v, want every worker argument", workers[0].args)
 	}
 	author := authors[0]
 	if !author.started("--model", "fable") || slices.Contains(author.args, "--mcp-config") || slices.Contains(author.args, "--add-dir") {
@@ -197,7 +194,7 @@ func TestTheAuthorsBriefStaysWithinOneArgumentWhateverItFences(t *testing.T) {
 }
 
 // A branch that has a pull request open when the pr stage comes to open one — a resumed run whose
-// reading of it failed ran its work session again — goes on with that pull request: no author session
+// reading of it failed ran its implement session again — goes on with that pull request: no author session
 // and no second pull request, which GitHub refuses for the same branch.
 func TestThePRStageGoesOnWithAPullRequestTheBranchHasOpen(t *testing.T) {
 	t.Parallel()
@@ -222,7 +219,7 @@ func TestThePRStageGoesOnWithAPullRequestTheBranchHasOpen(t *testing.T) {
 }
 
 // A run interrupted after the review and before the pull request is resumed at the pr stage: the review
-// it recorded stands while the branch is still at the commit it was recorded at, and no work session
+// it recorded stands while the branch is still at the commit it was recorded at, and no implement session
 // runs again.
 func TestAResumeAfterTheReviewStartsAtThePRStageWithoutASecondReview(t *testing.T) {
 	t.Parallel()
@@ -252,7 +249,7 @@ func TestAResumeAfterTheReviewStartsAtThePRStageWithoutASecondReview(t *testing.
 			resumed.Outcome, resumed.PullRequest, resumed.Reason, pullOfTheClaim, f.output(t))
 	}
 	if workers := gh.workers(t); len(workers) != 0 {
-		t.Errorf("the resume started %d work sessions, want none: the review is done", len(workers))
+		t.Errorf("the resume started %d implement sessions, want none: the review is done", len(workers))
 	}
 	if !equal(resumed.Stages, []string{"pr", "ci"}) {
 		t.Errorf("the resume went through the stages %v, want pr and ci", resumed.Stages)
@@ -268,7 +265,7 @@ func TestAResumeAfterTheReviewStartsAtThePRStageWithoutASecondReview(t *testing.
 
 // A branch that moved after the review was recorded carries work no reviewer read and no gate passed:
 // the resume starts at the gate stage on the branch's head instead of opening the pull request, and
-// runs no work session, since the commits beyond the base are the implementation.
+// runs no implement session, since the commits beyond the base are the implementation.
 func TestAResumeWhoseBranchMovedAfterTheReviewStartsAtTheGateStage(t *testing.T) {
 	t.Parallel()
 	gh := newGhShim(t)
@@ -296,7 +293,7 @@ func TestAResumeWhoseBranchMovedAfterTheReviewStartsAtTheGateStage(t *testing.T)
 		t.Fatalf("run 2 ended as %q (%s), want ready; the factory's log:\n%s", resumed.Outcome, resumed.Reason, f.output(t))
 	}
 	if workers := gh.workers(t); len(workers) != 0 {
-		t.Errorf("the resume started %d work sessions, want none: the branch carries the implementation", len(workers))
+		t.Errorf("the resume started %d implement sessions, want none: the branch carries the implementation", len(workers))
 	}
 	if !equal(resumed.Stages, []string{"gate", "review", "pr", "ci"}) || len(resumed.Gates) != 1 || resumed.Gates[0].Head != moved || !resumed.Gates[0].Passed {
 		t.Errorf("the resume went through the stages %v with the gates %+v, want it to start at the gate stage with a pass on %s", resumed.Stages, resumed.Gates, short(moved))
