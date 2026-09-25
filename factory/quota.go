@@ -36,9 +36,9 @@ const quotaTimeout = 30 * time.Second
 // weekly window.
 const allModels = "all_models"
 
-// workerModel is the model the worker agent runs on unless worker_args names another. It is the
-// `model:` of plugins/worker/agents/worker.md, and a drift test holds the two together: the scope the
-// check reads has to be the one the worker spends.
+// workerModel is the model the worker agent runs on unless worker_args names another. The factory's
+// definition of that agent names it (workerAgents), so the scope the check reads is the one the
+// worker spends.
 const workerModel = "opus"
 
 // scope is one row quota-axi reports: how much of it is left and when the windows that limit it

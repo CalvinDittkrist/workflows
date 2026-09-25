@@ -10,10 +10,6 @@ wf_kv reviewers "$(wf_reviewers)"
 # fix named, instead of printing an empty value and letting panel.sh meet it.
 max_rounds=$(wf_review_rounds) || exit 1
 wf_kv max_rounds "$max_rounds"
-# The factory's transitional knob (ADR 0043): printed only when the session carries it, so a local session's
-# facts are what they were, and a value that names no stage stops the session here with the fix.
-stop_after=$(wf_stop_after) || exit 1
-[ -z "$stop_after" ] || wf_kv stop_after "$stop_after"
 
 # A claim starts a worker with background tasks disabled, so a subagent's report is the result of the Agent
 # call; a session started or restarted by hand has no such setting and its subagents run in the background,

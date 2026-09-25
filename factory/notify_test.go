@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"syscall"
 	"testing"
@@ -119,7 +120,7 @@ func TestAReviewRequestThatStallsStillReachesTheLoginsBehindIt(t *testing.T) {
 
 // A run that ends ready and names no pull request has nothing to ask a review of, and is an issue
 // the factory still holds and is done with: the maintainer hears of it on the issue, like every
-// other ending that waits for a person. No run of this factory ends so any more — the work session
+// other ending that waits for a person. No run of this factory ends so any more — the implement session
 // stops after the review and the factory opens the pull request itself, and a follow-up run answers
 // the review in its own address-reviews stage — so such a run is one a factory before it recorded,
 // whose session ran the pipeline to its end and named a pull request of another repository, and
@@ -433,6 +434,41 @@ func TestAnEndingThatWasRecordedAndNotNotifiedIsNotifiedOnTheNextStart(t *testin
 	again.queue(t, 0)
 	if made := gh.made(t, commentCall("acme/edge-sensors", claimedIssue)); made != 1 {
 		t.Errorf("the factory commented %d times over two starts, want once; the second start's log:\n%s", made, again.output(t))
+	}
+}
+
+// A record an earlier factory wrote carries the version of the worker plugin its run drove. Rewriting
+// the record, here to mark its ending notified, keeps that version: it is what the run ran with.
+func TestARecordOfAnEarlierFactoryKeepsItsWorkerVersionWhenItIsRewritten(t *testing.T) {
+	t.Parallel()
+	gh := newGhShim(t)
+	gh.remote(t, "acme/edge-sensors")
+	gh.loggedInAs(t, "factory-bot")
+	gh.issues(t, "acme/edge-sensors")
+	gh.comments(t, "acme/edge-sensors", claimedIssue)
+	data := filepath.Join(t.TempDir(), "data")
+	gh.cloneInto(t, data, "acme/edge-sensors")
+
+	began := time.Now().UTC().Add(-2 * time.Hour)
+	owed := record(1, claimedIssue, claimedTitle, signalRouted, outcomeFailed, true, began, began.Add(time.Minute))
+	owed.Reason = "the session ended in an error (exit 1): the gate did not pass"
+	owed.Notified = notifyPending
+	owed.Versions = Versions{ClaudeCode: "2.1.270", Factory: "0.4.0", Worker: "0.9.1"}
+	records(t, data, owed)
+
+	f := gh.work(t, config{"poll": "50ms", "data_dir": data,
+		"repositories": []string{"acme/edge-sensors"}, "notify": maintainers})
+	f.notified(t, 1)
+	f.stop(t, syscall.SIGTERM)
+
+	rewritten := map[string]any{}
+	read(t, filepath.Join(data, "run-1.json"), &rewritten)
+	if rewritten["notified"] != notifyDone {
+		t.Fatalf("the record is marked notified=%v, want %q: the test needs the record rewritten", rewritten["notified"], notifyDone)
+	}
+	want := map[string]any{"claudeCode": "2.1.270", "factory": "0.4.0", "worker": "0.9.1"}
+	if versions, _ := rewritten["versions"].(map[string]any); !reflect.DeepEqual(versions, want) {
+		t.Errorf("the rewritten record carries the versions %v, want %v, the ones its run ran with", versions, want)
 	}
 }
 

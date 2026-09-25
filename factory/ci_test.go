@@ -19,7 +19,7 @@ import (
 // [ADR 0043]: ../docs/adr/0043-the-migration-runs-from-the-last-stage-to-the-first.md
 
 // ciClaim is the fixture every test of the ci stage starts from: #104 routed on acme/edge-sensors,
-// claimed by factory-bot, whose work session commits and stops after the review; the pr stage opens
+// claimed by factory-bot, whose implement session commits and stops after the review; the pr stage opens
 // its pull request.
 func ciClaim(t *testing.T) (*ghShim, string) {
 	t.Helper()
@@ -134,7 +134,7 @@ func TestFailedChecksRunAFixSessionWithTheirLogsAndTheRunEndsReadyOnceGreen(t *t
 	}
 	workers := gh.workers(t)
 	if len(workers) != 2 {
-		t.Fatalf("the factory started %d sessions, want the work session and one fix session", len(workers))
+		t.Fatalf("the factory started %d sessions, want the implement session and one fix session", len(workers))
 	}
 	fix := workers[1]
 	if fix.cwd != workers[0].cwd || fix.branch != claimedBranch {
@@ -149,9 +149,12 @@ func TestFailedChecksRunAFixSessionWithTheirLogsAndTheRunEndsReadyOnceGreen(t *t
 	if strings.Contains(brief, "- lint") {
 		t.Errorf("the fix session's brief names the check that passed:\n%s", brief)
 	}
-	// The work session stopped after the gate: the review, pr and ci stages are the factory's.
-	if stop := workers[0].settings(t).Env["WF_STOP_AFTER"]; stop != "implement" {
-		t.Errorf("the work session ran with WF_STOP_AFTER=%q, want implement", stop)
+	// The fix session runs as the factory's own worker agent, as the implement session does, and no
+	// plugin of the workflow is on in it.
+	for i, w := range workers {
+		if w.arg("--agent") != workerAgent || w.settings(t).EnabledPlugins["worker@workflows"] {
+			t.Errorf("session %d ran as the agent %q with the plugins %v, want the factory's %s and the worker plugin off", i+1, w.arg("--agent"), w.settings(t).EnabledPlugins, workerAgent)
+		}
 	}
 }
 
@@ -178,7 +181,7 @@ func TestAConflictThatMergesCleanlyIsPushedWithoutASession(t *testing.T) {
 		t.Errorf("the ci stage said %v, want a conflict, one round and a clean merge", titles)
 	}
 	if workers := gh.workers(t); len(workers) != 1 {
-		t.Errorf("the factory started %d sessions, want the work session alone: a clean merge needs nobody", len(workers))
+		t.Errorf("the factory started %d sessions, want the implement session alone: a clean merge needs nobody", len(workers))
 	}
 	parents := strings.Fields(gh.git(t, gh.remotePath("acme/edge-sensors"), "rev-list", "--parents", "-n", "1", head))
 	if len(parents) != 3 || !slices.Contains(parents[1:], moved) {
@@ -195,7 +198,7 @@ func TestAConflictingMergeBriefsAFixSessionWithTheConflictedFiles(t *testing.T) 
 
 	f := gh.work(t, ciConfig(data, nil))
 	f.saw(t, "ci: waiting")
-	// main takes a change to the file the work session wrote, after the branch was cut.
+	// main takes a change to the file the implement session wrote, after the branch was cut.
 	other := filepath.Join(t.TempDir(), "other")
 	gh.git(t, filepath.Dir(other), "clone", "-q", gh.remotePath("acme/edge-sensors"), other)
 	writeFile(t, filepath.Join(other, "worked.md"), "somebody else's work\n")
@@ -216,7 +219,7 @@ func TestAConflictingMergeBriefsAFixSessionWithTheConflictedFiles(t *testing.T) 
 	}
 	workers := gh.workers(t)
 	if len(workers) != 2 {
-		t.Fatalf("the factory started %d sessions, want the work session and one fix session", len(workers))
+		t.Fatalf("the factory started %d sessions, want the implement session and one fix session", len(workers))
 	}
 	if brief := strings.Join(briefs(run), "\n"); !strings.Contains(brief, "worked.md") || !strings.Contains(brief, "origin/main") {
 		t.Errorf("the fix session's brief does not name the conflicted file and the base it merged:\n%s", brief)
@@ -249,7 +252,7 @@ func TestARunOverItsRepairBudgetIsBlockedNamingTheFailingChecks(t *testing.T) {
 		}
 	}
 	if workers := gh.workers(t); len(workers) != 2 {
-		t.Errorf("the factory started %d sessions, want the work session and the one fix session the budget allows", len(workers))
+		t.Errorf("the factory started %d sessions, want the implement session and the one fix session the budget allows", len(workers))
 	}
 }
 
@@ -366,7 +369,7 @@ func TestReviewCommentsAreAnsweredByAnAddressReviewsSessionWhoseRepliesTheFactor
 	}
 	workers := gh.workers(t)
 	if len(workers) != 2 {
-		t.Fatalf("the factory started %d sessions, want the work session and one address-reviews session", len(workers))
+		t.Fatalf("the factory started %d sessions, want the implement session and one address-reviews session", len(workers))
 	}
 	if workers[1].cwd != workers[0].cwd || workers[1].branch != claimedBranch {
 		t.Errorf("the address-reviews session ran in %s on %s, want the run's worktree %s on %s", workers[1].cwd, workers[1].branch, workers[0].cwd, claimedBranch)
@@ -462,7 +465,7 @@ func TestReviewCommentsOverTheRepairBudgetBlockTheRunNamingThem(t *testing.T) {
 		t.Errorf("the blocked run names the review its round answered: %q", run.Reason)
 	}
 	if workers := gh.workers(t); len(workers) != 2 {
-		t.Errorf("the factory started %d sessions, want the work session and the one address-reviews session the budget allows", len(workers))
+		t.Errorf("the factory started %d sessions, want the implement session and the one address-reviews session the budget allows", len(workers))
 	}
 }
 
@@ -644,7 +647,7 @@ func TestAThreadWhoseResolutionFailedIsResolvedWithoutASecondReply(t *testing.T)
 		t.Fatalf("the run ended as %q after %d repair rounds (%s), want ready after one; the factory's log:\n%s", run.Outcome, run.RepairRounds, run.Reason, f.output(t))
 	}
 	if workers := gh.workers(t); len(workers) != 2 {
-		t.Errorf("the factory started %d sessions, want the work session and one address-reviews session", len(workers))
+		t.Errorf("the factory started %d sessions, want the implement session and one address-reviews session", len(workers))
 	}
 	if replies := gh.made(t, replyCall); replies != 1 {
 		t.Errorf("the factory replied %d times in the thread, want once", replies)
@@ -675,7 +678,7 @@ func TestAThreadOfSomebodyWhoMayNotWriteStartsNoSession(t *testing.T) {
 		t.Fatalf("the run ended as %q after %d repair rounds (%s), want ready after none; the factory's log:\n%s", run.Outcome, run.RepairRounds, run.Reason, f.output(t))
 	}
 	if workers := gh.workers(t); len(workers) != 1 {
-		t.Errorf("the factory started %d sessions, want the work session alone", len(workers))
+		t.Errorf("the factory started %d sessions, want the implement session alone", len(workers))
 	}
 	if asked := gh.made(t, "api "+permissionRequest("acme/edge-sensors", "passer-by")+" --jq .user.permissions.push"); asked == 0 {
 		t.Errorf("the factory never asked whether the thread's author may write: the fixture did not reach the rule")
