@@ -4,10 +4,19 @@ Date: 2026-09-18
 Status: accepted
 
 ## Context
-Bringing an existing repository to the standard removes files a maintainer may still want, such as a skill written for that repository. Judgement about what goes should be independent per area and must not change anything before the maintainer approves. Spec: #3.
+- Bringing a repository to the standard removes files a maintainer may still want, such as a skill written for it.
+- Judgement on what goes should be independent per area and change nothing before the maintainer approves.
+- Spec: #3.
 
 ## Decision
-A main-session agent gathers facts with a script and fans out to six read-only auditors (files, agent configuration, docs, tests and CI, GitHub workspace, security); read-only is expressed through their tool lists. Findings are approved per category. Before anything changes, a tag `pre-standard` is pushed on the current head and protected against deletion and moving, and a catalogue issue labelled `skill-candidate` lists each removed skill with the command that restores it. All deletions and baseline files arrive in one pull request from `chore/standardize`. Code findings become issues for the worker pipeline.
+Read-only auditors judge the repository, the maintainer approves per category, a protected tag backs up the head, and deletions arrive in one pull request.
 
 ## Consequences
-Nothing is lost, every removal is reviewed like other changes, and a removed skill can later move into the marketplace. A run is repeatable and doubles as a drift check. The cost is one extra pull request and issue per repository. Repositories no longer override plugin agents or skills locally, which amends ADR 0004; a model or reviewer change goes into the plugin or the `WF_*` settings. Deleting directly on the default branch and keeping a per-repository allowlist of local skills were rejected.
+- A main-session agent gathers facts with a script. Six auditors cover files, agent configuration, docs, tests and CI, GitHub workspace, and security, read-only through their tool lists.
+- The tag `pre-standard` is pushed on the head and protected against deletion and moving.
+- A catalogue issue labelled `skill-candidate` lists each removed skill with its restore command.
+- The pull request comes from `chore/standardize`; code findings become issues.
+- Nothing is lost, and every removal is reviewed.
+- A run is repeatable and doubles as a drift check. It costs one pull request and issue per repository.
+- Repositories no longer override plugin agents or skills, which amends ADR 0004; changes go into the plugin or `WF_*` settings.
+- Rejected: deleting on the default branch, and an allowlist of local skills per repository.
