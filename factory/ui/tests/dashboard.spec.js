@@ -112,7 +112,7 @@ test('the stage line and the outcome box show the scripted states', async ({ pag
   await expect(stages).toHaveText([
     'implement',
     'gate',
-    'review, round 2, class docs → upload',
+    'review, round 2, class docs › upload',
     'pr',
     'ci',
     'address-reviews',
