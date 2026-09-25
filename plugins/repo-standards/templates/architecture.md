@@ -1,9 +1,7 @@
 # Architecture
 
-<!-- One page. What exists, how it fits together, where the boundaries are. Link, do not duplicate. -->
-
 ## Purpose
-One paragraph: what this system does and for whom.
+What this system does and for whom, in one paragraph.
 
 ## Components
 | Component | Responsibility | Entry point |
@@ -11,10 +9,14 @@ One paragraph: what this system does and for whom.
 | | | |
 
 ## Data flow
-How a request or job moves through the components. A diagram (Mermaid) is welcome when it says more than prose.
+1. Where a request or job enters.
+2. Each component it passes, in order.
+3. Where it ends and what it leaves behind.
 
-## Boundaries and constraints
-External systems, trust boundaries, secrets handling, performance limits, anything an agent must not touch without asking.
+## Boundaries
+- External systems and trust boundaries.
+- Secrets and how they are handled.
+- What an agent must not touch without asking.
 
 ## Decisions
-See [ADRs](adr/README.md). Record a new ADR when a change alters a boundary, a dependency, or a convention.
+See [the ADRs](adr/README.md). Record a new ADR when a change alters a boundary, a dependency or a convention.
