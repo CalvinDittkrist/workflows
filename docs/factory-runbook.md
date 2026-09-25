@@ -205,7 +205,8 @@ The factory is configured by one JSON file and nothing else: no environment vari
 | `ci` | see below | The knobs of the ci stage ([The ci stage](#the-ci-stage)). |
 | `gate` | see below | The knobs of the gate stage ([The gate stage](#the-gate-stage)). |
 | `review` | see below | The knobs of the review stage ([The review stage](#the-review-stage)). |
-| `paused` | `true` | A paused factory shows the line and claims, resumes and writes nothing. A file that does not name `paused` is paused, so an unattended line is always something you wrote down. It is the one field read again on every poll, so it takes no restart ([Pausing](#pausing)). |
+| `paused` | `true` | A paused factory shows the line and claims, resumes and writes nothing. A file that does not name `paused` is paused, so an unattended line is always something you wrote down. It is read again on every poll, so it takes no restart ([Pausing](#pausing)). |
+| `auto_update` | `false` | Lets the host's update tick install factory releases on this host. It is read again on every poll like `paused`, and `/api/line` reports it. |
 | `notify` | `[]` | GitHub logins, without the `@`. They are asked for a review when a run ends `ready`, and mentioned on the issue when a run waits for a person. Empty: nobody is notified, and the log says so on start. |
 | `repositories` | none, at least one | The connected repositories, each `"owner/name"` or an object. See below the table. |
 | `quota_axi` | none: the check is off | The absolute path of the quota-axi installed above. |
@@ -311,6 +312,8 @@ Environment=PATH=/home/factory/.local/bin:/usr/local/go/bin:/usr/local/bin:/usr/
 ExecStart=/usr/local/bin/factory -config /etc/factory/factory.json
 Restart=on-failure
 RestartSec=30s
+# A drain (SIGHUP) exits with 75, and systemd starts the binary on disk again.
+RestartForceExitStatus=75
 # SIGTERM goes to the factory alone, which ends its worker's process group and records the run as
 # interrupted; whatever is left of the service after it exits is killed.
 KillMode=mixed
@@ -337,6 +340,7 @@ What the settings rest on:
   - `KillMode=mixed` sends the first signal to the factory alone. So the factory ends the worker and records it, and systemd does not end it at the same moment.
   - `TimeoutStopSec=60s` leaves room for all of it. Then systemd kills what is left, including a process a worker started outside its group ([ADR 0027](adr/0027-the-factorys-isolation-boundary-is-the-host.md)).
   - The run is recorded as interrupted, and the next start resumes it once by itself.
+- **Restart after a drain.** `RestartForceExitStatus=75` starts the factory again after a drain ([Draining](#draining)), which exits with code 75 and not with an error.
 - **One factory per host.** A second one fails on start, on the address or on the data directory's lock.
 
 ## Access
@@ -635,7 +639,7 @@ After a repair:
 ### Updating
 The factory updates nothing. Claude Code, the factory binary and quota-axi are yours. The prompts every session runs on come with the factory binary. A change to them reaches a host with the next factory release ([ADR 0042](adr/0042-the-factory-carries-its-own-prompts-and-updates-no-plugin.md)).
 
-Update them between runs. Stopping the factory interrupts the run that is going, which is resumed once by itself; a second interruption of the same issue waits for you. `curl -s http://127.0.0.1:7341/api/line | jq '.now | length'` prints `0` when nothing runs. Pause the factory first (below) to keep it that way.
+Update them between runs. Stopping the factory interrupts the run that is going, which is resumed once by itself; a second interruption of the same issue waits for you. A drain waits for that run instead ([Draining](#draining)). `curl -s http://127.0.0.1:7341/api/line | jq '.now | length'` prints `0` when nothing runs. Pause the factory first (below) to keep it that way.
 
 - **Claude Code**, as the user `factory`: `claude update`, then `claude --version`. Every run records the version it was made with.
 - **The factory binary**: download and check it as in [Installation](#installation), then `systemctl stop factory`.
@@ -645,6 +649,18 @@ Update them between runs. Stopping the factory interrupts the run that is going,
   - Then run `npm install -g quota-axi@<version>` and restart nothing.
   - If the factory cannot read its answer, every run carries a warning that the check could not answer and starts regardless ([ADR 0028](adr/0028-the-quota-check-is-a-courtesy-not-a-guard.md)).
   - Then install the pinned version again.
+
+### Draining
+A drain stops the factory between runs. `systemctl kill -s HUP factory` sends it `SIGHUP`, and the factory drains:
+
+- It claims, resumes and follows up nothing new, and stops polling GitHub.
+- It waits for the run in `.now`, which ends with its own outcome and delivers the notifications it owes.
+- Then it exits with code 75, and systemd starts the binary on disk. An idle or paused factory exits at once.
+- The drained run was never interrupted, so it spends no automatic resume. The next process takes up its work as if the factory had never stopped.
+
+`curl -s http://127.0.0.1:7341/api/line | jq '{version, draining, auto_update}'` reads the running process: its version, whether it drains and its `auto_update`. A second `SIGHUP` changes nothing, and the journal says so once.
+
+Stopping the service during a drain is still an interruption. `SIGTERM` records the run in `.now` as interrupted and spends its one automatic resume, drain or not.
 
 ### Moving a host off the plugin
 A host set up for an earlier factory carries the `worker` plugin, and its configuration may carry `worker_env`. The factory now refuses to start on `worker_env`, with an error that names the factory's own knobs to write instead:
@@ -674,7 +690,7 @@ Set `"paused": true` in the configuration and save it; the factory reads it at i
 - It claims, resumes, follows up, notifies and lets go of nothing, and the dashboard says it is paused.
 - Set `"paused": false` to unpause it the same way. The next poll claims again, and the endings a paused start owed are notified then.
 
-`paused` is the one field read again while the factory runs. Every other field takes effect only with `systemctl restart factory`, and the restart interrupts a run that is going. So pause first and restart once `.now` is empty (see [Updating](#updating)).
+`paused` and `auto_update` are the fields read again while the factory runs. Every other field takes effect only with a new start. `systemctl restart factory` interrupts a run that is going; a drain waits for it ([Draining](#draining)).
 
 A file that does not read when the factory reads it again changes nothing. The factory keeps the settings it runs with and names the error once in the journal.
 

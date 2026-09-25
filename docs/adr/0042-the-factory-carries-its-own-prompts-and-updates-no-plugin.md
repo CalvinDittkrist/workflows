@@ -3,6 +3,7 @@
 Date: 2026-09-23
 Status: accepted
 Supersedes: [0036](0036-the-factory-updates-the-worker-plugin-and-nothing-else.md)
+Amended by: [0050](0050-the-host-installs-every-factory-release-and-the-factory-drains-on-signal.md)
 
 ## Context
 - The factory updated the worker plugin before each run ([ADR 0036](0036-the-factory-updates-the-worker-plugin-and-nothing-else.md)), so a change to a hands-on skill changed an unattended host with no deploy.
