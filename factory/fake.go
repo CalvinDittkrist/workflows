@@ -221,7 +221,7 @@ func (c *canned) pullChecks(_ context.Context, held Held) (pullReading, error) {
 	case ciFailed:
 		test.State = checkFail
 	}
-	return pullReading{Mergeable: "MERGEABLE", Head: fmt.Sprintf("canned-gate-%d", n), HeadAt: c.started,
+	return pullReading{Mergeable: "MERGEABLE", Head: "canned-gate", HeadAt: c.started,
 		Checks:     []check{{Name: "lint", URL: runs + "1/job/1", State: checkPass, CompletedAt: c.started}, test},
 		Objections: []objection{}, Threads: []thread{}}, nil
 }

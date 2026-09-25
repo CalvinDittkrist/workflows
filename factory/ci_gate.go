@@ -29,8 +29,10 @@ import (
 // that does not merge: the base is merged (mergedBase) and pushed. The checks read are every check of
 // the head, or the named ones; a bot review is none. A named check that has not appeared once the checks
 // grace (ci.checks_grace) has passed since the push, or a head without any check by then, ends the run
-// blocked naming it, so a typo never reads as a pass. Checks still running are waited for within the
-// run's deadline. The result is a gate run like one in the worktree, with the failed logs of the checks
+// blocked naming it, so a typo never reads as a pass. A gate that reads every check passes only on two
+// readings a poll apart that show the same checks, all passed, because GitHub registers the checks of a
+// head one workflow at a time and a quick one can end before a slow one is there. Checks still running
+// are waited for within the run's deadline. The result is a gate run like one in the worktree, with the failed logs of the checks
 // that failed as its tail.
 func (f *Factory) ciGate(parent, ctx context.Context, r *Run, entry Entry, claim claimed, panel *Panel, classed Classed) gateRun {
 	head, ok := f.gatePushed(parent, ctx, r, claim, *panel)
@@ -46,7 +48,7 @@ func (f *Factory) ciGate(parent, ctx context.Context, r *Run, entry Entry, claim
 	began, pushedAt := time.Now(), time.Now()
 	f.runs.event(r, Event{Kind: "factory", Title: "waiting on CI for the gate on " + pull,
 		Body: fmt.Sprintf("the checks %s of %s", whichChecks(classed.Gate), short(head))})
-	said := ""
+	said, seen := "", ""
 	for {
 		if ctx.Err() != nil {
 			return gateRun{} // the caller ends the run the way its context ended
@@ -62,7 +64,7 @@ func (f *Factory) ciGate(parent, ctx context.Context, r *Run, entry Entry, claim
 			if ctx.Err() == nil {
 				f.warn(r, "CI not read", "the pull request "+pull+" could not be read while the gate waited on CI: "+err.Error()+"; it is read again on the next poll")
 			}
-		case read.Mergeable == "CONFLICTING" && (f.fake || read.Head == head):
+		case read.Mergeable == "CONFLICTING" && read.Head == head:
 			f.runs.event(r, Event{Kind: "factory", Title: "the pull request conflicts with " + claim.base,
 				Body: "GitHub runs no workflow on a branch that does not merge, so the base is merged before the gate goes on"})
 			if !f.mergedBase(parent, ctx, r, entry, claim, panel) {
@@ -71,12 +73,20 @@ func (f *Factory) ciGate(parent, ctx context.Context, r *Run, entry Entry, claim
 			if head, ok = f.gatePushed(parent, ctx, r, claim, *panel); !ok {
 				return gateRun{ended: true}
 			}
-			pushedAt, said = time.Now(), ""
-			continue
+			// The merged head is read after a poll like any push, so a mergeability GitHub has not
+			// updated yet costs a poll, not a loop of pushes.
+			pushedAt, seen = time.Now(), ""
 		case !f.fake && read.Head != head, read.Mergeable != "MERGEABLE":
 			// The push has not reached the pull request yet, or GitHub is still trying the merge.
 		default:
 			verdict, checks, missing = judgeGate(read.Checks, classed.Gate.Checks, time.Since(pushedAt) >= knobs.ChecksGrace)
+			if verdict == ciGreen && len(classed.Gate.Checks) == 0 {
+				// Every check: a pass stands once a second reading shows the same checks.
+				names := read.Head + " " + named(checks)
+				if names != seen {
+					verdict, seen = ciWaiting, names
+				}
+			}
 		}
 		if verdict != said {
 			f.runs.event(r, Event{Kind: "factory", Title: "gate on CI: " + verdict, Body: summarise(read)})

@@ -108,11 +108,11 @@ func (f *Factory) pr(parent, ctx context.Context, r *Run, entry Entry, claim cla
 		return
 	}
 	body := got.Body + "\n\n" + verification(review)
-	url, title := r.PullRequest, "opened "
+	url, did := r.PullRequest, "opened "
 	if url != "" {
 		number, _ := pullNumber(url)
 		err = f.source.finishPull(ctx, entry.Repository, number, got.Title, body)
-		title = "made the draft ready: "
+		did = "made the draft ready: "
 	} else {
 		url, err = f.source.createPull(ctx, entry.Repository, newPull{Title: got.Title, Head: claim.branch, Base: claim.base, Body: body, issue: entry.Number})
 	}
@@ -123,7 +123,7 @@ func (f *Factory) pr(parent, ctx context.Context, r *Run, entry Entry, claim cla
 		return
 	}
 	f.runs.update(r, func() { r.Draft = false })
-	f.runs.event(r, Event{Kind: "factory", Title: title + url, Body: got.Title})
+	f.runs.event(r, Event{Kind: "factory", Title: did + url, Body: got.Title})
 	f.ci(parent, ctx, r, entry, claim, url, false)
 }
 

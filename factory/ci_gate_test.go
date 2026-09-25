@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -133,6 +134,29 @@ func TestAGateOnCIReadsItsNamedChecksAndBlocksOnOneThatIsMissing(t *testing.T) {
 	}
 }
 
+// A gate that reads every check does not pass on the first reading that shows them all passed: GitHub
+// registers the checks of a head one workflow at a time, so a check that appears on the next reading
+// is read too, and its failure is the gate's.
+func TestAGateOnEveryCheckReadsACheckThatAppearsLate(t *testing.T) {
+	t.Parallel()
+	gh, data := ciClaim(t)
+	gh.checksAre(t, claimedIssue, "", passed("check"))
+	cfg := ciConfig(data, nil)
+	cfg["gate"] = map[string]any{"command": "ci", "rounds": 0}
+	cfg["poll"] = "3s"
+
+	f := gh.work(t, cfg)
+	f.saw(t, "gate on CI: waiting")
+	gh.checksAre(t, claimedIssue, "", passed("check"), failed("browser", 77))
+	run := f.ended(t, 1)
+	if run.Outcome != outcomeBlocked || !strings.Contains(run.Reason, "gate_checks: check=pass, browser=fail") {
+		t.Fatalf("the run ended as %q (%s), want blocked on the browser check that appeared late; the factory's log:\n%s", run.Outcome, run.Reason, f.output(t))
+	}
+	if len(run.Gates) != 1 || run.Gates[0].Passed {
+		t.Errorf("the run recorded the gates %+v, want one failure", run.Gates)
+	}
+}
+
 // A check that fails is a failed gate: a fix session of the gate stage is briefed with the checks that
 // failed and their failed logs, the factory pushes its commit and reads the checks of the new head.
 // Checks still running are waited for.
@@ -169,6 +193,40 @@ func TestAFailingGateOnCIGoesToAFixSessionWithTheFailedLogs(t *testing.T) {
 	}
 	if pulls := gh.opened(t, "acme/edge-sensors"); len(pulls) != 1 {
 		t.Errorf("the factory opened %d pull requests, want the one draft", len(pulls))
+	}
+}
+
+// A draft that conflicts with the base runs no workflow on GitHub, so the gate merges the base into the
+// branch, as the ci stage does, pushes the merge and reads the checks of the merged head.
+func TestAGateOnCIMergesTheBaseIntoADraftThatConflicts(t *testing.T) {
+	t.Parallel()
+	gh, data := ciClaim(t)
+	gh.checksAre(t, claimedIssue, "", pending("test"))
+
+	f := gh.work(t, ciGateConfig(data, "ci"))
+	f.saw(t, "gate on CI: waiting")
+	first := gh.head(t, "acme/edge-sensors", claimedBranch)
+	moved := gh.commitOn(t, "acme/edge-sensors", "main")
+	gh.answer(t, fmt.Sprintf("mergeable-%d-%s", claimedIssue, first), "CONFLICTING")
+	f.saw(t, "merged main into the branch")
+	gh.checksAre(t, claimedIssue, "", passed("test"))
+	run := f.ended(t, 1)
+	if run.Outcome != outcomeReady {
+		t.Fatalf("the run ended as %q (%s), want ready; the factory's log:\n%s", run.Outcome, run.Reason, f.output(t))
+	}
+	if titles := factoryTitles(run, "the pull request conflicts with", "merged main"); !equal(titles, []string{"the pull request conflicts with main", "merged main into the branch"}) {
+		t.Errorf("the gate said %v, want a conflict and a clean merge", titles)
+	}
+	merged := gh.head(t, "acme/edge-sensors", claimedBranch)
+	parents := strings.Fields(gh.git(t, gh.remotePath("acme/edge-sensors"), "rev-list", "--parents", "-n", "1", merged))
+	if len(parents) != 3 || !slices.Contains(parents[1:], moved) || !slices.Contains(parents[1:], first) {
+		t.Errorf("%s of the remote is at %v, want a merge of main's head %s into %s", claimedBranch, parents, short(moved), short(first))
+	}
+	if len(run.Gates) != 1 || !run.Gates[0].Passed || run.Gates[0].Head != merged {
+		t.Errorf("the run recorded the gates %+v, want one pass on the merged head %s", run.Gates, short(merged))
+	}
+	if workers := gh.workers(t); len(workers) != 1 || run.RepairRounds != 0 {
+		t.Errorf("the factory started %d sessions and counted %d repair rounds, want the implement session alone and no repair round: a clean merge needs nobody", len(workers), run.RepairRounds)
 	}
 }
 
@@ -382,7 +440,7 @@ func TestACancelDuringAFixSessionOfAGateOnCIEndsIt(t *testing.T) {
 
 // Fake mode works a gate on CI on canned checks: the ready run's draft has its checks running, then
 // failing, and passing once a fix session of the gate stage has repaired them; the review's fix moves
-// the head, so the final head is gated on CI again.
+// the head, so the final head is gated on CI again. A pass of every check stands on its second reading.
 func TestFakeModeGatesOnCannedChecks(t *testing.T) {
 	t.Parallel()
 	f := start(t, config{"deadline": "30s", "poll": "100ms", "repositories": []any{"acme/edge-sensors"}, "gate": map[string]any{"command": "ci"}})
@@ -394,8 +452,8 @@ func TestFakeModeGatesOnCannedChecks(t *testing.T) {
 	})
 	if got := factoryTitles(run, "gate on CI: ", "opened the draft", "briefed a fix session of the gate"); strings.Join(got, " | ") !=
 		"opened the draft https://github.com/acme/edge-sensors/pull/204 | gate on CI: waiting | gate on CI: checks-failed | briefed a fix session of the gate, 1 of 3 | "+
-			"gate on CI: green | gate on CI: green" {
-		t.Errorf("run 1 logged its gate as %q, want the draft opened, the checks waited on, failed, a fix session, green and green on the final head", got)
+			"gate on CI: waiting | gate on CI: green | gate on CI: waiting | gate on CI: green" {
+		t.Errorf("run 1 logged its gate as %q, want the draft opened, the checks waited on, failed, a fix session, and a pass read twice on the fix and on the final head", got)
 	}
 	if run.Outcome != "ready" || len(run.Gates) != 3 || run.Gates[0].Passed || !run.Gates[1].Passed || len(run.Gates[1].Checks) != 2 ||
 		run.Gates[2].Stage != stageReview || !run.Gates[2].Passed {
