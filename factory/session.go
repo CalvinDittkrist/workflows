@@ -128,7 +128,13 @@ const workerAgent = "worker"
 // the built-in Explore and no other subagent, none of which could reach the web on its behalf
 // (https://code.claude.com/docs/en/sub-agents.md, "Restrict which subagents can be spawned", checked
 // on 2026-09-25 and tried with Claude Code: another type is refused).
-const workerTools = "Bash,Read,Write,Edit,Grep,Glob,Agent(Explore)"
+const workerTools = "Bash,Read,Write,Edit,Grep,Glob,Agent(Explore)," + resultTool
+
+// resultTool is the tool through which a session run with --json-schema hands over its result. An agent
+// definition with a tools list has only the tools it names, and an agent without this one ends with text
+// and no structured_output (tried with Claude Code 2.1.282 on 2026-09-25; the documentation of
+// --json-schema does not name the tool). Every agent the factory defines names it.
+const resultTool = "StructuredOutput"
 
 // workerPrompt is the system prompt of the worker agent: how a session that writes on the branch
 // works, whichever task its brief gives it.

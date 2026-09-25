@@ -128,8 +128,8 @@ func TestThePanelRunsTheFactorysReviewersReadOnlyBesideEachOther(t *testing.T) {
 		if plugins := r.settings(t).EnabledPlugins; plugins["worker@workflows"] {
 			t.Errorf("the %s reviewer carries the worker plugin", name)
 		}
-		if def["model"] != models[name] || !strings.Contains(text(def["prompt"]), "read-only") || !equal(anyStrings(def["tools"]), []string{"Read", "Grep", "Glob"}) {
-			t.Errorf("the %s reviewer runs as %v, want its own prompt, Read, Grep and Glob, and the model %s", name, def, models[name])
+		if def["model"] != models[name] || !strings.Contains(text(def["prompt"]), "read-only") || !equal(anyStrings(def["tools"]), []string{"Read", "Grep", "Glob", "StructuredOutput"}) {
+			t.Errorf("the %s reviewer runs as %v, want its own prompt, Read, Grep, Glob and the tool of its result, and the model %s", name, def, models[name])
 		}
 		// A reviewer whose definition names its model runs on it; one that inherits runs on the model
 		// the host's worker_args name.

@@ -173,7 +173,7 @@ func reviewerAgents(name string) (string, string) {
 	def := reviewers[name]
 	raw, _ := json.Marshal(map[string]any{agent: map[string]any{
 		"description": def.description, "prompt": reviewerPrompt(name),
-		"tools": strings.Split(readTools, ","), "model": def.model,
+		"tools": strings.Split(readTools+","+resultTool, ","), "model": def.model,
 	}})
 	return agent, string(raw)
 }
