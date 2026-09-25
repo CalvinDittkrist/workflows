@@ -251,7 +251,7 @@ func notifyBody(r Run, held holding, logins []string) string {
 		said = append(said, reason)
 	}
 	if r.Unpushed != "" {
-		said = append(said, "The commits of this run's worktree could not be pushed when it ended, so they are on the factory host alone:", verbatim(r.Unpushed))
+		said = append(said, verbatim(r.Unpushed))
 	}
 	switch {
 	case held.holds && r.Holding:
