@@ -289,6 +289,9 @@ type Tokens struct {
 type Versions struct {
 	ClaudeCode string `json:"claudeCode"`
 	Factory    string `json:"factory"`
+	// Worker is the version of the worker plugin a run of an earlier factory drove. No run records it
+	// any more; it is kept so that rewriting such a record keeps what its run ran with.
+	Worker string `json:"worker,omitempty"`
 }
 
 // Event is one line of a run's log: what the factory did, and what the worker's stream said.

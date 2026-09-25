@@ -120,6 +120,28 @@ func TestAFactoryStoppedWhileItReadsTheVersionInterruptsTheRunRatherThanFailingI
 	}
 }
 
+// A claude that prints something other than "<number> (Claude Code)", such as a wrapper's own line, is
+// recorded whole: its first word is no version.
+func TestAVersionLineOfAnotherShapeIsRecordedWhole(t *testing.T) {
+	t.Parallel()
+	gh := newGhShim(t)
+	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
+	gh.loggedInAs(t, "factory-bot")
+	gh.assigns(t, "acme/edge-sensors", claimedIssue, "factory-bot")
+	gh.claudeIs(t, "Claude Code 2.1.278")
+
+	data := filepath.Join(t.TempDir(), "data")
+	gh.cloneInto(t, data, "acme/edge-sensors")
+
+	f := gh.work(t, config{"poll": "50ms", "deadline": "90s", "data_dir": data,
+		"repositories": []string{"acme/edge-sensors"}})
+	run := f.ended(t, 1)
+
+	if run.Versions.ClaudeCode != "Claude Code 2.1.278" {
+		t.Errorf("the run records Claude Code %q, want the line claude printed, whole", run.Versions.ClaudeCode)
+	}
+}
+
 func TestAVersionThatCannotBeReadIsAWarningAndNoVersionOnTheRecord(t *testing.T) {
 	t.Parallel()
 	gh := newGhShim(t)

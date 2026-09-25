@@ -167,9 +167,13 @@ func validBase(name string) bool {
 // being unattended costs, and the settings object that switches the workflow's plugins off and carries
 // the compact pin. worker_args is added to that command, so an operator's own copy of one of them
 // would be a second value for something the factory has decided — and a worker started with someone
-// else's --settings or --agents could carry a plugin that merges what it built. What Claude Code makes of two of the same flag is not what the factory rests on: it is
+// else's --settings or --agents could carry a plugin that merges what it built. --plugin-dir is refused
+// for the same reason: the plugins the settings switch off are the workflow's by name, and a plugin
+// loaded from a directory would reach the session anyway ([ADR 0042]). What Claude Code makes of two of the same flag is not what the factory rests on: it is
 // refused before a run is started (README, Configuration).
-var workerFlags = []string{"--settings", "--agents", "--agent", "--permission-mode", "--output-format", "-p", "--print"}
+//
+// [ADR 0042]: ../docs/adr/0042-the-factory-carries-its-own-prompts-and-updates-no-plugin.md
+var workerFlags = []string{"--settings", "--agents", "--agent", "--plugin-dir", "--permission-mode", "--output-format", "-p", "--print"}
 
 // factoryOwns names the flag of the worker command an argument would be a second value for, or "".
 func factoryOwns(arg string) string {
@@ -273,7 +277,9 @@ func Load(path string) (Settings, error) {
 		s.Poll = d
 	}
 	for _, arg := range c.WorkerArgs {
-		if flag := factoryOwns(arg); flag != "" {
+		if flag := factoryOwns(arg); flag == "--plugin-dir" {
+			return bad("worker_args carries --plugin-dir, which would load a plugin into the sessions that write on the branch; remove it — they run on the factory's own prompts and no plugin")
+		} else if flag != "" {
 			return bad("worker_args carries %s, which the factory gives the worker itself; remove it — worker_args adds arguments to a run, it cannot replace the ones the run is defined by", flag)
 		}
 	}

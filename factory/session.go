@@ -81,10 +81,13 @@ func implementSession(brief string) session {
 
 // implementBrief is the prompt of the implement session: the issue, the branch and its base, and the
 // one thing it is there for. The session reads the issue itself, with the gh the host is logged in
-// with, so the brief carries no text of the issue's author.
+// with, so the brief carries no text of the issue's author. The read it names is bounded the way the
+// worker plugin's issue facts are: the body to issueBodyLimit characters and the last issueComments
+// comments to issueCommentLimit each, so a long or hostile discussion cannot fill the context before
+// the work starts.
 func implementBrief(entry Entry, claim claimed) string {
 	return fmt.Sprintf("Implement issue #%d of %s. The branch %s is checked out in this worktree, cut from origin/%s.\n\n"+
-		"Read the issue and its comments with `gh issue view %d --repo %s --comments`, then the repository's instructions: "+
+		"Read the issue and its latest comments with `gh issue view %d --repo %s --json title,body,comments --jq %s`, then the repository's instructions: "+
 		"AGENTS.md or CLAUDE.md at its root and the documents they point to for the part you change. "+
 		"The branch may carry commits of an earlier session on this issue: read them with `git log origin/%s..HEAD` and go on from where they stand rather than starting over.\n\n"+
 		"Make the smallest complete change that closes the issue. For a bug, reproduce it before you fix it. Update the documentation the change makes stale. "+
@@ -93,8 +96,19 @@ func implementBrief(entry Entry, claim claimed) string {
 		"Report complete with the commits of the branch beyond origin/%s in commits, each as its short hash and subject, once everything you changed is committed. "+
 		"Report blocked with what you need from a person and why when the issue cannot be done as written: it is ambiguous in a way that changes the work, "+
 		"contradicts a decision of the repository, or needs access or a choice only a person has.\n",
-		entry.Number, entry.Repository, claim.branch, claim.base, entry.Number, entry.Repository, claim.base, claim.base)
+		entry.Number, entry.Repository, claim.branch, claim.base, entry.Number, entry.Repository, issueRead, claim.base, claim.base)
 }
+
+// issueBodyLimit, issueComments and issueCommentLimit bound the issue the implement session reads, and
+// issueRead is the jq program of that read.
+const (
+	issueBodyLimit    = 6000
+	issueComments     = 8
+	issueCommentLimit = 1500
+)
+
+var issueRead = fmt.Sprintf(`'"# " + .title, "", .body[:%d], (.comments[-%d:][] | "", "## comment by " + .author.login, .body[:%d])'`,
+	issueBodyLimit, issueComments, issueCommentLimit)
 
 // workerAgent is the name of the agent every session that writes on the branch runs as: the implement
 // session, the fix sessions and the address-reviews session. It is the factory's own, given to the call
@@ -110,7 +124,11 @@ const workerAgent = "worker"
 // workerTools is the built-in tools of the worker agent: it reads, edits and runs commands, and hands
 // a search of the code to a built-in subagent so the search stays out of its own context. It runs no
 // skill: every plugin is off in its session.
-const workerTools = "Bash,Read,Write,Edit,Grep,Glob,Agent"
+// Agent(Explore) is an allowlist: the session runs as the main thread with --agent, so it can start
+// the built-in Explore and no other subagent, none of which could reach the web on its behalf
+// (https://code.claude.com/docs/en/sub-agents.md, "Restrict which subagents can be spawned", checked
+// on 2026-09-25 and tried with Claude Code: another type is refused).
+const workerTools = "Bash,Read,Write,Edit,Grep,Glob,Agent(Explore)"
 
 // workerPrompt is the system prompt of the worker agent: how a session that writes on the branch
 // works, whichever task its brief gives it.

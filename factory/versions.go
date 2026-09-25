@@ -64,11 +64,10 @@ func (f *Factory) claudeVersion(ctx context.Context, r *Run) string {
 // not of that shape is recorded whole rather than read into something it is not.
 func versionOf(printed string) string {
 	line := firstLine(printed)
-	number, _, _ := strings.Cut(line, " ")
-	if number == "" {
-		return line
+	if number, name, ok := strings.Cut(line, " "); ok && number != "" && name == "(Claude Code)" {
+		return number
 	}
-	return number
+	return line
 }
 
 // versionUnread says that the version could not be read. It is a warning, and the run goes on: a run

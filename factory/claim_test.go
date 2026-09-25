@@ -119,7 +119,7 @@ func TestAClaimCutsTheBranchFromTheFreshlyFetchedBaseAndRunsTheWorkerInItsWorktr
 	// never to push, and no slash command of a plugin.
 	prompt := worker.arg("-p")
 	for _, want := range []string{fmt.Sprintf("Implement issue #%d of acme/edge-sensors", claimedIssue),
-		fmt.Sprintf("gh issue view %d --repo acme/edge-sensors --comments", claimedIssue), claimedBranch, "origin/main", "never push"} {
+		fmt.Sprintf("gh issue view %d --repo acme/edge-sensors --json title,body,comments --jq %s", claimedIssue, issueRead), claimedBranch, "origin/main", "never push"} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("the implement session was briefed with\n%s\nwant %q in it", prompt, want)
 		}
