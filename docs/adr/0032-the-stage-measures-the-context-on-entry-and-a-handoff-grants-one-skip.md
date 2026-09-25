@@ -11,7 +11,7 @@ Status: accepted
 `/worker:review` and `/worker:ci` measure the context on entry, and a context a handoff started does one unit of work before handing over again.
 
 ## Consequences
-- This supersedes ADR 0029 for its two checkpoints and its last paragraph; the handover stands.
+- This supersedes ADR 0029 for its two checkpoints and its note on the context value after a handover; the handover stands.
 - Each stage injects `checkpoint.sh <stage>` among its facts, and on `handoff: yes` hands over with itself as resume stage.
 - `/worker:work` keeps no copy of the checkpoint, so it cannot drift from the stages.
 - The hook records `injected_session:`, and the first entry of that session into the note's stage skips once, marked `skip_used:`.
