@@ -678,7 +678,7 @@ func (finding Finding) line() string {
 	if place == "" {
 		place = "(no file)"
 	}
-	return oneLine(fmt.Sprintf("%s [%s] %s — %s %s Fix: %s", finding.ID, finding.Severity, place, finding.Claim, finding.Why, finding.Fix))
+	return oneLine(fmt.Sprintf("%s [%s] %s: %s %s Fix: %s", finding.ID, finding.Severity, place, finding.Claim, finding.Why, finding.Fix))
 }
 
 // oneLine is a text with its line breaks as spaces, so it keeps its words and stays one line.
@@ -1084,7 +1084,7 @@ func panelSummary(panel Panel, knobs reviewSettings) string {
 			fixed[severity[id]]++
 		}
 		for _, excuse := range round.Repair.Disputed {
-			line := fmt.Sprintf("disputed: round %d, %s — disputed: %s", round.Number, byID[excuse.Finding], oneLine(excuse.Reason))
+			line := fmt.Sprintf("disputed: round %d, %s; disputed: %s", round.Number, byID[excuse.Finding], oneLine(excuse.Reason))
 			if !slices.Contains(disputed, line) {
 				disputed = append(disputed, line)
 			}

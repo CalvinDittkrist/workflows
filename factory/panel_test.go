@@ -197,7 +197,7 @@ func TestMixedVerdictsTakeASecondRoundOfTheReviewersThatAskedForFixes(t *testing
 		t.Fatalf("the factory started %d worker sessions, want the implement session and one fix session of the review", len(workers))
 	}
 	repair := strings.Join(factoryBodies(run, "briefed the fix session of review round 1"), "\n")
-	for _, want := range []string{"code: F1 [S2] upload/retry.go:42 — The backoff is never reset.", "code: F2 [S3]", "tests: F3 [S1] upload/retry_test.go:18", "round 1 of 3"} {
+	for _, want := range []string{"code: F1 [S2] upload/retry.go:42: The backoff is never reset.", "code: F2 [S3]", "tests: F3 [S1] upload/retry_test.go:18", "round 1 of 3"} {
 		if !strings.Contains(repair, want) {
 			t.Errorf("the fix session's brief does not carry %q:\n%s", want, repair)
 		}
@@ -217,7 +217,7 @@ func TestMixedVerdictsTakeASecondRoundOfTheReviewersThatAskedForFixes(t *testing
 	}
 	body := pulls[0].Body
 	for _, want := range []string{"review_rounds: 2\npanel: code=FIX→PASS security=PASS docs=PASS tests=FIX→PASS senior=PASS\nfixed: 1 (S1 0, S2 1, S3 0)\n",
-		"disputed: round 1, tests F3 [S1] upload/retry_test.go:18 — The test sleeps for the backoff.", "disputed: " + reason,
+		"disputed: round 1, tests F3 [S1] upload/retry_test.go:18: The test sleeps for the backoff.", "disputed: " + reason,
 		"gate_result: pass (exit 0) at " + short(head), "gate_command: make check"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("the body does not carry %q:\n%s", want, body)
