@@ -644,11 +644,31 @@ func git(ctx context.Context, dir string, args ...string) (string, error) {
 }
 
 // gitWithin is git with a deadline of the caller's choosing, for the commands the usual one is too
-// short for.
+// short for. Its error carries all git said, its lines joined on one, because git puts the reason
+// of a refusal on a line after the first.
 func gitWithin(ctx context.Context, dir string, within time.Duration, args ...string) (string, error) {
-	out, reason, err := command(ctx, within, "git", append([]string{"-C", dir}, args...)...)
+	out, reason, err := commandSaying(ctx, within, "", "git", append([]string{"-C", dir}, args...)...)
 	if err != nil {
-		return "", fmt.Errorf("git %s: %s", strings.Join(args, " "), reason)
+		return "", fmt.Errorf("git %s: %s", strings.Join(args, " "), gitSaid(reason))
 	}
 	return strings.TrimSpace(string(out)), nil
 }
+
+// gitSaid joins the lines git said into one, dropping the empty ones and its hints, and cuts it at
+// maxSaid characters, so a reason fits a log line and a warning however much git printed.
+func gitSaid(said string) string {
+	lines := []string{}
+	for _, line := range strings.Split(said, "\n") {
+		if line = strings.TrimSpace(line); line != "" && !strings.HasPrefix(line, "hint:") {
+			lines = append(lines, line)
+		}
+	}
+	s := strings.Join(lines, "; ")
+	if runes := []rune(s); len(runes) > maxSaid {
+		s = string(runes[:maxSaid]) + "…"
+	}
+	return s
+}
+
+// maxSaid is how much of what a program said an error keeps.
+const maxSaid = 1000
