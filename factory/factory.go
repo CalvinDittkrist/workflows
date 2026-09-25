@@ -86,21 +86,21 @@ type Factory struct {
 	active   sync.WaitGroup
 
 	// paused is the one setting taken over while the factory runs: the configuration file is read
-	// again on every poll for it (followPause), so a pause needs no restart, and the restart's SIGTERM
+	// again on every poll for it (followConfig), so a pause needs no restart, and the restart's SIGTERM
 	// no longer interrupts the run that is going. brake is -paused, which no configuration undoes, and
 	// unread the error the last reading of the file failed with, so the log says it once.
 	paused atomic.Bool
-	// autoUpdate is the other one: the file's auto_update, read on the same polls and reported on the
-	// line, so the host's update tick reads it from the running process.
+	// autoUpdate is the other one: the file's auto_update, read on the same polls. The line reports
+	// it, so the host's update tick reads it from the running process.
 	autoUpdate atomic.Bool
 	config     string
 	brake      bool
 	unread     string
 
-	// draining says the factory answers a SIGHUP (Drain): it starts and polls nothing more, lets the
-	// run that is going end with its own outcome and then exits with the drain code. drain is closed
-	// when it begins, so the working loop hears of it at once, and repeated says a second SIGHUP was
-	// logged, so the journal says it once.
+	// draining says the factory answers a SIGHUP (Drain). It starts and polls nothing more, and the
+	// run that is going ends with its own outcome. Then the factory exits with the drain code. drain
+	// is closed when it begins, so the working loop hears of it at once. repeated says a second SIGHUP
+	// was logged, so the journal says it once.
 	draining atomic.Bool
 	drain    chan struct{}
 	repeated atomic.Bool
@@ -253,7 +253,7 @@ func (f *Factory) Connect(ctx context.Context) {
 // has ended.
 func (f *Factory) Work(ctx context.Context) {
 	for ctx.Err() == nil && !f.Draining() {
-		f.followPause(ctx)
+		f.followConfig(ctx)
 		if f.Draining() {
 			break
 		}
@@ -278,9 +278,9 @@ func (f *Factory) Work(ctx context.Context) {
 }
 
 // Drain is the factory's answer to SIGHUP. It claims, resumes, follows up and polls nothing from
-// now on, and Work returns once the run that is going has ended with its own outcome and delivered
-// what it owes, so the process exits with the drain code and the service manager starts the binary
-// on disk. The run is not interrupted, so it spends no resume. A SIGTERM during a drain still
+// now on. Work returns once the run that is going has ended with its own outcome and delivered what
+// it owes. The process then exits with the drain code, and the service manager starts the binary on
+// disk. The run is not interrupted, so it spends no resume. A SIGTERM during a drain still
 // interrupts that run, as it always does. A second SIGHUP changes nothing, and the log says so once.
 func (f *Factory) Drain() {
 	if f.draining.Swap(true) {
@@ -304,9 +304,9 @@ func (f *Factory) AutoUpdate() bool { return f.autoUpdate.Load() }
 // (RestartForceExitStatus=75), and it is EX_TEMPFAIL, a stop that asks to be run again.
 const drainExit = 75
 
-// Follow has the factory read paused from its configuration file again on every poll, with -paused
-// as the brake that holds whatever the file says. Without it the pause is what the factory started
-// with.
+// Follow has the factory read paused and auto_update from its configuration file again on every
+// poll, with -paused as the brake that holds whatever the file says. Without it both stay what the
+// factory started with.
 func (f *Factory) Follow(config string, brake bool) {
 	f.config, f.brake = config, brake
 }
@@ -315,11 +315,11 @@ func (f *Factory) Follow(config string, brake bool) {
 // nothing is claimed, resumed, followed up or let go, and a run that is going finishes.
 func (f *Factory) Paused() bool { return f.paused.Load() }
 
-// followPause reads the configuration file again and takes paused and auto_update from it; every
+// followConfig reads the configuration file again and takes paused and auto_update from it; every
 // other setting stays the one the factory started with and needs a restart (docs/factory-runbook.md).
 // A file that cannot be read or is refused changes nothing: the factory goes on as it is and says so
 // once, until the file reads again. Only the working loop calls it, so config and unread are its own.
-func (f *Factory) followPause(ctx context.Context) {
+func (f *Factory) followConfig(ctx context.Context) {
 	if f.config == "" {
 		return
 	}

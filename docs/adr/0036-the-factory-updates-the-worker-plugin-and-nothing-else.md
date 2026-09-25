@@ -20,6 +20,6 @@ Before every run the factory updates the marketplace and the worker plugin with 
 
 ## Consequences
 - Every run names its worker plugin, Claude Code and factory, on the record and the dashboard.
-- The `workflows` marketplace becomes a trust boundary of every host: whoever publishes there decides what the next unattended run executes, pinned by nothing but the plugin commands.
+- The `workflows` marketplace becomes a trust boundary of every host. Whoever publishes there decides what the next unattended run executes, pinned by nothing but the plugin commands.
 - The last step of the migration ends the update ([ADR 0043](0043-the-migration-runs-from-the-last-stage-to-the-first.md)).
 - Rejected: updating Claude Code and the factory too. A service that upgrades its own runtime or binary changes it on a schedule nobody chose.
