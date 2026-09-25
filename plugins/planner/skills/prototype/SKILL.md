@@ -7,7 +7,8 @@ argument-hint: <question>
 A prototype is throwaway code that answers one question: $ARGUMENTS
 
 Pick the shape from the question:
-- "Does this logic or state model hold?" One runnable file (a script, or a single HTML page a non-developer can click through) that drives the model through the cases that are hard to reason about on paper and prints the full state after every step.
+- "Does this logic or state model hold?" One runnable file: a script, or a single HTML page a non-developer can click through.
+  - It drives the model through the cases that are hard to reason about on paper and prints the full state after every step.
 - "What should this look like?" Several clearly different variants of one screen, switchable in place, in the project's own routing convention.
 
 Rules: name it so a reader sees it is a prototype; one command to run; state in memory only; no tests, no error handling beyond what makes it run, no abstractions. Tell the user how to run it and what to look at.

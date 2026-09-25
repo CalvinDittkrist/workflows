@@ -18,7 +18,9 @@ Round format:
     ...
 
 Rules:
-- Facts are your job. When a question needs a fact from the code, the docs or a tool, look it up or spawn a subagent; never ask the user for it. Ask the rest of the frontier while it runs.
+- Facts are your job.
+- When a question needs a fact from the code, the docs or a tool, look it up or spawn a subagent; never ask the user for it.
+- Ask the rest of the frontier while it runs.
 - Decisions are the user's. Never answer your own question.
 - Test relationships with concrete scenarios and edge cases. Check claims about the code against the code and say when they differ.
 - Vocabulary: when a term conflicts with `docs/glossary.md` or is fuzzy, ask for the precise term. Keep a list of new or changed terms; the spec carries it.
