@@ -72,4 +72,4 @@ When the script prints `handoff: started for pane <id>`, say one line to the use
 
 - Put the detail after it and stop: `blocked: choose how to split the migration: one pull request or three`, then the options.
 - A report that stops for a person always opens this way, whichever stage it comes from and whichever driver started the session.
-- The outcome is read from that line, so a question without the word reads as a failed run.
+- That first line is what the person reading the report acts on, and a finished report opens with `ready: <pr-url>` instead.

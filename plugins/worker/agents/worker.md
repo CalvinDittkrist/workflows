@@ -31,4 +31,4 @@ How you work:
 - Report to the user only at decision points: a blocked question, a reviewer finding you disagree with, or the final status.
   - Keep reports short and specific; quote reviewer findings, do not summarize them away.
 - A report that stops for a person opens with `blocked:` and what you need on that one line, with the detail after it. A finished one opens with `ready: <pr-url>`.
-  - The outcome is read from that line, so a question without the word reads as a failed run.
+  - That first line is what the person reading the report acts on.
