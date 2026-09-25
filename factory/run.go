@@ -174,7 +174,10 @@ type Run struct {
 	ExitCode   *int     `json:"exitCode"`
 	EventCount int      `json:"eventCount"`
 	Warnings   []string `json:"warnings"`
-	Versions   Versions `json:"versions"`
+	// Unpushed is the warning of a push the ending of this run could not make (keep.go): the commits
+	// of its worktree are on this host alone, which its notification says. Empty when they are not.
+	Unpushed string   `json:"unpushed,omitempty"`
+	Versions Versions `json:"versions"`
 	// Notified is what this ending owes the maintainer on GitHub: pending while the notification is
 	// still owed and done once the factory has tried it: done says it was made, not that GitHub
 	// took it, and a call GitHub refused is a warning on the run and done all the same. It is

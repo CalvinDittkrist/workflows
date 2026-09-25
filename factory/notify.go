@@ -250,6 +250,9 @@ func notifyBody(r Run, held holding, logins []string) string {
 	if reason := verbatim(r.Reason); reason != "" {
 		said = append(said, reason)
 	}
+	if r.Unpushed != "" {
+		said = append(said, "The commits of this run's worktree could not be pushed when it ended, so they are on the factory host alone:", verbatim(r.Unpushed))
+	}
 	switch {
 	case held.holds && r.Holding:
 		said = append(said, fmt.Sprintf("The branch `%s`, its worktree on the factory host and the assignee stay as they are. "+

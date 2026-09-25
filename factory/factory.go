@@ -93,6 +93,9 @@ type Factory struct {
 	config string
 	brake  bool
 	unread string
+	// cutOffPushed says the worktrees of the runs this start found active were pushed (PushCutOff).
+	// Only the start and the working loop touch it, one after the other.
+	cutOffPushed bool
 
 	mu    sync.Mutex
 	queue []Issue
@@ -297,6 +300,7 @@ func (f *Factory) followPause(ctx context.Context) {
 		return
 	}
 	log.Printf("working again: the configuration no longer pauses the factory")
+	f.PushCutOff()
 	f.deliverOwed(ctx)
 }
 
@@ -1346,6 +1350,9 @@ func (f *Factory) finish(r *Run, outcome, reason string, exitCode *int) {
 	if reason != "" {
 		f.runs.event(r, Event{Kind: kind, Title: outcome, Body: reason})
 	}
+	// The worktree goes to the remote before the ending is written, so a push that failed is in the
+	// record and in the notification both (keep.go).
+	f.pushEnding(r, outcome)
 	if models := f.runs.unpriced(r); len(models) > 0 {
 		f.warn(r, "cost counted without "+strings.Join(models, ", "),
 			"the factory has no price for "+strings.Join(models, ", ")+", so the cost it counted leaves the messages of that model out")

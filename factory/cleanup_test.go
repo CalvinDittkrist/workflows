@@ -286,8 +286,10 @@ func TestAWorktreeWhoseCommitsCannotBePushedStaysAndTheRunWarns(t *testing.T) {
 	}
 	worktree := filepath.Join(clone, ".claude", "worktrees", claimedWorktree)
 
-	// Somebody else pushed to the branch, so the commits of the worktree no longer fast-forward it
-	// and nothing of them can be put on the remote without deciding whose work wins.
+	// The ending of the run pushed its commit. Somebody else then put the branch back on its base and
+	// pushed work of their own, so the commits of the worktree no longer fast-forward it and nothing
+	// of them can be put on the remote without deciding whose work wins.
+	gh.branchAt(t, "acme/edge-sensors", claimedBranch, gh.head(t, "acme/edge-sensors", "main"))
 	moved := gh.commitOn(t, "acme/edge-sensors", claimedBranch)
 	gh.issue(t, "acme/edge-sensors", assignedTo(
 		openIssue(claimedIssue, claimedTitle, time.Now().UTC().Add(-72*time.Hour), readyLabel), "factory-bot"))
@@ -751,6 +753,10 @@ func TestAWorktreeWhoseHeadIsBehindItsBranchStillHasEveryCommitPushed(t *testing
 	}
 	worktree := filepath.Join(clone, ".claude", "worktrees", claimedWorktree)
 	work := committed(t, f, worktree, "worked.md")
+	// The ending of the run pushed its commit; the remote branch is put back on its base, as it stands
+	// for a run whose ending could not push, so the commit is on this host alone.
+	gh.branchAt(t, "acme/edge-sensors", claimedBranch, base)
+	gh.git(t, clone, "update-ref", "refs/remotes/origin/"+claimedBranch, base)
 	// The HEAD of the worktree goes back to the base, while the branch keeps the commit of the run.
 	checkout := exec.Command("git", "-C", worktree, "checkout", "--quiet", "--detach", base)
 	checkout.Env = gitIsolation()
