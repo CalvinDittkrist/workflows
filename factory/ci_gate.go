@@ -34,7 +34,7 @@ import (
 // head one workflow at a time and a quick one can end before a slow one is there. Checks still running
 // are waited for within the run's deadline. The result is a gate run like one in the worktree, with
 // the failed logs of the checks that failed as its tail.
-func (f *Factory) ciGate(parent, ctx context.Context, r *Run, entry Entry, claim claimed, panel *Panel, classed Classed) gateRun {
+func (f *Factory) ciGate(parent, ctx context.Context, r *Run, entry Entry, claim claimed, panel *Panel, classed Classed, stage string) gateRun {
 	head, ok := f.gatePushed(parent, ctx, r, claim, *panel)
 	if !ok {
 		return gateRun{ended: true}
@@ -67,7 +67,7 @@ func (f *Factory) ciGate(parent, ctx context.Context, r *Run, entry Entry, claim
 		case read.Mergeable == "CONFLICTING" && read.Head == head:
 			f.runs.event(r, Event{Kind: "factory", Title: "the pull request conflicts with " + claim.base,
 				Body: "GitHub runs no workflow on a branch that does not merge, so the base is merged before the gate goes on"})
-			if !f.mergedBase(parent, ctx, r, entry, claim, panel) {
+			if !f.mergedBase(parent, ctx, r, entry, claim, panel, stage) {
 				return gateRun{ended: true}
 			}
 			if head, ok = f.gatePushed(parent, ctx, r, claim, *panel); !ok {

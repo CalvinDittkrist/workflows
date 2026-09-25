@@ -94,6 +94,7 @@ type apiRun struct {
 	Reason       string     `json:"reason"`
 	StartedAt    time.Time  `json:"startedAt"`
 	EndedAt      *time.Time `json:"endedAt"`
+	ReadiedAt    *time.Time `json:"readiedAt"`
 	Turns        int        `json:"turns"`
 	CostUSD      float64    `json:"costUsd"`
 	Totals       string     `json:"totals"`

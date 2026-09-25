@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // The pr stage, which the factory runs itself ([ADR 0043], step 3): the implement session stops once the
@@ -122,7 +123,13 @@ func (f *Factory) pr(parent, ctx context.Context, r *Run, entry Entry, claim cla
 		}
 		return
 	}
-	f.runs.update(r, func() { r.Draft = false })
+	f.runs.update(r, func() {
+		if r.Draft {
+			now := time.Now()
+			r.ReadiedAt = &now
+		}
+		r.Draft = false
+	})
 	f.runs.event(r, Event{Kind: "factory", Title: did + url, Body: got.Title})
 	f.ci(parent, ctx, r, entry, claim, url, false)
 }

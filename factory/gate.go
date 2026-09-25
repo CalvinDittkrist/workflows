@@ -129,7 +129,7 @@ func (f *Factory) gate(parent, ctx context.Context, r *Run, entry Entry, claim c
 	f.runs.update(r, func() { r.stage(stageGate) })
 	knobs := f.gateFor(entry.Repository)
 	panel := Panel{Rounds: []Round{}}
-	if !f.mergedBase(parent, ctx, r, entry, claim, &panel) {
+	if !f.mergedBase(parent, ctx, r, entry, claim, &panel, stageGate) {
 		return
 	}
 	for fixes := 0; ; {
@@ -193,8 +193,10 @@ func (f *Factory) gate(parent, ctx context.Context, r *Run, entry Entry, claim c
 
 // mergedBase merges the base into the branch when the base has commits the branch lacks, with a merge
 // commit, and hands a merge that conflicts to a fix session with the conflicted files. It ends the run
-// and answers false when the merge cannot be made or the session cannot go on.
-func (f *Factory) mergedBase(parent, ctx context.Context, r *Run, entry Entry, claim claimed, panel *Panel) bool {
+// and answers false when the merge cannot be made or the session cannot go on. The stage is the one the
+// merge is made in: the gate stage's fix comes before the review, and one of the gate on the final head
+// (stageReview) after it, where no reviewer reads it.
+func (f *Factory) mergedBase(parent, ctx context.Context, r *Run, entry Entry, claim claimed, panel *Panel, stage string) bool {
 	before, err := f.head(ctx, claim)
 	var conflicted []string
 	if err == nil {
@@ -213,8 +215,12 @@ func (f *Factory) mergedBase(parent, ctx context.Context, r *Run, entry Entry, c
 		return true
 	}
 	f.runs.event(r, Event{Kind: "factory", Title: "the merge of " + claim.base + " conflicts", Body: strings.Join(conflicted, "\n")})
-	panel.StageFixes++
-	s := gateFixSession(stageGate, mergeFixBrief(entry, claim, conflicted))
+	if stage == stageReview {
+		panel.MergeFixes++
+	} else {
+		panel.StageFixes++
+	}
+	s := gateFixSession(stage, mergeFixBrief(entry, claim, conflicted))
 	f.runs.event(r, Event{Kind: "factory", Title: "briefed a fix session of the merge", Body: s.prompt})
 	if !f.fixed(parent, ctx, r, s, entry, claim) {
 		return false

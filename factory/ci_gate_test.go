@@ -460,3 +460,95 @@ func TestFakeModeGatesOnCannedChecks(t *testing.T) {
 		t.Errorf("run 1 ended %q with the gates %+v, want ready after a failed and a passed gate on the two canned checks and a pass on the final head", run.Outcome, run.Gates)
 	}
 }
+
+// pushOnMain commits a file with that text on main of the shim's GitHub from a clone of its own, as
+// somebody else's push, and answers the commit.
+func (g *ghShim) pushOnMain(t *testing.T, file, text string) string {
+	t.Helper()
+	other := filepath.Join(t.TempDir(), "other")
+	g.git(t, filepath.Dir(other), "clone", "-q", g.remotePath("acme/edge-sensors"), other)
+	if err := os.MkdirAll(filepath.Dir(filepath.Join(other, file)), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(other, file), text)
+	g.git(t, other, "add", file)
+	g.git(t, other, "-c", "user.email=somebody@example.com", "-c", "user.name=somebody", "commit", "-q", "-m", "chore: "+file)
+	g.git(t, other, "push", "-q", "origin", "HEAD:refs/heads/main")
+	return g.head(t, "acme/edge-sensors", "main")
+}
+
+// A repository with a workflow that runs when a draft is marked ready gets checks of its own after the
+// pr stage marks the draft ready, and until one of them has finished the checks of the draft are not
+// read as the pull request's: a ready-only check that fails is a failed check of the ci stage, one
+// that passes lets the run end ready before the checks grace is out.
+func TestTheCIStageWaitsForTheChecksOfMarkingTheDraftReady(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct {
+		check   map[string]any
+		outcome string
+	}{
+		"a ready check that fails": {check: failed("ready", 88), outcome: outcomeBlocked},
+		"a ready check that passes": {check: map[string]any{"name": "ready", "status": "COMPLETED", "conclusion": "SUCCESS",
+			"completedAt": time.Now().Add(time.Hour).UTC().Format(time.RFC3339), "detailsUrl": "https://github.com/o/r/actions/runs/88/job/1"}, outcome: outcomeReady},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			gh, data := ciClaim(t)
+			gh.pushOnMain(t, ".github/workflows/ready.yml", "on:\n  pull_request:\n    types: [opened, synchronize, ready_for_review]\n")
+			gh.checksAre(t, claimedIssue, "", passed("test"))
+			cfg := ciGateConfig(data, "ci")
+			cfg["ci"] = map[string]any{"repair_rounds": 1, "checks_grace": "60s", "bot_reviewers": []string{}}
+
+			f := gh.work(t, cfg)
+			f.saw(t, "made the draft ready")
+			// The draft's checks passed, and still the ready pull request is waited on.
+			f.saw(t, "ci: waiting")
+			gh.checksAre(t, claimedIssue, "", passed("test"), c.check)
+			run := f.ended(t, 1)
+			if run.Outcome != c.outcome {
+				t.Fatalf("the run ended as %q (%s), want %s on the check of marking the draft ready; the factory's log:\n%s", run.Outcome, run.Reason, c.outcome, f.output(t))
+			}
+			if c.outcome == outcomeBlocked && !strings.Contains(run.Reason, "ready https://github.com/o/r/actions/runs/88/job/1") {
+				t.Errorf("the run was blocked because %q, want the ready check named", run.Reason)
+			}
+			if run.ReadiedAt == nil {
+				t.Error("the run did not record when its draft was marked ready")
+			}
+		})
+	}
+}
+
+// A merge of the base that conflicts during the gate on CI of the final head goes to a fix session after
+// the last round, so the pull request says its commits are ones no reviewer read.
+func TestAConflictDuringTheGateOnCIOfTheFinalHeadIsNamedUnreviewed(t *testing.T) {
+	t.Parallel()
+	gh, data := ciClaim(t)
+	gh.verdict(t, "docs", 1, findings(t, Finding{Severity: "S2", Path: "worked.md", Line: 1, Claim: "The heading is wrong.", Why: "It names the old tool.", Fix: "Rename it."}))
+	gh.repairs(t, map[string]any{"outcome": "complete", "fixed": []string{"F1"}, "disputed": []map[string]any{}, "skipped": []map[string]any{}, "summary": "Fixed."})
+	gh.checksAre(t, claimedIssue, "", passed("test"))
+
+	f := gh.work(t, ciGateConfig(data, "ci"))
+	f.saw(t, "review round 1")
+	gated := gh.head(t, "acme/edge-sensors", claimedBranch)
+	gh.checksAre(t, claimedIssue, "", pending("test"))
+	f.saw(t, "running the gate on the final head")
+	var final string
+	f.eventually(t, 60*time.Second, "the final head pushed", func() bool {
+		final = gh.head(t, "acme/edge-sensors", claimedBranch)
+		return final != gated
+	})
+	gh.pushOnMain(t, "worked.md", "somebody else's work\n")
+	gh.answer(t, fmt.Sprintf("mergeable-%d-%s", claimedIssue, final), "CONFLICTING")
+	f.saw(t, "the merge of main conflicts")
+	gh.checksAre(t, claimedIssue, "", passed("test"))
+	run := f.ended(t, 1)
+	if run.Outcome != outcomeReady {
+		t.Fatalf("the run ended as %q (%s), want ready; the factory's log:\n%s", run.Outcome, run.Reason, f.output(t))
+	}
+	if run.Panel == nil || run.Panel.MergeFixes != 1 || run.Panel.StageFixes != 0 {
+		t.Errorf("the run recorded the panel %+v, want the merge's fix counted as one of the final head", run.Panel)
+	}
+	if body := gh.wrote(t, pullEdited); !strings.Contains(body, "unreviewed: the fixes made after round 2") {
+		t.Errorf("the pr stage wrote the body\n%s\nwant it to say the fixes after the last round are unreviewed", body)
+	}
+}

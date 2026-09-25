@@ -212,9 +212,12 @@ type Panel struct {
 	Round   int     `json:"round"`   // the round running now, or the last one that ran
 	Rounds  []Round `json:"rounds"`
 	// GateRounds is how many fix sessions the gate on the final head has taken, and StageFixes how
-	// many the gate stage took before the review: the merge of the base's and the gate's.
+	// many the gate stage took before the review: the merge of the base's and the gate's. MergeFixes is
+	// how many a merge of the base that conflicted took during a gate on CI on the final head, which,
+	// like GateRounds, spend no budget of their own and no reviewer reads.
 	GateRounds int `json:"gateRounds"`
 	StageFixes int `json:"stageFixes,omitempty"`
+	MergeFixes int `json:"mergeFixes,omitempty"`
 	// Classes is every determination of the change class, in the order they were made: the one the
 	// reviewers were chosen by, and one before every gate on the final head.
 	Classes []Classed `json:"classes,omitempty"`
@@ -872,7 +875,7 @@ func (f *Factory) movedSinceGate(ctx context.Context, claim claimed, panel Panel
 
 // fakeHead stands for the commit a fake run is at: one more for every fix session that committed.
 func fakeHead(panel Panel) string {
-	n := panel.StageFixes + panel.GateRounds
+	n := panel.StageFixes + panel.GateRounds + panel.MergeFixes
 	for _, round := range panel.Rounds {
 		if round.Repair != nil && len(round.Repair.Fixed) > 0 {
 			n++
@@ -907,7 +910,7 @@ func (f *Factory) gateOn(parent, ctx context.Context, r *Run, entry Entry, claim
 	var ran gateRun
 	switch {
 	case classed.Gate.CI:
-		ran = f.ciGate(parent, ctx, r, entry, claim, panel, classed)
+		ran = f.ciGate(parent, ctx, r, entry, claim, panel, classed, stage)
 	case f.fake:
 		ran = cannedGate(entry.scenario, *panel, classed, timeout)
 	default:
@@ -1085,11 +1088,11 @@ func panelSummary(panel Panel, knobs reviewSettings) string {
 	if line := classLine(panel); line != "" {
 		summary += "\n" + line
 	}
-	// The fixes of the last round, and those of the gate on the final head, are commits no reviewer
-	// read, as the worker's summary says of them.
+	// The fixes of the last round, and those of the gate on the final head and of its merge of the base,
+	// are commits no reviewer read, as the worker's summary says of them.
 	if n := len(panel.Rounds); n > 0 {
 		last := panel.Rounds[n-1]
-		if last.Repair != nil && len(last.Repair.Fixed) > 0 || panel.GateRounds > 0 {
+		if last.Repair != nil && len(last.Repair.Fixed) > 0 || panel.GateRounds+panel.MergeFixes > 0 {
 			summary += fmt.Sprintf("\nunreviewed: the fixes made after round %d, which no reviewer read", n)
 		}
 	}

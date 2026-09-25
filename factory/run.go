@@ -125,6 +125,9 @@ type Run struct {
 	// pr stage has not written yet. It is the factory's record and never GitHub's draft state, which a
 	// person may change: the stage a resumed run goes on at is read from it and the branch.
 	Draft bool `json:"draft,omitempty"`
+	// ReadiedAt is when the pr stage marked that draft ready for review, which a workflow may run on:
+	// the ci stage does not read the draft's checks as the ready pull request's until that run is there.
+	ReadiedAt *time.Time `json:"readiedAt,omitempty"`
 	// RepairRounds is how many repair rounds the ci stage has spent on that pull request, which the
 	// budget is held against (ci.repair_rounds). A resumed run on the same pull request carries the
 	// count on.

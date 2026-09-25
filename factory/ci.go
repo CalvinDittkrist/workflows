@@ -357,6 +357,13 @@ func (f *Factory) ci(parent, ctx context.Context, r *Run, entry Entry, claim cla
 	}
 	held := Held{Repository: entry.Repository, Number: entry.Number, Branch: claim.branch, PullRequest: pull}
 	workflows := hasWorkflows(claim.worktree)
+	// A draft the pr stage made ready carries the checks of the draft, and a workflow that runs on
+	// ready_for_review registers its own after a while: until one has finished since, or the checks
+	// grace has passed, a green reading is the draft's and not the pull request's.
+	var readied time.Time
+	if r.ReadiedAt != nil && runsOnReady(claim.worktree) {
+		readied = *r.ReadiedAt
+	}
 	var doneAt time.Time
 	// spent is the head a repair round was spent on, which the pull request has to have left before it
 	// is judged again: GitHub shows a push after a while, and until then it shows the old verdict. Any
@@ -419,6 +426,9 @@ func (f *Factory) ci(parent, ctx context.Context, r *Run, entry Entry, claim cla
 				}
 			}
 			verdict = judge(read, knobs, workflows, time.Now(), &doneAt)
+			if verdict == ciGreen && !readied.IsZero() && time.Since(readied) < knobs.ChecksGrace && !finishedSince(read.Checks, readied) {
+				verdict = ciWaiting
+			}
 		}
 		if verdict != said {
 			f.runs.event(r, Event{Kind: "factory", Title: "ci: " + verdict, Body: summarise(read)})
@@ -832,6 +842,29 @@ func hasWorkflows(worktree string) bool {
 		}
 	}
 	return false
+}
+
+// runsOnReady says a workflow of the worktree names the ready_for_review event, so marking a draft
+// ready starts checks of its own. It reads the text, not the YAML: a workflow that only mentions the
+// event costs a wait of the checks grace, never a pass on checks that were not there yet.
+func runsOnReady(worktree string) bool {
+	if worktree == "" {
+		return false
+	}
+	for _, pattern := range []string{"*.yml", "*.yaml"} {
+		found, _ := filepath.Glob(filepath.Join(worktree, ".github", "workflows", pattern))
+		for _, path := range found {
+			if text, err := os.ReadFile(path); err == nil && strings.Contains(string(text), "ready_for_review") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// finishedSince says a check of the reading finished after that time.
+func finishedSince(checks []check, since time.Time) bool {
+	return slices.ContainsFunc(checks, func(c check) bool { return c.CompletedAt.After(since) })
 }
 
 // halted ends a run whose context ended outside a session — the factory stopping, a cancel, the
