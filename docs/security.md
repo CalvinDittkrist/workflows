@@ -106,7 +106,9 @@ Its HTTP interface is read-only and unauthenticated, and it serves live issue ti
 - The release path is the factory host's trust boundary. Whoever can push a factory version tag (`factory/v<version>`) on main decides what the host runs.
 - The release workflow attests both binaries in its publishing job, the one job with an OIDC token. That job runs nothing but gh and the attestation action.
 - The build job, which runs npm packages, can only read.
-- The attestation narrows the binary to one built by this repository's release workflow at that tag. That the tag is on main is the build job's merge-base check, which runs from the workflow file at the tagged commit. Neither says anything about what the commit does.
+- The attestation narrows the binary to one built by this repository's release workflow at that tag.
+- That the tag is on main is the build job's merge-base check, which runs from the workflow file at the tagged commit.
+- Neither says anything about what the commit does.
 - The security reviewer flags new dependencies (pin, provenance, need) and CI or hook changes that widen permissions.
 
 ## What this does not do
