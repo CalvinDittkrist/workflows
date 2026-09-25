@@ -157,21 +157,30 @@ Run the following as root unless it says otherwise.
    - It switches the `worker`, `planner` and `orchestrator` plugins of the `workflows` marketplace off.
    - So the host needs Claude Code, `git`, `gh`, the factory binary and the tools of the gates above, and no plugin of this repository.
    - A host that carries the plugin from an earlier factory moves over in [Moving a host off the plugin](#moving-a-host-off-the-plugin).
-6. **The factory binary** from a release. The tag `factory/v<version>` carries `factory-linux-amd64`, `factory-linux-arm64` and `checksums.txt`.
+6. **The factory binary** from a release. The tag `factory/v<version>` carries `factory-linux-amd64`, `factory-linux-arm64`, `checksums.txt` and `factory-v<version>.sigstore.json`.
    - They are static binaries with the dashboard inside them.
    - So the host needs no Go, no Node and no checkout for the factory itself.
+   - The `.sigstore.json` file is the attestation of both binaries: the release workflow signed their digests when it built them.
 
    ```sh
    version=0.1.0
    arch=arm64   # or amd64: dpkg --print-architecture
    cd "$(mktemp -d)"
-   gh release download "factory/v$version" -R CalvinDittkrist/workflows -p "factory-linux-$arch" -p checksums.txt
+   gh release download "factory/v$version" -R CalvinDittkrist/workflows \
+     -p "factory-linux-$arch" -p checksums.txt -p "factory-v$version.sigstore.json"
    sha256sum --check --ignore-missing checksums.txt   # must print: factory-linux-<arch>: OK
+   gh attestation verify "factory-linux-$arch" -R CalvinDittkrist/workflows \
+     --bundle "factory-v$version.sigstore.json" \
+     --cert-identity "https://github.com/CalvinDittkrist/workflows/.github/workflows/factory-release.yml@refs/tags/factory/v$version" \
+     --source-ref "refs/tags/factory/v$version" \
+     --deny-self-hosted-runners                       # must end without an error
    install -m 0755 "factory-linux-$arch" /usr/local/bin/factory
    factory -version                                   # factory 0.1.0
    ```
 
-   Install nothing that `sha256sum` did not answer `OK` for.
+   - The checksum says the file is the one the release lists. The attestation says the release workflow of this repository built it, run by the tag of this version.
+   - `--cert-identity` is the release workflow at the tag `factory/v<version>`, and `--source-ref` is that same tag as the commit it was built from.
+   - Install nothing that `sha256sum` did not answer `OK` for, and nothing that `gh attestation verify` refused.
 7. **quota-axi** in a pinned version. The factory reads the output of quota-axi 0.1.49 ([ADR 0037](adr/0037-the-quota-check-waits-below-12-percent-of-the-workers-scope.md)).
    - It needs Node 22.19 or later (`engines` of the package). Node 24 from NodeSource, installed with the gate's tools, is that.
    - Do not move the pin to 0.1.50. It reads the `utilization` of Claude's usage endpoint, the percentage used, as the percentage remaining.

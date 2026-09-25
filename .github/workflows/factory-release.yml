@@ -58,14 +58,28 @@ jobs:
   release:
     needs: binaries
     runs-on: ubuntu-latest
-    # The only job that can write, and all it runs is gh: nothing built here, nothing installed.
+    # The only job that can write, and all it runs is gh and GitHub's attestation action: nothing
+    # built here, nothing installed. It alone gets an OIDC token, because the build job runs other
+    # people's npm code, and a token there could sign anything as this workflow.
     permissions:
       contents: write # the release the binaries are attached to
+      id-token: write # the Sigstore certificate that signs the attestation
+      attestations: write # the attestation, stored with the repository
     steps:
       - uses: actions/download-artifact@v8
         with:
           name: factory-binaries
           path: dist
+      - name: Attest where the binaries came from
+        id: attest
+        # The checksums are the subject list, so the bundle and checksums.txt name the same digests.
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-checksums: dist/checksums.txt
+      - name: The bundle, named after the version
+        env:
+          BUNDLE: ${{ steps.attest.outputs.bundle-path }}
+        run: cp "$BUNDLE" "dist/factory-v${GITHUB_REF_NAME#factory/v}.sigstore.json"
       - name: Attach them to the release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -79,12 +93,13 @@ jobs:
           # not the same file when the tag was moved or the toolchain has moved on. Both look alike
           # from here, so the finished release is refused and a person decides what to do.
           published="$(gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets | length' 2>/dev/null || echo 0)"
-          if [ "$published" -ge 3 ]; then # the three files below
-            echo "error: the release $GITHUB_REF_NAME already carries its binaries and checksums; a published version is never rebuilt, release the next version instead" >&2
+          if [ "$published" -ge 4 ]; then # the four files below
+            echo "error: the release $GITHUB_REF_NAME already carries its binaries, checksums and attestation; a published version is never rebuilt, release the next version instead" >&2
             exit 1
           fi
+          bundle="dist/factory-v${GITHUB_REF_NAME#factory/v}.sigstore.json"
           gh release create "$GITHUB_REF_NAME" --verify-tag --latest=false \
             --title "factory v${GITHUB_REF_NAME#factory/v}" --generate-notes \
-            dist/factory-linux-amd64 dist/factory-linux-arm64 dist/checksums.txt \
+            dist/factory-linux-amd64 dist/factory-linux-arm64 dist/checksums.txt "$bundle" \
             || gh release upload --clobber "$GITHUB_REF_NAME" \
-              dist/factory-linux-amd64 dist/factory-linux-arm64 dist/checksums.txt
+              dist/factory-linux-amd64 dist/factory-linux-arm64 dist/checksums.txt "$bundle"

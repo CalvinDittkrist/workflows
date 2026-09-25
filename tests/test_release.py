@@ -286,7 +286,8 @@ class PublishStepTests(unittest.TestCase):
     `gh` on PATH. It is shell in a workflow file, so the test reads that shell out of the file and
     runs it; a step rewritten some other way stops being found and fails here."""
 
-    ASSETS = ["dist/factory-linux-amd64", "dist/factory-linux-arm64", "dist/checksums.txt"]
+    ASSETS = ["dist/factory-linux-amd64", "dist/factory-linux-arm64", "dist/checksums.txt",
+              "dist/factory-v0.1.0.sigstore.json"]
     # A gh that says what the release already carries and writes down what it was asked to do. It
     # answers `release view` the way gh does: an unknown release is an error, not an empty answer.
     GH = """#!/usr/bin/env bash
