@@ -42,11 +42,11 @@ This session is a test hunt: it works no issue, and the hunt record above stands
    - The commit says in plain words why the test proved nothing and whether another test still proves the behaviour it touched.
    - Then record it: pipe this block into `"${CLAUDE_PLUGIN_ROOT}/scripts/hunt.sh" removed` with a quoted heredoc (`<<'REMOVED'`):
 
-```
-remove: <the fields of the remove: or check: line as triage printed them>
-why: <in plain words, for someone who never read the test, why it proved nothing>
-still_proven: <yes, by <which test> | no, <why no test needs to>>
-```
+   ```
+   remove: <the fields of the remove: or check: line as triage printed them>
+   why: <in plain words, for someone who never read the test, why it proved nothing>
+   still_proven: <yes, by <which test> | no, <why no test needs to>>
+   ```
 
    No gate runs between rounds, and no hunter runs anything. Verify a removal with the single test file it touched at most.
 2. **Gate.** When the record names no removal (`hunt_removed: 0`), skip every stage below: open no pull request and run no review.

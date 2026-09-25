@@ -53,11 +53,11 @@ Round procedure:
 6. Record the round: pipe this block into `"${CLAUDE_PLUGIN_ROOT}/scripts/panel.sh" round` with a quoted heredoc (`<<'ROUND'`).
    - Never use an unquoted one: the block quotes reviewer text, and the shell would expand `$x` and backticks in it.
 
-```
-panel: code=FIX security=PASS docs=PASS tests=FIX senior=PASS
-fixed: <count> (S1 <n>, S2 <n>, S3 <n>)
-disputed: <none | one line each>
-```
+   ```
+   panel: code=FIX security=PASS docs=PASS tests=FIX senior=PASS
+   fixed: <count> (S1 <n>, S2 <n>, S3 <n>)
+   disputed: <none | one line each>
+   ```
 
    - One `PASS` or `FIX` for each reviewer that ran **in this round** and for no other, the fixes made in this round, and what stands disputed after it.
    - The script numbers the round, derives the chain across rounds and refuses a block it cannot parse with an `error:` line naming the fix.
