@@ -49,11 +49,13 @@
 #                      a repair round wait or block while the work session before it reported
 #
 # The author session of the pr stage, the one started with --tools, is none of those: it is logged to
-# CLAUDE_SHIM_AUTHOR_LOG instead, counts as no call above, and reads only these two:
+# CLAUDE_SHIM_AUTHOR_LOG instead, counts as no call above, and reads only these three:
 #
 #   CLAUDE_SHIM_AUTHOR_RESULT  its structured result as one line of JSON, by default a title and a
 #                              body that closes the issue in the branch name
 #   CLAUDE_SHIM_AUTHOR_FAIL    when set, it ends with this on its error output and exit 1
+#   CLAUDE_SHIM_AUTHOR_SLEEP   when set, it waits that many seconds before it reports, so a test can
+#                              reach an author session that is still going
 #
 # A reviewer of the panel, the session started as an agent whose name ends in -reviewer, is none of
 # those either: it is logged to
@@ -194,6 +196,10 @@ if [ -n "$author" ]; then
   if [ -n "${CLAUDE_SHIM_AUTHOR_FAIL:-}" ]; then
     echo "$CLAUDE_SHIM_AUTHOR_FAIL" >&2
     exit 1
+  fi
+  if [ -n "${CLAUDE_SHIM_AUTHOR_SLEEP:-}" ]; then
+    sleep "$CLAUDE_SHIM_AUTHOR_SLEEP" &
+    wait
   fi
   output="${CLAUDE_SHIM_AUTHOR_RESULT:-}"
   [ -n "$output" ] || output=$(printf '{"title":"feat: the work of issue %s","body":"Closes #%s\\n\\nWhat the branch changes."}' "${issue:-0}" "${issue:-0}")
