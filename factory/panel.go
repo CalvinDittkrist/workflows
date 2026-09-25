@@ -933,9 +933,13 @@ func (f *Factory) execGate(ctx context.Context, r *Run, claim claimed, classed C
 	cmd.WaitDelay = 10 * time.Second
 	out := &outputTail{max: maxGateTail}
 	cmd.Stdout, cmd.Stderr = out, out
-	if r.lock != nil {
-		cmd.ExtraFiles = []*os.File{r.lock}
+	// The gate of a run resumed at the gate stage is the first process of the run, so the lock may not
+	// be taken yet; a gate without it would be invisible to the next start of a factory killed under it.
+	lock, err := f.runLock(r)
+	if err != nil {
+		return gateRun{err: fmt.Errorf("the factory could not take the lock of this run: %w", err)}
 	}
+	cmd.ExtraFiles = []*os.File{lock}
 	began := time.Now()
 	if err := cmd.Start(); err != nil {
 		return gateRun{err: err}

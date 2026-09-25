@@ -239,10 +239,18 @@ func mergeFixBrief(entry Entry, claim claimed, conflicted []string) string {
 }
 
 // gatingAlready says whether a resumed run that has no review to go on from starts at the gate stage:
-// its branch carries commits beyond the base, which is work the work session committed, and the gate
-// has no pass recorded for them. Fake mode has no branch, and its resumed runs start at the work session.
+// the run before it got past the work session, which reported its implementation complete, and its
+// branch carries commits beyond the base without a pass of the gate recorded for them. A run before it
+// that ended in the work session, interrupted or out of quota after a commit of its own, left an
+// implementation it never reported complete, and the run starts with the work session again. Fake mode
+// has no branch, and its resumed runs start at the work session.
 func (f *Factory) gatingAlready(ctx context.Context, r *Run, entry Entry, claim claimed) bool {
 	if kindOf(entry.Signal) != kindResumed || f.fake {
+		return false
+	}
+	if !pastImplement(entry.resume) {
+		f.runs.event(r, Event{Kind: "factory", Title: "resuming at the work session",
+			Body: fmt.Sprintf("run %d ended before its work session reported the implementation complete, so the work session runs again on what the branch %s carries", entry.resume.ID, claim.branch)})
 		return false
 	}
 	out, err := git(ctx, claim.worktree, "rev-list", "--count", "origin/"+claim.base+"..HEAD")
@@ -256,6 +264,13 @@ func (f *Factory) gatingAlready(ctx context.Context, r *Run, entry Entry, claim 
 		return false
 	}
 	f.runs.event(r, Event{Kind: "factory", Title: "resuming at the gate stage",
-		Body: fmt.Sprintf("the branch %s carries %s commit(s) beyond origin/%s and no pass of the gate is recorded for its head, so the gate runs on them", claim.branch, out, claim.base)})
+		Body: fmt.Sprintf("run %d got past the work session, and the branch %s carries %s commit(s) beyond origin/%s and no pass of the gate is recorded for its head, so the gate runs on them", entry.resume.ID, claim.branch, out, claim.base)})
 	return true
+}
+
+// pastImplement says whether a run got past its work session: it reached the gate stage, which the
+// factory enters only after a work session that reported its implementation complete or on a resume
+// past it, or it recorded the review that comes after the gate.
+func pastImplement(prior Run) bool {
+	return slices.Contains(prior.Stages, stageGate) || prior.Panel != nil || prior.Review != nil
 }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -213,12 +214,21 @@ func TestTheGateStageMergesTheBaseAndAConflictGoesToAFixSession(t *testing.T) {
 	}
 }
 
-// A resumed run whose branch carries commits beyond the base and no pass of the gate for them starts
-// at the gate stage on them, and starts no work session; one whose branch carries none starts with the
-// work session.
+// A resumed run whose run before got past the work session, and whose branch carries commits beyond the
+// base and no pass of the gate for them, starts at the gate stage on them and starts no work session;
+// one whose branch carries none starts with the work session. So does one whose run before ended in the
+// work session after a commit of its own: that session never reported its implementation complete, and
+// gating what it left would review and open a pull request of half an implementation.
 func TestAResumeWithCommitsBeyondTheBaseStartsAtTheGateStage(t *testing.T) {
 	t.Parallel()
-	for name, committed := range map[string]bool{"with commits": true, "without commits": false} {
+	for name, c := range map[string]struct {
+		committed, gating bool
+		stages            []string
+	}{
+		"with commits":    {committed: true, gating: true, stages: []string{"implement", "gate"}},
+		"without commits": {committed: false, gating: false, stages: []string{"implement", "gate"}},
+		"with commits of a work session that ended": {committed: true, gating: false, stages: []string{"implement"}},
+	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			gh := newGhShim(t)
@@ -229,13 +239,13 @@ func TestAResumeWithCommitsBeyondTheBaseStartsAtTheGateStage(t *testing.T) {
 			clone := gh.cloneInto(t, data, "acme/edge-sensors")
 			gh.branchAt(t, "acme/edge-sensors", claimedBranch, gh.head(t, "acme/edge-sensors", "main"))
 			head := gh.head(t, "acme/edge-sensors", "main")
-			if committed {
+			if c.committed {
 				head = gh.commitOn(t, "acme/edge-sensors", claimedBranch)
 			}
 			began := time.Now().UTC().Add(-2 * time.Hour)
 			interrupted := record(1, claimedIssue, claimedTitle, signalRouted, outcomeInterrupted, true, began, began.Add(30*time.Minute))
 			interrupted.Worktree = filepath.Join(clone, ".claude", "worktrees", claimedWorktree)
-			interrupted.Stages = []string{"implement"}
+			interrupted.Stages = c.stages
 			records(t, data, interrupted)
 			gh.issues(t, "acme/edge-sensors")
 			gh.issue(t, "acme/edge-sensors", assignedTo(openIssue(claimedIssue, claimedTitle, began.Add(-72*time.Hour)), "factory-bot"))
@@ -248,7 +258,7 @@ func TestAResumeWithCommitsBeyondTheBaseStartsAtTheGateStage(t *testing.T) {
 				t.Fatalf("run 2 ended as %q (%s), want ready; the factory's log:\n%s", resumed.Outcome, resumed.Reason, f.output(t))
 			}
 			workers, gating := gh.workers(t), factoryTitles(resumed, "resuming at the gate stage")
-			if committed {
+			if c.gating {
 				if len(workers) != 0 || len(gating) != 1 || !equal(resumed.Stages, []string{"gate", "review", "pr", "ci"}) ||
 					len(resumed.Gates) != 1 || resumed.Gates[0].Head != head {
 					t.Errorf("the resume started %d work sessions, said %v, went through %v and ran the gates %+v, want it to start at the gate stage on %s",
@@ -259,6 +269,119 @@ func TestAResumeWithCommitsBeyondTheBaseStartsAtTheGateStage(t *testing.T) {
 			if len(workers) != 1 || len(gating) != 0 || !equal(resumed.Stages, []string{"implement", "gate", "review", "pr", "ci"}) {
 				t.Errorf("the resume started %d work sessions, said %v and went through %v, want it to start with the work session", len(workers), gating, resumed.Stages)
 			}
+			if len(resumed.Gates) == 0 || resumed.Gates[0].Head == head {
+				t.Errorf("the resume ran the gates %+v, want the first on the commit of its own work session and not on %s", resumed.Gates, short(head))
+			}
 		})
+	}
+}
+
+// A run that ends while the fix session of its merge has resolved every conflict but not committed the
+// merge leaves the merge in progress in the worktree. The resumed run keeps those resolutions: it
+// commits the merge as it stands and gates it, and neither starts the merge again nor gives it up.
+func TestAResumedGateCommitsAMergeWhoseConflictsAreResolved(t *testing.T) {
+	t.Parallel()
+	gh, data := panelClaim(t, "@true")
+	gh.branchAt(t, "acme/edge-sensors", claimedBranch, gh.head(t, "acme/edge-sensors", "main"))
+	edit := filepath.Join(t.TempDir(), "edit")
+	gh.git(t, filepath.Dir(edit), "clone", "-q", gh.remotePath("acme/edge-sensors"), edit)
+	commit := func(branch, text string) string {
+		gh.git(t, edit, "checkout", "-q", branch)
+		writeFile(t, filepath.Join(edit, "shared.md"), text)
+		gh.git(t, edit, "add", "shared.md")
+		gh.git(t, edit, "commit", "-q", "-m", "shared.md on "+branch)
+		gh.git(t, edit, "push", "-q", "origin", "HEAD:"+branch)
+		return gh.git(t, edit, "rev-parse", "HEAD")
+	}
+	work := commit(claimedBranch, "the branch's line\n")
+	base := commit("main", "the base's line\n")
+
+	// The worktree as the run before left it: the merge of the base conflicted, and its fix session
+	// resolved the file and staged it before the run ended.
+	clone := clonePath(data, "acme/edge-sensors")
+	gh.git(t, clone, "fetch", "-q", "origin")
+	worktree := worktreePath(clone, claimedBranch)
+	gh.git(t, clone, "worktree", "add", "-q", "-b", claimedBranch, worktree, "origin/"+claimedBranch)
+	merge := exec.Command("git", "merge", "-q", "--no-edit", "origin/main")
+	merge.Dir, merge.Env = worktree, gitIsolation()
+	if err := merge.Run(); err == nil {
+		t.Fatal("the merge of main into the branch was clean, want a conflict in shared.md")
+	}
+	resolution := "the branch's line\nthe base's line\n"
+	writeFile(t, filepath.Join(worktree, "shared.md"), resolution)
+	gh.git(t, worktree, "add", "shared.md")
+
+	began := time.Now().UTC().Add(-2 * time.Hour)
+	interrupted := record(1, claimedIssue, claimedTitle, signalRouted, outcomeInterrupted, true, began, began.Add(30*time.Minute))
+	interrupted.Worktree = worktree
+	interrupted.Stages = []string{"implement", "gate"}
+	records(t, data, interrupted)
+	gh.issues(t, "acme/edge-sensors")
+	gh.issue(t, "acme/edge-sensors", assignedTo(openIssue(claimedIssue, claimedTitle, began.Add(-72*time.Hour)), "factory-bot"))
+	gh.openPullsListed(t, "acme/edge-sensors", claimedBranch)
+
+	f := gh.work(t, ciConfig(data, nil))
+	resumed := f.ended(t, 2)
+	if resumed.Outcome != outcomeReady {
+		t.Fatalf("run 2 ended as %q (%s), want ready; the factory's log:\n%s", resumed.Outcome, resumed.Reason, f.output(t))
+	}
+	if len(resumed.Gates) == 0 {
+		t.Fatalf("the resume ran no gate; the factory's log:\n%s", f.output(t))
+	}
+	gated := resumed.Gates[0].Head
+	if parents := gh.git(t, worktree, "rev-list", "--parents", "-n", "1", gated); parents != gated+" "+work+" "+base {
+		t.Errorf("the resume gated %s with the parents %q, want the merge of %s into %s", short(gated), parents, short(base), short(work))
+	}
+	if kept := gh.git(t, worktree, "show", gated+":shared.md"); kept+"\n" != resolution {
+		t.Errorf("the merge the resume committed has shared.md as %q, want the resolution %q", kept, resolution)
+	}
+	if workers := gh.workers(t); len(workers) != 0 {
+		t.Errorf("the resume started %d work sessions, want none: the merge was resolved already", len(workers))
+	}
+}
+
+// A run resumed at the gate stage starts no session before its gate, so the gate is the first process
+// that holds the run's lock. A factory killed while that gate runs leaves it running, and the next start
+// has to find it through the lock and end it before the issue is worked again in the same worktree.
+func TestARestartEndsTheGateOfAResumeThatOutlivedTheFactory(t *testing.T) {
+	t.Parallel()
+	pidFile := filepath.Join(t.TempDir(), "gate.pid")
+	gh, data := panelClaim(t, "@echo $$$$ > "+pidFile+"; exec sleep 300")
+	gh.branchAt(t, "acme/edge-sensors", claimedBranch, gh.head(t, "acme/edge-sensors", "main"))
+	gh.commitOn(t, "acme/edge-sensors", claimedBranch)
+	clone := clonePath(data, "acme/edge-sensors")
+	began := time.Now().UTC().Add(-2 * time.Hour)
+	interrupted := record(1, claimedIssue, claimedTitle, signalRouted, outcomeInterrupted, true, began, began.Add(30*time.Minute))
+	interrupted.Worktree = worktreePath(clone, claimedBranch)
+	interrupted.Stages = []string{"implement", "gate"}
+	records(t, data, interrupted)
+	gh.issues(t, "acme/edge-sensors")
+	gh.issue(t, "acme/edge-sensors", assignedTo(openIssue(claimedIssue, claimedTitle, began.Add(-72*time.Hour)), "factory-bot"))
+	gh.openPullsListed(t, "acme/edge-sensors", claimedBranch)
+
+	first := gh.work(t, ciConfig(data, nil))
+	var pid int
+	first.eventually(t, 30*time.Second, "the gate of the resumed run to start", func() bool {
+		raw, err := os.ReadFile(pidFile)
+		if err != nil {
+			return false
+		}
+		pid, err = strconv.Atoi(strings.TrimSpace(string(raw)))
+		return err == nil
+	})
+	t.Cleanup(func() { _ = syscall.Kill(pid, syscall.SIGKILL) })
+	first.stop(t, syscall.SIGKILL) // a kill of the factory alone, not of the host
+	if !survived(pid) {
+		t.Fatalf("the gate %d ended with the factory that was killed; this test needs one that outlives it", pid)
+	}
+
+	again := gh.work(t, ciConfig(data, nil))
+	again.eventually(t, 30*time.Second, "the gate the killed factory left behind to be ended", func() bool {
+		return syscall.Kill(pid, 0) != nil
+	})
+	var run apiRun
+	again.get(t, "/api/runs/2", &run)
+	if n := len(run.Events); n == 0 || !strings.Contains(run.Events[n-1].Title, "worker ended after the factory") {
+		t.Errorf("the log of the resumed run ends on %v, want the start saying it ended the gate that outlived the factory", run.Events)
 	}
 }

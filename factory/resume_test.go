@@ -397,6 +397,7 @@ func TestAResumeWhoseWorktreeIsGoneIsMadeAgainFromTheBranch(t *testing.T) {
 	began := time.Now().UTC().Add(-2 * time.Hour)
 	interrupted := record(1, claimedIssue, claimedTitle, signalRouted, outcomeInterrupted, true, began, began.Add(30*time.Minute))
 	interrupted.Worktree = filepath.Join(clone, ".claude", "worktrees", claimedWorktree)
+	interrupted.Stages = []string{"implement", "gate"}
 	records(t, data, interrupted)
 	// #104 is held by this host, so it is read on its own and not from the line, which is empty.
 	gh.issues(t, "acme/edge-sensors")
@@ -409,8 +410,9 @@ func TestAResumeWhoseWorktreeIsGoneIsMadeAgainFromTheBranch(t *testing.T) {
 		t.Fatalf("run 2 works #%d on the signal %q and ends as %q (%s), want the resume of #%d ending ready; the factory's log:\n%s",
 			resumed.Issue, resumed.Signal, resumed.Outcome, resumed.Reason, claimedIssue, f.output(t))
 	}
-	// The run went on where the record says, on the branch, and on the commits the remote carries: those
-	// are beyond the base, so it started at the gate stage, gated them and had them reviewed there.
+	// The run went on where the record says, on the branch, and on the commits the remote carries: the
+	// run before got past its work session and those are beyond the base, so it started at the gate
+	// stage, gated them and had them reviewed there.
 	if workers := gh.workers(t); len(workers) != 0 {
 		t.Errorf("the factory started %d work sessions, want none: the branch carries the work", len(workers))
 	}

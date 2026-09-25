@@ -917,6 +917,21 @@ func (f *Factory) end(parent context.Context, r *Run, e ending) {
 	f.finish(r, e.outcome, e.reason, e.exitCode)
 }
 
+// runLock is the run's lock, taken before the first process of the run starts, a session or a gate, and
+// kept until the run ends (release). Every process group of the run holds it, so the next start of a
+// factory the host killed finds a process of the run that outlived it (endSurvivors).
+func (f *Factory) runLock(r *Run) (*os.File, error) {
+	var lock *os.File
+	var err error
+	f.runs.update(r, func() {
+		if r.lock == nil {
+			r.lock, err = f.runs.lock(r.ID)
+		}
+		lock = r.lock
+	})
+	return lock, err
+}
+
 // runSession starts one session and reads it to its end, and answers with its result, or with how it
 // ended when it left none that fits. label names the session in the run's log when it runs beside
 // others, and is empty for one that runs alone.
@@ -959,18 +974,13 @@ func (f *Factory) runSession(parent, ctx context.Context, r *Run, s session, ent
 		return result{}, abandoned(ctx, claim, "the factory could not open a pipe for the worker: "+err.Error())
 	}
 	cmd.Stdout, cmd.Stderr = stdoutWriter, stderrWriter
-	// The run's lock goes into the process group of every session of the run: the factory takes it
-	// before the first one and keeps it until the run ends (release), so a process an earlier session
+	// The run's lock goes into the process group of every session and gate of the run: the factory takes
+	// it before the first one and keeps it until the run ends (release), so a process an earlier session
 	// left behind cannot keep the next one from starting, and the kernel gives it back when the factory
 	// and the last process of those groups are gone. A factory the host killed ends nothing and holds
 	// nothing any more, and this is what the next start reads to find the worker that outlived it
 	// (endSurvivors).
-	var lockErr error
-	f.runs.update(r, func() {
-		if r.lock == nil {
-			r.lock, lockErr = f.runs.lock(r.ID)
-		}
-	})
+	lock, lockErr := f.runLock(r)
 	if lockErr != nil {
 		stdout.Close()
 		stdoutWriter.Close()
@@ -978,7 +988,7 @@ func (f *Factory) runSession(parent, ctx context.Context, r *Run, s session, ent
 		stderrWriter.Close()
 		return result{}, abandoned(ctx, claim, "the factory could not take the lock of this run: "+lockErr.Error())
 	}
-	cmd.ExtraFiles = []*os.File{r.lock}
+	cmd.ExtraFiles = []*os.File{lock}
 	err = cmd.Start()
 	if err != nil {
 		stdout.Close()
