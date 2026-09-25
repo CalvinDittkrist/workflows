@@ -4,12 +4,19 @@ Date: 2026-09-18
 Status: accepted
 
 ## Context
-[ADR 0012](0012-releases-are-manual-and-close-a-milestone.md) makes a release manual and ties it to a milestone, but leaves open how the command finds the promotion, what it tags and how the promotion is merged. [ADR 0011](0011-github-workspace-configured-by-an-idempotent-script.md) sets squash-only merges and linear history on `main` and `dev`. Squash-merging a promotion leaves `main` with a commit `dev` never gets. Every later promotion then repeats all earlier commits, can conflict on lines already promoted, and gets release notes that list only the promotion PR. Implemented in #8.
+- [ADR 0012](0012-releases-are-manual-and-close-a-milestone.md) makes releases manual but leaves open how the command finds the promotion, what it tags and how the promotion merges.
+- [ADR 0011](0011-github-workspace-configured-by-an-idempotent-script.md) sets squash-only merges and linear history on `main` and `dev`.
+- A squashed promotion gives `main` a commit `dev` never gets, so later promotions repeat earlier commits and can conflict.
+- Implemented in #8.
 
 ## Decision
-This refines ADR 0012 and supersedes ADR 0011 for promotions only. A milestone is the unit of a release. The planner asks once per ticket batch which milestone the tickets belong to (an open one, a new `vX.Y.Z`, or none) and attaches them through `issue.sh`. The board shows each frontier issue's milestone.
-
-`/orchestrator:release vX.Y.Z` runs `release.sh`. The skill has `disable-model-invocation`, so only the user starts a release. The script refuses when the milestone does not exist, is closed, has open issues, or the tag exists. With `main` alone it tags the head of `main`. With `dev` plus `main` it opens, or finds by its title `chore(release): vX.Y.Z`, the promotion PR from this repository's `dev` to `main` (pull requests from forks are ignored), and stops with `status: waiting` until that PR is merged. On a later run it tags the promotion's merge commit. The tag comes from `gh release create --target <sha> --generate-notes`, and then the milestone is closed. `merge.sh` merges a promotion PR with a merge commit, not a squash, and keeps `dev`. That way `dev` stays an ancestor of `main`, the next promotion carries only new commits, and generated notes list the feature PRs merged into `dev`. In the two-level model the repository therefore allows merge commits, and the ruleset on `main` does not require linear history. `dev` keeps linear history, and `merge.sh` still squash-merges every feature PR.
+`merge.sh` merges a promotion PR with a merge commit and keeps `dev`, and `/orchestrator:release vX.Y.Z` tags that merge commit; this refines ADR 0012 and supersedes ADR 0011 for promotions only.
 
 ## Consequences
-A release keeps no state of its own. It reads the milestone, the promotion PR title and the tag, so a release waiting for its promotion resumes by running the command again. If publishing succeeds but closing the milestone fails, the milestone must be closed by hand; the script says so. Tagging the merge commit rather than the head of `main` keeps a later push to `main` out of the release. The script does not block while the promotion PR waits for CI and a merge, so the orchestrator stays usable in that time. The cost is a second command after the merge. Rejected: squash-merging the promotion (it cuts `dev` off from `main`, so every later promotion repeats earlier commits and can conflict); polling until the PR is merged (the orchestrator session would stay blocked until someone merges, often longer than a tool call may run) and triggering the release when the last milestone issue closes (the release is a decision the user makes).
+- The planner asks once per ticket batch for a milestone; the board shows each frontier issue's milestone.
+- `release.sh` refuses a missing or closed milestone, open issues or an existing tag. With `main` alone it tags the head of `main`.
+- With `dev` plus `main` it opens or finds the PR `chore(release): vX.Y.Z` and stops with `status: waiting` until it merges.
+- `gh release create --target <sha> --generate-notes` tags; then the milestone closes, or the script says to close it by hand.
+- The two-level model allows merge commits on `main`; `dev` keeps linear history and feature PRs are squashed.
+- A release keeps no state; running the command again after the merge resumes it, and the orchestrator session stays usable meanwhile.
+- Rejected: squashing the promotion, polling until the merge, and releasing when the last milestone issue closes.
