@@ -114,6 +114,7 @@ type apiRun struct {
 	} `json:"versions"`
 	Review *Review    `json:"review"`
 	Panel  *Panel     `json:"panel"`
+	Gates  []Gated    `json:"gates"`
 	Events []apiEvent `json:"events"`
 }
 
@@ -143,10 +144,11 @@ type apiLine struct {
 func TestFakeModeWorksTheCannedQueueOneRunAtATime(t *testing.T) {
 	t.Parallel()
 	// The deadline has to be far above what a scripted run costs — a binary built with the race
-	// detector pays about a second on every exit, and the detached run has fourteen sessions, most
+	// detector pays about a second on every exit, and the detached run has sixteen sessions, most
 	// of them one after the other — or a quick run would be read as a timeout.
 	// The runs of acme/edge-sensors change a document, which is the class docs; the ready run's fixes
-	// move its change to the class upload, which has no gate, and the detached run's out of every class.
+	// move its change to the class upload, which has no gate, and the detached run's out of every class,
+	// from the fix of its merge in the gate stage on.
 	f := start(t, config{"deadline": "30s", "poll": "100ms", "repositories": []any{
 		map[string]any{"name": "acme/edge-sensors", "review": map[string]any{"classes": []map[string]any{
 			{"name": "docs", "paths": []string{"docs/**"}, "gate": []string{"make", "docs"}},
@@ -192,10 +194,10 @@ func TestFakeModeWorksTheCannedQueueOneRunAtATime(t *testing.T) {
 	if ready.Outcome != "ready" || ready.PullRequest != "https://github.com/acme/edge-sensors/pull/204" {
 		t.Errorf("run 1 ended %q with the pull request %q, want ready with the pull request of the result", ready.Outcome, ready.PullRequest)
 	}
-	if got, want := strings.Join(ready.Stages, " "), "implement review pr ci address-reviews ci"; got != want {
+	if got, want := strings.Join(ready.Stages, " "), "implement gate review pr ci address-reviews ci"; got != want {
 		t.Errorf("run 1 went through the stages %q, want %q", got, want)
 	}
-	// Its work session stopped after the gate, the factory's reviewers asked for a fix its review fix
+	// Its work session stopped after the implement stage, the factory's gate passed, its reviewers asked for a fix its review fix
 	// session made, a read-only author session wrote the pull request the factory opened, and the factory
 	// waited on CI: the checks pending, then failed, one repair round with
 	// a fix session given the failed log, then review comments answered by an address-reviews session in
@@ -214,11 +216,13 @@ func TestFakeModeWorksTheCannedQueueOneRunAtATime(t *testing.T) {
 		!strings.Contains(readyLog.Review.PanelSummary, "the sleep is the fake clock's, which returns at once") {
 		t.Errorf("run 1 recorded the panel %+v and handed the pr stage %+v, want two rounds, the second of code and tests, and the dispute", readyLog.Panel, readyLog.Review)
 	}
-	// Its change was a document, the class docs, until its fix edited upload/retry.go: the class of the
-	// final head is upload, whose gate is none, and the pull request says so.
-	if got := classesOf(readyLog); !equal(got, []string{"docs/review", "upload/gate"}) ||
+	// Its change was a document, the class docs, whose gate the gate stage ran and passed, until its fix
+	// edited upload/retry.go: the class of the final head is upload, whose gate is none, and the pull
+	// request says so.
+	if got := classesOf(readyLog); !equal(got, []string{"docs/gate", "docs/review", "upload/gate"}) ||
+		len(readyLog.Gates) != 1 || readyLog.Gates[0].Stage != stageGate || !readyLog.Gates[0].Passed || readyLog.Gates[0].Command != "make docs" ||
 		!strings.HasPrefix(readyLog.Review.GateResult, "gate_result: none (the change class upload has no gate)") {
-		t.Errorf("run 1 recorded the classes %v and the gate result %q, want docs for the review, then upload without a gate", got, readyLog.Review.GateResult)
+		t.Errorf("run 1 recorded the classes %v and the gate result %q, want docs for the gate that passed and the review, then upload without a gate", got, readyLog.Review.GateResult)
 	}
 	if !strings.Contains(fmt.Sprint(readyLog.Events), "--- FAIL: TestCalibrationFileAge") {
 		t.Errorf("run 1 never gave its fix session the failed log")
@@ -227,10 +231,10 @@ func TestFakeModeWorksTheCannedQueueOneRunAtATime(t *testing.T) {
 		t.Errorf("run 1 took %d repair rounds, want 2: the fix of the checks and the answer to the review comments", ready.RepairRounds)
 	}
 	// The context peak is the fullest one message of the worker itself came. The scripted session
-	// hands the rest of its stage to a fresh context after the gate, so the peak stands at the message
+	// hands the rest of its stage to a fresh context after its commit, so the peak stands at the message
 	// before that handover: neither the last message, which carries less, nor the far larger context
 	// its subagent reports, which says nothing about the worker's.
-	const readyPeak = 52_600 // the fifth message of the work session, the gate's, the one before the handover
+	const readyPeak = 52_600 // the fifth message of the work session, the commit's, the one before the handover
 	if ready.ContextPeak != readyPeak {
 		t.Errorf("run 1 peaked at %d tokens of context, want %d: the fullest message of the worker itself, taken before the handover dropped it and never from the %d a subagent reported",
 			ready.ContextPeak, readyPeak, subagentContext)
@@ -339,11 +343,19 @@ func TestFakeModeWorksTheCannedQueueOneRunAtATime(t *testing.T) {
 	if len(detached.Warnings) != 1 || !strings.Contains(detached.Warnings[0], "left a process behind") {
 		t.Errorf("run 5 has the warnings %q, want the one that says its worker left a process behind", detached.Warnings)
 	}
-	// Its pull request conflicted with the base: the merge conflicted too, and a fix session was given
-	// the conflicted file. The process its first session left behind did not keep that one from starting.
-	if got := factoryTitles(full, "ci: ", "repair round", "the merge of"); strings.Join(got, " | ") !=
-		"ci: conflicts | repair round 1 of 3 | the merge of main conflicts | ci: green" {
-		t.Errorf("run 5 logged the ci stage as %q, want a conflict repaired by a merge and a fix session", got)
+	// Its base had moved on by the gate stage, and the merge of it conflicted: a fix session was given
+	// the conflicted file. The process its first session left behind did not keep that one from
+	// starting. Its gate then ran past its timeout, which is a failure a fix session repaired. Its pull
+	// request conflicted with the base too: the merge conflicted again, and a fix session of the ci stage
+	// was given the file.
+	if got := factoryTitles(full, "ci: ", "repair round", "the merge of", "briefed a fix session of the", "gate_result: "); strings.Join(got, " | ") !=
+		"the merge of main conflicts | briefed a fix session of the merge | gate_result: fail (ran past its timeout of 45m0s) at fake-1 | briefed a fix session of the gate, 1 of 3 | "+
+			"gate_result: pass (exit 0) at fake-2 | gate_result: fail (exit 2) at fake-4 | briefed a fix session of the gate, 1 of 2 | gate_result: pass (exit 0) at fake-5 | "+
+			"ci: conflicts | repair round 1 of 3 | the merge of main conflicts | ci: green" {
+		t.Errorf("run 5 logged the gates and the ci stage as %q, want a conflicting merge fixed, a gate past its timeout fixed, a failing final gate fixed, and a conflict repaired by a merge and a fix session", got)
+	}
+	if len(full.Gates) != 4 || !full.Gates[0].TimedOut || full.Gates[0].Stage != stageGate || !full.Gates[1].Passed || full.Gates[2].Stage != stageReview || full.Gates[2].Exit != 2 {
+		t.Errorf("run 5 recorded the gates %+v, want a timeout and a pass in the gate stage, then a failure and a pass on the final head", full.Gates)
 	}
 	if !strings.Contains(fmt.Sprint(full.Events), "docs/preview.md") {
 		t.Errorf("run 5 never gave its fix session the conflicted file")
@@ -354,10 +366,10 @@ func TestFakeModeWorksTheCannedQueueOneRunAtATime(t *testing.T) {
 		!strings.Contains(full.Review.PanelSummary, "tests=FIX→FIX→FIX") || !strings.HasPrefix(full.Review.GateResult, "gate_result: pass") {
 		t.Errorf("run 5 recorded the panel %+v and handed the pr stage %+v, want three rounds with tests on FIX in each and a gate that passed after one fix", full.Panel, full.Review)
 	}
-	// Its fixes edited preview/serve.go, which no class covers: the gate on the final head is the class
-	// full's, determined again before it ran the second time.
-	if got := classesOf(full); !equal(got, []string{"docs/review", "full/gate", "full/gate"}) || !strings.Contains(full.Review.GateResult, "gate_command: make check\ngate_class: full") {
-		t.Errorf("run 5 recorded the classes %v and the gate result %q, want docs for the review and full before each gate", got, full.Review.GateResult)
+	// The fix of its merge edited preview/serve.go, which no class covers: every gate is the class
+	// full's, determined again before each run, and so is the review's.
+	if got := classesOf(full); !equal(got, []string{"full/gate", "full/gate", "full/review", "full/gate", "full/gate"}) || !strings.Contains(full.Review.GateResult, "gate_command: make check\ngate_class: full") {
+		t.Errorf("run 5 recorded the classes %v and the gate result %q, want full for the review and before each gate", got, full.Review.GateResult)
 	}
 
 	// follow-up: the maintainer asked for changes on run 5's pull request after it ended, and the
@@ -762,7 +774,7 @@ func TestAnInvalidConfigurationIsRefusedWithTheFix(t *testing.T) {
 		{"worker variable that is the base branch", `{"data_dir":"data","repositories":["a/b"],"worker_env":{"WF_BASE_BRANCH":"dev"}}`, `worker_env carries WF_BASE_BRANCH, which is not a worker knob`},
 		{"worker variable of the shell", `{"data_dir":"data","repositories":["a/b"],"worker_env":{"PATH":"/tmp"}}`, `worker_env carries PATH, which is not a worker knob`},
 		{"worker variable that is not a string", `{"data_dir":"data","repositories":["a/b"],"worker_env":{"WF_PR_REVIEW_WAIT":600}}`, `see factory/factory.example.json`},
-		{"repository object with an unknown field", `{"data_dir":"data","repositories":[{"name":"a/b","branch":"dev"}]}`, `a repository is "owner/name" or {"name": "owner/name", "base": "dev", "ci": {"repair_rounds": 2}, "review": {"rounds": 2}}`},
+		{"repository object with an unknown field", `{"data_dir":"data","repositories":[{"name":"a/b","branch":"dev"}]}`, `a repository is "owner/name" or {"name": "owner/name", "base": "dev", "ci": {"repair_rounds": 2}, "review": {"rounds": 2}, "gate": {"rounds": 2}}`},
 		// The knobs of the ci stage are the factory's own, at the top of the file or on a repository.
 		{"unknown ci knob", `{"data_dir":"data","repositories":["a/b"],"ci":{"repair_round":2}}`, `json: unknown field "repair_round"; the ci knobs are repair_rounds, bot_reviewers, review_wait, checks_grace`},
 		{"unknown ci knob of a repository", `{"data_dir":"data","repositories":[{"name":"a/b","ci":{"grace":"1m"}}]}`, `the ci knobs are repair_rounds, bot_reviewers, review_wait, checks_grace`},
@@ -796,6 +808,10 @@ func TestAnInvalidConfigurationIsRefusedWithTheFix(t *testing.T) {
 		{"a class with a reviewer the panel does not have", `{"data_dir":"data","repositories":["a/b"],"review":{"classes":[{"name":"docs","paths":["docs/**"],"gate":[],"reviewers":["docs","style"]}]}}`, `the class "docs": reviewers carries "style", which is no reviewer; the reviewers are code, security, docs, tests, senior, or leave reviewers out`},
 		{"a class without reviewers", `{"data_dir":"data","repositories":["a/b"],"review":{"classes":[{"name":"docs","paths":["docs/**"],"gate":[],"reviewers":[]}]}}`, `the class "docs": reviewers is empty`},
 		{"a class with a field it does not have", `{"data_dir":"data","repositories":["a/b"],"review":{"classes":[{"name":"docs","patterns":["docs/**"],"gate":[]}]}}`, `unknown field "patterns"; its fields are name, paths, gate, reviewers`},
+		// And those of the gate stage.
+		{"unknown gate knob", `{"data_dir":"data","repositories":["a/b"],"gate":{"round":2}}`, `json: unknown field "round"; the gate knobs are rounds, timeout`},
+		{"a negative gate budget", `{"data_dir":"data","repositories":["a/b"],"gate":{"rounds":-1}}`, `gate: rounds -1 is not a number of fix sessions; write it as 3, or 0 to block on the first failure`},
+		{"a gate timeout of a repository that is no duration", `{"data_dir":"data","repositories":[{"name":"a/b","gate":{"timeout":"0s"}}]}`, `the gate of a/b: timeout "0s" is not a positive duration; write it as "45m"`},
 		{"a review knob in worker_env", `{"data_dir":"data","repositories":["a/b"],"worker_env":{"WF_REVIEWERS":"code"}}`, `worker_env carries WF_REVIEWERS, which is a knob of the review stage the factory runs itself; write it as "review": {"reviewers": ...}`},
 		// The quota check runs the binary the operator installed, never a name PATH or npx resolves.
 		{"quota tool by name", `{"data_dir":"data","repositories":["a/b"],"quota_axi":"quota-axi"}`, `quota_axi "quota-axi" is not an absolute path`},

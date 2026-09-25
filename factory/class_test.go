@@ -60,8 +60,8 @@ func TestAChangeClassDecidesTheReviewersAndTheGateOnTheFinalHead(t *testing.T) {
 		gate      string // what the gate on the final head printed
 		gateClass string
 	}{
-		"a fix within the class":  {"docs/worked.md", []string{"docs/review", "docs/gate"}, "the docs gate ran", "docs"},
-		"a fix outside the class": {"upload/retry.go", []string{"docs/review", "full/gate"}, "make check ran", "full"},
+		"a fix within the class":  {"docs/worked.md", []string{"docs/gate", "docs/review", "docs/gate"}, "the docs gate ran", "docs"},
+		"a fix outside the class": {"upload/retry.go", []string{"docs/gate", "docs/review", "full/gate"}, "make check ran", "full"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -91,7 +91,7 @@ func TestAChangeClassDecidesTheReviewersAndTheGateOnTheFinalHead(t *testing.T) {
 			if len(pulls) != 1 {
 				t.Fatalf("the factory opened %d pull requests, want one", len(pulls))
 			}
-			for _, want := range []string{"gate_class: " + c.gateClass, "change_class: docs for the review at ", ", " + c.gateClass + " for the gate at " + short(head),
+			for _, want := range []string{"gate_class: " + c.gateClass, "change_class: docs for the gate at ", ", docs for the review at ", ", " + c.gateClass + " for the gate at " + short(head),
 				"panel: docs=FIX→PASS senior=PASS\n"} {
 				if !strings.Contains(pulls[0].Body, want) {
 					t.Errorf("the body does not carry %q:\n%s", want, pulls[0].Body)
@@ -111,8 +111,8 @@ func TestAChangeClassDecidesTheReviewersAndTheGateOnTheFinalHead(t *testing.T) {
 	}
 }
 
-// A class with an empty gate command runs no gate on the final head, and the run and the pull request
-// say so; a change with a file outside every class is the class full, reviewed by the whole panel.
+// A class with an empty gate command runs no gate, in the gate stage or on the final head, and the run
+// and the pull request say so; a change with a file outside every class is the class full, reviewed by the whole panel.
 func TestAClassWithoutAGateRunsNoneAndAChangeOutsideEveryClassIsFull(t *testing.T) {
 	t.Parallel()
 	t.Run("no gate", func(t *testing.T) {
@@ -126,12 +126,12 @@ func TestAClassWithoutAGateRunsNoneAndAChangeOutsideEveryClassIsFull(t *testing.
 		if run.Outcome != outcomeReady {
 			t.Fatalf("the run ended as %q (%s), want ready; the factory's log:\n%s", run.Outcome, run.Reason, f.output(t))
 		}
-		head := gh.head(t, "acme/edge-sensors", claimedBranch)
+		head, worked := gh.head(t, "acme/edge-sensors", claimedBranch), run.Panel.Rounds[0].Head
 		none := "gate_result: none (the change class docs has no gate) at " + short(head)
-		if titles := factoryTitles(run, "gate_result: "); !equal(titles, []string{none}) {
-			t.Errorf("the factory logged the gates %v, want none run on %s", titles, short(head))
+		if titles := factoryTitles(run, "gate_result: "); !equal(titles, []string{"gate_result: none (the change class docs has no gate) at " + short(worked), none}) {
+			t.Errorf("the factory logged the gates %v, want none run on %s or on %s", titles, short(worked), short(head))
 		}
-		if run.Panel == nil || !strings.HasPrefix(run.Panel.Gate, none) || !equal(classesOf(run), []string{"docs/review", "docs/gate"}) {
+		if run.Panel == nil || !strings.HasPrefix(run.Panel.Gate, none) || !equal(classesOf(run), []string{"docs/gate", "docs/review", "docs/gate"}) {
 			t.Errorf("the run recorded the panel %+v, want no gate on the final head of the class docs", run.Panel)
 		}
 		if pulls := gh.opened(t, "acme/edge-sensors"); len(pulls) != 1 || !strings.Contains(pulls[0].Body, none+"\ngate_command: none\ngate_class: docs") {
@@ -160,7 +160,7 @@ func TestAClassWithoutAGateRunsNoneAndAChangeOutsideEveryClassIsFull(t *testing.
 	for file, want := range map[string]string{"upload/retry.go": classFull, "notes/todo.md": classFull, "README.md": "docs", "docs/api/v2/index.md": "docs"} {
 		t.Run("a change of "+file, func(t *testing.T) {
 			t.Parallel()
-			gh, data := panelClaim(t, "@echo make check ran, which it should not have; exit 1")
+			gh, data := panelClaim(t, "@echo make check ran")
 			gh.workerCommits(t, file)
 			f := gh.work(t, classedConfig(data, docsClass([]string{})))
 			run := f.ended(t, 1)
@@ -174,17 +174,18 @@ func TestAClassWithoutAGateRunsNoneAndAChangeOutsideEveryClassIsFull(t *testing.
 			if got := agents(t, gh); !equal(slices.Sorted(slices.Values(got)), slices.Sorted(slices.Values(panel))) {
 				t.Errorf("the factory started the reviewers %v, want %v", got, panel)
 			}
-			// The branch did not move, so no gate ran again and the class was determined once.
-			if got := classesOf(run); !equal(got, []string{want + "/review"}) {
-				t.Errorf("the run recorded the classes %v, want %s for the review alone", got, want)
+			// The branch did not move, so no gate ran again and the class was determined once for the gate
+			// stage and once for the review.
+			if got := classesOf(run); !equal(got, []string{want + "/gate", want + "/review"}) {
+				t.Errorf("the run recorded the classes %v, want %s for the gate and the review alone", got, want)
 			}
 			if want == classFull {
-				classed := run.Panel.Classes[0]
+				classed := run.Panel.Classes[1]
 				if !equal(classed.Gate, fullGate) || !strings.Contains(classed.Why, file+" is outside every class") {
 					t.Errorf("the run recorded the class %+v, want make check and the file outside every class", classed)
 				}
 			}
-			if pulls := gh.opened(t, "acme/edge-sensors"); len(pulls) != 1 || !strings.Contains(pulls[0].Body, "change_class: "+want+" for the review at ") {
+			if pulls := gh.opened(t, "acme/edge-sensors"); len(pulls) != 1 || !strings.Contains(pulls[0].Body, "change_class: "+want+" for the gate at ") || !strings.Contains(pulls[0].Body, ", "+want+" for the review at ") {
 				t.Errorf("the factory opened %+v, want one pull request with the class %s", pulls, want)
 			}
 		})

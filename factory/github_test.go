@@ -1100,7 +1100,8 @@ func (g *ghShim) hang(t *testing.T, how time.Duration) string {
 
 // remote is a repository on the shim's GitHub: what `gh repo clone owner/name` clones from and what
 // a claim creates its branch in. It is bare, as the remote of the workflow is: a claim writes a
-// reference into it and a worker pushes to it, and neither may meet a checked-out branch.
+// reference into it and a worker pushes to it, and neither may meet a checked-out branch. Its gate,
+// make check, passes; gateIs gives it another.
 func (g *ghShim) remote(t *testing.T, repository string) {
 	t.Helper()
 	dir := filepath.Join(g.remotes, strings.ReplaceAll(repository, "/", "-"))
@@ -1114,6 +1115,7 @@ func (g *ghShim) remote(t *testing.T, repository string) {
 		t.Fatal(err)
 	}
 	writeFile(t, filepath.Join(work, "README.md"), "# "+repository+"\n")
+	writeFile(t, filepath.Join(work, "Makefile"), ".PHONY: check\ncheck:\n\t@echo the gate passes\n")
 	for _, args := range [][]string{{"init", "-q", "-b", "main"}, {"add", "."}, {"commit", "-q", "-m", "init"}} {
 		g.git(t, work, args...)
 	}

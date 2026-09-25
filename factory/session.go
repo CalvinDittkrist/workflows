@@ -18,10 +18,11 @@ import (
 // A session is one print-mode call of Claude Code, and this is the one place such a call is built:
 // the agent, the prompt, the settings and the permission mode, the timeout of its stage and the JSON
 // schema of its result ([ADR 0039]). A run starts its first session at the stage its signal names;
-// the stages that follow it up to the review run inside that session, as the worker plugin drives
-// them, and the pr and ci stages are the factory's own: the pr stage starts a read-only session that
-// writes the pull request's title and body, the ci stage a fix session per repair round and an
-// address-reviews session per round of review comments.
+// the work session runs the implement stage as the worker plugin drives it, and the gate, review, pr
+// and ci stages are the factory's own: the gate stage starts a fix session per conflicting merge and
+// per failing gate, the review stage the reviewers and their fix sessions, the pr stage a read-only
+// session that writes the pull request's title and body, the ci stage a fix session per repair round
+// and an address-reviews session per round of review comments.
 //
 // [ADR 0039]: ../docs/adr/0039-every-session-reports-through-a-structured-result.md
 type session struct {
@@ -57,17 +58,20 @@ type session struct {
 	began func()
 }
 
+// stageImplement is the stage the work session runs and ends after.
+const stageImplement = "implement"
+
 // The work session is the one a local claim starts and the one a first and a resumed run of an issue
 // start with, the resumed one when its branch has no pull request open yet and is not waiting at the
-// pr stage: it derives where the work stands from git and GitHub as any worker does, and it stops once
-// the gate has recorded its result, where the factory's review stage takes over. A follow-up run
-// starts no work session: the maintainer has read the pull request and asked for changes, so it starts
-// at the ci stage's address-reviews session.
+// pr stage and has no commits of its own for the gate stage to go on from: it derives where the work
+// stands from git and GitHub as any worker does, and it stops once the implementation is committed,
+// where the factory's gate stage takes over. A follow-up run starts no work session: the maintainer has
+// read the pull request and asked for changes, so it starts at the ci stage's address-reviews session.
 //
 // The timeouts are fixed here and not in the host's configuration. They are a backstop above the
 // run's deadline, which stays the limit an operator sets and which ends a run with the outcome
 // timeout; a session that outruns its own timeout has failed, and the run says in which stage.
-var workSession = session{stage: stages["worker:work"], prompt: "/worker:work", timeout: 4 * time.Hour, stopAfter: stageGate}
+var workSession = session{stage: stages["worker:work"], prompt: "/worker:work", timeout: 4 * time.Hour, stopAfter: stageImplement}
 
 // fixTimeout is how long one fix session of the ci stage may run, addressTimeout one address-reviews
 // session, and authorTimeout the session that writes the pull request's title and body.

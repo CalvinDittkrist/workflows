@@ -92,7 +92,7 @@ type block struct {
 
 // The worker never reports a stage; the skill it invokes is the stage.
 var stages = map[string]string{
-	"worker:work":            "implement",
+	"worker:work":            stageImplement,
 	"worker:review":          stageReview,
 	"worker:pr":              stagePR,
 	"worker:ci":              stageCI,

@@ -150,8 +150,8 @@ func TestFailedChecksRunAFixSessionWithTheirLogsAndTheRunEndsReadyOnceGreen(t *t
 		t.Errorf("the fix session's brief names the check that passed:\n%s", brief)
 	}
 	// The work session stopped after the gate: the review, pr and ci stages are the factory's.
-	if stop := workers[0].settings(t).Env["WF_STOP_AFTER"]; stop != "gate" {
-		t.Errorf("the work session ran with WF_STOP_AFTER=%q, want gate", stop)
+	if stop := workers[0].settings(t).Env["WF_STOP_AFTER"]; stop != "implement" {
+		t.Errorf("the work session ran with WF_STOP_AFTER=%q, want implement", stop)
 	}
 }
 
@@ -361,7 +361,7 @@ func TestReviewCommentsAreAnsweredByAnAddressReviewsSessionWhoseRepliesTheFactor
 	if titles := factoryTitles(run, "ci: review-comments", "repair round", "replied to", "answered the review", "ci: green"); !equal(titles, wantTitles) {
 		t.Errorf("the ci stage said %v, want %v", titles, wantTitles)
 	}
-	if !equal(run.Stages, []string{"implement", "review", "pr", "ci", "address-reviews", "ci"}) {
+	if !equal(run.Stages, []string{"implement", "gate", "review", "pr", "ci", "address-reviews", "ci"}) {
 		t.Errorf("the run went through the stages %v, want the round in the address-reviews stage between two of ci", run.Stages)
 	}
 	workers := gh.workers(t)

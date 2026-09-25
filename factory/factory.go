@@ -802,6 +802,12 @@ func (f *Factory) execute(parent context.Context, r *Run, entry Entry) {
 			f.review(parent, ctx, r, entry, claim, panel)
 			return
 		}
+		// One whose branch carries commits beyond the base without a pass of the gate for them starts at
+		// the gate stage: the implementation is committed.
+		if f.gatingAlready(ctx, r, entry, claim) {
+			f.gate(parent, ctx, r, entry, claim)
+			return
+		}
 	}
 
 	s := workSession.overridden()
@@ -825,14 +831,7 @@ func (f *Factory) execute(parent context.Context, r *Run, entry Entry) {
 		f.finish(r, outcomeReady, reason, nil)
 		return
 	}
-	panel, err := f.gatedOf(ctx, claim, got)
-	if err != nil {
-		if !f.halted(parent, ctx, r, "read the gated commit") {
-			f.finish(r, outcomeFailed, "the commit the gate ran on could not be read: "+err.Error()+leftBehind(claim), nil)
-		}
-		return
-	}
-	f.review(parent, ctx, r, entry, claim, panel)
+	f.gate(parent, ctx, r, entry, claim)
 }
 
 // openedAlready is the open pull request of the branch a resumed run continues, which is where it
@@ -918,6 +917,21 @@ func (f *Factory) end(parent context.Context, r *Run, e ending) {
 	f.finish(r, e.outcome, e.reason, e.exitCode)
 }
 
+// runLock is the run's lock, taken before the first process of the run starts, a session or a gate, and
+// kept until the run ends (release). Every process group of the run holds it, so the next start of a
+// factory the host killed finds a process of the run that outlived it (endSurvivors).
+func (f *Factory) runLock(r *Run) (*os.File, error) {
+	var lock *os.File
+	var err error
+	f.runs.update(r, func() {
+		if r.lock == nil {
+			r.lock, err = f.runs.lock(r.ID)
+		}
+		lock = r.lock
+	})
+	return lock, err
+}
+
 // runSession starts one session and reads it to its end, and answers with its result, or with how it
 // ended when it left none that fits. label names the session in the run's log when it runs beside
 // others, and is empty for one that runs alone.
@@ -960,18 +974,13 @@ func (f *Factory) runSession(parent, ctx context.Context, r *Run, s session, ent
 		return result{}, abandoned(ctx, claim, "the factory could not open a pipe for the worker: "+err.Error())
 	}
 	cmd.Stdout, cmd.Stderr = stdoutWriter, stderrWriter
-	// The run's lock goes into the process group of every session of the run: the factory takes it
-	// before the first one and keeps it until the run ends (release), so a process an earlier session
+	// The run's lock goes into the process group of every session and gate of the run: the factory takes
+	// it before the first one and keeps it until the run ends (release), so a process an earlier session
 	// left behind cannot keep the next one from starting, and the kernel gives it back when the factory
 	// and the last process of those groups are gone. A factory the host killed ends nothing and holds
 	// nothing any more, and this is what the next start reads to find the worker that outlived it
 	// (endSurvivors).
-	var lockErr error
-	f.runs.update(r, func() {
-		if r.lock == nil {
-			r.lock, lockErr = f.runs.lock(r.ID)
-		}
-	})
+	lock, lockErr := f.runLock(r)
 	if lockErr != nil {
 		stdout.Close()
 		stdoutWriter.Close()
@@ -979,7 +988,7 @@ func (f *Factory) runSession(parent, ctx context.Context, r *Run, s session, ent
 		stderrWriter.Close()
 		return result{}, abandoned(ctx, claim, "the factory could not take the lock of this run: "+lockErr.Error())
 	}
-	cmd.ExtraFiles = []*os.File{r.lock}
+	cmd.ExtraFiles = []*os.File{lock}
 	err = cmd.Start()
 	if err != nil {
 		stdout.Close()
@@ -1228,8 +1237,8 @@ func workerSettings(env map[string]string) (string, error) {
 // own keys are written over them and stay what this function says, however the accepted names ever
 // change — the order the orchestrator's claim.sh keeps.
 //
-// WF_STOP_AFTER is the stage the session ends after, for the session that stops once the gate has
-// recorded its result, where the factory's review stage takes over ([ADR 0043]). No session runs
+// WF_STOP_AFTER is the stage the session ends after, for the session that stops once it has
+// committed its implementation, where the factory's gate stage takes over ([ADR 0043]). No session runs
 // the worker's own ci stage any more, so neither its knobs nor the review mandate of its repair count
 // reach a session: the factory counts the repair rounds itself.
 //

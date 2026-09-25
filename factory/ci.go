@@ -7,7 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/url"
+	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -739,10 +741,29 @@ func addressBrief(entry Entry, claim claimed, pull, listing string) string {
 
 // mergeBase merges the base into the branch in the worktree and answers with the files it conflicts
 // in, none for a clean merge, whose commit is made. A conflicting merge is left in progress, which is
-// what the fix session resolves. Fake mode has no worktree, so its canned scenario answers.
+// what the fix session resolves. A merge that is in progress already, which a run that ended while its
+// fix session resolved it leaves behind, is taken up rather than started again: its files still in
+// conflict are the answer, and one whose conflicts are all resolved is committed as it stands before
+// the base is merged again. Fake mode has no worktree, so its canned scenario answers.
 func (f *Factory) mergeBase(ctx context.Context, entry Entry, claim claimed) ([]string, error) {
 	if f.fake {
 		return cannedMerge(entry.scenario), nil
+	}
+	merging, err := mergeInProgress(ctx, claim.worktree)
+	if err != nil {
+		return nil, err
+	}
+	if merging {
+		out, err := git(ctx, claim.worktree, "diff", "--name-only", "--diff-filter=U")
+		if err != nil {
+			return nil, err
+		}
+		if out != "" {
+			return strings.Split(out, "\n"), nil
+		}
+		if _, err := git(ctx, claim.worktree, "commit", "--quiet", "--no-edit"); err != nil {
+			return nil, err
+		}
 	}
 	if _, err := gitWithin(ctx, claim.worktree, fetchTimeout, "fetch", "--quiet", "origin", claim.base); err != nil {
 		return nil, err
@@ -762,6 +783,23 @@ func (f *Factory) mergeBase(ctx context.Context, entry Entry, claim claimed) ([]
 		return nil, mergeErr
 	}
 	return strings.Split(out, "\n"), nil
+}
+
+// mergeInProgress says whether the worktree is in the middle of a merge: its git directory holds
+// MERGE_HEAD.
+func mergeInProgress(ctx context.Context, worktree string) (bool, error) {
+	path, err := git(ctx, worktree, "rev-parse", "--git-path", "MERGE_HEAD")
+	if err != nil {
+		return false, err
+	}
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(worktree, path)
+	}
+	_, err = os.Stat(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	return err == nil, err
 }
 
 // pushed pushes what the worktree holds to the branch, which a fix session has done already when it

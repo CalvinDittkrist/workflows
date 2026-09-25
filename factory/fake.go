@@ -374,19 +374,19 @@ func scriptedWorker(args []string, stdout, stderr io.Writer) int {
 		s.result("success", "", false, "completed", map[string]any{"outcome": resultBlocked, "summary": summary})
 		return 0
 	}
-	s.subagent("worker:docs-lookup", "Look up the stop-after flag", "WF_STOP_AFTER=gate ends the session once the gate has recorded a pass.")
-	s.tool("Bash", map[string]any{"command": "plugins/worker/scripts/gate.sh run", "description": "Run the gate and record it"}, "gate: pass")
-	// The gate hands the rest of the stage to a fresh context, so what the worker carries drops back
-	// to a loaded session: the peak of this run stands before the handover, not at its end.
+	s.subagent("worker:docs-lookup", "Look up the stop-after flag", "WF_STOP_AFTER=implement ends the session once the implementation is committed.")
+	s.tool("Bash", map[string]any{"command": "git commit -am 'feat: the change the canned issue asks for'", "description": "Commit the implementation"},
+		"[feat f00d5ed] feat: the change the canned issue asks for")
+	// The implementation hands the rest of the stage to a fresh context, so what the worker carries
+	// drops back to a loaded session: the peak of this run stands before the handover, not at its end.
 	s.compact()
-	s.say("The gate is green. Stopping after the gate.")
-	// The session stops after the gate (WF_STOP_AFTER=gate), and the factory runs the reviewers.
-	gate := "gate_result: pass (exit 0) at f00d5ed"
+	s.say("The implementation is committed. Stopping after the implement stage.")
+	// The session stops after the implement stage (WF_STOP_AFTER=implement), and the factory runs the gate.
 	commits := []string{"f00d5ed feat: the change the canned issue asks for"}
 	s.tool("Bash", map[string]any{"command": "plugins/worker/scripts/stop.sh", "description": "Report the stage the session stops after"},
-		"ready: stopped after gate\n"+gate)
-	s.result("success", "", false, "completed", map[string]any{"outcome": resultComplete, "gateResult": gate, "commits": commits,
-		"summary": "stopped after gate"})
+		"ready: stopped after implement\ncommits:\n"+commits[0])
+	s.result("success", "", false, "completed", map[string]any{"outcome": resultComplete, "commits": commits,
+		"summary": "stopped after implement"})
 	return 0
 }
 
@@ -480,15 +480,21 @@ func scriptedRepair(s *script, scenario string, round int) int {
 	return 0
 }
 
-// cannedGate is the gate on the final head in fake mode: the detached issue's fails on its first run,
-// which a fix session repairs; every other one passes.
-func cannedGate(scenario string, panel Panel, classed Classed) gateRun {
+// cannedGate is the gate in fake mode. The detached issue's runs past its timeout in the gate stage,
+// once the fix session of its conflicting merge committed, and passes after a fix session; on the final
+// head it fails on its first run, which a fix session repairs. Every other one passes.
+func cannedGate(scenario string, panel Panel, classed Classed, timeout time.Duration) gateRun {
 	head := fakeHead(panel)
-	if scenario == "detached" && panel.GateRounds == 0 {
-		return gateRun{head: head, result: gateResult("fail (exit 2)", head, classed, 41),
+	switch {
+	case scenario == "detached" && len(panel.Rounds) == 0 && panel.StageFixes < 2:
+		return gateRun{head: head, exit: -1, timedOut: true, seconds: int(timeout.Seconds()),
+			result: gateResult(fmt.Sprintf("fail (ran past its timeout of %s)", timeout), head, classed, int(timeout.Seconds())),
+			tail:   "=== RUN   TestPreviewServes\n    preview_test.go:18: waiting for the preview to listen"}
+	case scenario == "detached" && len(panel.Rounds) > 0 && panel.GateRounds == 0:
+		return gateRun{head: head, exit: 2, seconds: 41, result: gateResult("fail (exit 2)", head, classed, 41),
 			tail: "--- FAIL: TestPreviewServes (0.02s)\n    preview_test.go:31: the preview answered 404\nFAIL\nmake: *** [check] Error 1"}
 	}
-	return gateRun{passed: true, head: head, result: gateResult("pass (exit 0)", head, classed, 38), tail: "ok  \tpreview\t0.4s"}
+	return gateRun{passed: true, head: head, seconds: 38, result: gateResult("pass (exit 0)", head, classed, 38), tail: "ok  \tpreview\t0.4s"}
 }
 
 // cannedFiles is the files a fake run's change touches at the head it is at: the document its work
