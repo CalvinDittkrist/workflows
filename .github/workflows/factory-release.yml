@@ -72,18 +72,25 @@ jobs:
           path: dist
       - name: Attest where the binaries came from
         id: attest
-        # The checksums are the subject list, so the bundle and checksums.txt name the same digests.
+        # The subjects are the binaries this job holds, digested here. A list of digests written by
+        # the build job would let that job choose what gets signed.
         uses: actions/attest-build-provenance@v4
         with:
-          subject-checksums: dist/checksums.txt
+          subject-path: dist/factory-linux-*
       - name: The bundle, named after the version
+        id: bundle
+        # The one place the bundle's name is made; the next step reads it from this step's output.
         env:
-          BUNDLE: ${{ steps.attest.outputs.bundle-path }}
-        run: cp "$BUNDLE" "dist/factory-v${GITHUB_REF_NAME#factory/v}.sigstore.json"
+          ATTESTATION: ${{ steps.attest.outputs.bundle-path }}
+        run: |
+          bundle="dist/factory-v${GITHUB_REF_NAME#factory/v}.sigstore.json"
+          cp "$ATTESTATION" "$bundle"
+          echo "path=$bundle" >> "$GITHUB_OUTPUT"
       - name: Attach them to the release
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
+          BUNDLE: ${{ steps.bundle.outputs.path }}
         # Not the latest release: the repository's releases are its milestones, and a factory binary
         # is not one of them.
         run: |
@@ -97,9 +104,8 @@ jobs:
             echo "error: the release $GITHUB_REF_NAME already carries its binaries, checksums and attestation; a published version is never rebuilt, release the next version instead" >&2
             exit 1
           fi
-          bundle="dist/factory-v${GITHUB_REF_NAME#factory/v}.sigstore.json"
           gh release create "$GITHUB_REF_NAME" --verify-tag --latest=false \
             --title "factory v${GITHUB_REF_NAME#factory/v}" --generate-notes \
-            dist/factory-linux-amd64 dist/factory-linux-arm64 dist/checksums.txt "$bundle" \
+            dist/factory-linux-amd64 dist/factory-linux-arm64 dist/checksums.txt "$BUNDLE" \
             || gh release upload --clobber "$GITHUB_REF_NAME" \
-              dist/factory-linux-amd64 dist/factory-linux-arm64 dist/checksums.txt "$bundle"
+              dist/factory-linux-amd64 dist/factory-linux-arm64 dist/checksums.txt "$BUNDLE"

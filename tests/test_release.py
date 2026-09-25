@@ -311,7 +311,8 @@ esac
 
     def run_step(self, assets=None):
         env = {"PATH": f"{self.bin}:{os.environ['PATH']}", "GH_LOG": str(self.log),
-               "GITHUB_REF_NAME": "factory/v0.1.0", "GH_TOKEN": "x", "GH_REPO": "o/r"}
+               "GITHUB_REF_NAME": "factory/v0.1.0", "GH_TOKEN": "x", "GH_REPO": "o/r",
+               "BUNDLE": "dist/factory-v0.1.0.sigstore.json"}
         if assets is not None:
             env["GH_ASSETS"] = str(assets)
         return subprocess.run(["bash", "-e", "-c", self.script], cwd=self.tmp.name,
@@ -333,6 +334,14 @@ esac
         r = self.run_step(assets=1)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("release upload --clobber factory/v0.1.0", self.asked())
+
+    def test_a_release_without_its_attestation_is_finished(self):
+        """Three of the four files are a release still missing one of them, so the run goes on
+        and uploads the four instead of refusing."""
+        r = self.run_step(assets=len(self.ASSETS) - 1)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("release upload --clobber factory/v0.1.0", self.asked())
+        self.assertIn("dist/factory-v0.1.0.sigstore.json", self.asked())
 
     def test_a_release_that_already_carries_its_binaries_is_never_overwritten(self):
         """What a host downloaded under a version stays what it downloaded. A re-run of a finished
