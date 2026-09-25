@@ -111,11 +111,21 @@ func TestAPushTheRemoteRefusesAtTheEndingIsAWarningTheNotificationNames(t *testi
 	}
 }
 
-// A run the next start finds active was ended by a factory that is gone, and its commits may be in
-// the worktree alone. The start pushes them before it works, so they are on the remote whatever
-// becomes of the host after it.
+// A run the next start finds active was ended by a factory that is gone. Its commits may be in the
+// worktree alone. The start pushes them before it works, so they are on the remote whatever becomes
+// of the host after it. A start that is paused pushes nothing, and pushes them once when it is
+// unpaused.
 func TestAnInterruptedRunTheStartFindsHasItsCommitsPushed(t *testing.T) {
 	t.Parallel()
+	for _, paused := range []bool{false, true} {
+		t.Run(fmt.Sprintf("paused=%v", paused), func(t *testing.T) {
+			t.Parallel()
+			interruptedRunIsPushed(t, paused)
+		})
+	}
+}
+
+func interruptedRunIsPushed(t *testing.T, paused bool) {
 	gh := newGhShim(t)
 	gh.remote(t, "acme/edge-sensors")
 	gh.loggedInAs(t, "factory-bot")
@@ -143,10 +153,22 @@ func TestAnInterruptedRunTheStartFindsHasItsCommitsPushed(t *testing.T) {
 	active.State, active.Outcome, active.EndedAt, active.Worktree = "running", "", nil, worktree
 	records(t, data, first, active)
 
-	f := gh.work(t, config{"poll": "50ms", "data_dir": data,
+	f := gh.work(t, config{"poll": "50ms", "data_dir": data, "paused": paused,
 		"repositories": []string{"acme/edge-sensors"}, "notify": maintainers})
 	if ended := f.ended(t, 2); ended.Outcome != outcomeInterrupted {
 		t.Fatalf("run 2 ended as %q, want interrupted: the start found it active", ended.Outcome)
+	}
+	if paused {
+		f.never(t, time.Second, "a push while the configuration pauses the factory",
+			func() bool { return gh.head(t, "acme/edge-sensors", claimedBranch) != main })
+		f.configure(t, config{"paused": false})
+		// A second pause and unpause makes no second push.
+		f.eventually(t, 10*time.Second, "the push once the factory works again",
+			func() bool { return gh.head(t, "acme/edge-sensors", claimedBranch) == work })
+		f.configure(t, config{"paused": true})
+		f.eventually(t, 5*time.Second, "the second pause", func() bool { return f.state(t) == "paused" })
+		f.configure(t, config{"paused": false})
+		f.eventually(t, 5*time.Second, "the second unpause", func() bool { return f.state(t) != "paused" })
 	}
 	f.notified(t, 2)
 	if head := gh.head(t, "acme/edge-sensors", claimedBranch); head != work {
