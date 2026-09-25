@@ -2,8 +2,8 @@ package main
 
 import "strings"
 
-// A worker's totals are its result line's, and a session the factory ends — on the deadline, a stop,
-// a cancel — never prints one. For that case the factory counts the totals itself from the assistant
+// A worker's totals are its result line's, and a session the factory ends (on the deadline, a stop,
+// a cancel) never prints one. For that case the factory counts the totals itself from the assistant
 // lines it reads anyway, and prices them with the list prices below. The worker's own figure wins
 // whenever there is one: it is what Claude Code billed, while the factory's count is a floor, because
 // the output tokens of a message are not all known when its lines are printed.

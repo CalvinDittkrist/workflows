@@ -3,7 +3,7 @@
 # Usage: handoff.sh <review|ci>   with the note on stdin
 # The note is the only thing the next context learns that git and GitHub do not tell it, so this script
 # refuses one that leaves a section out, and refuses a working tree whose changes are in neither. It writes
-# the note into this worktree's git directory (ADR 0018) — outside the tree, never committed — appends the
+# the note into this worktree's git directory (ADR 0018), outside the tree and never committed, appends the
 # state of the branch, and starts the detached process that clears the session and sends the driver command
 # back to the pane. Nothing else in the pipeline reads the note: the SessionStart hook injects it once, and
 # no reviewer and no pull request author brief carries it.

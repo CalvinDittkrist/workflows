@@ -9,8 +9,8 @@ import (
 
 // The data directory is the one thing two factories on a host cannot share: the run ids, the run
 // records, the clones and the worktrees in it are written as if this process were alone with them.
-// The address the interface answers on is no guard for that — two configurations that name two
-// addresses would both start, work two issues at once and race each other's records — so the
+// The address the interface answers on is no guard for that (two configurations that name two
+// addresses would both start, work two issues at once and race each other's records), so the
 // directory itself is taken, before anything is read of it or written to it ([ADR 0027]).
 //
 // The lock is the kernel's, held by the open file and released when the process is gone whatever

@@ -10,7 +10,7 @@ import (
 // checkout: `make ui` builds ui/dist/app with Vite and this embeds it.
 //
 // Go refuses an embed pattern that matches nothing, so ui/dist is in git with a placeholder while
-// the build output under it is not — and a binary built without that step answers with what to do
+// the build output under it is not, and a binary built without that step answers with what to do
 // rather than with nothing (see uiHandler).
 //
 //go:embed all:ui/dist

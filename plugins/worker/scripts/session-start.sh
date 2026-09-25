@@ -21,10 +21,10 @@ emit() { jq -n --arg c "$1" '{hookSpecificOutput:{hookEventName:"SessionStart",a
 
 # A handoff note is waiting when the previous context of this worktree wrote one and no session has been
 # given it yet (ADR 0029). That context cleared itself, so this session starts with the issue as if it were
-# the first — plus the note, which is the only thing the branch and the issue do not say.
+# the first, plus the note, which is the only thing the branch and the issue do not say.
 # The note is for the next context, never for the one that wrote it: the record names the session that asked
-# for the handover, and a start that reaches this session again — an auto-compact firing between the note and
-# the `/clear` — must leave the note where it is, or the fresh context would resume a stage with no report.
+# for the handover, and a start that reaches this session again (an auto-compact firing between the note and
+# the `/clear`) must leave the note where it is, or the fresh context would resume a stage with no report.
 handoff=""
 if state=$(wf_state_dir 2>/dev/null) && [ -f "$state/handoff" ] && [ -z "$(wf_record_field "$state/handoff" injected)" ] &&
    [ "$(wf_record_field "$state/handoff" session)" != "${session_id:-}" ]; then
@@ -37,7 +37,7 @@ if [ -n "$issue" ] && [ "$source_" != "startup" ] && [ -z "$handoff" ]; then
 fi
 
 # The note goes to one session only: the record is marked before the context is emitted, so a second start
-# in the same worktree — a compact, a resume, a second handoff that never came — injects nothing from it,
+# in the same worktree (a compact, a resume, a second handoff that never came) injects nothing from it,
 # and a note that is delivered twice cannot make two contexts resume the same stage.
 # The mark names the session the note went to, which is what the entry checkpoint of that stage reads: the
 # context a handoff started skips exactly one checkpoint, and no session that merely finds the record
@@ -63,7 +63,7 @@ handoff_context() {
 }
 # Injecting the note and marking it spent are one step, and every exit that carries the note goes through
 # here: an emit path that forgot the marking would hand the same note to a second context, which is the one
-# thing the marking exists to prevent. So the marking comes first and has to succeed — a note that could not
+# thing the marking exists to prevent. So the marking comes first and has to succeed: a note that could not
 # be marked is one a second context could still be given, and it is not injected at all. The record stays as
 # it is, this context starts as if no handover had happened, and the handover's own timeout reports the note
 # that never arrived. Emitting anyway would fail open on the single invariant the mark exists for.

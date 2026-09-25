@@ -11,8 +11,8 @@ import (
 )
 
 // Every factory a test starts is bound to the life of the test process. The cleanup a test registers
-// ends it when the test ends, but go test can end first — on its -timeout, on a panic, or when
-// whatever ran it is killed — and then no cleanup runs: a factory left like that polls its gh shim
+// ends it when the test ends, but go test can end first (on its -timeout, on a panic, or when
+// whatever ran it is killed), and then no cleanup runs: a factory left like that polls its gh shim
 // for as long as the host is up. So the binary is started here and nowhere else, and on Linux, where
 // every host runs, the kernel kills it with the test process (lifeline). The cleanups stay, because
 // they end a factory the way a stop does, and on macOS they are all there is.

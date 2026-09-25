@@ -41,7 +41,7 @@ snapshot() {
   # list and not the review, and jq fails as soon as a PR has any review at all.
   bot_reviews=$(printf '%s' "$view" | jq -r --arg bots ",$bots," '[.reviews[] | ((.author.login // "") | sub("\\[bot\\]$";"")) as $l | select(($bots | index("," + $l + ",")) != null)] | length')
   # What one reviewer says about the pull request is their latest review that states anything, and an
-  # objection stands until that author approves or it is dismissed — the same rule pr-threads.sh lists the
+  # objection stands until that author approves or it is dismissed: the same rule pr-threads.sh lists the
   # summaries by, so the wait ends on exactly what the listing then shows. A review with nothing written
   # in it is not one of them: the listing has nothing to show for it, and the stage would loop on it.
   changes_requested=$(printf '%s' "$view" | jq -r '[.reviews[] | select(.state != "COMMENTED" and .state != "PENDING")]

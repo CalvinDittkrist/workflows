@@ -17,7 +17,7 @@ import (
 // The follow-up run. A run that ended ready leaves a pull request, and the maintainer reads it on
 // GitHub: requesting changes there is the gesture that hands the objection back to the factory,
 // which queues a run in the worktree of the claim that starts at the factory's address-reviews stage
-// ([ADR 0023]). Nothing else is needed of the maintainer — no checkout, no comment on the issue —
+// ([ADR 0023]). Nothing else is needed of the maintainer (no checkout, no comment on the issue),
 // and nothing of it is a state of the factory: the review is read from GitHub on every poll and what
 // has been answered is read from the run records, exactly as a release is ([ADR 0025]).
 //
@@ -28,8 +28,8 @@ import (
 // remembers the newest review of each that asks for changes. It runs on every poll, beside the
 // queue: a follow-up run stands in the same line as the work the factory resumes.
 //
-// Only an issue whose last run has ended is asked about, which is both what the rule needs — a
-// review is answered after the run it arrived during — and what keeps the factory from asking
+// Only an issue whose last run has ended is asked about, which is both what the rule needs (a
+// review is answered after the run it arrived during) and what keeps the factory from asking
 // GitHub about a pull request while its worker is writing to it.
 func (f *Factory) refreshRequested(ctx context.Context) {
 	requested, early := map[string]time.Time{}, false
@@ -65,7 +65,7 @@ func (h holding) pull() (int, bool) {
 
 // changesRequested says that a review asks for changes and that no run of this issue has answered
 // it: it was submitted after the last run of the issue ended, which is the rule the maintainer's
-// gesture is read by — an objection raised while a run was going is the running session's to see —
+// gesture is read by (an objection raised while a run was going is the running session's to see),
 // and after the review the last follow-up run of this issue already stands for.
 //
 // That second comparison is what makes one review one run, however many polls read it: it holds
@@ -171,7 +171,7 @@ func (g *gitHub) newestRequest(ctx context.Context, repository string, pull int)
 	switch read := strings.TrimSpace(string(state)); read {
 	case "open":
 	case "closed":
-		// Merged or closed — GitHub calls both of them closed — so what a review asked of it is not
+		// Merged or closed (GitHub calls both of them closed), so what a review asked of it is not
 		// this factory's to answer, and it is not asked about again. That bound is what keeps the
 		// watch to the pull requests that are open: the factory holds every issue it has ever claimed
 		// until cleanup lets one go ([ADR 0026]), and a call per poll for each of them would spend a
@@ -182,7 +182,7 @@ func (g *gitHub) newestRequest(ctx context.Context, repository string, pull int)
 		return none, nil
 	default:
 		// Only the two states GitHub names end the watch. Anything else is a reading this factory does
-		// not understand — an empty answer, a gh that changed its output — and reading it as closed
+		// not understand (an empty answer, a gh that changed its output), and reading it as closed
 		// would end the watch of an open pull request for the life of the process, silently.
 		return none, fmt.Errorf("the state of the pull request %s reads %q, which is neither open nor closed", key, read)
 	}
@@ -195,7 +195,7 @@ func (g *gitHub) newestRequest(ctx context.Context, repository string, pull int)
 	// was submitted with, so a maintainer who asked for changes and later approved without dismissing
 	// the first review still has that CHANGES_REQUESTED entry in it. Reading the raw history would
 	// answer a retracted objection with a run, so the list is read into the latest review per author
-	// and only that one speaks — the same answer whatever order GitHub sends the pages in.
+	// and only that one speaks: the same answer whatever order GitHub sends the pages in.
 	latest := map[string]ghReview{}
 	// --paginate answers one JSON array per page, so the pages are read as a stream of arrays.
 	decoder := json.NewDecoder(bytes.NewReader(raw))
@@ -225,15 +225,15 @@ func (g *gitHub) newestRequest(ctx context.Context, repository string, pull int)
 		may, err := g.mayWrite(ctx, repository, review)
 		if err != nil {
 			// An author whose access cannot be read is no writer for this poll, and the other reviews
-			// are read all the same: a login GitHub answers nothing for — a reviewing app, a deleted
-			// account — would otherwise silence the maintainer's own review on this pull request for
+			// are read all the same: a login GitHub answers nothing for (a reviewing app, a deleted
+			// account) would otherwise silence the maintainer's own review on this pull request for
 			// good. Nothing of the failure is remembered, so the next poll asks again.
 			g.warn(g.pullWarnings, key+" by "+review.User.Login, "error: %v; that review queues nothing", err)
 			continue
 		}
 		// The author was read, so the next failure on them is worth a line again. Without this the key
-		// would be set for the life of the process — the pull request's own key above says nothing about
-		// it — and a later review of the same author whose access cannot be read would be passed over in
+		// would be set for the life of the process (the pull request's own key above says nothing about
+		// it), and a later review of the same author whose access cannot be read would be passed over in
 		// silence, which is the one thing a warn-once memo may not become.
 		g.readable(g.pullWarnings, key+" by "+review.User.Login)
 		if may {
@@ -250,7 +250,7 @@ func (g *gitHub) newestRequest(ctx context.Context, repository string, pull int)
 // It is read once per review and kept: a review is submitted once, and the access its author had
 // when they submitted it is what the follow-up run stands on. The answer is the push permission of
 // that user and not the association GitHub puts on the review, which says that somebody is a member
-// of the organisation or was invited to the repository — neither of which is write access to it.
+// of the organisation or was invited to the repository, neither of which is write access to it.
 func (g *gitHub) mayWrite(ctx context.Context, repository string, review ghReview) (bool, error) {
 	return g.mayPush(ctx, repository, review.User.Login, "review "+strconv.FormatInt(review.ID, 10))
 }

@@ -5,14 +5,14 @@
 # The summaries are here because a review is not only its inline comments: "request changes" with the
 # whole objection in the review body and no comment on a line is an ordinary gesture, and a listing of
 # threads alone answers it with nothing. What one reviewer says is their latest review that states
-# anything — GitHub leaves an older entry in the list with the state it was submitted with, so an
+# anything: GitHub leaves an older entry in the list with the state it was submitted with, so an
 # objection its author later approved away is not one that still stands, and a review that only
 # commented states nothing and leaves the one before it standing. That fold below is the rule; the
 # states argument of the query is what keeps a page from being spent on reviews that state nothing,
 # which a bot that comments on every push posts by the dozen.
 #
 # The reviews are read to the first of them and not only the newest page: the rule is the latest review
-# per author, and an author whose word lies before a page boundary would otherwise be read as silent —
+# per author, and an author whose word lies before a page boundary would otherwise be read as silent:
 # while the factory, which paginates the whole list, queues a follow-up run for exactly that review and
 # would then record it as answered by a session that was shown nothing. A pull request with a hundred
 # reviews that state something is rare, so this is one request on all but those.

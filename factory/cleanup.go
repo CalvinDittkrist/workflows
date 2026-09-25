@@ -11,7 +11,7 @@ import (
 )
 
 // Letting an issue go: the factory gives back what it holds once GitHub says the maintainer is done
-// with the issue — the routing label taken off it, the issue closed, the pull request of one of its
+// with the issue: the routing label taken off it, the issue closed, the pull request of one of its
 // runs merged or closed. It is the only path in the factory that removes anything, and it removes
 // nothing that is work ([ADR 0026]): the commits of the worktree go to the remote before the
 // worktree does, a push that fails keeps the worktree where it is, the branch on the remote is
@@ -27,7 +27,7 @@ import (
 
 // handoverTimeout bounds every handover of one poll: their pushes, their fetches and the requests
 // that give the issues back. Handovers run in the working loop, so whatever they wait for the line
-// waits for too — a poll that does not happen, an interface whose last poll goes stale under a
+// waits for too: a poll that does not happen, an interface whose last poll goes stale under a
 // reader. What one of them transfers is the commits of one branch and not a repository, which is
 // why they are given the room of a few polls and not the hour a clone has; each transfer may take
 // that room, and this deadline over the whole pass is what keeps a poll to it however many
@@ -48,8 +48,8 @@ var errHandoverCut = errors.New("letting the issue go took longer than " + hando
 // if no pull request came of the issue. The record is marked last and only when the worktree is gone and this
 // host is off the issue, because the mark is what says the issue is out of this factory's hands: a
 // run marked while its worktree is still there would leave that directory on the host for good, and
-// one marked while GitHub still names this host as the assignee would leave an issue nobody — no
-// other claimer, no person reading the frontier — ever sees as free again.
+// one marked while GitHub still names this host as the assignee would leave an issue nobody (no
+// other claimer, no person reading the frontier) ever sees as free again.
 //
 // Every step of it may be made again: each reads the host and the remote as they are rather than
 // what the step before it left, so a handover that stops halfway is taken up whole by a later poll.
@@ -88,7 +88,7 @@ func (f *Factory) letGo(ctx context.Context, h holding, decision string) {
 
 // pushWorktree puts what this host holds of the branch on the remote, which is the act everything
 // below waits for. What that is depends on what is left: the worktree's HEAD while the worktree is
-// there — whatever the worker checked out on the way is what it did — and the local branch in the
+// there (whatever the worker checked out on the way is what it did), and the local branch in the
 // clone when the directory is gone and the name is not, which is what a worktree somebody removed by
 // hand leaves behind. A host that holds neither has nothing to push.
 //
@@ -97,7 +97,7 @@ func (f *Factory) letGo(ctx context.Context, h holding, decision string) {
 // pushed on top of the host's commits. The branch is fetched and, when it contains them, the
 // handover carries on as after a push that landed.
 //
-// Any other refusal — a remote branch that does not hold the commits, a host that cannot reach it —
+// Any other refusal (a remote branch that does not hold the commits, a host that cannot reach it)
 // leaves the worktree, the branch and the assignee exactly as they are, says so on the run with all
 // git said, and the next poll tries again. The alternative is a directory of commits nobody else has.
 func (f *Factory) pushWorktree(ctx context.Context, record *Run, clone string, held Run) bool {
@@ -147,8 +147,8 @@ func onRemote(ctx context.Context, clone, from, ref, branch string) bool {
 // be read ([ADR 0026]).
 //
 // Such a name stops the handover too, rather than leaving it to run on without it. The push above
-// puts the worktree's HEAD on the remote, and a worker that left that HEAD behind its own branch —
-// detached, or moved on by hand — is the one way the two differ; carrying on would then read a
+// puts the worktree's HEAD on the remote, and a worker that left that HEAD behind its own branch
+// (detached, or moved on by hand) is the one way the two differ; carrying on would then read a
 // remote branch that holds nothing beyond its base and delete it, and the commits the name holds
 // would be on this host alone. The next poll finds the worktree gone, pushes the name itself and
 // takes the issue the rest of the way.
@@ -187,7 +187,7 @@ func (f *Factory) removeWorktree(ctx context.Context, record *Run, clone string,
 // it was cut from, so a claim that produced nothing leaves nothing behind. The second is a branch
 // whose pull request GitHub reports as merged: its work is in the base whatever the merge method, and
 // a squash or a rebase leaves commits on the branch that the base does not have by their names.
-// Everything else stays for the person the issue is with now — a closed pull request that was not
+// Everything else stays for the person the issue is with now: a closed pull request that was not
 // merged is still under that branch, and a run of the issue after this one continues on it.
 //
 // The remote is fetched first, because what the branch holds is decided against what the remote has
@@ -222,8 +222,8 @@ func (f *Factory) removeRemoteBranch(ctx context.Context, record *Run, clone str
 
 // mergedAtTip says whether the pull request the claim opened is merged, is of this branch of the
 // repository itself, and was merged at the commit the branch is at on the remote now. The last one is
-// what keeps a commit somebody pushed to the branch after the merge — or a cancelled worker's that
-// the push above put there — from going with it: only the commits the merge took are in the base. A
+// what keeps a commit somebody pushed to the branch after the merge (or a cancelled worker's that
+// the push above put there) from going with it. Only the commits the merge took are in the base. A
 // pull request that cannot be read is no answer, so the branch stays.
 func mergedAtTip(ctx context.Context, clone, repository, branch, link string) bool {
 	if link == "" {
@@ -239,11 +239,11 @@ func mergedAtTip(ctx context.Context, clone, repository, branch, link string) bo
 
 // removeAssignee takes this host off the issue, which is what says on GitHub that the factory holds
 // it: an issue it has given back must not keep it, or no other claimer and no person would ever see
-// it as free. An issue whose run opened a pull request keeps the assignee — the work is with a
+// it as free. An issue whose run opened a pull request keeps the assignee: the work is with a
 // person from then on, and who worked it is part of what they read ([ADR 0026]).
 //
 // It is the last step of the handover and the handover stands or falls with it: a removal GitHub
-// refused — a token that expired, a rate limit, a factory that was stopped in the middle of it —
+// refused (a token that expired, a rate limit, a factory that was stopped in the middle of it)
 // leaves the issue marked as this host's, and only a run that is not yet marked as let go is tried
 // again. So the handover stops here, says so on the run, and a later poll asks GitHub once more.
 //
@@ -265,8 +265,8 @@ func (f *Factory) removeAssignee(ctx context.Context, record *Run, connected Con
 // heldUp says on the run what stopped the handover, and answers false so a step can hand its own
 // answer on. A factory that is stopping says nothing: the git or gh call it cancelled itself failed
 // because of that and not because of this host, and the next start takes the issue up again. A
-// handover that ran out of its own time (errHandoverCut) is this host's trouble all the same — a
-// line that cannot carry a branch in two minutes — so that one is said.
+// handover that ran out of its own time (errHandoverCut) is this host's trouble all the same (a
+// line that cannot carry a branch in two minutes), so that one is said.
 func (f *Factory) heldUp(ctx context.Context, r *Run, warning string) bool {
 	if ctx.Err() == nil || errors.Is(context.Cause(ctx), errHandoverCut) {
 		f.warn(r, "letting the issue go is held up", warning)

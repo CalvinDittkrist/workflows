@@ -312,7 +312,7 @@ func (c changeClass) covers(file string) bool {
 
 // Classed is one determination of the class, as the run records it: the class that applied, what it
 // was determined for (the review or the gate), the commit and the files it was read from, and what the
-// class decided — the gate command, in the form the configuration writes it, and the reviewers.
+// class decided: the gate command, in the form the configuration writes it, and the reviewers.
 type Classed struct {
 	Class     string      `json:"class"`
 	For       string      `json:"for"`

@@ -1,6 +1,6 @@
 name: factory-release
 # The factory host needs no Go, no Node and no checkout: it downloads one static binary. A factory
-# version tag, and nothing else, builds it — `scripts/release.sh factory --push` creates that tag
+# version tag, and nothing else, builds it: `scripts/release.sh factory --push` creates that tag
 # from a green gate. No branch push and no other tag matches this trigger: a plugin release is
 # tagged <plugin>--vX.Y.Z and a milestone vX.Y.Z, neither of which can carry a slash.
 on:
@@ -11,8 +11,8 @@ permissions:
 jobs:
   binaries:
     runs-on: ubuntu-latest
-    # Building is the half that runs other people's code — npm packages, their install and build
-    # scripts — so it does it with a token that can only read. Publishing is the other job.
+    # Building is the half that runs other people's code (npm packages, their install and build
+    # scripts), so it does it with a token that can only read. Publishing is the other job.
     permissions:
       contents: read
     steps:

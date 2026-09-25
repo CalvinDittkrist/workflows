@@ -867,8 +867,8 @@ func finishedSince(checks []check, since time.Time) bool {
 	return slices.ContainsFunc(checks, func(c check) bool { return c.CompletedAt.After(since) })
 }
 
-// halted ends a run whose context ended outside a session — the factory stopping, a cancel, the
-// deadline — the way the ending of a session is read, and says whether it did.
+// halted ends a run whose context ended outside a session (the factory stopping, a cancel, the
+// deadline) the way the ending of a session is read, and says whether it did.
 func (f *Factory) halted(parent, ctx context.Context, r *Run, while string) bool {
 	stopped, was := cancelledBy(ctx)
 	switch {

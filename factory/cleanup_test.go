@@ -23,7 +23,7 @@ const claimedWorktree = "feat-104-retry-the-upload-when-the-broker-drops"
 
 // Taking the routing label off an issue whose run is going is the one gesture that ends work in
 // progress: the worker's process group goes, the run is recorded cancelled, and the issue is given
-// back — pushed first, and with the branch on the remote kept exactly as long as it carries a commit.
+// back: pushed first, and with the branch on the remote kept exactly as long as it carries a commit.
 func TestARunIsCancelledWhenTheRoutingLabelIsTakenOffItsIssue(t *testing.T) {
 	t.Parallel()
 	for _, one := range []struct {
@@ -124,7 +124,7 @@ func TestARunIsCancelledWhenTheRoutingLabelIsTakenOffItsIssue(t *testing.T) {
 
 // An issue the factory holds whose runs are over is let go on the same three decisions, and this is
 // where they are read: the pull request of its run merged or closed, the issue closed, the routing
-// label taken off it. An issue that reached a pull request keeps its assignee — the work is with a
+// label taken off it. An issue that reached a pull request keeps its assignee: the work is with a
 // person from then on. A branch that carries commits stays on the remote whatever the decision was,
 // unless its pull request was merged at the commit the branch is at: then its work is in the base,
 // whatever the merge method, and the branch goes like one that holds nothing.
@@ -634,8 +634,8 @@ func TestAWorktreeRemovedByHandStillHasItsBranchPushedBeforeThatBranchGoes(t *te
 }
 
 // Routing an issue this factory let go again asks for one more run, and one is what it gets. The run
-// it starts answers that routing whatever becomes of it — a claim another host won in between makes
-// it a lost run, and lost or not the gesture is spent — or the factory would take the issue back on
+// it starts answers that routing whatever becomes of it (a claim another host won in between makes
+// it a lost run, and lost or not the gesture is spent), or the factory would take the issue back on
 // every poll for as long as the label stays on it.
 func TestARoutingAnsweredByARunIsNotTakenUpAgain(t *testing.T) {
 	t.Parallel()
@@ -724,7 +724,7 @@ func TestAnIdleHeldIssueIsAskedAboutFarMoreRarelyThanThePoll(t *testing.T) {
 }
 
 // Pushing a worktree pushes what its HEAD points at, and a worker that left that HEAD behind its own
-// branch — detached, or moved by hand — is the one case where that is not the work. The branch in
+// branch (detached, or moved by hand) is the one case where that is not the work. The branch in
 // the clone still holds those commits, so it holds the whole handover up until the poll after it has
 // pushed them from there: a handover that carried on would read a remote branch with nothing beyond
 // its base and delete it, and the work would be on this host alone ([ADR 0026]).
@@ -823,7 +823,7 @@ func TestAnIssueIsNotLetGoWhileThisHostIsStillItsAssignee(t *testing.T) {
 	gh.issue(t, "acme/edge-sensors", assignedTo(
 		openIssue(claimedIssue, claimedTitle, time.Now().UTC().Add(-72*time.Hour), readyLabel), "factory-bot"))
 
-	// The work reaches the remote and the worktree goes with it — those steps are done — but the
+	// The work reaches the remote and the worktree goes with it (those steps are done), but the
 	// issue itself is not given back while GitHub still names this host as its assignee.
 	f.eventually(t, 30*time.Second, "the worktree to be removed", func() bool {
 		_, err := os.Stat(worktree)
@@ -873,7 +873,7 @@ func TestAnIssueIsNotLetGoWhileThisHostIsStillItsAssignee(t *testing.T) {
 // A branch this factory takes back is recognised by the work it carries and not by its name alone.
 // Every claimer spells an issue's branch the same way, so a branch another claimer cut in the
 // seconds between this factory's reading of the line and its fetch carries the name of the run that
-// once held the issue — and two claimers working one branch is what the claim exists to make
+// once held the issue. Two claimers working one branch is what the claim exists to make
 // impossible. A branch is left on the remote only when it carries work the base does not have, so a
 // branch of that name with nothing on it is somebody else's claim and this issue is claimed anew:
 // GitHub refuses the second creation of the reference, and this run is recorded as lost.

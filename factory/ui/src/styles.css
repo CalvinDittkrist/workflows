@@ -1,5 +1,5 @@
 /* Vesper, the palette of the terminal this factory is watched from: near-black, white text, a peach
-   accent. Dark only — the host is watched at night, and a second theme is one more thing to hold. */
+   accent. Dark only: the host is watched at night, and a second theme is one more thing to hold. */
 :root {
   --bg: #101010;
   --line: #262626;

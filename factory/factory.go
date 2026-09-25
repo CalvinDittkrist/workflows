@@ -129,7 +129,7 @@ type Factory struct {
 // source is where the line comes from on every poll: GitHub, or the canned queue of fake mode. It
 // answers with what it could read and reports what it could not, so nothing of it is ever stored.
 // The issues this factory holds are asked about in the same reading, because they are not in the
-// line — an issue the factory holds is assigned to this host, which is what takes it out of it.
+// line: an issue the factory holds is assigned to this host, which is what takes it out of it.
 type source interface {
 	queue(ctx context.Context, held []Held) poll
 	// changesRequested is the newest review that asks for changes on one pull request this factory
@@ -161,8 +161,8 @@ type source interface {
 
 // Held is one issue this factory holds, as a poll asks the source about it: the issue, the run that
 // holds it, and the pull request a run of it opened if one stands. It is the one reading through
-// which a maintainer's decision reaches work in progress — the routing label taken off, the issue
-// closed, the pull request merged or closed — and GitHub is the only surface those decisions are
+// which a maintainer's decision reaches work in progress (the routing label taken off, the issue
+// closed, the pull request merged or closed), and GitHub is the only surface those decisions are
 // made on ([ADR 0023]).
 //
 // [ADR 0023]: ../docs/adr/0023-github-is-the-only-control-surface-of-the-factory.md
@@ -182,7 +182,7 @@ func (h Held) key() string { return Issue{Repository: h.Repository, Number: h.Nu
 // poll is one reading of the line: the routed issues the source could read, and the repositories it
 // could not, with what stood in the way. The factory serves the second beside the first, because a
 // repository nobody can read holds no issues either, and an empty line is otherwise the same sight
-// as an idle one — on the one surface an unattended factory is watched through.
+// as an idle one, on the one surface an unattended factory is watched through.
 type poll struct {
 	issues     []Issue
 	unreadable map[string]string // repository -> what gh said
@@ -322,7 +322,7 @@ func (f *Factory) refreshQueue(ctx context.Context) poll {
 
 // heldPolls is how many poll intervals apart an idle holding is asked about. Reading one costs a
 // request for the issue and another for its pull request, and an issue whose run is over stays held until a
-// person is done with that pull request — days of polling, for every pull request this host has
+// person is done with that pull request: days of polling, for every pull request this host has
 // waiting at once. Asking about all of them every minute would spend the host's whole hour of
 // requests on issues nobody has touched, and the token that runs out is the one the workers use.
 //
@@ -342,8 +342,8 @@ const heldPolls = 10
 //
 // An issue is left out of the reading while it is not due: an idle holding is asked about once
 // every heldPolls poll intervals, not on each poll, and the wait starts over whenever the issue is
-// in another state than it was last asked in — the run that held it ended, a pull request came of
-// it — so the factory hears at once about work that has just changed hands and keeps its questions
+// in another state than it was last asked in (the run that held it ended, a pull request came of
+// it), so the factory hears at once about work that has just changed hands and keeps its questions
 // rare about work that lies as it did. A reading that failed counts as asked: GitHub said nothing either way,
 // and asking a rate limit again every minute is what ran into it.
 //
@@ -399,7 +399,7 @@ func (f *Factory) heldIssuesDue() []Held {
 // run which is still going cancels it: the worker's process group is ended and the run is recorded
 // cancelled. A decision that reaches an issue whose runs are over lets the issue go, which is the
 // one path that removes anything ([ADR 0026]) and the same path a cancelled run is let go by on the
-// poll after it — so nothing is ever taken apart under a worker that is still writing in it.
+// poll after it, so nothing is ever taken apart under a worker that is still writing in it.
 //
 // The cancels come first and cost nothing: a signal to a process group this host already has. The
 // handovers come after them and run in the working loop rather than beside it, because letting an
@@ -408,9 +408,9 @@ func (f *Factory) heldIssuesDue() []Held {
 // together are bound to the few polls of handoverTimeout rather than each to itself: whatever many
 // decisions arrive in one poll, the next poll is that deadline away and not a multiple of it. A
 // handover the deadline cuts, and every one behind it, is left for a later poll to make again from
-// the state of the host — which is what a handover reads at every step anyway.
+// the state of the host, which is what a handover reads at every step anyway.
 //
-// A paused factory does none of it — it writes nothing anywhere while it is paused, which is what a
+// A paused factory does none of it: it writes nothing anywhere while it is paused, which is what a
 // pause is for.
 //
 // [ADR 0026]: ../docs/adr/0026-the-factory-never-deletes-work-on-its-own.md
@@ -523,8 +523,8 @@ func (f *Factory) dispatch(ctx context.Context) {
 }
 
 // claimable says whether a run of this repository could claim anything at all. A repository whose
-// clone is missing — the host could not reach it when the factory connected, and connecting is done
-// once per start — has no worktree to give a worker, so every run of it would fail before it touched
+// clone is missing (the host could not reach it when the factory connected, and connecting is done
+// once per start) has no worktree to give a worker, so every run of it would fail before it touched
 // the remote. A run is what takes an issue out of the line for good, so such an issue is left in the
 // line instead of being spent on a claim that cannot work, and the operator reads why in the log.
 func (f *Factory) claimable(repository string) bool {
@@ -563,19 +563,19 @@ func (f *Factory) hold(repository, reason string) {
 }
 
 // waiting is the line as the factory would work it and as the interface serves it: first the work it
-// already holds — resumed and follow-up runs — ordered by the time of the signal that queued it, then
+// already holds (resumed and follow-up runs), ordered by the time of the signal that queued it, then
 // the routed issues nobody has worked yet, in the order the maintainer routed them ([ADR 0025]).
 //
 // An issue with a run of its own is out of the routed part while a run of it stands: only the
 // signals of held work put it back in the line, and only for an issue this factory holds. That is
-// what leaves a foreign claim alone — a routed issue whose branch another claimer created is
+// what leaves a foreign claim alone: a routed issue whose branch another claimer created is
 // recorded as lost, holds nothing, and is never read as a release or as a pull request to watch.
 //
 // An issue the factory has let go comes back into the routed part, and its entry carries the run
 // that held it, so the claim takes that run's branch back rather than claiming the issue anew
 // ([ADR 0026]). Only a routing newer than the moment it was let go does that: the label that was on
-// the issue all along is the one the maintainer's decision was made under — closing a pull request
-// would otherwise start the same work over by itself — and routing the issue again is the gesture
+// the issue all along is the one the maintainer's decision was made under (closing a pull request
+// would otherwise start the same work over by itself), and routing the issue again is the gesture
 // that asks for another run. It is answered once, by the run it starts: a routing no newer than the
 // signal the issue's latest run already stands for is one that has been acted on, whatever became of
 // that run, which is what keeps an issue whose take-back was lost from being taken back on every
@@ -592,7 +592,7 @@ func (f *Factory) hold(repository, reason string) {
 //
 // Only a connected repository is in the line, held work included: a repository the configuration no
 // longer names is one this host is not to work, whatever its records say it once held. Nothing of it
-// is touched or deleted — the branch, the worktree and the assignee stay — and connecting it again
+// is touched or deleted (the branch, the worktree and the assignee stay) and connecting it again
 // puts what it holds back in the line.
 //
 // [ADR 0025]: ../docs/adr/0025-one-queue-one-worker-work-in-progress-first.md
@@ -1054,7 +1054,7 @@ func (f *Factory) runSession(parent, ctx context.Context, r *Run, s session, ent
 	// process it left behind would still hold open.
 	_ = endGroup(pid, syscall.SIGKILL)
 	// What the group wrote before it ended is in the pipes and is read in a moment. A process that
-	// took a session of its own — a server started with nohup — is outside the group and keeps the
+	// took a session of its own (a server started with nohup) is outside the group and keeps the
 	// pipes open for as long as it lives, which no deadline ends: the factory stops reading instead,
 	// or this run would never end and no other would ever start.
 	drained := make(chan struct{})
@@ -1111,8 +1111,8 @@ func (f *Factory) runSession(parent, ctx context.Context, r *Run, s session, ent
 		reason: "the session ended without a result line; a session ends by printing its structured result"}
 }
 
-// abandoned is how a run whose worker never started ends. A cancel that arrives in that moment — the
-// claim stands, the session is a few lines away — ends the run the way every other cancel does, and
+// abandoned is how a run whose worker never started ends. A cancel that arrives in that moment (the
+// claim stands, the session is a few lines away) ends the run the way every other cancel does, and
 // only what is really this host's trouble is recorded as a failure of it.
 func abandoned(ctx context.Context, claim claimed, reason string) *ending {
 	if stopped, was := cancelledBy(ctx); was {
@@ -1137,8 +1137,8 @@ func cancelledBy(ctx context.Context) (cancelled, bool) {
 // endInError ends a run whose session ended in an error. When the quota the worker spends is used up
 // by then, the error is the quota's and not the issue's: the outcome is quota, everything the run
 // holds stays as it is, and the factory resumes the issue by itself after the reset, without spending
-// the one automatic resume an interruption has ([ADR 0026]) — once in a row, so a quota resume that
-// runs out again leaves the issue to a person. Otherwise, and when the check cannot answer, the run
+// the one automatic resume an interruption has ([ADR 0026]). It does so once in a row, so a quota
+// resume that runs out again leaves the issue to a person. Otherwise, and when the check cannot answer, the run
 // has failed.
 //
 // [ADR 0026]: ../docs/adr/0026-the-factory-never-deletes-work-on-its-own.md
@@ -1163,7 +1163,7 @@ func (f *Factory) endInError(ctx context.Context, r *Run, reason string, exitCod
 // leftBehind says what a run that did not finish left on the remote, which is what the operator
 // needs to decide: a claim that never got to create the branch took nothing, one that did holds the
 // issue by it until somebody removes it, and a resumed run leaves the claim it was under exactly as
-// it found it — nothing here deletes work ([ADR 0026]).
+// it found it: nothing here deletes work ([ADR 0026]).
 //
 // [ADR 0026]: ../docs/adr/0026-the-factory-never-deletes-work-on-its-own.md
 func leftBehind(claim claimed) string {
@@ -1310,8 +1310,8 @@ const drainGrace = 3 * time.Second
 const maxStreamLine = 64 << 20
 
 // read takes a worker's stream line by line. A stream that cannot be read to its end says so in the
-// run's log — the alternative is a silent reader and a worker that blocks on a pipe nobody empties
-// until the deadline ends it — and what is left of it is drained so the worker can finish.
+// run's log (the alternative is a silent reader and a worker that blocks on a pipe nobody empties
+// until the deadline ends it), and what is left of it is drained so the worker can finish.
 func (f *Factory) read(r *Run, session *heard, what string, stream io.Reader, line func([]byte)) {
 	scanner := bufio.NewScanner(stream)
 	scanner.Buffer(make([]byte, 64*1024), maxStreamLine)

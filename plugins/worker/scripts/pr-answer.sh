@@ -3,7 +3,7 @@
 #
 # A review whose objection is in its body and on no line of the diff has no thread to resolve, so
 # pr-resolve.sh cannot say what was done about it. Without this the reviewer's only answer is the
-# commits, and a point that was declined gets no word at all — least of all on an unattended run,
+# commits, and a point that was declined gets no word at all, least of all on an unattended run,
 # where the pull request is the whole conversation.
 # Usage: pr-answer.sh [<pr>] --body "<text>"
 set -uo pipefail

@@ -23,8 +23,8 @@ import (
 // [ADR 0026]: ../docs/adr/0026-the-factory-never-deletes-work-on-its-own.md
 
 // endSurvivors ends the worker of every run this start found active whose process group is still
-// alive. A factory that was stopped ends its worker itself, but one the host killed — the kernel out
-// of memory, a `kill -9`, a service manager that does not take the whole group with it — ends
+// alive. A factory that was stopped ends its worker itself, but one the host killed (the kernel out
+// of memory, a `kill -9`, a service manager that does not take the whole group with it),
 // nothing, and its worker runs on with nobody reading its stream. The run it belongs to is over as
 // far as every record goes, so resuming that issue beside it would leave two unattended sessions
 // committing in one worktree.
@@ -32,7 +32,7 @@ import (
 // The run's lock is the proof: it is held by that process group and by nothing else, so a lock this
 // factory cannot take says a process of the group is there, and a process group whose members are
 // alive is one no other process on this host has been given the number of. Only then is the recorded
-// number signalled — the same group, ended the same way a stop ends it, and killed if it does not go.
+// number signalled: the same group, ended the same way a stop ends it, and killed if it does not go.
 func (f *Factory) endSurvivors() {
 	for _, id := range f.runs.cutOff {
 		run, ok := f.runs.find(id)
@@ -104,7 +104,7 @@ type holding struct {
 	answered time.Time
 	// pullRequest is the pull request the claim this factory holds has opened, the latest run of it
 	// that named one: the one the factory watches for a review that asks for changes, and the one
-	// whose own end — merged or closed — lets the issue go. An issue let go without one loses the
+	// whose own end (merged or closed) lets the issue go. An issue let go without one loses the
 	// assignee this factory put on it; an issue with one keeps it, because from then on the work is
 	// with a person and the assignee says who did it. It goes with the claim: what became of it was
 	// decided about the runs that opened it, and a run that takes the issue back afterwards is a
@@ -138,8 +138,8 @@ func holdings(runs []Run) map[string]holding {
 		key := run.key()
 		h := out[key]
 		h.last, h.idle = run, run.EndedAt != nil
-		// The pull request of the issue moves forward with the runs that report one — a run that
-		// reported none says nothing about it — and is cleared below with the claim it was opened
+		// The pull request of the issue moves forward with the runs that report one (a run that
+		// reported none says nothing about it) and is cleared below with the claim it was opened
 		// under, which is why it is read here and not after that.
 		if run.PullRequest != "" {
 			h.pullRequest, h.drafted = run.PullRequest, run.Draft
@@ -148,7 +148,7 @@ func holdings(runs []Run) map[string]holding {
 		case run.LetGoAt != nil:
 			// The claim of this run stood and stands no more. What it holds is cleared with it, so a
 			// reader that forgets to ask holds first meets an empty run rather than a worktree that
-			// is not on this host any more — and the pull request of that claim goes with it, so the
+			// is not on this host any more, and the pull request of that claim goes with it, so the
 			// run that takes the issue back is not decided about by the one before it.
 			h.run, h.holds, h.let, h.letGo, h.pullRequest, h.drafted = Run{}, false, run, true, "", false
 		case run.Holding:
@@ -185,14 +185,14 @@ func holdings(runs []Run) map[string]holding {
 }
 
 // releaseAt is the release a run has answered, and the zero time for a run that has not. Answering a
-// release is taking the issue back — the assignee this factory put on it again — or, short of that,
+// release is taking the issue back (the assignee this factory put on it again) or, short of that,
 // ending on the attempt: a run that reached an outcome of its own has answered the gesture whether
 // the take-back landed or not. Only the interruption is not an answer, because the factory was
 // stopped or cut off under that run rather than done with it: the issue is still lying unassigned
 // where the person who released it left it, and the next start takes it back for good.
 //
-// A failed attempt has to count, or the release is read anew on every poll — nothing about the issue
-// changed, so GitHub keeps answering with it — and the factory works the same failing resume again
+// A failed attempt has to count, or the release is read anew on every poll (nothing about the issue
+// changed, so GitHub keeps answering with it), and the factory works the same failing resume again
 // the moment it ends, for as long as the issue stands. The issue waits for a person instead, and the
 // person's next gesture is a removal newer than this one.
 func releaseAt(run Run) time.Time {
@@ -217,9 +217,9 @@ func (h holding) issue() Issue {
 	return Issue{Repository: h.run.Repository, Number: h.run.Issue, Title: h.run.Title, Labels: []string{}}
 }
 
-// resume prepares a run of work this factory already holds — a resumed run and a follow-up run
+// resume prepares a run of work this factory already holds: a resumed run and a follow-up run
 // alike: the worktree the claim made is where the worker continues, on the commits that are there.
-// Nothing is fetched and no branch is created — the claim that decided the issue stands, and this
+// Nothing is fetched and no branch is created: the claim that decided the issue stands, and this
 // run is under it.
 //
 // A release is the one signal with something to do on the remote. The person who released the issue
@@ -244,8 +244,8 @@ func (f *Factory) resume(ctx context.Context, r *Run, e Entry) (claimed, error) 
 	}
 	if _, err := os.Stat(held.worktree); err != nil {
 		// The worktree of the claim is not on this host: the data directory was moved or lost, or the
-		// issue was let go and routed again. The work itself is on the remote — every worktree this
-		// factory removes is pushed first ([ADR 0026]) — so the worktree is made again from the branch
+		// issue was let go and routed again. The work itself is on the remote (every worktree this
+		// factory removes is pushed first, [ADR 0026]), so the worktree is made again from the branch
 		// and the run continues on those commits. The remote is fetched for it, which a resume that
 		// finds its worktree does not do: that one continues on the commits that are there.
 		if _, err := gitWithin(ctx, clone, fetchTimeout, "fetch", "--quiet", "--prune", "origin"); err != nil {
@@ -291,15 +291,15 @@ var resuming = map[string]string{
 // claim from counting as a release.
 //
 // Both comparisons are two readings on GitHub's own clock: the removal against the release a run was
-// queued on, so a poll that still shows the issue unassigned — the assignment of the resumed run has
-// not landed yet — queues nothing twice, and the removal against the assignment it undid. Nothing
+// queued on, so a poll that still shows the issue unassigned (the assignment of the resumed run has
+// not landed yet) queues nothing twice, and the removal against the assignment it undid. Nothing
 // here is held against this host's clock, which may be minutes from GitHub's in either direction:
 // a host running ahead would else answer a genuine release with silence for as long as the drift
 // lasts, and there is nobody watching who would notice.
 //
 // Only when GitHub's event list names no assignment at all is the start of the latest run the guard
-// instead. There is no reading to compare with then, and the gesture that case stands for — an
-// assignee removed before this factory ever claimed the issue — lies hours behind the run rather
+// instead. There is no reading to compare with then, and the gesture that case stands for (an
+// assignee removed before this factory ever claimed the issue) lies hours behind the run rather
 // than minutes.
 func (h holding) released(issue Issue, routed bool) bool {
 	if !routed || !h.holds || !h.idle || !issue.unassignedAt.After(h.answered) {

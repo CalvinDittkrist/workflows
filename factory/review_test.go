@@ -152,7 +152,7 @@ func TestAReviewThatAsksForChangesRunsTheWorkerOnItInTheSameWorktree(t *testing.
 // What a poll must not read as a review that asks for changes: one from somebody without write
 // access, a plain comment, a dismissed review, and one submitted before the last run of the issue
 // ended. The maintainer's own then fills the line, which is what says the fixture was sound and the
-// silence before it was the rule at work, and merging the pull request empties it again — after
+// silence before it was the rule at work, and merging the pull request empties it again, after
 // which the factory stops reading that pull request at all, because it holds every issue it ever
 // claimed and a call per poll for each of them is a rate limit spent on work that is over.
 //
@@ -195,7 +195,7 @@ func TestAReviewQueuesNothingUnlessAWriterAskedForChangesOnTheOpenPullRequest(t 
 
 	// The maintainer asks for changes on the same pull request: the line fills with it.
 	requestedAt := ended.Add(10 * time.Minute).Truncate(time.Second) // GitHub times a review to the second
-	// A newer review by a login GitHub answers nothing for — an app, a deleted account — is beside it:
+	// A newer review by a login GitHub answers nothing for (an app, a deleted account) is beside it:
 	// the maintainer's gesture stands all the same. The shim has no answer for that permission, which
 	// is a request that fails, so an author whose access cannot be read must not take the whole
 	// reading down with them.
@@ -360,7 +360,7 @@ func TestAFollowUpRunStandsWithTheResumedWorkBeforeAnyNewIssue(t *testing.T) {
 
 // The rule a poll reads a review by, in the shapes it can meet one in. The gesture is driven end to
 // end above; what is read here is what the records of an issue say about a review the last poll
-// found — above all that a review is answered once, because the poll that queued it repeats for as
+// found, above all that a review is answered once, because the poll that queued it repeats for as
 // long as the follow-up run takes to be recorded.
 func TestAReviewIsAnsweredOncePerIssueAndOnlyWhileTheIssueIsIdle(t *testing.T) {
 	t.Parallel()
@@ -427,7 +427,7 @@ func TestAReviewIsAnsweredOncePerIssueAndOnlyWhileTheIssueIsIdle(t *testing.T) {
 
 // What is said about an author GitHub could not be asked about, which is said once while it lasts and
 // again the next time it happens: the factory polls every minute for weeks, so a warning that repeated
-// itself would drown the log — and one that was never cleared would silence the next outage for the
+// itself would drown the log, and one that was never cleared would silence the next outage for the
 // life of the process, leaving a review passed over without a word.
 //
 // This one is read from the code itself rather than through the running binary: the gesture it belongs
@@ -466,7 +466,7 @@ func TestAnAuthorGitHubCouldNotBeAskedAboutIsWarnedAboutAgainAfterItCould(t *tes
 		t.Fatalf("the factory said %d times that %s could not be asked about, want once", n, author)
 	}
 
-	// It answers again — for this review the author is no writer, so nothing is queued either.
+	// It answers again: for this review the author is no writer, so nothing is queued either.
 	writeFile(t, permission, "false\n")
 	if _, err := g.newestRequest(context.Background(), repository, pull); err != nil {
 		t.Fatalf("the reviews could not be read: %v", err)

@@ -15,14 +15,14 @@
 # Which round this is, however, is not the session's to judge: the count is the one bound on an
 # unattended repair loop, and a stage that could start it again whenever it read itself as asked for
 # would be no bound at all. WF_REVIEW_MANDATE is the driver's word that this session was started to
-# answer a review — a driver that starts a session for a review that asks for changes sets it —
+# answer a review (a driver that starts a session for a review that asks for changes sets it),
 # and without it reset keeps the count and says so, so the address-reviews skill may call it either
 # way and the script decides.
 #
 # The word names the review it stands for (the time it was submitted), because one review is one new
 # mandate and not one per round: the record keeps the mandate its count was started for, and a reset
 # that names that same mandate again keeps the count. The session started for a review therefore has
-# the rounds of that one review and no way to grant itself more — the CI stage of that very session
+# the rounds of that one review and no way to grant itself more: the CI stage of that very session
 # invokes this skill again on the next review comments, and each of those rounds is the pipeline's
 # own.
 set -euo pipefail
@@ -44,7 +44,7 @@ printf '%s' "$limit" | grep -Eq '^[1-9][0-9]*$' ||
   wf_die "WF_CI_REPAIR_ROUNDS='$limit' is not a positive number of repair rounds, e.g. WF_CI_REPAIR_ROUNDS=3"
 
 # The record belongs to the pull request it names, which is the one this branch has open. A second pull
-# request for the branch — opened after the first was closed, or for other work of this worktree — carries
+# request for the branch (opened after the first was closed, or for other work of this worktree) carries
 # another number, so the record reads as none and the count starts at one: its checks have failed no round
 # yet. Reading it costs one GitHub call and never the model's memory of which pull request this is.
 pr=$(wf_pr_for_branch)

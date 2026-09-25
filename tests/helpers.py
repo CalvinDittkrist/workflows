@@ -40,7 +40,7 @@ class ShimTest(unittest.TestCase):
         self.wt_root.mkdir()
 
     def await_detached(self, seconds=30):
-        """Wait for a process a script under test left running in the temp directory — the handoff starts one
+        """Wait for a process a script under test left running in the temp directory: the handoff starts one
         with nohup. The directory is removed when the test ends, and a process still writing into it made the
         removal fail from time to time; one that outstays the wait is ended, because what it writes into is
         about to go."""

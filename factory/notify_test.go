@@ -62,8 +62,8 @@ func TestARunThatEndsReadyAsksTheMaintainersForAReviewOfItsPullRequest(t *testin
 	}
 }
 
-// A review request GitHub refuses is refused for one login — somebody who cannot review that
-// repository, the author of the pull request — and the maintainers it takes still hear of the run.
+// A review request GitHub refuses is refused for one login (somebody who cannot review that
+// repository, the author of the pull request), and the maintainers it takes still hear of the run.
 func TestAReviewRequestOneLoginIsRefusedStillReachesTheOthers(t *testing.T) {
 	t.Parallel()
 	gh := newGhShim(t)
@@ -120,9 +120,9 @@ func TestAReviewRequestThatStallsStillReachesTheLoginsBehindIt(t *testing.T) {
 
 // A run that ends ready and names no pull request has nothing to ask a review of, and is an issue
 // the factory still holds and is done with: the maintainer hears of it on the issue, like every
-// other ending that waits for a person. No run of this factory ends so any more — the implement session
+// other ending that waits for a person. No run of this factory ends so any more (the implement session
 // stops after the review and the factory opens the pull request itself, and a follow-up run answers
-// the review in its own address-reviews stage — so such a run is one a factory before it recorded,
+// the review in its own address-reviews stage), so such a run is one a factory before it recorded,
 // whose session ran the pipeline to its end and named a pull request of another repository, and
 // whose ending that factory did not get to make.
 func TestAReadyRunThatNamesNoPullRequestIsSaidOnTheIssue(t *testing.T) {
@@ -241,8 +241,8 @@ func TestABlockedSummaryIsKeptAsTheWorkerWroteIt(t *testing.T) {
 
 // The hand-back gesture is the gesture of an issue the factory holds, and a run can end waiting for
 // a person while holding none: a claim that created the branch and failed at the assignee leaves
-// that branch on the remote and holds nothing. Its comment says what the run left — the run's own
-// reason does, and the comment must not say the opposite of it — and offers no gesture that would do
+// that branch on the remote and holds nothing. Its comment says what the run left (the run's own
+// reason does, and the comment must not say the opposite of it), and offers no gesture that would do
 // nothing, because a maintainer who read one would leave the branch standing and every later claim
 // of the issue would be lost to it.
 func TestTheCommentOfARunThatHoldsNothingSaysSoAndOffersNoGesture(t *testing.T) {
@@ -400,7 +400,7 @@ func TestOnlyAnInterruptionTheFactoryDoesNotResumeItselfIsNotified(t *testing.T)
 	}
 }
 
-// An ending the factory recorded and did not get to notify — the host lost power between the two —
+// An ending the factory recorded and did not get to notify (the host lost power between the two)
 // is notified on the next start, and by that start alone.
 func TestAnEndingThatWasRecordedAndNotNotifiedIsNotifiedOnTheNextStart(t *testing.T) {
 	t.Parallel()
@@ -610,7 +610,7 @@ func TestTheEndingsThatNotifyAndTheOnesThatDoNot(t *testing.T) {
 }
 
 // The comment carries a text the factory did not write: the blocker is the worker's report, and the
-// text of an issue can steer what a worker writes. So it is quoted as the text it is — nothing in it
+// text of an issue can steer what a worker writes. So it is quoted as the text it is: nothing in it
 // becomes a mention, a heading or a link, whatever it contains.
 func TestTheReasonIsQuotedIntoTheCommentAndCannotBreakOutOfIt(t *testing.T) {
 	t.Parallel()

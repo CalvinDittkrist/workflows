@@ -317,12 +317,12 @@ class WorkerKnobTests(ShimTest):
     README = ROOT / "README.md"
     # The four variables of the table a worker reads that a claim does not take: it sets the session's mode
     # and issue itself, the base branch is what --base is for, and the review mandate is the word of the
-    # driver that starts a session to answer a review — a claim starts a session at the work stage.
+    # driver that starts a session to answer a review: a claim starts a session at the work stage.
     CLAIM_OWNED = ("WF_MODE", "WF_ISSUE", "WF_BASE_BRANCH", "WF_REVIEW_MANDATE")
     maxDiff = None
 
     def accepted_names(self):
-        """The names claim.sh lists when it refuses one it does not accept — the set as a user meets it."""
+        """The names claim.sh lists when it refuses one it does not accept: the set as a user meets it."""
         r = self.run_script(ORCH / "claim.sh", "12", "--env", "NOT_A_KNOB=1")
         self.assertNotEqual(r.returncode, 0, r.stdout)
         listed = re.search(r"Accepted names: (.+)", r.stderr)

@@ -290,9 +290,9 @@ func (f *Factory) readOnlyCommand(ctx context.Context, s session, claim claimed,
 }
 
 // readOnlyArgs is what a read-only session takes of worker_args: the model it names, and nothing else.
-// worker_args is written for the worker, and an argument that gives it a capability — an MCP server
-// (--mcp-config, which --strict-mcp-config still loads), a plugin directory, an added directory or
-// tools — would give it to a session that reads text somebody else wrote as well
+// worker_args is written for the worker, and an argument that gives it a capability (an MCP server
+// through --mcp-config, which --strict-mcp-config still loads, a plugin directory, an added directory or
+// tools) would give it to a session that reads text somebody else wrote as well
 // (https://code.claude.com/docs/en/cli-reference.md, checked on 2026-09-24).
 func readOnlyArgs(workerArgs []string) []string {
 	for i := len(workerArgs) - 1; i >= 0; i-- {
