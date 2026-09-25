@@ -372,7 +372,8 @@ The logins in `notify` are asked for a review when a run ends `ready`. They are 
 - An issue is held when its run ended `blocked`, `failed`, on the deadline, or interrupted twice.
 - Its branch, worktree and assignee stay, and it is out of the line until you remove the assignee.
 - The run's ending pushed the worktree's HEAD to the branch, so the branch on the remote carries every commit of the last run.
-- A push that failed is a warning on the run, and the comment on the issue names it. A run the next start finds interrupted is pushed by that start, before its first poll.
+- A push that failed is a warning on the run, and the comment on the issue names it.
+- A run the next start finds interrupted is pushed by that start, before its first poll.
 - The factory then assigns itself again and resumes it in the same worktree.
 - When `notify` names somebody, the comment the factory leaves on the issue says so.
 
