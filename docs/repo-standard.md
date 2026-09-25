@@ -1,6 +1,6 @@
 # Repository standard
 
-The baseline every repository that runs this workflow is held to. `plugins/repo-standards/scripts/check.sh` (or `/repo-standards:docs-check`) verifies the file rules offline and in CI; `/repo-standards:standardize` audits a repository with six read-only auditors, one per area, and records the maintainer's approval per category of the findings; on an empty repository every finding is a create action. `plugins/repo-standards/scripts/workspace.sh` brings the GitHub workspace and its milestones to the standard, and the check reports its differences as warnings when GitHub is reachable. `/repo-standards:apply` applies the approved findings: backup, cleanup pull request, issues, then the workspace and the check. Terms are defined in the [glossary](glossary.md).
+The baseline every repository that runs this workflow is held to. `plugins/repo-standards/scripts/check.sh` (or `/repo-standards:docs-check`) verifies the file rules and the [writing rules](#writing-rules) offline and in CI; `/repo-standards:standardize` audits a repository with six read-only auditors, one per area, and records the maintainer's approval per category of the findings; on an empty repository every finding is a create action. `plugins/repo-standards/scripts/workspace.sh` brings the GitHub workspace and its milestones to the standard, and the check reports its differences as warnings when GitHub is reachable. `/repo-standards:apply` applies the approved findings: backup, cleanup pull request, issues, then the workspace and the check. Terms are defined in the [glossary](glossary.md).
 
 ## Profile
 A repository's profile is its visibility plus its branch model. Both are derived from GitHub, never configured per repository ([ADR 0009](adr/0009-profile-derived-from-github-with-two-branch-models.md)).
@@ -11,14 +11,14 @@ A repository's profile is its visibility plus its branch model. Both are derived
 ## Files that stay
 | File | Purpose | Checked |
 | --- | --- | --- |
-| `README.md` | What the repository is and how to use it | fails if missing; warns with `<fill in>` left |
+| `README.md` | What the repository is and how to use it | fails if missing or over its word cap; warns with `<fill in>` left |
 | `AGENTS.md` | Instruction source for every agent: commands and conventions an agent cannot infer; under 200 lines | fails if missing; warns over 200 lines or with `<fill in>` left |
 | `CLAUDE.md` | The line `@AGENTS.md`, optionally a short Claude-only section | fails if missing or without the import; warns over 200 lines |
 | `Makefile` | The gate: a `check` target | fails without a `check` target; warns with `<fill in>` left |
 | `.github/workflows/*.yml` | A job named `check` that runs `make check` | fails without one |
-| `docs/architecture.md` | One-page map: components, data flow, boundaries | fails if missing or under 15 lines |
-| `docs/adr/README.md` + `NNNN-title.md` | Decisions, MADR-trimmed, numbered, each with a Status line | fails on a missing index, duplicate numbers or a missing Status |
-| `docs/glossary.md` | Terms the code and issues use | warns if missing |
+| `docs/architecture.md` | Map: purpose, components, data flow, boundaries, decisions | fails if missing, under 15 lines or over its word cap |
+| `docs/adr/README.md` + `NNNN-title.md` | Decisions, MADR-trimmed, numbered, each with a Status line | fails on a missing index, duplicate numbers, a missing Status or an ADR over its word cap |
+| `docs/glossary.md` | Terms the code and issues use, one row each | warns if missing; fails on an entry over its word cap |
 | `.github/PULL_REQUEST_TEMPLATE.md` | Closes, what and why, verification, limits | warns if missing |
 | `.github/dependabot.yml` | Grouped version updates, one entry per package manager | warns if missing |
 | `.claude/settings.json` | Marketplace, enabled plugins, `WF_*` env, permission allowlist, attribution off | warns on a missing workflow plugin, any other plugin enabled, MCP servers enabled or attribution on; fails on hooks |
@@ -38,6 +38,28 @@ The check fails on every tracked or untracked, not ignored path under `.claude/`
 
 ## Instruction files
 `AGENTS.md` is the source; `CLAUDE.md` imports it with `@AGENTS.md`, because Claude Code reads `CLAUDE.md` and not `AGENTS.md` ([ADR 0007](adr/0007-agents-md-is-the-instruction-source.md)). Both stay under 200 lines. A monorepo may keep one such pair per area (`services/api/AGENTS.md` and `services/api/CLAUDE.md`); an area's pair loads only when an agent works there, and the check holds each pair to the same rules. Claude Code loads every nested `CLAUDE.md` it passes, so a `CLAUDE.md` or `AGENTS.md` kept as data (a template, a fixture) is instructions too and must form a valid pair or be renamed.
+
+## Writing rules
+The rules for prose in documents, prompts and comments ([ADR 0048](adr/0048-writing-rules-are-part-of-the-standard-and-the-gate-checks-the-mechanical-ones.md)):
+
+- No em dash, in any text file.
+- A paragraph has at most 80 words; longer content becomes bullets.
+- A bullet has at most 30 words.
+- A sentence has at most 25 words.
+- No metaphors, no filler, no hedging.
+- No session ids, dates or measurements told as a story; a fact is one line or it goes.
+- An ADR has at most 250 words, headings included.
+- The architecture map has at most 2000 words, the README 1200, a plugin README 800, a glossary entry 40.
+
+The check counts the em dash in every text file and the word caps in Markdown. Sentence length, filler, hedging and metaphors are judged by the docs reviewer. Nothing is measured in lines.
+
+- A word is a whitespace-separated token that is not punctuation alone.
+- A bullet is a list item, numbered or not; a glossary entry is a table row of `docs/glossary.md`.
+- Code blocks, front matter and tables are no paragraphs; a document's count skips code blocks and front matter.
+
+Each finding fails the check. A repository not rewritten yet sets `WF_WRITING_LENIENT=1` for the check in its `Makefile`, which turns them into warnings. An accepted ADR may be shortened in wording; its decision is never edited ([ADR 0049](adr/0049-an-accepted-adr-may-be-shortened-in-wording-its-decision-is-never-edited.md)).
+
+The templates in `plugins/repo-standards/templates/` are the fixed form of each document: `README.md.tpl`, `plugin-README.md`, `architecture.md`, `adr-template.md` and `glossary.md`.
 
 ## The gate
 Every repository has a `Makefile`, and `make check` runs everything CI gates on ([ADR 0008](adr/0008-make-check-is-the-single-gate.md)). Agents run `make check` instead of guessing a per-repository test command. CI runs it in a job named `check`, and `check` is the one required status check. A repository with several CI jobs keeps them parallel, each calling its own make target, and adds an aggregating job named `check`.

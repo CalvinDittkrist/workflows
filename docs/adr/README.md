@@ -1,6 +1,6 @@
 # Architecture Decision Records
 
-One file per decision, numbered, never edited after acceptance (supersede instead). Format: [MADR](https://adr.github.io/madr/), trimmed. Create one with `/repo-standards:adr <title>`.
+One file per decision, numbered. An accepted ADR may be shortened in wording, but its decision is never edited: a new decision supersedes it. Format: [MADR](https://adr.github.io/madr/), trimmed. Create one with `/repo-standards:adr <title>`.
 
 | ADR | Title | Status |
 | --- | --- | --- |
@@ -51,3 +51,5 @@ One file per decision, numbered, never edited after acceptance (supersede instea
 | [0045](0045-a-test-hunt-runs-on-a-branch-without-an-issue.md) | A test hunt runs on a branch without an issue | accepted |
 | [0046](0046-a-test-is-removed-at-high-confidence-without-approval-before-the-pull-request.md) | A test is removed at high confidence without a person's approval before the pull request | accepted; amended by [0047](0047-a-test-hunt-reads-its-shares-whole-and-hunts-while-it-finds-something.md): the worker checks a `medium` candidate instead of keeping it unread |
 | [0047](0047-a-test-hunt-reads-its-shares-whole-and-hunts-while-it-finds-something.md) | A test hunt reads its shares whole and hunts while it finds something new | accepted |
+| [0048](0048-writing-rules-are-part-of-the-standard-and-the-gate-checks-the-mechanical-ones.md) | Writing rules are part of the standard, and the gate checks the mechanical ones | accepted |
+| [0049](0049-an-accepted-adr-may-be-shortened-in-wording-its-decision-is-never-edited.md) | An accepted ADR may be shortened in wording; its decision is never edited | accepted |

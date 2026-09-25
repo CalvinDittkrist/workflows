@@ -23,6 +23,7 @@ Public repository of Claude Code plugins for agent-driven development: an orches
 - Every user-facing behaviour has a test in `tests/` that runs the real script with the `gh`/`herdr` shims in `tests/shims/`, and the factory's has a Go test in `factory/` that starts the real binary. Tests assert observable behaviour, never grep prompt text.
 - Plugins are self-contained (no shared code across plugin directories); duplicated helpers in `lib.sh` are intentional. The label vocabulary is duplicated the same way, and a test in `tests/test_plugins.py` fails when the two copies drift apart.
 - Docs: `docs/architecture.md` is the map, `docs/vision.md` is the why, decisions are ADRs in `docs/adr/`, terms are in `docs/glossary.md`, the standard every repository follows is `docs/repo-standard.md`. Update them with the change that makes them stale.
+- Prose in documents, prompts and comments follows the [writing rules](docs/repo-standard.md#writing-rules).
 - `AGENTS.md` is the instruction source for every agent; `CLAUDE.md` only imports it. No repository-local skills, agents, commands or rules (the standard check fails on them).
 - No agent co-authors in commits. Conventional commits.
 
