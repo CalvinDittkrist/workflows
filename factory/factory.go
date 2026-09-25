@@ -1105,10 +1105,10 @@ func (f *Factory) runSession(parent, ctx context.Context, r *Run, s session, ent
 	case got != nil:
 		return *got, nil
 	case misfit != "":
-		return result{}, &ending{outcome: outcomeFailed, reason: "the session's result does not fit the schema: " + misfit, exitCode: &exitCode}
+		return result{}, &ending{outcome: outcomeFailed, reason: fmt.Sprintf("the result of the session of the stage %s does not fit the schema: %s", s.stage, misfit), exitCode: &exitCode}
 	}
 	return result{}, &ending{outcome: outcomeFailed, inError: true, exitCode: &exitCode,
-		reason: "the session ended without a result line; a session ends by printing its structured result"}
+		reason: fmt.Sprintf("the session of the stage %s ended without a result line; a session ends by printing its structured result", s.stage)}
 }
 
 // abandoned is how a run whose worker never started ends. A cancel that arrives in that moment (the
