@@ -343,7 +343,7 @@ const heldPolls = 10
 // An issue is left out of the reading while it is not due: an idle holding is asked about once
 // every heldPolls poll intervals, not on each poll, and the wait starts over whenever the issue is
 // in another state than it was last asked in (the run that held it ended, a pull request came of
-// it) so the factory hears at once about work that has just changed hands and keeps its questions
+// it), so the factory hears at once about work that has just changed hands and keeps its questions
 // rare about work that lies as it did. A reading that failed counts as asked: GitHub said nothing either way,
 // and asking a rate limit again every minute is what ran into it.
 //
@@ -1137,8 +1137,8 @@ func cancelledBy(ctx context.Context) (cancelled, bool) {
 // endInError ends a run whose session ended in an error. When the quota the worker spends is used up
 // by then, the error is the quota's and not the issue's: the outcome is quota, everything the run
 // holds stays as it is, and the factory resumes the issue by itself after the reset, without spending
-// the one automatic resume an interruption has ([ADR 0026]), once in a row, so a quota resume that
-// runs out again leaves the issue to a person. Otherwise, and when the check cannot answer, the run
+// the one automatic resume an interruption has ([ADR 0026]). It does so once in a row, so a quota
+// resume that runs out again leaves the issue to a person. Otherwise, and when the check cannot answer, the run
 // has failed.
 //
 // [ADR 0026]: ../docs/adr/0026-the-factory-never-deletes-work-on-its-own.md
