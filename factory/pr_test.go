@@ -15,7 +15,7 @@ import (
 //
 // [ADR 0043]: ../docs/adr/0043-the-migration-runs-from-the-last-stage-to-the-first.md
 
-// failedPanel is the panel summary of a implement session whose review ran out of rounds with two reviewers
+// failedPanel is the panel summary of an implement session whose review ran out of rounds with two reviewers
 // that never passed.
 const failedPanel = "review_rounds: 3\npanel: code=PASS security=PASS docs=FIX→PASS tests=FIX→FIX→FIX senior=FIX→FIX→BLOCK\n" +
 	"fixed: 5 (S1 1, S2 3, S3 1)\ndisputed: senior S2 factory/pr.go:40 the naming of the stage"

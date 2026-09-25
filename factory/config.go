@@ -219,8 +219,7 @@ func Load(path string) (Settings, error) {
 	if err := decoder.Decode(&c); err != nil {
 		if strings.Contains(err.Error(), `unknown field "worker_env"`) {
 			return bad("%v; worker_env set knobs of the worker plugin, which no session of the factory runs any more; remove it, and write a knob it carried as the factory's own, "+
-				"at the top of the file or on the repository: \"ci\": {\"repair_rounds\", \"bot_reviewers\", \"review_wait\", \"checks_grace\"}, "+
-				"\"review\": {\"rounds\", \"reviewers\", \"gate_rounds\", \"classes\"} or \"gate\": {\"rounds\", \"timeout\"}", err)
+				"at the top of the file or on the repository: ci (%s), review (%s) or gate (%s)", err, ciFields, reviewFields, gateFields)
 		}
 		return bad("%v; the fields are %s, see factory/factory.example.json", err, configFields)
 	}

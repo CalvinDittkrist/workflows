@@ -227,7 +227,7 @@ func TestAResumeWithCommitsBeyondTheBaseStartsAtTheGateStage(t *testing.T) {
 	}{
 		"with commits":    {committed: true, gating: true, stages: []string{"implement", "gate"}},
 		"without commits": {committed: false, gating: false, stages: []string{"implement", "gate"}},
-		"with commits of a implement session that ended": {committed: true, gating: false, stages: []string{"implement"}},
+		"with commits of an implement session that ended": {committed: true, gating: false, stages: []string{"implement"}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

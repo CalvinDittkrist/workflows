@@ -269,7 +269,7 @@ func (f *Factory) gatingAlready(ctx context.Context, r *Run, entry Entry, claim 
 }
 
 // pastImplement says whether a run got past its implement session: it reached the gate stage, which the
-// factory enters only after a implement session that reported its implementation complete or on a resume
+// factory enters only after an implement session that reported its implementation complete or on a resume
 // past it, or it recorded the review that comes after the gate.
 func pastImplement(prior Run) bool {
 	return slices.Contains(prior.Stages, stageGate) || prior.Panel != nil || prior.Review != nil
