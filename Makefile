@@ -29,10 +29,8 @@ validate:
 	@set -e; for p in plugins/*; do echo "claude plugin validate $$p --strict"; claude plugin validate "$$p" --strict; done
 	@set -e; for d in plugins/*/skills plugins/*/agents; do [ ! -d "$$d" ] || { echo "claude plugin validate $$d --strict"; claude plugin validate "$$d" --strict; }; done
 
-# WF_WRITING_LENIENT=1 turns the writing rules' failures into warnings while the documents are rewritten to them.
-# The last ticket of spec #175 removes it.
 standard:
-	WF_WRITING_LENIENT=1 plugins/repo-standards/scripts/check.sh
+	plugins/repo-standards/scripts/check.sh
 
 # The suite builds the release binaries with the real scripts/factory-binaries.sh, which refuses to
 # build one without the dashboard inside it, so the build it embeds has to be there first. The runner
