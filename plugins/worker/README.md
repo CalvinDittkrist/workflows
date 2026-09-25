@@ -53,12 +53,15 @@ Yolo mode (`WF_MODE=yolo`): `finish.sh` squash-merges after `green`, notifies th
 | `WF_REVIEWERS` | `code,security,docs,tests,senior` | members of the reviewer panel |
 | `WF_REVIEW_ROUNDS` | `3` | max review rounds, counted over the recorded rounds |
 | `WF_CI_REPAIR_ROUNDS` | `3` | max repair rounds per pull request |
+| `WF_PR_BOT_REVIEWERS` | `chatgpt-codex-connector` | bot logins whose review the worker waits for; `""` for none |
+| `WF_PR_REVIEW_WAIT` | `1200` | seconds to wait for the bot's one review after checks pass |
+| `WF_REVIEW_MANDATE` | unset | names the review a driver starts a worker to answer; `repair.sh reset` restarts the repair count once per review |
 | `WF_HANDOFF_TOKENS` | `100000` | context size at which the checkpoint says hand over |
 | `WF_CONTEXT_MAX_AGE` | `900` | seconds after which a recorded size is too old and the answer is `yes` |
 | `WF_HANDOFF_SESSION_MS` | `60000` | how long a fresh session may take to appear; no number means the default |
 | `WF_HANDOFF_POLL_SECONDS` | `1` | how often the pane is asked; no number means the default |
 | `WF_DOCS_TIMEOUT` | `30` | seconds one documentation request may take |
-| `WF_MODE` | set by the claim | `manual` or `yolo` |
+| `WF_MODE`, `WF_ISSUE` | set by the claim | mode (`manual` or `yolo`) and issue of the worker session |
 
 ## Develop
 `claude --plugin-dir plugins/worker` loads the plugin without installing it. `make check` runs the gate.

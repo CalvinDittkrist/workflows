@@ -16,13 +16,13 @@ Coordinator session for one repository. Start it in the main checkout inside a H
 | `/orchestrator:herdr` | | loads Herdr's own skill for manual pane control |
 | `/orchestrator:gh-axi` | | the `gh-axi` discovery skill, so agents prefer it over raw `gh` |
 
-The frontier is the open `ready-for-agent` issues with no open blocker, no assignee, no worktree and no routing label. A spec is ready for acceptance when it has native sub-issues and none of them is open.
+The frontier is the open `ready-for-agent` issues with no open blocker, no assignee, no worktree and no routing label. A spec is ready for acceptance when it is open, has native sub-issues and none of them is open.
 
 A claim refuses before anything is created, and the error names the labels or branch and the fix. `--force` claims anyway.
 
 - An issue without `ready-for-agent` is refused ([ADR 0014](../../docs/adr/0014-claims-require-ready-for-agent.md)).
 - An issue with the routing label `factory` is refused, because the factory host claims it.
-- An issue whose branch already exists on origin is refused, because a claim on the remote is the creation of that branch. `abandon.sh` leaves such a branch on origin.
+- An issue whose branch of the shape `<type>/<issue>-…` already exists on origin is refused, because a claim on the remote is the creation of that branch. `abandon.sh` leaves such a branch on origin.
 - A forced claim over a remote branch adopts it and runs code nobody here reviewed. It refuses while a local branch of that name points elsewhere.
 - An origin that cannot be read is a warning; that check never stops a claim.
 

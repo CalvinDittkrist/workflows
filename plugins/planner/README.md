@@ -28,7 +28,7 @@ Acceptance works in four steps:
 
 The acceptance rules that no script output states:
 
-- `accept-facts.sh` refuses an issue that is not an open `spec`, open tickets and a worktree behind the base branch.
+- `accept-facts.sh` refuses an issue that is not an open `spec` or has open tickets, and a worktree behind the base branch.
 - Ticket numbers are arguments where a repository has no native sub-issues; they add to the sub-issues and never replace them.
 - Verdicts are `met`, `missing`, `deviates` and `untested`, over the sections User stories, Decisions, Testing, Vocabulary and ADRs to write.
 - An accepted deviation is a spec comment opening with `> Accepted deviation (spec acceptance).`. Only a commenter with write access counts.
