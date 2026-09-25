@@ -3,6 +3,7 @@
 Date: 2026-09-22
 Status: accepted
 Amends: [0028](0028-the-quota-check-is-a-courtesy-not-a-guard.md) (the default minimum, which scope is the worker's, and when a run ran out of quota)
+Amended by: [0048](0048-the-quota-check-renews-an-expired-credential.md) (the check renews an expired credential instead of passing `--no-credential-refresh`)
 
 ## Context
 [ADR 0028](0028-the-quota-check-is-a-courtesy-not-a-guard.md) decided the check: before every run, the smaller remaining percentage of the all-models scope and the worker's model scope, a configured minimum, a wait until the reported reset, and a check that fails open. Building it left four questions that ADR did not answer.

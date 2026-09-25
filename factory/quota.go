@@ -112,12 +112,17 @@ type quotaReport struct {
 }
 
 // readQuota runs the configured quota-axi for the Claude provider and reads the scopes of these models
-// out of its answer. It never refreshes a credential: the worker's own Claude Code does that, and a
-// check that wrote credentials while a worker read them would be a second writer nobody asked for.
+// out of its answer. An expired credential is renewed on the way: quota-axi runs Claude Code's own
+// `claude doctor` for that, which spends no quota, and no session of the factory reads the credential
+// while a check runs, because the factory works one run at a time and checks only between sessions
+// ([ADR 0048]). With the flag that forbade the renewal, every run after a quiet night started without
+// a reading, which is when the maintainer's share of the window is most likely in use.
+//
+// [ADR 0048]: ../docs/adr/0048-the-quota-check-renews-an-expired-credential.md
 func (f *Factory) readQuota(ctx context.Context, models []string) (quota, error) {
 	ctx, cancel := context.WithTimeout(ctx, quotaTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, f.settings.QuotaAxi, "--provider", "claude", "--json", "--no-credential-refresh")
+	cmd := exec.CommandContext(ctx, f.settings.QuotaAxi, "--provider", "claude", "--json")
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if err := cmd.Run(); err != nil {

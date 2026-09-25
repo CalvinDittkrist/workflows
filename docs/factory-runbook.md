@@ -101,7 +101,7 @@ Run the following as root unless it says otherwise.
    { "env": { "DISABLE_AUTOUPDATER": "1" } }
    ```
 
-4. **The headless login**, as the user `factory`: run `claude`, type `/login` and sign in with the subscription the workers run on. Over SSH the browser cannot reach the host, so Claude Code shows a URL to open on another machine and a code to paste back ([authentication](https://code.claude.com/docs/en/authentication.md)). The credential lands in `~/.claude/.credentials.json`, mode 0600, where the worker sessions refresh it and the quota check reads it. `claude setup-token` with `CLAUDE_CODE_OAUTH_TOKEN` also runs a worker, but it writes no credentials file, so quota-axi has nothing to read and every run carries a warning that the check could not answer.
+4. **The headless login**, as the user `factory`: run `claude`, type `/login` and sign in with the subscription the workers run on. Over SSH the browser cannot reach the host, so Claude Code shows a URL to open on another machine and a code to paste back ([authentication](https://code.claude.com/docs/en/authentication.md)). The credential lands in `~/.claude/.credentials.json`, mode 0600, where the worker sessions renew it, and so does the quota check when it finds it expired ([ADR 0048](adr/0048-the-quota-check-renews-an-expired-credential.md)). `claude setup-token` with `CLAUDE_CODE_OAUTH_TOKEN` also runs a worker, but it writes no credentials file, so quota-axi has nothing to read and every run carries a warning that the check could not answer.
 5. **The marketplace and the worker plugin**, as the user `factory`, in the user scope ([discover plugins](https://code.claude.com/docs/en/discover-plugins.md)):
 
    ```sh

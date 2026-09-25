@@ -133,8 +133,10 @@ func TestARunStartsWhenEnoughQuotaIsLeft(t *testing.T) {
 	if len(calls) != 1 {
 		t.Fatalf("the factory asked quota-axi %d times, want once: before the one run", len(calls))
 	}
-	// The report of the Claude provider, as JSON, and nothing that renews a credential on the way.
-	if want := "--provider claude --json --no-credential-refresh"; calls[0].args != want {
+	// The report of the Claude provider, as JSON, and nothing that forbids quota-axi to renew an expired
+	// credential on the way: the check runs while no session of the factory is, and a host that was
+	// quiet for longer than the credential lives would otherwise start every run without a reading.
+	if want := "--provider claude --json"; calls[0].args != want {
 		t.Errorf("the factory ran quota-axi %s, want %s", calls[0].args, want)
 	}
 	var status apiStatus
