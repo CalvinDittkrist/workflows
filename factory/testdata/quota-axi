@@ -11,6 +11,8 @@
 #                                 call; reset=none names no reset time at all, and a trailing
 #                                 stale marks the reading as quota-axi's stale cache
 #                      fail       quota-axi's own error, on its error output with exit 1
+#                      hang       a renewal that does not come back: a child of its own, as claude
+#                                 doctor is, whose pid goes to QUOTA_SHIM_CHILD, and no answer
 #                      garbage    output that is not a report
 #   QUOTA_SHIM_LOG   one line per call: when it came, in seconds since the epoch, and its arguments
 #   QUOTA_SHIM_COUNT the file the calls are counted in, which is how a line of the plan is chosen
@@ -39,6 +41,11 @@ case "$answer" in
   garbage)
     echo "quota: fine, probably"
     exit 0
+    ;;
+  hang)
+    sleep 600 &
+    printf '%s\n' "$!" > "${QUOTA_SHIM_CHILD:-/dev/null}"
+    wait
     ;;
 esac
 

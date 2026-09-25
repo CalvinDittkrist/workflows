@@ -1,12 +1,14 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -30,8 +32,26 @@ func newQuotaShim(t *testing.T, plan ...string) *quotaShim {
 	q := &quotaShim{path: abs(t, filepath.Join("testdata", "quota-axi")), log: filepath.Join(dir, "calls.log")}
 	writeFile(t, filepath.Join(dir, "plan"), strings.Join(plan, "\n")+"\n")
 	q.env = []string{"QUOTA_SHIM_PLAN=" + filepath.Join(dir, "plan"), "QUOTA_SHIM_LOG=" + q.log,
-		"QUOTA_SHIM_COUNT=" + filepath.Join(dir, "count")}
+		"QUOTA_SHIM_COUNT=" + filepath.Join(dir, "count"), "QUOTA_SHIM_CHILD=" + filepath.Join(dir, "child")}
 	return q
+}
+
+// child is the pid of the process a hanging call started, once it has.
+func (q *quotaShim) child(t *testing.T) int {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		raw, err := os.ReadFile(filepath.Join(filepath.Dir(q.log), "child"))
+		if err == nil {
+			if pid, err := strconv.Atoi(strings.TrimSpace(string(raw))); err == nil && pid > 0 {
+				return pid
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the quota shim did not start its child within 10s")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 }
 
 // quotaCall is one call the factory made of the scripted tool: when, to the second, and with what.
@@ -116,8 +136,10 @@ func TestARunStartsWhenEnoughQuotaIsLeft(t *testing.T) {
 	if len(calls) != 1 {
 		t.Fatalf("the factory asked quota-axi %d times, want once: before the one run", len(calls))
 	}
-	// The report of the Claude provider, as JSON, and nothing that renews a credential on the way.
-	if want := "--provider claude --json --no-credential-refresh"; calls[0].args != want {
+	// The report of the Claude provider, as JSON, and nothing that forbids quota-axi to renew an expired
+	// credential on the way: the check runs while no session of the factory is, and a host that was
+	// quiet for longer than the credential lives would otherwise start every run without a reading.
+	if want := "--provider claude --json"; calls[0].args != want {
 		t.Errorf("the factory ran quota-axi %s, want %s", calls[0].args, want)
 	}
 	var status apiStatus
@@ -279,6 +301,28 @@ func TestARunStartsWithAWarningWhenTheQuotaCheckFails(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A check that does not come back is ended after its 30 seconds, together with what it started: the
+// renewal quota-axi delegates to claude doctor is a child of its own, and one that outlived the check
+// would rewrite the credential later, beside the session that started meanwhile. The run starts with
+// the warning, as after any check that could not answer.
+func TestAQuotaCheckThatHangsIsEndedWithItsChild(t *testing.T) {
+	t.Parallel()
+	q := newQuotaShim(t, "hang")
+	f, _ := claimsWithQuota(t, q, config{})
+	child := q.child(t)
+	run := f.ended(t, 1)
+	if run.Outcome != "ready" {
+		t.Fatalf("the run ended as %q (%s), want ready: a check that hangs starts the run; the factory's log:\n%s",
+			run.Outcome, run.Reason, f.output(t))
+	}
+	if len(run.Warnings) != 1 || !strings.Contains(run.Warnings[0], "did not answer within 30s") {
+		t.Errorf("the run carries the warnings %q, want one that says quota-axi did not answer within 30s", run.Warnings)
+	}
+	f.eventually(t, 10*time.Second, "the child of the hanging check to be gone", func() bool {
+		return errors.Is(syscall.Kill(child, 0), syscall.ESRCH)
+	})
 }
 
 // A run that ends in an error while the worker's quota is used up has not failed: it ran out. The

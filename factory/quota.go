@@ -1,13 +1,11 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
-	"os/exec"
 	"slices"
 	"strings"
 	"time"
@@ -112,24 +110,33 @@ type quotaReport struct {
 }
 
 // readQuota runs the configured quota-axi for the Claude provider and reads the scopes of these models
-// out of its answer. It never refreshes a credential: the worker's own Claude Code does that, and a
-// check that wrote credentials while a worker read them would be a second writer nobody asked for.
+// out of its answer. An expired credential is renewed on the way: quota-axi runs Claude Code's own
+// `claude doctor` for that, which spends no quota, and no session of the factory reads the credential
+// while a check runs, because the factory works one run at a time and checks only between sessions
+// ([ADR 0037], amended). With the flag that forbade the renewal, every run after a quiet night
+// started without a reading, which is when the maintainer's share of the window is most likely in use.
+//
+// The renewal is a child of quota-axi, so the check runs as a process group and the deadline ends
+// the group: a renewal that outlived the check would rewrite the credential later, beside the
+// session that started meanwhile, which is the second writer the check must not be.
+//
+// [ADR 0037]: ../docs/adr/0037-the-quota-check-waits-below-12-percent-of-the-workers-scope.md
 func (f *Factory) readQuota(ctx context.Context, models []string) (quota, error) {
+	// command sets the same deadline once more; this one is the earlier of the two, so a check the
+	// deadline ended is told from one that failed on its own.
 	ctx, cancel := context.WithTimeout(ctx, quotaTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, f.settings.QuotaAxi, "--provider", "claude", "--json", "--no-credential-refresh")
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &stdout, &stderr
-	if err := cmd.Run(); err != nil {
+	out, said, err := command(ctx, quotaTimeout, f.settings.QuotaAxi, "--provider", "claude", "--json")
+	if err != nil {
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			return quota{}, fmt.Errorf("%s did not answer within %s", f.settings.QuotaAxi, quotaTimeout)
 		}
-		if said := firstLine(stderr.String()); said != "" {
-			return quota{}, fmt.Errorf("%s failed: %v: %s", f.settings.QuotaAxi, err, said)
+		if said == err.Error() {
+			return quota{}, fmt.Errorf("%s failed: %v", f.settings.QuotaAxi, err)
 		}
-		return quota{}, fmt.Errorf("%s failed: %v", f.settings.QuotaAxi, err)
+		return quota{}, fmt.Errorf("%s failed: %v: %s", f.settings.QuotaAxi, err, said)
 	}
-	return parseQuota(stdout.Bytes(), models)
+	return parseQuota(out, models)
 }
 
 // parseQuota reads the all-models scope and the scopes of the models out of quota-axi's output.

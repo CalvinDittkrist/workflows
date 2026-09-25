@@ -32,7 +32,7 @@ Threat model: an agent with shell access works on code and reads text from the i
 
 ## Supply chain
 - Plugins are installed from a pinned marketplace (`extraKnownMarketplaces` + `enabledPlugins` in the repo settings). Claude Code caches plugin versions; releases are git tags created with `claude plugin tag`.
-- `npx -y gh-axi` and `npx -y quota-axi` are optional and run unpinned; pin them in your own settings or install globally if that matters to you. The factory never runs `npx`: its quota check runs the quota-axi at the absolute path its configuration names, installed on the host in a pinned version, and never lets it refresh a credential.
+- `npx -y gh-axi` and `npx -y quota-axi` are optional and run unpinned; pin them in your own settings or install globally if that matters to you. The factory never runs `npx`: its quota check runs the quota-axi at the absolute path its configuration names, installed on the host in a pinned version; an expired credential it renews through Claude Code's own `claude doctor`, while no session runs ([ADR 0037](adr/0037-the-quota-check-waits-below-12-percent-of-the-workers-scope.md)).
 - The security reviewer flags new dependencies (pin, provenance, need) and CI or hook changes that widen permissions.
 
 ## What this does not do
