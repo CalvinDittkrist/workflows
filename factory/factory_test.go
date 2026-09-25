@@ -831,6 +831,7 @@ func TestAnInvalidConfigurationIsRefusedWithTheFix(t *testing.T) {
 		{"login that is a team", `{"data_dir":"data","repositories":["a/b"],"notify":["acme/maintainers"]}`, `is not a GitHub login`},
 		{"empty login", `{"data_dir":"data","repositories":["a/b"],"notify":[""]}`, `is not a GitHub login`},
 		{"login twice in two spellings", `{"data_dir":"data","repositories":["a/b"],"notify":["Octocat","octocat"]}`, `notify names "octocat" twice`},
+		{"auto_update that is no boolean", `{"data_dir":"data","repositories":["a/b"],"auto_update":"yes"}`, `auto_update`},
 		{"unknown field", `{"data_dir":"data","repositories":["a/b"],"listn":"x"}`, `unknown field "listn"; the fields are listen, label`},
 		{"not JSON", `listen = 7341`, `see factory/factory.example.json`},
 		{"deadline in words", `{"data_dir":"data","repositories":["a/b"],"deadline":"90 minutes"}`, `is not a positive duration; write it as "90m"`},
