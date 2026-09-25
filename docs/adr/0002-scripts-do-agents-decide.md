@@ -9,7 +9,7 @@ Status: accepted
 - GitHub, git and Herdr interactions are deterministic.
 
 ## Decision
-Every deterministic step is a bash script in the plugin's `scripts/` directory, and skills are one-screen prompts that call these scripts.
+Every deterministic step is a bash script in the plugin's `scripts/` directory, and skills are one-screen prompts that call these scripts and interpret the result.
 
 ## Consequences
 - Output is fixed and compact: `key: value` lines and small tables, and `error:` lines name the fix.
@@ -17,5 +17,4 @@ Every deterministic step is a bash script in the plugin's `scripts/` directory, 
 - Tests run the real scripts against `gh` and `herdr` shims, so behaviour is testable without a model.
 - Token use per step is fixed, and a script change needs no re-prompting.
 - The cost is two languages, bash and prompts, and a bash 3.2 constraint for macOS.
-- - Skills interpret the result.
 - Rejected: Python scripts. Bash composes better with `gh`, `git` and `herdr` and needs no interpreter inside sandboxes.
