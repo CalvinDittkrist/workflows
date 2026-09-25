@@ -181,7 +181,7 @@ func TestAClassWithoutAGateRunsNoneAndAChangeOutsideEveryClassIsFull(t *testing.
 			}
 			if want == classFull {
 				classed := run.Panel.Classes[1]
-				if !equal(classed.Gate, fullGate) || !strings.Contains(classed.Why, file+" is outside every class") {
+				if classed.Gate.CI || !equal(classed.Gate.Args, []string{"make", "check"}) || !strings.Contains(classed.Why, file+" is outside every class") {
 					t.Errorf("the run recorded the class %+v, want make check and the file outside every class", classed)
 				}
 			}

@@ -212,9 +212,12 @@ type Panel struct {
 	Round   int     `json:"round"`   // the round running now, or the last one that ran
 	Rounds  []Round `json:"rounds"`
 	// GateRounds is how many fix sessions the gate on the final head has taken, and StageFixes how
-	// many the gate stage took before the review: the merge of the base's and the gate's.
+	// many the gate stage took before the review: the merge of the base's and the gate's. MergeFixes is
+	// how many a merge of the base that conflicted took during a gate on CI on the final head, which,
+	// like GateRounds, spend no budget of their own and no reviewer reads.
 	GateRounds int `json:"gateRounds"`
 	StageFixes int `json:"stageFixes,omitempty"`
+	MergeFixes int `json:"mergeFixes,omitempty"`
 	// Classes is every determination of the change class, in the order they were made: the one the
 	// reviewers were chosen by, and one before every gate on the final head.
 	Classes []Classed `json:"classes,omitempty"`
@@ -796,14 +799,17 @@ func (f *Factory) finalGate(parent, ctx context.Context, r *Run, entry Entry, cl
 			}
 			return "", false
 		}
-		if len(classed.Gate) == 0 {
+		if classed.Gate.none() {
 			panel.Gate, panel.GatedAt = noGateResult(classed), classed.Head
 			record()
 			f.runs.event(r, Event{Kind: "factory", Title: firstLine(panel.Gate), Body: panel.Gate})
 			return panel.Gate, true
 		}
-		f.runs.event(r, Event{Kind: "factory", Title: "running the gate on the final head", Body: commandLine(classed.Gate) + ", the gate of the change class " + classed.Class})
-		ran := f.runGate(ctx, r, entry, claim, *panel, classed, stageReview)
+		f.runs.event(r, Event{Kind: "factory", Title: "running the gate on the final head", Body: classed.Gate.String() + ", the gate of the change class " + classed.Class})
+		ran := f.gateOn(parent, ctx, r, entry, claim, panel, classed, stageReview)
+		if ran.ended {
+			return "", false
+		}
 		if f.halted(parent, ctx, r, "ran the gate on the final head") {
 			return "", false
 		}
@@ -852,7 +858,7 @@ func (f *Factory) movedSinceGate(ctx context.Context, claim claimed, panel Panel
 	settled := strings.HasPrefix(panel.Gate, "gate_result: pass")
 	if strings.HasPrefix(panel.Gate, gateNone) {
 		classed, ok := classedFor(panel, classForGate)
-		settled = ok && len(classed.Gate) == 0 && classed.Head == panel.GatedAt
+		settled = ok && classed.Gate.none() && classed.Head == panel.GatedAt
 	}
 	if !settled {
 		return true, nil
@@ -869,7 +875,7 @@ func (f *Factory) movedSinceGate(ctx context.Context, claim claimed, panel Panel
 
 // fakeHead stands for the commit a fake run is at: one more for every fix session that committed.
 func fakeHead(panel Panel) string {
-	n := panel.StageFixes + panel.GateRounds
+	n := panel.StageFixes + panel.GateRounds + panel.MergeFixes
 	for _, round := range panel.Rounds {
 		if round.Repair != nil && len(round.Repair.Fixed) > 0 {
 			n++
@@ -879,8 +885,8 @@ func fakeHead(panel Panel) string {
 }
 
 // gateRun is one run of the gate: whether it passed, its result as the pull request carries it, the
-// tail of its output, the commit it ran on, its exit status, whether it ran past its timeout, and how
-// long it took.
+// tail of its output, the commit it ran on, its exit status, whether it ran past its timeout, how long
+// it took, and the checks a gate on CI read.
 type gateRun struct {
 	passed       bool
 	result, tail string
@@ -888,25 +894,34 @@ type gateRun struct {
 	exit         int
 	timedOut     bool
 	seconds      int
+	checks       []check
 	err          error // the gate could not be run at all
+	ended        bool  // the gate ended the run itself, which a gate on CI does when it cannot go on
 }
 
 // maxGateTail is how much of the gate's output the factory keeps: the end, where a failure says why.
 const maxGateTail = 12000
 
-// runGate runs the gate command of the change class in the stage it is run for, and records the run
-// on the run's record (Run.Gates). Fake mode runs nothing, and its canned gate answers.
-func (f *Factory) runGate(ctx context.Context, r *Run, entry Entry, claim claimed, panel Panel, classed Classed, stage string) gateRun {
+// gateOn runs the gate command of the change class in the stage it is run for, on CI (ciGate) or in the
+// worktree, and records the run on the run's record (Run.Gates). Fake mode runs nothing in a worktree,
+// and its canned gate answers.
+func (f *Factory) gateOn(parent, ctx context.Context, r *Run, entry Entry, claim claimed, panel *Panel, classed Classed, stage string) gateRun {
 	timeout := f.gateFor(entry.Repository).Timeout
 	var ran gateRun
-	if f.fake {
-		ran = cannedGate(entry.scenario, panel, classed, timeout)
-	} else {
+	switch {
+	case classed.Gate.CI:
+		ran = f.ciGate(parent, ctx, r, entry, claim, panel, classed, stage)
+	case f.fake:
+		ran = cannedGate(entry.scenario, *panel, classed, timeout)
+	default:
 		ran = f.execGate(ctx, r, claim, classed, timeout)
 	}
-	if ran.err == nil && ctx.Err() == nil {
-		gated := Gated{Stage: stage, Head: ran.head, Class: classed.Class, Command: commandLine(classed.Gate), Exit: ran.exit,
+	if ran.err == nil && !ran.ended && ctx.Err() == nil {
+		gated := Gated{Stage: stage, Head: ran.head, Class: classed.Class, Command: classed.Gate.String(), Exit: ran.exit,
 			Passed: ran.passed, TimedOut: ran.timedOut, Seconds: ran.seconds, Tail: ran.tail}
+		for _, c := range ran.checks {
+			gated.Checks = append(gated.Checks, GatedCheck{Name: c.Name, URL: c.URL, State: c.State})
+		}
 		f.runs.update(r, func() { r.Gates = append(slices.Clone(r.Gates), gated) })
 	}
 	return ran
@@ -925,7 +940,7 @@ func (f *Factory) execGate(ctx context.Context, r *Run, claim claimed, classed C
 	}
 	gateCtx, done := context.WithTimeout(ctx, timeout)
 	defer done()
-	cmd := exec.CommandContext(gateCtx, classed.Gate[0], classed.Gate[1:]...)
+	cmd := exec.CommandContext(gateCtx, classed.Gate.Args[0], classed.Gate.Args[1:]...)
 	cmd.Dir = claim.worktree
 	cmd.Env = workerEnv(os.Environ(), nil)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -969,7 +984,7 @@ func (f *Factory) execGate(ctx context.Context, r *Run, claim claimed, classed C
 
 // gateResult is the result of a gate that ran, as the pull request carries it.
 func gateResult(status, head string, classed Classed, seconds int) string {
-	return fmt.Sprintf("gate_result: %s at %s\ngate_command: %s\ngate_class: %s\ngate_duration: %d s", status, short(head), commandLine(classed.Gate), classed.Class, seconds)
+	return fmt.Sprintf("gate_result: %s at %s\ngate_command: %s\ngate_class: %s\ngate_duration: %d s", status, short(head), classed.Gate.String(), classed.Class, seconds)
 }
 
 // noGateResult is the result of the gate of a class without one, in the lines of gateResult.
@@ -1073,11 +1088,11 @@ func panelSummary(panel Panel, knobs reviewSettings) string {
 	if line := classLine(panel); line != "" {
 		summary += "\n" + line
 	}
-	// The fixes of the last round, and those of the gate on the final head, are commits no reviewer
-	// read, as the worker's summary says of them.
+	// The fixes of the last round, and those of the gate on the final head and of its merge of the base,
+	// are commits no reviewer read, as the worker's summary says of them.
 	if n := len(panel.Rounds); n > 0 {
 		last := panel.Rounds[n-1]
-		if last.Repair != nil && len(last.Repair.Fixed) > 0 || panel.GateRounds > 0 {
+		if last.Repair != nil && len(last.Repair.Fixed) > 0 || panel.GateRounds+panel.MergeFixes > 0 {
 			summary += fmt.Sprintf("\nunreviewed: the fixes made after round %d, which no reviewer read", n)
 		}
 	}

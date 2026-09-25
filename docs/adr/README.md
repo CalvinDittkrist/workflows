@@ -43,7 +43,7 @@ One file per decision, numbered, never edited after acceptance (supersede instea
 | [0037](0037-the-quota-check-waits-below-12-percent-of-the-workers-scope.md) | The quota check waits below 12 % of the worker's scope | accepted; amended 2026-09-25: the check renews an expired credential |
 | [0038](0038-the-local-workflow-and-the-factory-are-peers.md) | The local workflow and the factory are peers | accepted |
 | [0039](0039-every-session-reports-through-a-structured-result.md) | Every session reports through a structured result and never through prose | accepted |
-| [0040](0040-the-factory-owns-the-delivery-lifecycle-in-go.md) | The factory owns the delivery lifecycle in Go and starts one fresh session per stage | accepted |
+| [0040](0040-the-factory-owns-the-delivery-lifecycle-in-go.md) | The factory owns the delivery lifecycle in Go and starts one fresh session per stage | accepted; amended 2026-09-25: a resumed run reads its stage from git, GitHub and its record, which names its pull request and whether it is still the gate's draft |
 | [0041](0041-a-change-class-decides-the-gate-and-the-reviewers-before-the-pull-request.md) | A change class decides the gate and the reviewers before the pull request, and CI remains the full gate | accepted |
 | [0042](0042-the-factory-carries-its-own-prompts-and-updates-no-plugin.md) | The factory carries its own prompts and updates no plugin | accepted |
 | [0043](0043-the-migration-runs-from-the-last-stage-to-the-first.md) | The migration runs from the last stage to the first, through a temporary stop-after knob | accepted |

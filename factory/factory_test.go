@@ -89,10 +89,12 @@ type apiRun struct {
 	Stages       []string   `json:"stages"`
 	Outcome      string     `json:"outcome"`
 	PullRequest  string     `json:"pullRequest"`
+	Draft        bool       `json:"draft"`
 	RepairRounds int        `json:"repairRounds"`
 	Reason       string     `json:"reason"`
 	StartedAt    time.Time  `json:"startedAt"`
 	EndedAt      *time.Time `json:"endedAt"`
+	ReadiedAt    *time.Time `json:"readiedAt"`
 	Turns        int        `json:"turns"`
 	CostUSD      float64    `json:"costUsd"`
 	Totals       string     `json:"totals"`
@@ -771,7 +773,7 @@ func TestAnInvalidConfigurationIsRefusedWithTheFix(t *testing.T) {
 		{"worker arguments that replace the agent's definition", `{"data_dir":"data","repositories":["a/b"],"worker_args":["--agents","{}"]}`, `worker_args carries --agents`},
 		// worker_env set knobs of the worker plugin, which no session runs any more: it is refused as
 		// unknown, naming the knobs of the factory's own that took its place.
-		{"worker variables", `{"data_dir":"data","repositories":["a/b"],"worker_env":{"WF_REVIEW_ROUNDS":"2"}}`, `json: unknown field "worker_env"; worker_env set knobs of the worker plugin, which no session of the factory runs any more; remove it, and write a knob it carried as the factory's own, at the top of the file or on the repository: ci (repair_rounds, bot_reviewers, review_wait, checks_grace), review (rounds, reviewers, gate_rounds, classes) or gate (rounds, timeout)`},
+		{"worker variables", `{"data_dir":"data","repositories":["a/b"],"worker_env":{"WF_REVIEW_ROUNDS":"2"}}`, `json: unknown field "worker_env"; worker_env set knobs of the worker plugin, which no session of the factory runs any more; remove it, and write a knob it carried as the factory's own, at the top of the file or on the repository: ci (repair_rounds, bot_reviewers, review_wait, checks_grace), review (rounds, reviewers, gate_rounds, classes) or gate (command, rounds, timeout)`},
 		{"repository object with an unknown field", `{"data_dir":"data","repositories":[{"name":"a/b","branch":"dev"}]}`, `a repository is "owner/name" or {"name": "owner/name", "base": "dev", "ci": {"repair_rounds": 2}, "review": {"rounds": 2}, "gate": {"rounds": 2}}`},
 		// The knobs of the ci stage are the factory's own, at the top of the file or on a repository.
 		{"unknown ci knob", `{"data_dir":"data","repositories":["a/b"],"ci":{"repair_round":2}}`, `json: unknown field "repair_round"; the ci knobs are repair_rounds, bot_reviewers, review_wait, checks_grace`},
@@ -798,15 +800,21 @@ func TestAnInvalidConfigurationIsRefusedWithTheFix(t *testing.T) {
 		{"a pattern that walks up", `{"data_dir":"data","repositories":["a/b"],"review":{"classes":[{"name":"docs","paths":["../docs/**"],"gate":[]}]}}`, `has the part ".."`},
 		{"a pattern with ** inside a part", `{"data_dir":"data","repositories":["a/b"],"review":{"classes":[{"name":"docs","paths":["docs/**.md"],"gate":[]}]}}`, `** stands alone between slashes`},
 		{"an empty pattern", `{"data_dir":"data","repositories":["a/b"],"review":{"classes":[{"name":"docs","paths":[""],"gate":[]}]}}`, `a path pattern is empty`},
-		{"a gate that is a string", `{"data_dir":"data","repositories":["a/b"],"review":{"classes":[{"name":"docs","paths":["docs/**"],"gate":"make docs"}]}}`, `the gate of the class "docs" is "make docs", which is not a list of arguments; write it as a list of arguments, such as ["make", "docs"], or [] for no gate`},
-		{"a gate that is null", `{"data_dir":"data","repositories":["a/b"],"review":{"classes":[{"name":"docs","paths":["docs/**"],"gate":null}]}}`, `the gate of the class "docs" is null, which is not a list of arguments`},
+		{"a gate that is a string", `{"data_dir":"data","repositories":["a/b"],"review":{"classes":[{"name":"docs","paths":["docs/**"],"gate":"make docs"}]}}`, `the class "docs": the gate "make docs" is none of the forms of a gate; write it as a list of arguments such as ["make", "check"], [] for no gate, "ci" for every check on CI, or {"ci": ["check", "browser"]} for the named checks on CI`},
+		{"a gate that is null", `{"data_dir":"data","repositories":["a/b"],"review":{"classes":[{"name":"docs","paths":["docs/**"],"gate":null}]}}`, `the class "docs" has no gate; write it as a list of arguments such as ["make", "check"]`},
 		{"a gate left out", `{"data_dir":"data","repositories":["a/b"],"review":{"classes":[{"name":"docs","paths":["docs/**"]}]}}`, `the class "docs" has no gate; write it as a list of arguments`},
-		{"a gate without a program", `{"data_dir":"data","repositories":["a/b"],"review":{"classes":[{"name":"docs","paths":["docs/**"],"gate":["","docs"]}]}}`, `the gate of the class "docs" names no program`},
+		{"a gate without a program", `{"data_dir":"data","repositories":["a/b"],"review":{"classes":[{"name":"docs","paths":["docs/**"],"gate":["","docs"]}]}}`, `the class "docs": the gate ["","docs"] names no program`},
+		{"a gate on CI that names no check", `{"data_dir":"data","repositories":["a/b"],"review":{"classes":[{"name":"docs","paths":["docs/**"],"gate":{"ci":[]}}]}}`, `the gate {"ci":[]} is none of the forms of a gate`},
+		{"a gate on CI with a field it does not have", `{"data_dir":"data","repositories":["a/b"],"review":{"classes":[{"name":"docs","paths":["docs/**"],"gate":{"ci":["check"],"wait":"5m"}}]}}`, `is none of the forms of a gate`},
+		{"a gate on CI that names a check twice", `{"data_dir":"data","repositories":["a/b"],"review":{"classes":[{"name":"docs","paths":["docs/**"],"gate":{"ci":["check","check"]}}]}}`, `names the check "check" twice`},
 		{"a class with a reviewer the panel does not have", `{"data_dir":"data","repositories":["a/b"],"review":{"classes":[{"name":"docs","paths":["docs/**"],"gate":[],"reviewers":["docs","style"]}]}}`, `the class "docs": reviewers carries "style", which is no reviewer; the reviewers are code, security, docs, tests, senior, or leave reviewers out`},
 		{"a class without reviewers", `{"data_dir":"data","repositories":["a/b"],"review":{"classes":[{"name":"docs","paths":["docs/**"],"gate":[],"reviewers":[]}]}}`, `the class "docs": reviewers is empty`},
 		{"a class with a field it does not have", `{"data_dir":"data","repositories":["a/b"],"review":{"classes":[{"name":"docs","patterns":["docs/**"],"gate":[]}]}}`, `unknown field "patterns"; its fields are name, paths, gate, reviewers`},
 		// And those of the gate stage.
-		{"unknown gate knob", `{"data_dir":"data","repositories":["a/b"],"gate":{"round":2}}`, `json: unknown field "round"; the gate knobs are rounds, timeout`},
+		{"unknown gate knob", `{"data_dir":"data","repositories":["a/b"],"gate":{"round":2}}`, `json: unknown field "round"; the gate knobs are command, rounds, timeout`},
+		{"a gate command in a word the factory does not know", `{"data_dir":"data","repositories":["a/b"],"gate":{"command":"github"}}`, `the gate "github" is none of the forms of a gate; write it as a list of arguments such as ["make", "check"]`},
+		{"a gate command of a repository that names a blank check", `{"data_dir":"data","repositories":[{"name":"a/b","gate":{"command":{"ci":["check"," "]}}}]}`, `names a check without a name`},
+		{"a gate command that is a line of shell", `{"data_dir":"data","repositories":["a/b"],"gate":{"command":"make check"}}`, `the gate "make check" is none of the forms of a gate`},
 		{"a negative gate budget", `{"data_dir":"data","repositories":["a/b"],"gate":{"rounds":-1}}`, `gate: rounds -1 is not a number of fix sessions; write it as 3, or 0 to block on the first failure`},
 		{"a gate timeout of a repository that is no duration", `{"data_dir":"data","repositories":[{"name":"a/b","gate":{"timeout":"0s"}}]}`, `the gate of a/b: timeout "0s" is not a positive duration; write it as "45m"`},
 		// The quota check runs the binary the operator installed, never a name PATH or npx resolves.

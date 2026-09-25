@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -358,6 +357,13 @@ func (f *Factory) ci(parent, ctx context.Context, r *Run, entry Entry, claim cla
 	}
 	held := Held{Repository: entry.Repository, Number: entry.Number, Branch: claim.branch, PullRequest: pull}
 	workflows := hasWorkflows(claim.worktree)
+	// A draft the pr stage made ready carries the checks of the draft, and a workflow that runs on
+	// ready_for_review registers its own after a while: until one has finished since, or the checks
+	// grace has passed, a green reading is the draft's and not the pull request's.
+	var readied time.Time
+	if r.ReadiedAt != nil && runsOnReady(claim.worktree) {
+		readied = *r.ReadiedAt
+	}
 	var doneAt time.Time
 	// spent is the head a repair round was spent on, which the pull request has to have left before it
 	// is judged again: GitHub shows a push after a while, and until then it shows the old verdict. Any
@@ -420,6 +426,9 @@ func (f *Factory) ci(parent, ctx context.Context, r *Run, entry Entry, claim cla
 				}
 			}
 			verdict = judge(read, knobs, workflows, time.Now(), &doneAt)
+			if verdict == ciGreen && !readied.IsZero() && time.Since(readied) < knobs.ChecksGrace && !finishedSince(read.Checks, readied) {
+				verdict = ciWaiting
+			}
 		}
 		if verdict != said {
 			f.runs.event(r, Event{Kind: "factory", Title: "ci: " + verdict, Body: summarise(read)})
@@ -835,6 +844,29 @@ func hasWorkflows(worktree string) bool {
 	return false
 }
 
+// runsOnReady says a workflow of the worktree names the ready_for_review event, so marking a draft
+// ready starts checks of its own. It reads the text, not the YAML: a workflow that only mentions the
+// event costs a wait of the checks grace, never a pass on checks that were not there yet.
+func runsOnReady(worktree string) bool {
+	if worktree == "" {
+		return false
+	}
+	for _, pattern := range []string{"*.yml", "*.yaml"} {
+		found, _ := filepath.Glob(filepath.Join(worktree, ".github", "workflows", pattern))
+		for _, path := range found {
+			if text, err := os.ReadFile(path); err == nil && strings.Contains(string(text), "ready_for_review") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// finishedSince says a check of the reading finished after that time.
+func finishedSince(checks []check, since time.Time) bool {
+	return slices.ContainsFunc(checks, func(c check) bool { return c.CompletedAt.After(since) })
+}
+
 // halted ends a run whose context ended outside a session — the factory stopping, a cancel, the
 // deadline — the way the ending of a session is read, and says whether it did.
 func (f *Factory) halted(parent, ctx context.Context, r *Run, while string) bool {
@@ -952,10 +984,11 @@ type ghThreads struct {
 	} `json:"data"`
 }
 
-// pullState reads the pull request a run waits on: the pull request itself with its rollup, its
-// reviews and its review threads. A pull request that is not of the branch the run holds is refused,
-// because the URL came out of a session's result and names whatever the session wrote.
-func (g *gitHub) pullState(ctx context.Context, held Held, bots []string) (pullReading, error) {
+// pullChecks reads what a gate on CI reads of the pull request of a run, and what every reading of the
+// ci stage starts with: its mergeability, its head and the rollup of that head's checks. A pull request
+// that is not of the branch the run holds is refused, because the URL came out of a session's result
+// and names whatever the session wrote.
+func (g *gitHub) pullChecks(ctx context.Context, held Held) (pullReading, error) {
 	number, ok := pullNumber(held.PullRequest)
 	if !ok {
 		return pullReading{}, fmt.Errorf("%s is no pull request URL", held.PullRequest)
@@ -979,6 +1012,17 @@ func (g *gitHub) pullState(ctx context.Context, held Held, bots []string) (pullR
 	for _, entry := range view.StatusCheckRollup {
 		read.Checks = append(read.Checks, entry.check())
 	}
+	return read, nil
+}
+
+// pullState reads the pull request a run waits on: the pull request itself with its rollup
+// (pullChecks), its reviews and its review threads.
+func (g *gitHub) pullState(ctx context.Context, held Held, bots []string) (pullReading, error) {
+	read, err := g.pullChecks(ctx, held)
+	if err != nil {
+		return pullReading{}, err
+	}
+	number, _ := pullNumber(held.PullRequest)
 	if err := g.readReviews(ctx, held.Repository, number, bots, &read); err != nil {
 		return pullReading{}, err
 	}
@@ -988,7 +1032,7 @@ func (g *gitHub) pullState(ctx context.Context, held Held, bots []string) (pullR
 	if err != nil {
 		return pullReading{}, err
 	}
-	raw, err = ghInput(ctx, ghTimeout, string(body), "api", "graphql", "--input", "-")
+	raw, err := ghInput(ctx, ghTimeout, string(body), "api", "graphql", "--input", "-")
 	if err != nil {
 		return pullReading{}, fmt.Errorf("the review threads could not be read: %w", err)
 	}
@@ -1184,27 +1228,4 @@ func tail(s string, n int) string {
 		start++
 	}
 	return "[earlier lines left out]\n" + s[start:]
-}
-
-// openPull is the open pull request of the branch a run holds the issue by, which is where a resumed
-// run starts: the stages before it are done when it stands.
-func (g *gitHub) openPull(ctx context.Context, repository, branch string) (string, error) {
-	owner, _, _ := strings.Cut(repository, "/")
-	raw, err := gh(ctx, "api", "repos/"+repository+"/pulls?state=open&head="+url.QueryEscape(owner+":"+branch)+"&per_page=10")
-	if err != nil {
-		return "", err
-	}
-	var pulls []struct {
-		Number int    `json:"number"`
-		Head   ghHead `json:"head"`
-	}
-	if err := json.Unmarshal(raw, &pulls); err != nil {
-		return "", fmt.Errorf("the answer is no list of pull requests: %w", err)
-	}
-	for _, p := range pulls {
-		if (ghPull{Head: p.Head}).of(repository, branch) && p.Number > 0 {
-			return "https://github.com/" + repository + "/pull/" + strconv.Itoa(p.Number), nil
-		}
-	}
-	return "", nil
 }
