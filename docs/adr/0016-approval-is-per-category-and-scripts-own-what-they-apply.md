@@ -5,7 +5,7 @@ Status: accepted; that a scaffolded category without findings cannot be answered
 
 ## Context
 - The findings report listed a category under `the run performs` (#15, after #3).
-- A reader took each line for an approved item and nothing more.
+- A reader took each line for a single approved item.
 - `delete`, `issue`, `replace` and `create` findings are worked one by one; `cleanup.sh` turns the last two into `todo:` lines.
 - `workspace.sh --apply` applies the whole difference it computes, and `scaffold.sh` creates every missing baseline file of a category.
 
@@ -20,5 +20,5 @@ Approval stays one answer per category, `approve` or `reject`, and the report st
 - `<git dir>/standardize/workspace-handled` keeps what a run handled; `report.sh` clears it.
 - `WF_SCAFFOLD_CATEGORIES` in `lib.sh` lists the scaffolded categories, and a test catches drift from `scaffold.sh`.
 - Objecting to one setting means rejecting the category.
-- Rejected: approval per `configure` finding, which `check.sh` then reports as drift on every run.
+- Rejected: approval per `configure` finding, which `check.sh` then reports as drift each run.
 - Rejected: a `finalize.sh` that stops on a deviation from the audit, because the cleanup merge itself changes the workspace.

@@ -22,7 +22,7 @@ A claim refuses before anything is created, and the error names the labels or br
 
 - An issue without `ready-for-agent` is refused ([ADR 0014](../../docs/adr/0014-claims-require-ready-for-agent.md)).
 - An issue with the routing label `factory` is refused, because the factory host claims it.
-- An issue whose branch of the shape `<type>/<issue>-…` already exists on origin is refused, because a claim on the remote is the creation of that branch. `abandon.sh` leaves such a branch on origin.
+- An issue whose `<type>/<issue>-…` branch already exists on origin is refused, since creating that branch is the claim on the remote. `abandon.sh` leaves such a branch on origin.
 - A forced claim over a remote branch adopts it and runs code nobody here reviewed. It refuses while a local branch of that name points elsewhere.
 - An origin that cannot be read is a warning; that check never stops a claim.
 
