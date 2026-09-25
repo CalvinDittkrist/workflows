@@ -5,22 +5,18 @@ Status: accepted
 Extends: [0023](0023-github-is-the-only-control-surface-of-the-factory.md) (the reading surface the control surface leaves open)
 
 ## Context
-The factory answers four read-only endpoints. JSON is enough to debug it and not enough to watch it: the maintainer wants to see, from a phone on the tailnet, what runs, what waits, what a run cost and where it stopped.
-
-A page needs a build step, and a build step is the first thing in this repository that is neither shell nor Go. The alternatives were a server-rendered page from Go templates, which keeps the toolchain but polls the whole page and hand-writes the markup the prototype already solved in React, and a separate static server beside the factory, which puts a second process, a second port and a second unit on a host whose whole isolation argument is that it runs one thing ([ADR 0027](0027-the-factorys-isolation-boundary-is-the-host.md)).
+- The factory answers four read-only endpoints. JSON serves debugging, but the maintainer wants to watch runs, waits and costs from a phone.
+- A page needs a build step, the first thing here that is neither shell nor Go.
 
 ## Decision
-The dashboard is a single-page app in `factory/ui`, built by Vite into `factory/ui/dist/app` and embedded into the binary with `//go:embed`. The binary serves it at `/`, the endpoints move under `/api`, and the fonts it renders in are served from the binary too.
-
-It reads and never writes. It calls the same four endpoints any other reader calls, and the interface keeps refusing everything that is not `GET` or `HEAD`, so the dashboard cannot become a control surface by growing a button ([ADR 0023](0023-github-is-the-only-control-surface-of-the-factory.md)).
-
-The gate gains the dashboard's lint, its build and one browser test that drives the real binary in fake mode ([ADR 0008](0008-make-check-is-the-single-gate.md)).
+The dashboard is a Vite single-page app in `factory/ui`, embedded into the binary with `//go:embed` and served at `/`, with the endpoints under `/api`.
 
 ## Consequences
-The host runs one process from one binary. Deploying the factory is copying that binary; there is no web root, no reverse proxy and no Node on the host.
-
-A fresh clone has to build the dashboard before the factory's Go tests pass, because they read it out of the binary. `make check` does that itself, and `factory/ui/dist` is in git with a placeholder so a build without the dashboard still compiles — it then answers `/` with a short line that names `make ui`.
-
-Node joins the toolchain for developing this repository, and Chromium joins it for the browser test. The gate installs the npm dependencies and that Chromium itself, and refuses with the fix when npm is not there; the CI job brings Node and Chromium with it. Neither is needed to run a factory.
-
-The browser test is the only test here that judges pixels. It masks what counts up, asserts the three panes numerically, and compares the rest to an approved screenshot. Layout is the same everywhere, the rasterisation of glyphs is not, so the baseline is per operating system and the one for a platform is approved on it: a platform without one fails the first time and is approved from what that run saw.
+- It reads and never writes. The interface refuses everything but `GET` and `HEAD`, so no button makes it a control surface ([ADR 0023](0023-github-is-the-only-control-surface-of-the-factory.md)).
+- The binary serves the fonts too. Deploying is copying one binary, with no web root, reverse proxy or Node on the host.
+- The gate runs the dashboard's lint, build and a browser test against the real binary in fake mode ([ADR 0008](0008-make-check-is-the-single-gate.md)).
+- The Go tests need the build first. `factory/ui/dist` keeps a placeholder, which answers `/` with a line naming `make ui`.
+- Node and Chromium join the development toolchain, not the host's.
+- The browser test compares an approved screenshot per operating system, because glyph rasterisation differs.
+- Rejected: Go templates, which poll whole pages and hand-write markup the prototype solved in React.
+- Rejected: a separate static server, a second process on a host that runs one thing ([ADR 0027](0027-the-factorys-isolation-boundary-is-the-host.md)).
