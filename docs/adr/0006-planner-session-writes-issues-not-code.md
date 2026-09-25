@@ -5,7 +5,7 @@ Status: accepted
 
 ## Context
 - The pipeline consumed GitHub issues, but nothing produced good ones.
-- The mattpocock skills (grilling, to-spec, to-tickets, triage, wayfinder, prototype) cover that job but load into every session, need a per-repository `issue-tracker.md` and carry prose the model does not need.
+- The mattpocock skills (grilling, to-spec, to-tickets, triage, wayfinder, prototype) cover that job but load into every session. They also need a per-repository `issue-tracker.md` and carry prose the model does not need.
 
 ## Decision
 A `planner` plugin with a main-thread `planner` agent runs as its own session that writes GitHub issues and nothing else.

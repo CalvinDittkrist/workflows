@@ -20,4 +20,5 @@ Approval stays one answer per category, `approve` or `reject`, and the report st
 - `<git dir>/standardize/workspace-handled` keeps what a run handled; `report.sh` clears it.
 - `WF_SCAFFOLD_CATEGORIES` in `lib.sh` lists the scaffolded categories, and a test catches drift from `scaffold.sh`.
 - Objecting to one setting means rejecting the category.
-- Rejected: approval per `configure` finding, and a `finalize.sh` that stops on a deviation from the audit.
+- Rejected: approval per `configure` finding, which `check.sh` then reports as drift on every run.
+- Rejected: a `finalize.sh` that stops on a deviation from the audit, because the cleanup merge itself changes the workspace.

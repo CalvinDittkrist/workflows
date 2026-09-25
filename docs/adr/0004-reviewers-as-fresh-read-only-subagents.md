@@ -10,9 +10,10 @@ Amended by: [0010](0010-standardisation-audits-read-only-and-backs-up-before-del
 - Separate reviewer sessions per worktree would multiply panes and tokens.
 
 ## Decision
-Five reviewer agents (code, security, docs, tests, senior) are Claude Code subagents with `disallowedTools: Edit, Write, NotebookEdit, Agent`, launched in parallel by `/worker:review` with the same brief.
+Five reviewer agents (code, security, docs, tests, senior) are read-only Claude Code subagents, launched in parallel by `/worker:review` with the same brief.
 
 ## Consequences
+- Each has `disallowedTools: Edit, Write, NotebookEdit, Agent`.
 - Each returns a fixed-format report (S1/S2/S3, PASS/FIX).
 - The worker fixes and re-runs only the reviewers that returned FIX, bounded by `WF_REVIEW_ROUNDS`.
 - Another fresh-context agent, `pr-author`, opens the PR, so its description reflects the diff.

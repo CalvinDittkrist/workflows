@@ -10,9 +10,10 @@ Status: accepted
 - Implemented in #8.
 
 ## Decision
-`merge.sh` merges a promotion PR with a merge commit and keeps `dev`, and `/orchestrator:release vX.Y.Z` tags that merge commit; this refines ADR 0012 and supersedes ADR 0011 for promotions only.
+`merge.sh` merges a promotion PR with a merge commit and keeps `dev`, and `/orchestrator:release vX.Y.Z` tags that merge commit.
 
 ## Consequences
+- This refines ADR 0012 and supersedes ADR 0011 for promotions only.
 - The planner asks once per ticket batch for a milestone; the board shows each frontier issue's milestone.
 - `release.sh` refuses a missing or closed milestone, open issues or an existing tag. With `main` alone it tags the head of `main`.
 - With `dev` plus `main` it opens or finds the PR `chore(release): vX.Y.Z` and stops with `status: waiting` until it merges. Pull requests from forks are ignored.
