@@ -755,6 +755,14 @@ func command(ctx context.Context, timeout time.Duration, name string, args ...st
 // commandWith is that command with a body on its standard input, empty for the commands that read
 // none.
 func commandWith(ctx context.Context, timeout time.Duration, input, name string, args ...string) ([]byte, string, error) {
+	out, reason, err := commandSaying(ctx, timeout, input, name, args...)
+	return out, firstLine(reason), err
+}
+
+// commandSaying is that command answering with everything the program said on its standard error
+// when it failed, for the programs whose first line is not the reason: git's refused push starts with
+// the remote it went to and says why on the lines after it.
+func commandSaying(ctx context.Context, timeout time.Duration, input, name string, args ...string) ([]byte, string, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, name, args...)
@@ -772,7 +780,7 @@ func commandWith(ctx context.Context, timeout time.Duration, input, name string,
 		if reason == "" {
 			reason = err.Error()
 		}
-		return nil, firstLine(reason), err
+		return nil, reason, err
 	}
 	return out, "", nil
 }

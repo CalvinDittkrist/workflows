@@ -92,9 +92,14 @@ func (f *Factory) letGo(ctx context.Context, h holding, decision string) {
 // clone when the directory is gone and the name is not, which is what a worktree somebody removed by
 // hand leaves behind. A host that holds neither has nothing to push.
 //
-// A push that is refused — the branch moved on the remote, the host cannot reach it — leaves the
-// worktree, the branch and the assignee exactly as they are, says so on the run, and the next poll
-// tries again. The alternative is a directory of commits nobody else has.
+// A push that is refused because the branch moved on the remote is no loss when the remote branch
+// holds what is pushed: a maintainer who merged the base in or fixed a review on the pull request
+// pushed on top of the host's commits. The branch is fetched and, when it contains them, the
+// handover carries on as after a push that landed.
+//
+// Any other refusal — a remote branch that does not hold the commits, a host that cannot reach it —
+// leaves the worktree, the branch and the assignee exactly as they are, says so on the run with all
+// git said, and the next poll tries again. The alternative is a directory of commits nobody else has.
 func (f *Factory) pushWorktree(ctx context.Context, record *Run, clone string, held Run) bool {
 	if held.Branch == "" {
 		return true
@@ -107,10 +112,27 @@ func (f *Factory) pushWorktree(ctx context.Context, record *Run, clone string, h
 		}
 	}
 	if _, err := gitWithin(ctx, from, handoverTimeout, "push", "--quiet", "origin", ref+":refs/heads/"+held.Branch); err != nil {
+		if onRemote(ctx, clone, from, ref, held.Branch) {
+			f.runs.event(record, Event{Kind: "factory", Title: held.Branch + " is on the remote already",
+				Body: "the push was refused because the branch moved on the remote, and origin/" + held.Branch + " holds the commits of " + from})
+			return true
+		}
 		return f.heldUp(ctx, record, fmt.Sprintf("the commits of %s in %s could not be pushed: %v; nothing of this issue is removed from this host until they are on the remote",
 			held.Branch, from, err))
 	}
 	return true
+}
+
+// onRemote says whether the branch on the remote holds the commit ref points at in from, read after
+// fetching the branch into the clone, whose remote-tracking branches its worktrees share. A branch
+// that cannot be fetched or read holds nothing as far as this is concerned.
+func onRemote(ctx context.Context, clone, from, ref, branch string) bool {
+	tracking := "refs/remotes/origin/" + branch
+	if _, err := gitWithin(ctx, clone, handoverTimeout, "fetch", "--quiet", "origin", "+refs/heads/"+branch+":"+tracking); err != nil {
+		return false
+	}
+	_, err := git(ctx, from, "merge-base", "--is-ancestor", ref, tracking)
+	return err == nil
 }
 
 // removeWorktree takes the worktree and the local branch out of this host's clone. Both are a copy

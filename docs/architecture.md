@@ -83,7 +83,7 @@ This repository packages a way of working with coding agents as Claude Code plug
 13. The factory resumes an interrupted run once by itself, in its worktree. Taking the assignee off, the release signal, resumes it again.
 14. A new review that asks for changes, by a writer, queues a follow-up run at address-reviews. Held work stands before new issues.
 15. On `ready` the configured logins are asked for a review. On `blocked`, `failed`, `timeout` or a second interruption they are mentioned on the issue.
-16. Removing the routing label or closing the issue cancels a run. Letting go pushes the worktree before removing it ([ADR 0026](adr/0026-the-factory-never-deletes-work-on-its-own.md)).
+16. Removing the routing label or closing the issue cancels a run. Letting go pushes the worktree before removing it; a push refused because the branch moved on counts as landed when the remote branch contains the worktree's HEAD ([ADR 0026](adr/0026-the-factory-never-deletes-work-on-its-own.md)).
 17. Before each run a quota-axi check waits below the minimum and fails open ([ADR 0028](adr/0028-the-quota-check-is-a-courtesy-not-a-guard.md), [ADR 0037](adr/0037-the-quota-check-waits-below-12-percent-of-the-workers-scope.md)). A used-up quota after an error ends `quota`.
 18. Sessions that write run in the auto permission mode, without Herdr and without `WF_` variables. The host is the isolation boundary ([ADR 0027](adr/0027-the-factorys-isolation-boundary-is-the-host.md)).
 19. The factory took the stages over from the worker plugin, from the last to the first ([ADR 0043](adr/0043-the-migration-runs-from-the-last-stage-to-the-first.md)).

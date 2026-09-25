@@ -320,6 +320,60 @@ func TestAWorktreeWhoseCommitsCannotBePushedStaysAndTheRunWarns(t *testing.T) {
 	if len(held.Warnings) != 1 {
 		t.Errorf("the run carries %d warnings, want the one that is true: %v", len(held.Warnings), held.Warnings)
 	}
+	// git names the remote on its first line and the reason on the line after it.
+	if len(held.Warnings) > 0 && !strings.Contains(held.Warnings[0], "! [rejected]") {
+		t.Errorf("the warning is %q, want it to carry git's reason, the line of the rejected branch", held.Warnings[0])
+	}
+}
+
+// A push refused because the branch moved on the remote loses nothing when the remote branch holds
+// the worktree's commits, as it does after a maintainer merged the base in or fixed a review on the
+// pull request: the issue is let go as after a push that landed, and the other work stays as it is.
+func TestAWorktreeWhoseCommitsTheMovedRemoteBranchHoldsIsLetGo(t *testing.T) {
+	t.Parallel()
+	gh := newGhShim(t)
+	gh.routed(t, "acme/edge-sensors", claimedIssue, claimedTitle)
+	gh.loggedInAs(t, "factory-bot")
+	gh.assigns(t, "acme/edge-sensors", claimedIssue, "factory-bot")
+	gh.unassigns(t, "acme/edge-sensors", claimedIssue, "factory-bot")
+	gh.workerCommits(t, "worked.md")
+	gh.workerReportsBlocked(t, "the repository has no test for this")
+
+	data := filepath.Join(t.TempDir(), "data")
+	clone := gh.cloneInto(t, data, "acme/edge-sensors")
+
+	f := gh.work(t, config{"poll": "50ms", "deadline": "90s", "data_dir": data,
+		"repositories": []string{"acme/edge-sensors"}})
+	if run := f.ended(t, 1); run.Outcome != "blocked" {
+		t.Fatalf("run 1 ended as %q (%s), want blocked; the factory's log:\n%s", run.Outcome, run.Reason, f.output(t))
+	}
+	worktree := filepath.Join(clone, ".claude", "worktrees", claimedWorktree)
+
+	// Somebody put the worktree's commits on the remote and a commit of their own on top of them.
+	gh.git(t, worktree, "push", "-q", gh.remotePath("acme/edge-sensors"), "HEAD:refs/heads/"+claimedBranch)
+	moved := gh.commitOn(t, "acme/edge-sensors", claimedBranch)
+	gh.issue(t, "acme/edge-sensors", assignedTo(
+		openIssue(claimedIssue, claimedTitle, time.Now().UTC().Add(-72*time.Hour), readyLabel), "factory-bot"))
+
+	var held apiRun
+	f.eventually(t, 30*time.Second, "the issue to be let go", func() bool {
+		held = apiRun{}
+		f.get(t, "/api/runs/1", &held)
+		return held.LetGoAt != nil
+	})
+	if len(held.Warnings) != 0 {
+		t.Errorf("the run carries the warnings %v, want none: the remote branch holds its commits", held.Warnings)
+	}
+	if _, err := os.Stat(worktree); !os.IsNotExist(err) {
+		t.Errorf("the worktree of a run whose commits are on the remote is still there: %v", err)
+	}
+	if head := gh.head(t, "acme/edge-sensors", claimedBranch); head != moved {
+		t.Errorf("%s of the remote is at %q, want %s: nothing of the other work may be overwritten", claimedBranch, head, moved)
+	}
+	removed := fmt.Sprintf("issue edit %d --repo acme/edge-sensors --remove-assignee factory-bot", claimedIssue)
+	if made := gh.made(t, removed); made != 1 {
+		t.Errorf("the factory made `gh %s` %d times, want once: an issue let go without a pull request loses its assignee", removed, made)
+	}
 }
 
 // An issue the factory let go and that is routed again: its branch is where its work is, so a run
