@@ -1,7 +1,7 @@
 # 0008. make check is the single gate and check the single required status check
 
 Date: 2026-09-18
-Status: accepted
+Status: accepted, amended
 Amended by: [0019](0019-the-gate-runs-once-per-review-round.md) (the command stays `make check`; reviewers no longer run it and the worker runs it through a script that records the result), [0041](0041-a-change-class-decides-the-gate-and-the-reviewers-before-the-pull-request.md) (the gate before a factory run's pull request is the gate command of its change class; CI still runs `make check`)
 
 ## Context

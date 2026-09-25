@@ -1,7 +1,7 @@
 # 0046. A test is removed at high confidence without a person's approval before the pull request
 
 Date: 2026-09-24
-Status: accepted
+Status: accepted, amended
 Amended by: [0047](0047-a-test-hunt-reads-its-shares-whole-and-hunts-while-it-finds-something.md)
 
 ## Context

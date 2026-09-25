@@ -1,7 +1,7 @@
 # 0004. Reviewers are fresh-context, read-only subagents
 
 Date: 2026-09-17
-Status: accepted
+Status: accepted, amended
 Amended by: [0010](0010-standardisation-audits-read-only-and-backs-up-before-deleting.md) (repositories no longer override agent files), [0019](0019-the-gate-runs-once-per-review-round.md) (reviewers no longer run the gate; its result reaches them as a fact in the brief)
 
 ## Context

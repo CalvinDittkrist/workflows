@@ -7,7 +7,7 @@ One file per decision, numbered. An accepted ADR may be shortened in wording in 
 | [0001](0001-distribute-as-claude-code-plugin-marketplace.md) | Distribute as a Claude Code plugin marketplace | accepted |
 | [0002](0002-scripts-do-agents-decide.md) | Scripts do, agents decide | accepted |
 | [0003](0003-herdr-worktree-per-issue.md) | One Herdr worktree workspace per issue, branch name as contract | accepted |
-| [0004](0004-reviewers-as-fresh-read-only-subagents.md) | Reviewers are fresh-context, read-only subagents | accepted |
+| [0004](0004-reviewers-as-fresh-read-only-subagents.md) | Reviewers are fresh-context, read-only subagents | amended by [0019](0019-the-gate-runs-once-per-review-round.md) |
 | [0005](0005-sandboxing-strategy.md) | Sandboxing strategy: layered, Docker Sandboxes opt-in | accepted |
 | [0006](0006-planner-session-writes-issues-not-code.md) | Planning is its own session that writes issues, not code | accepted |
 | [0007](0007-agents-md-is-the-instruction-source.md) | AGENTS.md is the instruction source and CLAUDE.md imports it | accepted |
@@ -31,7 +31,7 @@ One file per decision, numbered. An accepted ADR may be shortened in wording in 
 | [0025](0025-one-queue-one-worker-work-in-progress-first.md) | One queue, one worker, and work in progress before new work | accepted |
 | [0026](0026-the-factory-never-deletes-work-on-its-own.md) | The factory never deletes work on its own | accepted |
 | [0027](0027-the-factorys-isolation-boundary-is-the-host.md) | The factory's isolation boundary is the host | accepted |
-| [0028](0028-the-quota-check-is-a-courtesy-not-a-guard.md) | The quota check is a courtesy, not a guard | accepted |
+| [0028](0028-the-quota-check-is-a-courtesy-not-a-guard.md) | The quota check is a courtesy, not a guard | amended by [0037](0037-the-quota-check-waits-below-12-percent-of-the-workers-scope.md) |
 | [0029](0029-a-worker-resets-its-context-by-a-handoff-not-by-compaction.md) | A worker resets its context by a handoff at a checkpoint, not by compaction | amended by [0032](0032-the-stage-measures-the-context-on-entry-and-a-handoff-grants-one-skip.md) |
 | [0030](0030-agents-verify-claude-code-facts-against-the-live-documentation.md) | Agents verify Claude Code facts against the live documentation, and the worker reads it through a pinned script | accepted |
 | [0031](0031-the-workflow-pins-the-size-at-which-a-worker-session-compacts.md) | The workflow pins the size at which a worker session compacts | amended by [0034](0034-the-compact-trigger-is-raised-through-the-window.md) |
