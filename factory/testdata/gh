@@ -142,15 +142,24 @@ answer="${GH_SHIM_DIR:-/nowhere}/$named"
 [ -f "$answer" ] && exec cat "$answer"
 
 # The reads of the ci stage a test did not answer: every pull request is green — mergeable, of the
-# branch of its number on the local repository, one check passed long ago, no review, no thread —
-# and a branch has no open pull request; a reply in a thread and its resolution go through. A test of
-# the ci stage answers them otherwise.
+# branch of its number on the local repository and at the commit that branch is at there, one check
+# passed long ago, no review, no thread — and a branch has no open pull request; a reply in a thread
+# and its resolution go through. A test of the ci stage answers them otherwise, and a test of a gate
+# on CI writes the rollup of one head into "checks-<number>-<commit>" in GH_SHIM_DIR, and the one of
+# every other head into "checks-<number>".
 case "$request" in
   "pr view "*" --repo "*" --json mergeable,headRefName,headRefOid,isCrossRepository,commits,statusCheckRollup")
     number=$3; repository=$5
     remote="${GH_SHIM_REMOTES:-/nowhere}/${repository%%/*}-${repository#*/}"
     branch=$(git -C "$remote" for-each-ref --format='%(refname:lstrip=2)' refs/heads 2>/dev/null | grep -m1 "^[a-z]*/$number-" || true)
-    printf '{"mergeable":"MERGEABLE","headRefName":"%s","headRefOid":"c0ffee","isCrossRepository":false,"commits":[{"committedDate":"2026-01-01T00:00:00Z"}],"statusCheckRollup":[{"name":"gate","status":"COMPLETED","conclusion":"SUCCESS","completedAt":"2026-01-01T00:00:00Z"}]}\n' "$branch"
+    head=$(git -C "$remote" rev-parse --verify --quiet "refs/heads/$branch" 2>/dev/null || echo c0ffee)
+    checks='[{"name":"gate","status":"COMPLETED","conclusion":"SUCCESS","completedAt":"2026-01-01T00:00:00Z"}]'
+    if [ -f "${GH_SHIM_DIR:-/nowhere}/checks-$number-$head" ]; then
+      checks=$(cat "$GH_SHIM_DIR/checks-$number-$head")
+    elif [ -f "${GH_SHIM_DIR:-/nowhere}/checks-$number" ]; then
+      checks=$(cat "$GH_SHIM_DIR/checks-$number")
+    fi
+    printf '{"mergeable":"MERGEABLE","headRefName":"%s","headRefOid":"%s","isCrossRepository":false,"commits":[{"committedDate":"2026-01-01T00:00:00Z"}],"statusCheckRollup":%s}\n' "$branch" "$head" "$checks"
     exit 0 ;;
   "api --paginate repos/"*"/pulls/"*"/reviews?per_page=100"|"api repos/"*"/pulls?state=open&head="*"&per_page=10")
     echo '[]'; exit 0 ;;
@@ -164,6 +173,12 @@ case "$request" in
     repository=${4#repos/}; repository=${repository%/pulls}
     number=$(printf '%s' "$input" | sed -n 's#.*"head":"[a-z][a-z]*/\([0-9][0-9]*\)-[^"]*".*#\1#p')
     printf '{"number":%s,"html_url":"https://github.com/%s/pull/%s","draft":false}\n' "${number:-1}" "$repository" "${number:-1}"
+    exit 0 ;;
+  # The two calls that make the draft of a gate on CI the pull request: its title and body written,
+  # and marked ready for review.
+  "api --method PATCH repos/"*"/pulls/"*" --input -")
+    echo '{}'; exit 0 ;;
+  "pr ready "*" --repo "*)
     exit 0 ;;
   "api graphql --input - --jq .data.addPullRequestReviewThreadReply.comment.url")
     echo 'https://github.com/o/r/pull/1#discussion_r1'; exit 0 ;;

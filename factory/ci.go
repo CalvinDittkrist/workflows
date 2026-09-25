@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -952,10 +951,11 @@ type ghThreads struct {
 	} `json:"data"`
 }
 
-// pullState reads the pull request a run waits on: the pull request itself with its rollup, its
-// reviews and its review threads. A pull request that is not of the branch the run holds is refused,
-// because the URL came out of a session's result and names whatever the session wrote.
-func (g *gitHub) pullState(ctx context.Context, held Held, bots []string) (pullReading, error) {
+// pullChecks reads what a gate on CI reads of the pull request of a run, and what every reading of the
+// ci stage starts with: its mergeability, its head and the rollup of that head's checks. A pull request
+// that is not of the branch the run holds is refused, because the URL came out of a session's result
+// and names whatever the session wrote.
+func (g *gitHub) pullChecks(ctx context.Context, held Held) (pullReading, error) {
 	number, ok := pullNumber(held.PullRequest)
 	if !ok {
 		return pullReading{}, fmt.Errorf("%s is no pull request URL", held.PullRequest)
@@ -979,6 +979,17 @@ func (g *gitHub) pullState(ctx context.Context, held Held, bots []string) (pullR
 	for _, entry := range view.StatusCheckRollup {
 		read.Checks = append(read.Checks, entry.check())
 	}
+	return read, nil
+}
+
+// pullState reads the pull request a run waits on: the pull request itself with its rollup
+// (pullChecks), its reviews and its review threads.
+func (g *gitHub) pullState(ctx context.Context, held Held, bots []string) (pullReading, error) {
+	read, err := g.pullChecks(ctx, held)
+	if err != nil {
+		return pullReading{}, err
+	}
+	number, _ := pullNumber(held.PullRequest)
 	if err := g.readReviews(ctx, held.Repository, number, bots, &read); err != nil {
 		return pullReading{}, err
 	}
@@ -988,7 +999,7 @@ func (g *gitHub) pullState(ctx context.Context, held Held, bots []string) (pullR
 	if err != nil {
 		return pullReading{}, err
 	}
-	raw, err = ghInput(ctx, ghTimeout, string(body), "api", "graphql", "--input", "-")
+	raw, err := ghInput(ctx, ghTimeout, string(body), "api", "graphql", "--input", "-")
 	if err != nil {
 		return pullReading{}, fmt.Errorf("the review threads could not be read: %w", err)
 	}
@@ -1184,27 +1195,4 @@ func tail(s string, n int) string {
 		start++
 	}
 	return "[earlier lines left out]\n" + s[start:]
-}
-
-// openPull is the open pull request of the branch a run holds the issue by, which is where a resumed
-// run starts: the stages before it are done when it stands.
-func (g *gitHub) openPull(ctx context.Context, repository, branch string) (string, error) {
-	owner, _, _ := strings.Cut(repository, "/")
-	raw, err := gh(ctx, "api", "repos/"+repository+"/pulls?state=open&head="+url.QueryEscape(owner+":"+branch)+"&per_page=10")
-	if err != nil {
-		return "", err
-	}
-	var pulls []struct {
-		Number int    `json:"number"`
-		Head   ghHead `json:"head"`
-	}
-	if err := json.Unmarshal(raw, &pulls); err != nil {
-		return "", fmt.Errorf("the answer is no list of pull requests: %w", err)
-	}
-	for _, p := range pulls {
-		if (ghPull{Head: p.Head}).of(repository, branch) && p.Number > 0 {
-			return "https://github.com/" + repository + "/pull/" + strconv.Itoa(p.Number), nil
-		}
-	}
-	return "", nil
 }

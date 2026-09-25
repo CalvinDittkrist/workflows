@@ -12,10 +12,11 @@ import (
 
 // The gate stage, which the factory runs itself ([ADR 0043], step 5): the implement session stops once it
 // has committed its implementation, and the factory merges the base into the branch when the base has
-// commits the branch lacks, determines the change class and runs the class's gate in the worktree. A
-// merge that conflicts goes to a fix session with the conflicted files, and a gate that fails to a fix
-// session with the end of its output, within the gate's budget; the gate runs again on the commit the
-// session leaves. The pass is what the reviewers are briefed with and the pull request carries.
+// commits the branch lacks, determines the change class and runs the class's gate, in the worktree or,
+// for a gate on CI, on GitHub through a draft pull request (ci_gate.go). A merge that conflicts goes to
+// a fix session with the conflicted files, and a gate that fails to a fix session with the end of its
+// output or the failed logs of its checks, within the gate's budget; the gate runs again on the commit
+// the session leaves. The pass is what the reviewers are briefed with and the pull request carries.
 //
 // [ADR 0043]: ../docs/adr/0043-the-migration-runs-from-the-last-stage-to-the-first.md
 
@@ -26,11 +27,12 @@ const stageGate = "gate"
 // repository. A knob it leaves out is the one above it: the default for the host's, the host's for a
 // repository's.
 type gateKnobs struct {
-	Rounds  *int   `json:"rounds"`
-	Timeout string `json:"timeout"`
+	Command *gateCommand `json:"command"`
+	Rounds  *int         `json:"rounds"`
+	Timeout string       `json:"timeout"`
 }
 
-const gateFields = "rounds, timeout"
+const gateFields = "command, rounds, timeout"
 
 // UnmarshalJSON refuses a knob the gate stage does not have and names the ones it has.
 func (k *gateKnobs) UnmarshalJSON(raw []byte) error {
@@ -45,22 +47,32 @@ func (k *gateKnobs) UnmarshalJSON(raw []byte) error {
 	return nil
 }
 
-// gateSettings is the gate stage's knobs as a run reads them. Rounds is how many fix sessions a failing
-// gate of the gate stage may take; Timeout how long one run of the gate may take, here and on the final
-// head, before its process group is ended and the run counts as a failure.
+// gateSettings is the gate stage's knobs as a run reads them. Command is the repository's single gate
+// command, which the class full runs; Rounds how many fix sessions a failing gate of the gate stage may
+// take; Timeout how long one run of a gate in the worktree may take, here and on the final head, before
+// its process group is ended and the run counts as a failure. A gate on CI is waited for within the
+// run's deadline instead.
 type gateSettings struct {
+	Command gateCommand
 	Rounds  int
 	Timeout time.Duration
 }
 
-// defaultGate is what a host that names no gate knob runs with.
-var defaultGate = gateSettings{Rounds: 3, Timeout: 45 * time.Minute}
+// defaultGate is what a host that names no gate knob runs with: make check, the single gate of a
+// repository that follows the standard ([ADR 0008]).
+//
+// [ADR 0008]: ../docs/adr/0008-make-check-is-the-single-gate.md
+var defaultGate = gateSettings{Command: gateCommand{Args: []string{"make", "check"}}, Rounds: 3, Timeout: 45 * time.Minute}
 
 // over is these settings with the knobs a gate object names written over them.
 func (base gateSettings) over(k *gateKnobs) (gateSettings, error) {
 	out := base
+	out.Command = base.Command.clone()
 	if k == nil {
 		return out, nil
+	}
+	if k.Command != nil {
+		out.Command = k.Command.clone()
 	}
 	if k.Rounds != nil {
 		if *k.Rounds < 0 {
@@ -88,17 +100,26 @@ func (f *Factory) gateFor(repository string) gateSettings {
 }
 
 // Gated is one run of the gate as the run records it: the stage it ran in, the commit, the change
-// class and its command, how it ended, how long it took and the end of its output.
+// class and its command, how it ended, how long it took and the end of its output, which for a gate on
+// CI is the failed logs of its checks. Checks is the checks a gate on CI read, with how each ended.
 type Gated struct {
-	Stage    string `json:"stage"` // gate, or review for the gate on the final head
-	Head     string `json:"head"`  // fake-N in fake mode
-	Class    string `json:"class"`
-	Command  string `json:"command"`
-	Exit     int    `json:"exit"` // -1 for a gate that was ended
-	Passed   bool   `json:"passed"`
-	TimedOut bool   `json:"timedOut,omitempty"`
-	Seconds  int    `json:"seconds"`
-	Tail     string `json:"tail"`
+	Stage    string       `json:"stage"` // gate, or review for the gate on the final head
+	Head     string       `json:"head"`  // fake-N in fake mode
+	Class    string       `json:"class"`
+	Command  string       `json:"command"`
+	Exit     int          `json:"exit"` // -1 for a gate that was ended; 0 or 1 for a gate on CI, which passed or failed
+	Passed   bool         `json:"passed"`
+	TimedOut bool         `json:"timedOut,omitempty"`
+	Seconds  int          `json:"seconds"`
+	Tail     string       `json:"tail"`
+	Checks   []GatedCheck `json:"checks,omitempty"`
+}
+
+// GatedCheck is one check a gate on CI read: its name, where to read it, and pass or fail.
+type GatedCheck struct {
+	Name  string `json:"name"`
+	URL   string `json:"url"`
+	State string `json:"state"`
 }
 
 // gate is the gate stage of one run: the base merged into the branch, then the gate of the change class
@@ -127,14 +148,14 @@ func (f *Factory) gate(parent, ctx context.Context, r *Run, entry Entry, claim c
 			return
 		}
 		panel.Head = head
-		if len(classed.Gate) == 0 {
+		if classed.Gate.none() {
 			panel.Gate, panel.GatedAt = noGateResult(classed), classed.Head
 			f.runs.event(r, Event{Kind: "factory", Title: firstLine(panel.Gate), Body: panel.Gate})
 			break
 		}
-		f.runs.event(r, Event{Kind: "factory", Title: "running the gate", Body: commandLine(classed.Gate) + ", the gate of the change class " + classed.Class})
-		ran := f.runGate(ctx, r, entry, claim, panel, classed, stageGate)
-		if f.halted(parent, ctx, r, "ran the gate") {
+		f.runs.event(r, Event{Kind: "factory", Title: "running the gate", Body: classed.Gate.String() + ", the gate of the change class " + classed.Class})
+		ran := f.gateOn(parent, ctx, r, entry, claim, &panel, classed, stageGate)
+		if ran.ended || f.halted(parent, ctx, r, "ran the gate") {
 			return
 		}
 		if ran.err != nil {

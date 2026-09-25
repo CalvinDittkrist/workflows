@@ -193,28 +193,34 @@ func TestTheAuthorsBriefStaysWithinOneArgumentWhateverItFences(t *testing.T) {
 	}
 }
 
-// A branch that has a pull request open when the pr stage comes to open one — a resumed run whose
-// reading of it failed ran its implement session again — goes on with that pull request: no author session
-// and no second pull request, which GitHub refuses for the same branch.
-func TestThePRStageGoesOnWithAPullRequestTheBranchHasOpen(t *testing.T) {
+// A pull request is the run's only by the key: its number recorded, its head the claimed branch and
+// the factory's login its author. One on the branch that the run did not record, whoever opened it,
+// ends the run blocked when the pr stage comes to open its own, with a comment on the issue naming it,
+// because an issue gets one pull request: no author session, and no second pull request.
+func TestAPullRequestOnTheBranchThatIsNotTheRunsEndsItBlocked(t *testing.T) {
 	t.Parallel()
-	gh, data := ciClaim(t)
-	gh.openPullsListed(t, "acme/edge-sensors", claimedBranch, claimedIssue)
-	gh.ciReads(t, "acme/edge-sensors", claimedIssue, ciPull{})
+	for _, author := range []string{"someone", "factory-bot"} {
+		t.Run(author, func(t *testing.T) {
+			t.Parallel()
+			gh, data := ciClaim(t)
+			gh.openPullsBy(t, "acme/edge-sensors", claimedBranch, listedPull{claimedIssue, author, false})
+			gh.comments(t, "acme/edge-sensors", claimedIssue)
 
-	f := gh.work(t, ciConfig(data, nil))
-	run := f.ended(t, 1)
-	if run.Outcome != outcomeReady || run.PullRequest != pullOfTheClaim {
-		t.Fatalf("the run ended as %q with %q (%s), want ready with %s; the factory's log:\n%s", run.Outcome, run.PullRequest, run.Reason, pullOfTheClaim, f.output(t))
-	}
-	if pulls := gh.opened(t, "acme/edge-sensors"); len(pulls) != 0 {
-		t.Errorf("the factory opened %+v, want none: the branch has one open", pulls)
-	}
-	if authors := gh.authorSessions(t); len(authors) != 0 {
-		t.Errorf("the factory started %d author sessions, want none", len(authors))
-	}
-	if titles := factoryTitles(run, "going on with"); !equal(titles, []string{"going on with " + pullOfTheClaim}) {
-		t.Errorf("the run said %v, want that it goes on with the open pull request", titles)
+			f := gh.work(t, ciConfig(data, nil))
+			run := f.ended(t, 1)
+			if run.Outcome != outcomeBlocked || !strings.Contains(run.Reason, pullOfTheClaim+", opened by "+author) {
+				t.Fatalf("the run ended as %q (%s), want blocked naming %s; the factory's log:\n%s", run.Outcome, run.Reason, pullOfTheClaim, f.output(t))
+			}
+			if comment := gh.commented(t, "acme/edge-sensors", claimedIssue); !strings.Contains(comment, pullOfTheClaim) {
+				t.Errorf("the factory commented %q on the issue, want the pull request named", comment)
+			}
+			if pulls := gh.opened(t, "acme/edge-sensors"); len(pulls) != 0 {
+				t.Errorf("the factory opened %+v, want none: the branch has one open", pulls)
+			}
+			if authors := gh.authorSessions(t); len(authors) != 0 {
+				t.Errorf("the factory started %d author sessions, want none", len(authors))
+			}
+		})
 	}
 }
 

@@ -116,6 +116,9 @@ type holding struct {
 	// [ADR 0023]: ../docs/adr/0023-github-is-the-only-control-surface-of-the-factory.md
 	pullRequest string
 	addressed   time.Time
+	// drafted says the pull request is still the draft a gate on CI opened, which no pr stage finished:
+	// a review on it queues no follow-up run (holding.pull).
+	drafted bool
 }
 
 // holdings reads the run records, oldest first, into one entry per issue.
@@ -139,7 +142,7 @@ func holdings(runs []Run) map[string]holding {
 		// reported none says nothing about it — and is cleared below with the claim it was opened
 		// under, which is why it is read here and not after that.
 		if run.PullRequest != "" {
-			h.pullRequest = run.PullRequest
+			h.pullRequest, h.drafted = run.PullRequest, run.Draft
 		}
 		switch {
 		case run.LetGoAt != nil:
@@ -147,7 +150,7 @@ func holdings(runs []Run) map[string]holding {
 			// reader that forgets to ask holds first meets an empty run rather than a worktree that
 			// is not on this host any more — and the pull request of that claim goes with it, so the
 			// run that takes the issue back is not decided about by the one before it.
-			h.run, h.holds, h.let, h.letGo, h.pullRequest = Run{}, false, run, true, ""
+			h.run, h.holds, h.let, h.letGo, h.pullRequest, h.drafted = Run{}, false, run, true, "", false
 		case run.Holding:
 			h.run, h.holds, h.letGo = run, true, false
 		}

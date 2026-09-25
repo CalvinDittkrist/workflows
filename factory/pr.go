@@ -13,7 +13,8 @@ import (
 // review has recorded its panel summary, and the factory pushes the branch, has a read-only session
 // write the pull request's title and body from the diff, the commits and the issue, appends the
 // verification section from the run's facts as they were reported, and opens the pull request against
-// the base the branch was cut from. The ci stage follows.
+// the base the branch was cut from, or makes the draft a gate on CI opened that pull request. The ci
+// stage follows.
 //
 // [ADR 0043]: ../docs/adr/0043-the-migration-runs-from-the-last-stage-to-the-first.md
 
@@ -64,7 +65,8 @@ func (f *Factory) reviewedAlready(ctx context.Context, r *Run, entry Entry, clai
 }
 
 // pr is the pr stage of one run: it pushes the branch, has the author session write the pull request,
-// opens it and hands the run to the ci stage. Every way out of it but the last ends the run.
+// opens it or finishes the run's draft, and hands the run to the ci stage. Every way out of it but the
+// last ends the run.
 func (f *Factory) pr(parent, ctx context.Context, r *Run, entry Entry, claim claimed, review Review) {
 	f.runs.update(r, func() {
 		r.Review = &review
@@ -74,10 +76,15 @@ func (f *Factory) pr(parent, ctx context.Context, r *Run, entry Entry, claim cla
 	if _, ok := f.pushed(parent, ctx, r, claim, "the branch"); !ok {
 		return
 	}
-	// A resumed run whose reading of the open pull request failed ran its implement session again, and the
-	// pull request that reading missed may stand: the run goes on with it rather than opening a second
-	// one, which GitHub refuses for the same branch.
-	if pull := f.openAlready(ctx, r, entry, claim); pull != "" {
+	// A pull request on the branch that is not the run's ends it. A resumed run whose reading of its own
+	// failed ran its stages again, and the finished pull request that reading missed may stand: the run
+	// goes on with it rather than opening a second one.
+	if _, ok := f.settlePull(parent, ctx, r, entry, claim); !ok {
+		return
+	}
+	if pull := r.PullRequest; pull != "" && !r.Draft {
+		f.runs.event(r, Event{Kind: "factory", Title: "going on with " + pull,
+			Body: "the branch " + claim.branch + " has this pull request of the run's open already, so the pr stage opens none"})
 		if pullOf(entry.resume.PullRequest) == pullOf(pull) {
 			f.runs.update(r, func() { r.RepairRounds = entry.resume.RepairRounds })
 		}
@@ -101,36 +108,23 @@ func (f *Factory) pr(parent, ctx context.Context, r *Run, entry Entry, claim cla
 		return
 	}
 	body := got.Body + "\n\n" + verification(review)
-	url, err := f.source.createPull(ctx, entry.Repository, newPull{Title: got.Title, Head: claim.branch, Base: claim.base, Body: body, issue: entry.Number})
+	url, title := r.PullRequest, "opened "
+	if url != "" {
+		number, _ := pullNumber(url)
+		err = f.source.finishPull(ctx, entry.Repository, number, got.Title, body)
+		title = "made the draft ready: "
+	} else {
+		url, err = f.source.createPull(ctx, entry.Repository, newPull{Title: got.Title, Head: claim.branch, Base: claim.base, Body: body, issue: entry.Number})
+	}
 	if err != nil {
 		if !f.halted(parent, ctx, r, "opened the pull request") {
 			f.finish(r, outcomeFailed, "the pull request could not be opened: "+err.Error()+"; the branch "+claim.branch+" is pushed", nil)
 		}
 		return
 	}
-	f.runs.event(r, Event{Kind: "factory", Title: "opened " + url, Body: got.Title})
+	f.runs.update(r, func() { r.Draft = false })
+	f.runs.event(r, Event{Kind: "factory", Title: title + url, Body: got.Title})
 	f.ci(parent, ctx, r, entry, claim, url, false)
-}
-
-// openAlready is the pull request the branch has open when the pr stage is about to open one, and
-// empty when it has none. A reading that fails is warned about and taken as none: the pull request is
-// then opened, and GitHub's refusal says so if one stands after all.
-func (f *Factory) openAlready(ctx context.Context, r *Run, entry Entry, claim claimed) string {
-	if claim.branch == "" {
-		return ""
-	}
-	pull, err := f.source.openPull(ctx, entry.Repository, claim.branch)
-	if err != nil {
-		if ctx.Err() == nil {
-			f.warn(r, "pull request not read", "whether "+claim.branch+" has a pull request open could not be read before one is opened: "+err.Error())
-		}
-		return ""
-	}
-	if pull != "" {
-		f.runs.event(r, Event{Kind: "factory", Title: "going on with " + pull,
-			Body: "the branch " + claim.branch + " has this pull request open already, so the pr stage opens none"})
-	}
-	return pull
 }
 
 // facts is what the author session is briefed with: the diff range, the commits, the files and the
@@ -227,8 +221,8 @@ func authorBrief(entry Entry, claim claimed, c facts) string {
 
 // verification is the section the factory appends to the author's body: the gate result and the panel
 // summary as the implement session reported them, word for word, and when the panel did not pass, a line
-// that says so and names the reviewers that did not pass. The pull request is opened all the same, and
-// never as a draft: the maintainer decides on it.
+// that says so and names the reviewers that did not pass. The pull request is opened, or the gate's
+// draft marked ready, all the same: the maintainer decides on it.
 func verification(review Review) string {
 	gate := strings.TrimSpace(review.GateResult)
 	if gate == "" {
@@ -291,13 +285,13 @@ func notPassed(summary string) string {
 	return ""
 }
 
-// newPull is the pull request the pr stage opens.
+// newPull is the pull request the pr stage opens, or the draft a gate on CI opens.
 type newPull struct {
 	Title string `json:"title"`
 	Head  string `json:"head"`
 	Base  string `json:"base"`
 	Body  string `json:"body"`
-	Draft bool   `json:"draft"` // always false: a panel that did not pass says so in the body
+	Draft bool   `json:"draft"` // the gate's draft only: a panel that did not pass says so in the body
 	issue int    // the issue it closes, which fake mode numbers its canned pull request after
 }
 

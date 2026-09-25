@@ -65,9 +65,12 @@ type Entry struct {
 	// instead of claiming the issue anew (waiting, readopt). It is empty for every other routing,
 	// which is an issue this factory has never held.
 	resume Run
-	// pull is the pull request a follow-up run answers the review on: the one the claim opened, which
-	// the review was read from.
-	pull string
+	// pull is the pull request the issue's runs recorded under the claim: the one a follow-up run
+	// answers the review on, and the one a resumed run takes on when GitHub still shows it open and its
+	// own (settlePull). drafted says it is still the draft a gate on CI opened, which no pr stage has
+	// finished.
+	pull    string
+	drafted bool
 }
 
 // Factory is the service: it holds the queue it last derived, the runs it has made, and the one
@@ -134,15 +137,21 @@ type source interface {
 	// none, when the pull request is no longer open and when GitHub could not be read.
 	changesRequested(ctx context.Context, repository string, pull int) time.Time
 	// pullState is one reading of the pull request a run waits on in the ci stage (ci.go), with the
-	// reviews of the bots named; failedLogs the failed logs of the checks a fix session is given; and
-	// openPull the open pull request of a held branch, which a resumed run starts its ci stage on.
+	// reviews of the bots named; pullChecks the part of it a gate on CI reads, its mergeability and its
+	// checks (ci_gate.go); failedLogs the failed logs of the checks a fix session is given; and
+	// openPulls the open pull requests of a held branch, which settle the pull request of a run.
 	pullState(ctx context.Context, held Held, bots []string) (pullReading, error)
+	pullChecks(ctx context.Context, held Held) (pullReading, error)
 	failedLogs(ctx context.Context, repository string, failed []check) string
-	openPull(ctx context.Context, repository, branch string) (string, error)
-	// issueText is the title and the body of an issue, and createPull opens a pull request and answers
-	// with its URL: the two calls of the pr stage (pr.go).
+	openPulls(ctx context.Context, repository, branch string) ([]branchPull, error)
+	// issueText is the title and the body of an issue, createPull opens a pull request and answers with
+	// its URL, and finishPull makes the draft of a gate on CI the pull request: the calls of the pr stage
+	// (pr.go), and of the draft (ci_gate.go).
 	issueText(ctx context.Context, repository string, number int) (string, string, error)
 	createPull(ctx context.Context, repository string, p newPull) (string, error)
+	finishPull(ctx context.Context, repository string, pull int, title, body string) error
+	// commentOnIssue names on the issue a pull request of its branch that is not the run's.
+	commentOnIssue(ctx context.Context, repository string, issue int, body string) error
 	// replyToThread, resolveThread and commentOnPull carry what an address-reviews session answered to
 	// GitHub: a reply in one review thread, its resolution, and one comment on the pull request.
 	replyToThread(ctx context.Context, id, body string) error
@@ -620,9 +629,9 @@ func (f *Factory) waiting() []Entry {
 		}
 		switch {
 		case held.released(issue, routed):
-			out = append(out, Entry{Issue: issue, Signal: signalRelease, SignalAt: issue.unassignedAt, resume: held.run})
+			out = append(out, Entry{Issue: issue, Signal: signalRelease, SignalAt: issue.unassignedAt, resume: held.run, pull: held.pullRequest, drafted: held.drafted})
 		case held.resumes != "":
-			out = append(out, Entry{Issue: issue, Signal: held.resumes, SignalAt: held.signalAt(), resume: held.run})
+			out = append(out, Entry{Issue: issue, Signal: held.resumes, SignalAt: held.signalAt(), resume: held.run, pull: held.pullRequest, drafted: held.drafted})
 		case held.changesRequested(requested[key]):
 			out = append(out, Entry{Issue: issue, Signal: signalChangesRequested, SignalAt: requested[key], resume: held.run, pull: held.pullRequest})
 		}
@@ -766,15 +775,25 @@ func (f *Factory) execute(parent context.Context, r *Run, entry Entry) {
 	// What the claim or the resume ended up holding, before a worker is started on it.
 	f.runs.update(r, func() { r.Worktree, r.Holding = claim.worktree, claim.holding })
 
-	// A resumed run whose branch has a pull request open is past the stages that open one: it starts at
-	// the ci stage, with the repair rounds its pull request has had, and nothing before it is done again.
-	pull, known := f.openedAlready(ctx, r, entry, claim)
-	if pull != "" {
-		if pullOf(entry.resume.PullRequest) == pullOf(pull) {
-			f.runs.update(r, func() { r.RepairRounds = entry.resume.RepairRounds })
+	// A resumed run takes on the pull request the issue's runs recorded while GitHub shows it open and
+	// its own, and one the pr stage finished is past the stages that open it: the run starts at the ci
+	// stage, with the repair rounds its pull request has had, and nothing before it is done again. The
+	// gate's draft says nothing about the stage, which the record and the branch decide below.
+	known := false
+	if kindOf(entry.Signal) == kindResumed {
+		var ok bool
+		if known, ok = f.settlePull(parent, ctx, r, entry, claim); !ok {
+			return
 		}
-		f.ci(parent, ctx, r, entry, claim, pull, false)
-		return
+		if pull := r.PullRequest; pull != "" && !r.Draft {
+			f.runs.event(r, Event{Kind: "factory", Title: "resuming at the ci stage of " + pull,
+				Body: "the branch " + claim.branch + " has this pull request open, the run's own, so the stages that open it are done"})
+			if pullOf(entry.resume.PullRequest) == pullOf(pull) {
+				f.runs.update(r, func() { r.RepairRounds = entry.resume.RepairRounds })
+			}
+			f.ci(parent, ctx, r, entry, claim, pull, false)
+			return
+		}
 	}
 	// A follow-up run answers a review on the pull request the claim opened: it starts at the
 	// address-reviews stage, with a repair count of its own that starts at none, and goes on into the
@@ -789,8 +808,8 @@ func (f *Factory) execute(parent context.Context, r *Run, entry Entry) {
 		return
 	}
 
-	// A resumed run without a pull request whose branch is where the run before it recorded the review
-	// starts at the pr stage.
+	// A resumed run without a finished pull request whose branch is where the run before it recorded the
+	// review starts at the pr stage.
 	if known {
 		if review, ok := f.reviewedAlready(ctx, r, entry, claim); ok {
 			f.pr(parent, ctx, r, entry, claim, review)
@@ -851,28 +870,6 @@ func (f *Factory) implement(parent, ctx context.Context, r *Run, entry Entry, cl
 // commitsBeyond is how many commits the branch in the worktree carries beyond its base, as git counts them.
 func commitsBeyond(ctx context.Context, claim claimed) (string, error) {
 	return git(ctx, claim.worktree, "rev-list", "--count", "origin/"+claim.base+"..HEAD")
-}
-
-// openedAlready is the open pull request of the branch a resumed run continues, which is where it
-// starts, and whether GitHub said so. A first run has opened none, and a follow-up run answers a review
-// on its own; a reading that fails starts the run at its first stage, whose session finds the pull
-// request itself.
-func (f *Factory) openedAlready(ctx context.Context, r *Run, entry Entry, claim claimed) (string, bool) {
-	if kindOf(entry.Signal) != kindResumed || claim.branch == "" {
-		return "", false
-	}
-	pull, err := f.source.openPull(ctx, entry.Repository, claim.branch)
-	if err != nil {
-		if ctx.Err() == nil {
-			f.warn(r, "pull request not read", "whether "+claim.branch+" has a pull request open could not be read, so the run starts at its first stage: "+err.Error())
-		}
-		return "", false
-	}
-	if pull != "" {
-		f.runs.event(r, Event{Kind: "factory", Title: "resuming at the ci stage of " + pull,
-			Body: "the branch " + claim.branch + " has this pull request open, so the stages that open it are done"})
-	}
-	return pull, true
 }
 
 // session starts one session and reads it to its end. It answers with the session's result when the

@@ -60,6 +60,7 @@ type canned struct {
 
 	mu    sync.Mutex
 	reads map[string]int // how often the ci stage has read each issue's pull request
+	gated map[string]int // how often a gate on CI has read each issue's pull request
 	// requested is when the maintainer of fake mode asked for changes on the pull request of an issue,
 	// and answered the issues whose pull request the factory has commented on since.
 	requested map[int]time.Time
@@ -191,8 +192,46 @@ func (c *canned) commentOnPull(_ context.Context, _ string, pull int, _ string) 
 	return nil
 }
 
-// openPull answers that no branch has a pull request open: fake mode opens none.
-func (c *canned) openPull(context.Context, string, string) (string, error) { return "", nil }
+// cannedGateCI is what a gate on CI reads of the pull request of a scenario, one reading after the
+// other; the last one stands from then on. The ready worker's checks run, then fail, and pass once a
+// fix session has repaired them. Every other scenario's pass at once.
+var cannedGateCI = map[string][]string{
+	"ready": {ciWaiting, ciFailed, ciGreen},
+}
+
+// pullChecks answers the canned reading of a gate on CI of the scenario that works the issue: two
+// checks, a lint and a test, and the test is the one the script moves.
+func (c *canned) pullChecks(_ context.Context, held Held) (pullReading, error) {
+	c.mu.Lock()
+	if c.gated == nil {
+		c.gated = map[string]int{}
+	}
+	n := c.gated[held.key()]
+	c.gated[held.key()] = n + 1
+	c.mu.Unlock()
+	state := ciGreen
+	if script := cannedGateCI[scenarioOf(held.Number)]; len(script) > 0 {
+		state = script[min(n, len(script)-1)]
+	}
+	runs := "https://github.com/" + held.Repository + "/actions/runs/"
+	test := check{Name: "test", URL: runs + "2/job/1", State: checkPass, CompletedAt: c.started}
+	switch state {
+	case ciWaiting:
+		test.State, test.CompletedAt = checkPending, time.Time{}
+	case ciFailed:
+		test.State = checkFail
+	}
+	return pullReading{Mergeable: "MERGEABLE", Head: fmt.Sprintf("canned-gate-%d", n), HeadAt: c.started,
+		Checks:     []check{{Name: "lint", URL: runs + "1/job/1", State: checkPass, CompletedAt: c.started}, test},
+		Objections: []objection{}, Threads: []thread{}}, nil
+}
+
+// openPulls answers that no branch has a pull request open: fake mode opens none on GitHub.
+func (c *canned) openPulls(context.Context, string, string) ([]branchPull, error) { return nil, nil }
+
+// finishPull and commentOnIssue take the call: there is no pull request and no issue behind them.
+func (c *canned) finishPull(context.Context, string, int, string, string) error { return nil }
+func (c *canned) commentOnIssue(context.Context, string, int, string) error     { return nil }
 
 // issueText answers the canned issue's title and a body of its own.
 func (c *canned) issueText(_ context.Context, _ string, number int) (string, string, error) {

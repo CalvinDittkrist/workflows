@@ -798,13 +798,34 @@ func pending(name string) map[string]any {
 		"detailsUrl": "https://github.com/o/r/actions/runs/9/job/1"}
 }
 
-// openPullsListed is the answer to the one read a resumed run makes before it decides where to start: the
-// open pull requests of the branch it holds, which are the ones given.
+// openPullsListed is the answer to the read that settles the pull request of a run: the open pull
+// requests of the branch it holds, which are the ones given, each opened by factory-bot, the login of
+// ciClaim.
 func (g *ghShim) openPullsListed(t *testing.T, repository, branch string, numbers ...int) {
 	t.Helper()
-	pulls := []map[string]any{}
+	pulls := []listedPull{}
 	for _, n := range numbers {
-		pulls = append(pulls, map[string]any{"number": n, "head": map[string]any{"ref": branch, "repo": map[string]any{"full_name": repository}}})
+		pulls = append(pulls, listedPull{n, "factory-bot", false})
+	}
+	g.openPullsBy(t, repository, branch, pulls...)
+}
+
+// listedPull is one open pull request of a branch: its number, who opened it, and whether GitHub says
+// it is a draft, which the factory never reads.
+type listedPull struct {
+	number int
+	author string
+	draft  bool
+}
+
+// openPullsBy is the answer to the read of the open pull requests of a branch, each opened by the login
+// it names.
+func (g *ghShim) openPullsBy(t *testing.T, repository, branch string, listed ...listedPull) {
+	t.Helper()
+	pulls := []map[string]any{}
+	for _, p := range listed {
+		pulls = append(pulls, map[string]any{"number": p.number, "draft": p.draft, "user": map[string]any{"login": p.author},
+			"head": map[string]any{"ref": branch, "repo": map[string]any{"full_name": repository}}})
 	}
 	owner, _, _ := strings.Cut(repository, "/")
 	g.answer(t, "api repos/"+repository+"/pulls?state=open&head="+url.QueryEscape(owner+":"+branch)+"&per_page=10", marshal(t, pulls))

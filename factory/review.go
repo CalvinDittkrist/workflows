@@ -54,9 +54,10 @@ func (f *Factory) refreshRequested(ctx context.Context) {
 // pull is the pull request of this issue that the factory watches, and whether there is one at all.
 // It is the newest one the issue's runs reported, and it is only watched while this factory holds
 // the issue and no run of it is going: a follow-up run stands under the claim, like every other run
-// of held work, and never beside one.
+// of held work, and never beside one. The draft of a gate on CI is not watched: no pr stage has finished
+// it, and a follow-up run answers reviews on a pull request the pr stage finished.
 func (h holding) pull() (int, bool) {
-	if !h.holds || !h.idle || h.pullRequest == "" {
+	if !h.holds || !h.idle || h.pullRequest == "" || h.drafted {
 		return 0, false
 	}
 	return pullNumber(h.pullRequest)
