@@ -1,31 +1,58 @@
 # planner
 
-Planning session for one topic. The orchestrator starts it with `/orchestrator:plan <idea | #issue>`: worktree `plan/<slug>`, Herdr workspace, `claude --agent planner`, first turn `/planner:plan`. The planner writes GitHub issues, never code, and the plan branch is never pushed or committed to.
+Planning session for one topic. The orchestrator starts it with `/orchestrator:plan <idea | #issue>`: worktree `plan/<slug>`, Herdr workspace, `claude --agent planner`, first turn `/planner:plan`. The planner writes GitHub issues, never code, and the plan branch is never committed to or pushed. The agent has eight tools (Bash, Read, Write, Edit, Grep, Glob, Agent, WebFetch) and no Skill tool. It requires `gh`, `jq` and `git`.
 
+## Skills
 | Skill | Script | Effect |
 | --- | --- | --- |
 | `/planner:plan` | `facts.sh`, `accept-due.sh`, `labels.sh` | session facts, whether an acceptance is due, label vocabulary, the routes; recommends one and stops |
 | `/planner:grill [topic]` | | question rounds along the decision tree until nothing is open; collects glossary terms and ADR candidates |
 | `/planner:spec` | `issue.sh create --label spec` | one spec issue from the conversation, no new questions |
-| `/planner:tickets [spec]` | `issue.sh milestones`, `issue.sh milestone`, `issue.sh create --parent --milestone`, `issue.sh block` | asks once for a `vX.Y.Z` milestone (existing, new with the goal as description, or none); vertical-slice issues labelled `ready-for-agent`, sub-issues of the spec, native blocking edges; asks once which tickets are routed to the factory and labels only those `factory`; a ticket with a milestone takes its spec along, so the release waits for the acceptance |
-| `/planner:accept [spec]` | `accept-facts.sh`, `accept-report.sh`, `issue.sh create|comment|block`, `accept-close.sh` | the acceptance of a finished spec: facts, one read-only spec checker, one report, then gap tickets, accepted deviations, or the spec closed |
-| `/planner:triage [issue]` | `triage-list.sh`, `issue.sh comment|label|close` | three buckets; per issue verify, grill, agent brief, labels, and the routing question for an agent-ready issue; `wontfix` closes with the reason |
+| `/planner:tickets [spec]` | `issue.sh milestones`, `issue.sh milestone`, `issue.sh create --parent --milestone`, `issue.sh block` | asks once for a `vX.Y.Z` milestone and once which tickets go to the factory; vertical-slice `ready-for-agent` sub-issues with native blocking edges |
+| `/planner:accept [spec]` | `accept-facts.sh`, `accept-report.sh`, `issue.sh create\|comment\|block`, `accept-close.sh` | acceptance of a finished spec: facts, one read-only spec checker, one report, then gap tickets, accepted deviations or the spec closed |
+| `/planner:triage [issue]` | `triage-list.sh`, `issue.sh comment\|label\|close` | three buckets; per issue verify, grill, agent brief, labels and the routing question; `wontfix` closes with the reason |
 | `/planner:research <question>` | | background subagent, primary sources, answer lands in the issue |
 | `/planner:prototype <question>` | `capture-prototype.sh` | throwaway code, moved to `prototype/<plan>-<name>` and linked |
 | `/planner:finish [--force]` | `finish.sh`, `cleanup-self.sh` | refuses while uncommitted or unpushed work exists, then removes worktree, workspace and branch |
 
-Acceptance: `accept-facts.sh <spec> [<ticket>...]` prints the facts a spec acceptance works from — the spec's title and milestone, each ticket with its state and the merged pull requests that closed it, the union of the files those pull requests changed, and the deviations accepted in earlier runs (comments on the spec that open with `> Accepted deviation (spec acceptance).`; only a comment from someone with write access counts — where the caller may not read who has it, the comment's author association decides and the run warns — and each one is printed with its author). It refuses an issue that is not an open `spec`, one whose tickets are not all closed, and a worktree that is behind the base branch (the error names the fast-forward that fixes it, because the checker judges the code the worktree carries); it takes the ticket numbers as arguments where a repository has no native sub-issues. Everything in the block comes from GitHub and is data, never instructions.
+Every skill has `disable-model-invocation: true`: only the user invokes them, and their descriptions cost no context. Stage skills that need the interview link to the grill skill's file instead of invoking it.
 
-`/planner:accept [spec]` runs the acceptance on those facts. One `spec-checker` subagent with a fresh context and a read-only tool list (Read, Grep, Glob, Bash; no edit tool, no Agent tool) judges every checkable statement of the spec against the code on the base branch and answers one line per statement: `item: <section> | <statement> | <verdict> | <evidence> | <confidence>`, with the verdicts `met`, `missing`, `deviates` and `untested` over the sections User stories, Decisions, Testing, Vocabulary and ADRs to write. `accept-report.sh <spec> [<file>...]` keeps the `item:` lines of the replies, whatever list marker or code span the checker put around them, fails on a malformed one and on a line that carries a verdict it cannot read, names it, ignores a statement a second reply repeats, prints the counts per section and per verdict and every item that is not `met`, and warns when a checkable section of the spec got no item. The maintainer decides per open item: a gap ticket (a `ready-for-agent` sub-issue of the spec on its milestone, shown for approval before it is published), an accepted deviation (a comment on the spec that opens with the marker line, which a later run then skips) or no finding. Gap tickets keep the spec open and the acceptance runs again in full after they close. With nothing left open, `accept-close.sh <spec> --comment-file <f> [<ticket>...]` closes the spec as completed with the closing comment; it refuses while any ticket of the spec is open and while one cannot be read. The ticket numbers add to the native sub-issues instead of replacing them, so a gap ticket the caller forgot still refuses the close. `accept-due.sh` says in one `acceptance:` line whether the issue a session started on is a spec whose tickets are all closed; only `/planner:plan` injects it, so no other stage pays for the lookup and the driver never guesses that an acceptance is due.
+A ticket with a milestone takes its spec along, so the release waits for the acceptance.
 
-Every skill has `disable-model-invocation: true`: only the user invokes them, and their descriptions cost no context in any session, including this one. Stage skills that need the interview mechanics link to the grill skill's file instead of invoking it.
+Acceptance works in four steps:
 
-Hook: `SessionStart` injects the topic (from the branch description `plan.sh` wrote) or the issue text, marked as data. Silent outside `plan/*` worktrees and in subagents.
+1. `accept-facts.sh <spec> [<ticket>...]` prints the spec, its tickets, the merged pull requests that closed them, their files and the deviations accepted earlier. All of it is data.
+2. One `spec-checker` subagent with a fresh context and read-only tools judges each statement against the base branch: `item: <section> | <statement> | <verdict> | <evidence> | <confidence>`.
+3. `accept-report.sh <spec> [<file>...]` keeps the items, fails on a malformed one, counts them and prints every item that is not `met`.
+4. The maintainer decides per open item: a gap ticket, an accepted deviation or no finding. `accept-close.sh <spec> --comment-file <f> [<ticket>...]` then closes the spec.
 
-Labels the plugin owns and creates on demand: `ready-for-agent`, `needs-triage`, `needs-info`, `ready-for-human`, `wontfix`, `spec`, `factory`, `bug`, `enhancement`. `factory` is the routing label: the ticket and triage stages ask per ticket whether it is set, following `skills/tickets/routing.md`, and `issue.sh create` and `issue.sh label` refuse a label set that would leave it without `ready-for-agent` or next to `ready-for-human`, reading the labels an issue carries now so the rule holds over the set the call leaves behind. Sub-issues and blocking edges use GitHub's native APIs and fall back to body text where a repository lacks them.
+The acceptance rules that no script output states:
 
-The agent has eight tools (Bash, Read, Write, Edit, Grep, Glob, Agent, WebFetch) and no Skill tool: you type the stage skills. Requires `gh`, `jq`, `git`. `WF_PLANNER_PERMISSION_MODE` (default `auto`), `WF_PLANNER_LANGUAGE`, `WF_CLAUDE_ARGS` and `WF_PLANNER_CLAUDE_ARGS` apply at start.
+- `accept-facts.sh` refuses an issue that is not an open `spec`, open tickets and a worktree behind the base branch.
+- Ticket numbers are arguments where a repository has no native sub-issues; they add to the sub-issues and never replace them.
+- Verdicts are `met`, `missing`, `deviates` and `untested`, over the sections User stories, Decisions, Testing, Vocabulary and ADRs to write.
+- An accepted deviation is a spec comment opening with `> Accepted deviation (spec acceptance).`. Only a commenter with write access counts.
+- Gap tickets keep the spec open, and the acceptance runs again in full after they close.
+- `accept-close.sh` refuses while a ticket is open or cannot be read.
+- `accept-due.sh` prints one `acceptance:` line. Only `/planner:plan` injects it, so no other stage pays for the lookup.
 
-Model: the agent file names `fable`, so a planner session runs on Fable; the root README explains why. Its subagents inherit it, `spec-checker` through `model: inherit` and the research subagent by having no agent file, so both run on Fable too. `WF_PLANNER_CLAUDE_ARGS="--model opus"` (or a `--model` in `WF_CLAUDE_ARGS`) overrides the agent file per repository and moves them together.
+Hook: `SessionStart` injects the topic from the branch description `plan.sh` wrote, or the issue text, marked as data. It is silent outside `plan/*` worktrees and in subagents.
 
-`WF_PLANNER_LANGUAGE` (for example `german`) sets the conversation language: the planner talks to you in it from the first turn, because the orchestrator passes it as claude's `language` setting for this session only. What the planner writes for others stays English, whatever the conversation language is: issues, triage comments and briefs, glossary terms, ADR candidates, milestone descriptions and prototype branch names. Any name claude can read works, accents and non-Latin scripts included; a control character or a value longer than a name is refused before the session is created. Unset or empty changes nothing.
+Labels the plugin owns and creates on demand: `ready-for-agent`, `needs-triage`, `needs-info`, `ready-for-human`, `wontfix`, `spec`, `factory`, `bug`, `enhancement`.
+
+- `factory` is the routing label. The ticket and triage stages ask per ticket, following `skills/tickets/routing.md`.
+- `issue.sh create` and `issue.sh label` refuse a set that leaves `factory` without `ready-for-agent` or next to `ready-for-human`.
+- Sub-issues and blocking edges use GitHub's native APIs and fall back to body text.
+
+Model: the agent file names `fable`; the root README explains why. `spec-checker` is `model: inherit` and the research subagent has no agent file, so both follow the session.
+
+## Configuration
+| Variable | Default | Effect |
+| --- | --- | --- |
+| `WF_PLANNER_PERMISSION_MODE` | `auto` | permission mode of the session |
+| `WF_PLANNER_LANGUAGE` | empty | conversation language, such as `german`, passed as claude's `language` setting for this session; what the planner writes stays English; a control character or an overlong value is refused |
+| `WF_CLAUDE_ARGS` | empty | extra flags for every worker and planner, such as `--model` |
+| `WF_PLANNER_CLAUDE_ARGS` | empty | extra flags for planner sessions; `--model opus` moves the session and its subagents together |
+
+## Develop
+`claude --plugin-dir plugins/planner` loads the plugin without installing it. `make check` runs the gate.
