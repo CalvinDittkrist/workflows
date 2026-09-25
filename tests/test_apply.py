@@ -25,7 +25,7 @@ FILES = {
     "skills-lock.json": json.dumps({"version": 1, "skills": {"lint": {"source": "acme/skills"}}}) + "\n",
     ".cursor/rules/style.mdc": "be nice\n",
     "NOTES.md": "handover notes\n",
-    "src/app.py": "print('hi')\n",
+    "src/app.py": "print('hi')  # a \u2014 b\n",  # an em dash apply leaves to an issue: the check warns
 }
 REPLIES = """The agent-config auditor:
 finding: agent-config | .claude/skills | delete | three skills, deploy written for this repository | high
@@ -529,6 +529,7 @@ class WorkspaceTests(MessyRepositoryCase):
         self.assertIn("branch: chore/standardize deleted on origin\n", out)
         self.assertEqual(self.origin_git("branch", "--list", "chore/standardize"), "")
         self.assertIn("untouched: files (rejected in the audit)\n", out)
+        self.assertIn("check: warn: src/app.py has 1 em dash; use a comma, a colon or two sentences\n", out)
         self.assertTrue(out.endswith("result: pass\n"), out)
 
     def test_the_check_reports_what_is_left(self):

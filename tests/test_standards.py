@@ -326,6 +326,148 @@ class StandardsTests(ShimTest):
         (plain / ".claude/skills/x/SKILL.md").write_text("x\n")
         self.assertIn("fail: .claude/skills/x:", self.check(plain).stdout)
 
+    # The writing rules: the check counts the em dash and the word caps, fails on each finding, and warns
+    # instead with WF_WRITING_LENIENT set.
+    EM = "\u2014"
+    WRITING_OK = ("ok: no em dash", "ok: paragraphs, bullets and glossary entries within their word caps",
+                  "ok: documents within their word caps")
+
+    def strict(self, root=None):
+        return self.run_script(STANDARDS / "check.sh", *([str(root)] if root else []), WF_WRITING_LENIENT="")
+
+    def lenient(self, root=None):
+        return self.run_script(STANDARDS / "check.sh", *([str(root)] if root else []), WF_WRITING_LENIENT="1")
+
+    @staticmethod
+    def words(n, per=50):
+        """n words as paragraphs of at most `per` words each."""
+        return "\n\n".join(" ".join(["word"] * min(per, n - i)) for i in range(0, n, per)) + "\n"
+
+    def assert_writing(self, findings):
+        """The findings fail without the lenient variable and warn with it; everything else is the same."""
+        r = self.strict()
+        self.assertEqual(r.returncode, 1, r.stdout)
+        for f in findings:
+            self.assertIn(f"fail: {f}\n", r.stdout)
+        self.assertNotIn("warn: " + findings[0], r.stdout)
+        r = self.lenient()
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertIn("result: pass", r.stdout)
+        for f in findings:
+            self.assertIn(f"warn: {f}\n", r.stdout)
+        self.assertNotIn("fail: ", r.stdout)
+
+    def test_the_templates_pass_the_writing_rules(self):
+        (self.repo / "README.md").unlink()
+        self.scaffold()
+        self.run_script(STANDARDS / "new-adr.sh", "Use", "Postgres")
+        tpl = STANDARDS.parent / "templates"
+        self.write("plugins/tool/README.md", (tpl / "plugin-README.md").read_text())
+        r = self.strict()
+        self.assertEqual(r.returncode, 0, r.stdout)
+        for line in self.WRITING_OK:
+            self.assertIn(line, r.stdout)
+
+        def headings(path):
+            return [l for l in (self.repo / path).read_text().splitlines() if l.startswith("## ")]
+        self.assertEqual(headings("README.md"), ["## What it ships", "## Install", "## Daily use", "## Configuration",
+                                                 "## Design", "## Develop"])
+        self.assertEqual(headings("docs/architecture.md"), ["## Purpose", "## Components", "## Data flow", "## Boundaries",
+                                                            "## Decisions"])
+        self.assertEqual(headings("plugins/tool/README.md"), ["## Skills", "## Configuration", "## Develop"])
+        self.assertEqual(headings("docs/adr/0001-use-postgres.md"), ["## Context", "## Decision", "## Consequences"])
+
+    def test_an_em_dash_in_any_text_file_fails_and_names_the_file(self):
+        self.scaffold()
+        self.write("src/app.py", f"x = 1  # one {self.EM} two {self.EM} three\n")
+        self.write("docs/notes.md", f"A note {self.EM} short.\n")
+        (self.repo / "logo.png").write_bytes(b"\x89PNG\x00\x00" + self.EM.encode() + b"\x00")
+        self.assert_writing(["docs/notes.md has 1 em dash; use a comma, a colon or two sentences",
+                             "src/app.py has 2 em dashes; use a comma, a colon or two sentences"])
+        self.assertNotIn("logo.png", self.strict().stdout, "a binary file is no text")
+
+    def test_a_long_paragraph_or_bullet_fails_unless_it_is_code_or_a_table(self):
+        self.scaffold()
+        long, cap = " ".join(["word"] * 81), " ".join(["word"] * 80)
+        self.write("docs/notes.md", f"# Notes\n\n{cap}\n\n```\n{long}\n```\n\n| a | b |\n| --- | --- |\n| {long} | x |\n\n"
+                                    f"- {' '.join(['word'] * 30)}\n1. {' '.join(['word'] * 30)}\n")
+        r = self.strict()
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertIn(self.WRITING_OK[1], r.stdout)
+        half = " ".join(["word"] * 40)
+        self.write("docs/notes.md", f"# Notes\n\n{half}\n{half} more\n\n- {' '.join(['word'] * 30)}\n  more\n"
+                                    f"2. {' '.join(['word'] * 31)}\n")
+        self.assert_writing(["docs/notes.md:3: paragraph of 81 words (>80); split it or make it bullets",
+                             "docs/notes.md:6: bullet of 31 words (>30); shorten it or split it",
+                             "docs/notes.md:8: bullet of 31 words (>30); shorten it or split it"])
+        self.assertNotIn(self.WRITING_OK[1], self.strict().stdout)
+
+    def test_indented_code_a_table_without_the_leading_pipe_and_a_thematic_break_are_no_paragraphs(self):
+        self.scaffold()
+        long = " ".join(["word"] * 81)
+        self.write("docs/notes.md", f"---\n\nIntro.\n\n    {long}\n\n\tcode {long}\n\nText.\n\n"
+                                    f"a | b\n:-- | --:\n{long} | x\n\n- item\n\n      {long}\n")
+        r = self.strict()
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertIn(self.WRITING_OK[1], r.stdout)
+        # Four spaces under a list item are its paragraph, not code; a pipe in prose is no table.
+        self.write("docs/notes.md", f"- item\n\n    {long}\n\nThe a | b case {long}\n")
+        self.assert_writing(["docs/notes.md:3: paragraph of 81 words (>80); split it or make it bullets",
+                             "docs/notes.md:5: paragraph of 85 words (>80); split it or make it bullets"])
+
+    def test_front_matter_is_skipped_only_with_its_closing_line(self):
+        self.scaffold()
+        long = " ".join(["word"] * 81)
+        self.write("docs/notes.md", f"---\ntitle: {long}\n---\n\nShort.\n")
+        self.assertEqual(self.strict().returncode, 0)
+        self.write("docs/notes.md", f"---\n\n{long}\n")
+        self.assert_writing(["docs/notes.md:3: paragraph of 81 words (>80); split it or make it bullets"])
+
+    def test_every_markdown_extension_is_scanned_and_a_readme_in_another_format_is_counted_whole(self):
+        self.scaffold()
+        (self.repo / "README.md").unlink()
+        self.write("README.rst", f"{' '.join(['word'] * 1201)}\n")
+        self.write("docs/notes.markdown", f"{' '.join(['word'] * 81)}\n")
+        self.assert_writing(["docs/notes.markdown:1: paragraph of 81 words (>80); split it or make it bullets",
+                             "README.rst has 1201 words (>1200 for the README); shorten it"])
+        self.assertNotIn("README.rst:1", self.strict().stdout, "a README in another format has no paragraphs")
+
+    def test_each_document_fails_over_its_word_cap_and_is_named_with_its_count(self):
+        self.scaffold()
+        # Each document one word over its cap: the heading and the Status line count too, a code block does not.
+        self.write("docs/adr/0001-big.md", "# 0001. Big\n\nStatus: accepted\n\n" + self.words(247)
+                   + "```\n" + " ".join(["code"] * 60) + "\n```\n")
+        self.write("docs/architecture.md", "# Architecture\n\n" + self.words(2000))
+        self.write("README.md", "# shop\n\n" + self.words(1200))
+        self.write("plugins/tool/README.md", "# tool\n\n" + self.words(800))
+        self.write("docs/glossary.md", "# Glossary\n\n| Term | Meaning |\n| --- | --- |\n"
+                                       f"| short | {' '.join(['word'] * 39)} |\n| long | {' '.join(['word'] * 40)} |\n")
+        self.assert_writing(["docs/adr/0001-big.md has 251 words (>250 for an ADR); shorten it",
+                             "docs/architecture.md has 2001 words (>2000 for the architecture map); shorten it",
+                             "README.md has 1201 words (>1200 for the README); shorten it",
+                             "plugins/tool/README.md has 801 words (>800 for a plugin README); shorten it",
+                             "docs/glossary.md:6: glossary entry of 41 words (>40); shorten it"])
+        r = self.strict()
+        self.assertNotIn("docs/glossary.md:5", r.stdout)
+        self.assertNotIn(self.WRITING_OK[2], r.stdout)
+        self.write("docs/adr/0001-big.md", "# 0001. Big\n\nStatus: accepted\n\n" + self.words(246))
+        self.assertNotIn("0001-big.md", self.strict().stdout)
+
+    def test_the_writing_rules_are_counted_outside_git_on_the_files_found(self):
+        plain = self.base / "plain"
+        r = self.run_script(STANDARDS / "scaffold.sh", str(plain))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.strict(plain).returncode, 0)
+        (plain / "notes.md").write_text(f"{' '.join(['word'] * 81)}\n")
+        (plain / "run.sh").write_text(f"echo {self.EM}\n")
+        r = self.strict(plain)
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("fail: notes.md:1: paragraph of 81 words (>80); split it or make it bullets\n", r.stdout)
+        self.assertIn("fail: run.sh has 1 em dash; use a comma, a colon or two sentences\n", r.stdout)
+        r = self.lenient(plain)
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertIn("warn: notes.md:1: paragraph of 81 words (>80)", r.stdout)
+
     def test_new_adr_numbers_sequentially_and_indexes(self):
         self.scaffold()
         r1 = self.run_script(STANDARDS / "new-adr.sh", "Use", "Postgres")

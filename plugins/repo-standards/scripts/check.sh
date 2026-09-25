@@ -77,6 +77,21 @@ if [ -f "$root/docs/glossary.md" ]; then ok "docs/glossary.md"; else warn "docs/
 dep=$(first_of "$root/.github" dependabot.yml dependabot.yaml)
 if [ -n "$dep" ]; then ok ".github/$dep"; else warn ".github/dependabot.yml missing; add grouped version updates per package manager"; fi
 
+# The writing rules the check counts (writing.sh): no em dash in any text file, and the word caps. With
+# WF_WRITING_LENIENT set, which a repository that is not rewritten yet sets in its Makefile, each finding warns instead.
+writing() { if [ -n "${WF_WRITING_LENIENT:-}" ]; then warn "$@"; else bad "$@"; fi; }
+if found=$(printf '%s\n' "$all" | bash "$(dirname "$0")/writing.sh" "$root"); then
+  while IFS="$(printf '\t')" read -r group msg; do
+    [ -z "$group" ] || writing "$msg"
+  done <<EOF
+$found
+EOF
+  groups=$(printf '%s\n' "$found" | cut -f1)
+  printf '%s\n' "$groups" | grep -qx dash || ok "no em dash"
+  printf '%s\n' "$groups" | grep -qx words || ok "paragraphs, bullets and glossary entries within their word caps"
+  printf '%s\n' "$groups" | grep -qx docs || ok "documents within their word caps"
+else bad "the writing rules were not counted; fix the error above"; fi
+
 # Public repositories add a licence and a security policy. Visibility needs GitHub, so offline this is skipped.
 vis=""
 if command -v gh >/dev/null 2>&1 && command -v jq >/dev/null 2>&1 \

@@ -88,7 +88,7 @@ class FactsTests(ShimTest):
         out = self.facts(cwd=empty, github=False)
         self.assertEqual(lines(out, "github:", "head:", "branch-model:", "languages:", "manifests:", "gate:", "test:",
                                "lint:", "ci:", "ci-check-job:", "agent-config:", "baseline-present:",
-                               "baseline-missing:", "files:", "largest:"), [
+                               "baseline-missing:", "writing-findings:", "files:", "largest:"), [
             "github: unreachable (gh shim: unhandled: api repos/o/r)",
             "branch-model: main",
             "head: none (no commits yet)",
@@ -102,6 +102,7 @@ class FactsTests(ShimTest):
             "agent-config: none",
             "baseline-present: none",
             f"baseline-missing: {BASELINE}",
+            "writing-findings: none",
             "files: 0 tracked, 0 untracked, 0 B",
             "largest: none"])
 
@@ -142,6 +143,21 @@ class FactsTests(ShimTest):
             "top-dirs: .claude/ 4, src/ 3, api/ 2, .cursor/ 1, .github/ 1, docs/ 1"])
         self.assertIn("largest: docs/big.bin (3 KB), ", out)
         self.assertEqual(self.git("status", "--porcelain", "--ignored"), before, "facts.sh changed the working tree")
+
+    def test_the_writing_findings_are_the_ones_the_check_counts_and_are_cut_at_twenty(self):
+        self.write("README.md", "# shop\n\n" + " ".join(["word"] * 81) + "\n")
+        self.write("src/app.py", "x = 1  # a \u2014 b\n")
+        self.git("add", ".")
+        self.git("commit", "-qm", "docs")
+        self.assertEqual(lines(self.facts(), "writing-findings:"), [
+            "writing-findings:",
+            "  src/app.py has 1 em dash; use a comma, a colon or two sentences",
+            "  README.md:3: paragraph of 81 words (>80); split it or make it bullets"])
+        for i in range(25):
+            self.write(f"docs/n{i:02}.md", "\u2014\n")
+        out = lines(self.facts(), "writing-findings:")
+        self.assertEqual(len(out), 22, out)
+        self.assertEqual(out[-1], "  (+7 more)")
 
     def test_a_private_repository_on_dev_plus_main_owned_by_an_organisation(self):
         self.write("Makefile", "check: lint test\nlint:\n\ttrue\ntest:\n\ttrue\n")

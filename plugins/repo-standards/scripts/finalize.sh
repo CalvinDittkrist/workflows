@@ -127,10 +127,11 @@ if [ "$state" = merged ]; then
   fi
 fi
 
-# The check, on what is on GitHub now, in a temporary worktree so the checkout stays as it is.
+# The check, on what is on GitHub now, in a temporary worktree so the checkout stays as it is. The writing
+# rules warn here: apply brings the structure, and rewriting the documents to the rules is work of its own.
 check=$(mktemp -d); rmdir "$check"
 git worktree add -q --detach "$check" "$tip" 2>"$err" || die "cannot check out $default for the check: $(tail -n1 "$err")"
-rc=0; out=$(bash "$here/check.sh" "$check" 2>&1) || rc=$?
+rc=0; out=$(WF_WRITING_LENIENT=1 bash "$here/check.sh" "$check" 2>&1) || rc=$?
 git worktree remove --force "$check" >/dev/null 2>&1 || true
 printf '%s\n' "$out" | grep -E '^(fail|warn|skip): ' | sed 's/^/check: /' || true
 rejected=$(categories "$answers" reject)

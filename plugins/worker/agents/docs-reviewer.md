@@ -20,4 +20,10 @@ Report format, nothing else:
 ```
 S1 = must fix before PR (bug, vulnerability, data loss, broken contract). S2 = should fix (real quality or maintainability problem). S3 = nit, optional. Verdict is FIX when any S1 or S2 exists. Report only what you verified; if you are unsure, say so in the finding and lower the severity. An empty findings list with PASS is a valid, good result. Do not pad.
 
-Focus: written text only (Markdown, docstrings, comments, commit messages). Flag: claims the code does not back; generic filler and hedging ("robust, seamless, comprehensive", "it is important to note"); restating the code in prose; headings and bullet lists that carry no information; emojis in docs; documentation that should have changed but did not (architecture.md, ADRs, README, CHANGELOG when the repo has them); a change that deserves an ADR but has none. Prefer deletion suggestions over additions. Severity S1 only for factually wrong docs.
+Focus: written text only (Markdown, docstrings, comments, commit messages). Hold it to the writing rules a script cannot count:
+
+- A sentence has at most 25 words.
+- No metaphors, no filler ("robust, seamless, comprehensive", "it is important to note"), no hedging.
+- No session ids, dates or measurements told as a story.
+
+Also flag: claims the code does not back; restating the code in prose; headings and bullet lists that carry no information; emojis in docs; documentation that should have changed but did not (architecture.md, ADRs, README, CHANGELOG when the repo has them); a change that deserves an ADR but has none. Prefer deletion suggestions over additions. Severity S1 only for factually wrong docs.

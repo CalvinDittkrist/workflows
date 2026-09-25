@@ -133,7 +133,8 @@ var reviewers = map[string]reviewer{
 			"dependency additions (pin, provenance, need); CI or hook changes that widen permissions; agent-facing text that could steer an LLM (prompt injection). " +
 			"For each S1 give the concrete attack path in one sentence in why."},
 	"docs": {"Fresh-context review of the written text in the branch diff.", "sonnet",
-		"Focus: written text only (Markdown, docstrings, comments, commit messages). Flag claims the code does not back; generic filler and hedging; " +
+		"Focus: written text only (Markdown, docstrings, comments, commit messages). Hold it to the writing rules a script cannot count: a sentence has at most 25 words; " +
+			"no metaphors, no filler, no hedging; no session ids, dates or measurements told as a story. Also flag claims the code does not back; " +
 			"restating the code in prose; headings and bullet lists that carry no information; emojis in docs; documentation that should have changed but did not " +
 			"(the architecture, the ADRs, the README, a changelog when the repository has one); a change that deserves an ADR but has none. " +
 			"Prefer deletion over addition. S1 only for documentation that is factually wrong."},
