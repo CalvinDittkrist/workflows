@@ -4,24 +4,20 @@ Date: 2026-09-21
 Status: accepted
 
 ## Context
-The factory host is one machine — a Raspberry Pi 4 or a small VM — and a worker session runs a repository's whole gate next to its own reasoning. Two workers on such a host share a CPU, a disk and one Claude quota, and they would take twice as long each while making the cost of a run unreadable.
-
-The factory also serves several repositories. Either each repository has a line of its own, and the factory decides how to interleave them, or there is one line and the order is a property of the issues.
-
-Left alone, a queue that always takes the oldest new issue starves what is already half done: a pull request that came back with a review comment would wait behind every issue routed since, and go stale while it waits.
+- The factory host is one small machine, and a worker session runs a repository's whole gate.
+- Two workers would share one CPU, disk and Claude quota, and make a run's cost unreadable.
+- The factory serves several repositories, in a line each or in one line.
+- Taking the oldest new issue first starves half-done work, such as a pull request back from review.
 
 ## Decision
-All connected repositories feed one queue. It is derived from GitHub on every poll and never stored, so an issue is in the queue exactly as long as GitHub says it is routed.
-
-The factory works one issue at a time. There is no concurrency setting. The head of the queue starts when the run before it has ended, without waiting for the next poll.
-
-Work in progress comes first: resumed runs and follow-up runs, ordered by the time of the signal that queued them, then new issues, ordered by the time the routing label was set, oldest first. The routing time, not the issue's creation time, is the order: routing is when the maintainer handed the issue over.
+All connected repositories feed one queue, derived from GitHub on every poll, and the factory works one issue at a time, work in progress first.
 
 ## Consequences
-The host is never oversubscribed, a run's cost and duration mean what they say, and the plugin update before a run is safe because nothing else is running.
-
-Throughput is one run at a time, and a long run blocks the queue behind it. The deadline is the only thing that bounds it; there is no way to let a small issue pass a big one.
-
-A pull request that was reviewed is picked up before the next new issue, so the open work of the factory tends to close rather than grow.
-
-The queue is a view, never a state: a cancelled or closed issue simply stops appearing, and a restart of the factory needs nothing but a poll to know what to do next. The order is only as good as GitHub's timeline, which lags a label by a few seconds — the next poll sees it, and the order is unaffected.
+- The queue is never stored: an issue is in it while GitHub says it is routed, and a restart needs only a poll.
+- There is no concurrency setting. The head starts when the run before it ends.
+- Resumed runs and follow-up runs come first, by the time of their signal. New issues follow, by the time the routing label was set.
+- The routing time orders new issues, not the creation time, because routing is when the maintainer handed the issue over.
+- The host is never oversubscribed, and a run's cost and duration mean what they say.
+- A long run blocks the queue. Only the deadline bounds it, and a small issue cannot pass a big one.
+- Open work tends to close rather than grow.
+- Rejected: a line per repository, which makes the factory decide how to interleave them.
