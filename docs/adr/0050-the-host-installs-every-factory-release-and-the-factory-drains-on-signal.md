@@ -14,7 +14,7 @@ Amends: [0036](0036-the-factory-updates-the-worker-plugin-and-nothing-else.md), 
 - The release path is the host's trust boundary. The attestation narrows it to built by our CI from main.
 - `gh attestation verify` checks the attestation as a child process, so the module keeps no dependencies.
 - Version N writes what N minus 1 reads. The configuration parser still refuses unknown fields.
-- The updater and the drain are verified on the host, not in the test suite: signals, systemd and root belong to the host.
+- The drain is verified in the test suite, which starts the real binary and signals it (`factory/drain_test.go`). The updater is verified on the host: systemd and root belong to the host.
 
 ## Consequences
 - A release reaches every host that opts in, between runs.
