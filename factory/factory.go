@@ -8,11 +8,9 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"maps"
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -746,20 +744,22 @@ func (f *Factory) execute(parent context.Context, r *Run, entry Entry) {
 		f.finish(r, outcomeFailed, "the issue could not be "+taken(claim)+": "+err.Error()+leftBehind(claim), nil)
 		return
 	}
-	// The plugin the session is about to run is brought up to date and written down, here and not
-	// earlier: the issue is this factory's now, and nothing else of it is running. What the claim
-	// holds is on the record already, written where it became true rather than here, so a run this
-	// update is cut off in is still the held work the next start resumes.
-	f.prepare(ctx, r)
+	// What the run's sessions will be is written down, here and not earlier: the issue is this
+	// factory's now, and nothing else of it is running. What the claim holds is on the record already,
+	// written where it became true rather than here, so a run this reading is cut off in is still the
+	// held work the next start resumes.
+	f.recordVersions(ctx, r)
 	if ctx.Err() != nil {
-		// Updating the plugins reaches over the host's line and takes as long as that line does, so a
-		// stop or the deadline lands in it far more often than in the microseconds the claim used to be
-		// followed by. No worker was started here, and the record must not name one that failed.
+		// No session was started here, and the record must not name one that failed.
 		if parent.Err() != nil {
-			f.finish(r, outcomeInterrupted, "the factory stopped while this run was preparing its worker"+leftBehind(claim), nil)
+			f.finish(r, outcomeInterrupted, "the factory stopped while this run was reading the version of Claude Code"+leftBehind(claim), nil)
 			return
 		}
-		f.finish(r, outcomeTimeout, fmt.Sprintf("the deadline of %s passed while this run was preparing its worker", f.settings.Deadline)+leftBehind(claim), nil)
+		if stopped, was := cancelledBy(ctx); was {
+			f.finish(r, outcomeCancelled, stopped.Error()+"; no session had been started"+leftBehind(claim), nil)
+			return
+		}
+		f.finish(r, outcomeTimeout, fmt.Sprintf("the deadline of %s passed while this run was reading the version of Claude Code", f.settings.Deadline)+leftBehind(claim), nil)
 		return
 	}
 
@@ -810,10 +810,16 @@ func (f *Factory) execute(parent context.Context, r *Run, entry Entry) {
 		}
 	}
 
-	s := workSession.overridden()
-	// The session opens in the skill it is given as its prompt, and that prompt is a slash command and
-	// no Skill call, so nothing in the worker's stream announces it.
-	f.runs.update(r, func() { r.stage(s.stage) })
+	f.implement(parent, ctx, r, entry, claim)
+}
+
+// implement is the implement stage: one session briefed with the issue implements it and commits, and
+// the gate stage goes on from its commits. A session that reports blocked ends the run blocked, with
+// its summary as the reason the issue comment quotes.
+func (f *Factory) implement(parent, ctx context.Context, r *Run, entry Entry, claim claimed) {
+	f.runs.update(r, func() { r.stage(stageImplement) })
+	s := implementSession(implementBrief(entry, claim))
+	f.runs.event(r, Event{Kind: "factory", Title: "briefed the implement session", Body: s.prompt})
 	got, ok := f.session(parent, ctx, r, s, entry, claim)
 	if !ok {
 		return
@@ -823,15 +829,28 @@ func (f *Factory) execute(parent context.Context, r *Run, entry Entry) {
 		f.finish(r, outcomeBlocked, "", nil)
 		return
 	}
-	if s.stopAfter == "" {
-		// A session that ran the pipeline to its end has waited on CI itself: the run is ready, and the
-		// reason says what it lacks when it names no pull request.
-		url, reason := pullRequest(got.PullRequest, r.Repository)
-		f.runs.update(r, func() { r.PullRequest = url })
-		f.finish(r, outcomeReady, reason, nil)
-		return
+	// A session that reports complete and committed nothing leaves the gate, the reviewers and the pull
+	// request no change to work on.
+	if !f.fake {
+		count, err := commitsBeyond(ctx, claim)
+		if err != nil {
+			if !f.halted(parent, ctx, r, "counted the commits of the implementation") {
+				f.finish(r, outcomeFailed, "the commits of the implementation could not be counted: "+err.Error()+leftBehind(claim), nil)
+			}
+			return
+		}
+		if count == "0" {
+			f.finish(r, outcomeFailed, fmt.Sprintf("the implement session reported complete and the branch %s carries no commit beyond origin/%s, so there is no change to gate; the session said %q",
+				claim.branch, claim.base, got.Summary)+leftBehind(claim), nil)
+			return
+		}
 	}
 	f.gate(parent, ctx, r, entry, claim)
+}
+
+// commitsBeyond is how many commits the branch in the worktree carries beyond its base, as git counts them.
+func commitsBeyond(ctx context.Context, claim claimed) (string, error) {
+	return git(ctx, claim.worktree, "rev-list", "--count", "origin/"+claim.base+"..HEAD")
 }
 
 // openedAlready is the open pull request of the branch a resumed run continues, which is where it
@@ -1197,68 +1216,49 @@ func (f *Factory) take(ctx context.Context, r *Run, entry Entry) (claimed, error
 	return claim, err
 }
 
-// workerSettings is the session-scoped configuration a worker is started with, as JSON for
+// sessionSettings is the session-scoped configuration every session is started with, as JSON for
 // --settings. It is the settings object of the local claim (plugins/orchestrator/scripts/claim.sh)
-// without the one part only a Herdr pane can carry, its status line: nothing renders a status line in
-// print mode, and there is no pane for a checkpoint to hand the stage over to.
+// without the two parts only a session of the worker plugin in a Herdr pane uses: its status line,
+// which nothing renders in print mode, and the workflow variables, which no plugin of a factory
+// session reads.
 //
-// That is why the compact pin matters more here than anywhere: a factory session has no hand-over at
-// all, so compaction is its only safety net, and it must fire where the workflow says rather than at
-// a default Claude Code does not document ([ADR 0031], [ADR 0034]). The window and the percentage are
-// the claim's numbers, and a drift test binds them to it.
+// The compact pin matters more here than anywhere: a factory session has no hand-over at all, so
+// compaction is its only safety net, and it must fire where the workflow says rather than at a default
+// Claude Code does not document ([ADR 0031], [ADR 0034]). The window and the percentage are the
+// claim's numbers, and a drift test binds them to it.
 //
-// WF_BASE_BRANCH is the base the claim actually cut the branch from. The pipeline inside the worktree
-// asks wf_base_branch for it — the review range, the hand-over note, the pull request's --base — and
-// without it a clone whose origin/HEAD names another branch would review and open against a base the
-// branch was never cut from.
-//
-// The plugins the local claim switches off are switched off here too: a worker carries neither the
-// planner's nor the orchestrator's skills, which keeps them out of an unattended context that must
-// never merge what it built ([ADR 0023]).
+// Every plugin of the workflow is switched off, the worker's with the planner's and the
+// orchestrator's: a session runs on the factory's prompts alone, so a plugin a host still carries
+// changes nothing about what an unattended session is told, and no /orchestrator:merge reaches a
+// context that must never merge what it built ([ADR 0023], [ADR 0042]).
 //
 // [ADR 0023]: ../docs/adr/0023-github-is-the-only-control-surface-of-the-factory.md
 // [ADR 0031]: ../docs/adr/0031-the-workflow-pins-the-size-at-which-a-worker-session-compacts.md
 // [ADR 0034]: ../docs/adr/0034-the-compact-trigger-is-raised-through-the-window.md
-func workerSettings(env map[string]string) (string, error) {
+// [ADR 0042]: ../docs/adr/0042-the-factory-carries-its-own-prompts-and-updates-no-plugin.md
+func sessionSettings() (string, error) {
 	settings, err := json.Marshal(map[string]any{
-		"env":               env,
-		"enabledPlugins":    map[string]bool{"planner@" + marketplace: false, "orchestrator@" + marketplace: false},
+		"env":               sessionVariables,
+		"enabledPlugins":    map[string]bool{"worker@" + marketplace: false, "planner@" + marketplace: false, "orchestrator@" + marketplace: false},
 		"autoCompactWindow": compactWindow,
 	})
 	if err != nil {
-		return "", fmt.Errorf("the worker's settings could not be written: %w", err)
+		return "", fmt.Errorf("the session's settings could not be written: %w", err)
 	}
 	return string(settings), nil
 }
 
-// workerVariables is the env block of those settings: the worker knobs the host's configuration sets
-// for every run (worker_env, the same knobs a local claim takes with --env), and then what this one
-// session is, which nothing a host writes may disagree with. The knobs go in first, so the session's
-// own keys are written over them and stay what this function says, however the accepted names ever
-// change — the order the orchestrator's claim.sh keeps.
+// marketplace is the marketplace the workflow's plugins are distributed from, whose plugins every
+// session switches off.
+const marketplace = "workflows"
+
+// sessionVariables is the env block of those settings: subagents in the foreground, as a local claim
+// runs them ([ADR 0017]), and the percentage of the compact pin.
 //
-// WF_STOP_AFTER is the stage the session ends after, for the session that stops once it has
-// committed its implementation, where the factory's gate stage takes over ([ADR 0043]). No session runs
-// the worker's own ci stage any more, so neither its knobs nor the review mandate of its repair count
-// reach a session: the factory counts the repair rounds itself.
-//
-// [ADR 0043]: ../docs/adr/0043-the-migration-runs-from-the-last-stage-to-the-first.md
-func workerVariables(entry Entry, claim claimed, knobs map[string]string, s session) map[string]string {
-	variables := maps.Clone(knobs)
-	if variables == nil {
-		variables = map[string]string{}
-	}
-	if s.stopAfter != "" {
-		variables["WF_STOP_AFTER"] = s.stopAfter
-	}
-	maps.Copy(variables, map[string]string{
-		"WF_MODE":                              "manual",
-		"WF_ISSUE":                             strconv.Itoa(entry.Issue.Number),
-		"WF_BASE_BRANCH":                       claim.base,
-		"CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1",
-		"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE":      compactPercentage,
-	})
-	return variables
+// [ADR 0017]: ../docs/adr/0017-worker-subagents-run-in-the-foreground.md
+var sessionVariables = map[string]string{
+	"CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1",
+	"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE":      compactPercentage,
 }
 
 // The compact pin of the workflow, the two numbers the local claim sets and this one restates
@@ -1275,9 +1275,9 @@ const (
 // out of it. Every Herdr variable, because the factory may be started from a maintainer's terminal
 // and a worker that inherits
 // HERDR_ENV would act in that person's session instead of ending blocked ([ADR 0027]). And every
-// variable of the workflow, WF_*, because the session's settings say what this run is: which of the
-// two Claude Code prefers for a name both carry is not documented, and a WF_MODE=yolo left in a
-// maintainer's shell must not be the answer.
+// variable of the workflow, WF_*: the factory's brief says what a session is, and a WF_MODE=yolo left
+// in a maintainer's shell must not reach a hook or a script that still reads it. A name the session's
+// settings carry is taken out as well, because which of the two Claude Code prefers is not documented.
 //
 // [ADR 0027]: ../docs/adr/0027-the-factorys-isolation-boundary-is-the-host.md
 func workerEnv(env []string, settings map[string]string) []string {

@@ -41,9 +41,9 @@ func TestARunIsCancelledWhenTheRoutingLabelIsTakenOffItsIssue(t *testing.T) {
 			gh.assigns(t, "acme/edge-sensors", claimedIssue, "factory-bot")
 			gh.unassigns(t, "acme/edge-sensors", claimedIssue, "factory-bot")
 			gh.workerWaits(t, 10*time.Minute)
-			if one.commit != "" {
-				gh.workerCommits(t, one.commit)
-			}
+			// A session that commits nothing leaves a branch that holds nothing, which letting the issue
+			// go deletes.
+			gh.workerCommits(t, one.commit)
 
 			data := filepath.Join(t.TempDir(), "data")
 			clone := gh.cloneInto(t, data, "acme/edge-sensors")
@@ -342,9 +342,9 @@ func TestAnIssueRoutedAgainAfterItWasLetGoIsTakenBackOnItsBranch(t *testing.T) {
 			gh.assigns(t, "acme/edge-sensors", claimedIssue, "factory-bot")
 			gh.unassigns(t, "acme/edge-sensors", claimedIssue, "factory-bot")
 			gh.workerReportsBlocked(t, "the repository has no test for this")
-			if one.commit != "" {
-				gh.workerCommits(t, one.commit)
-			}
+			// A session that commits nothing leaves a branch that holds nothing, which letting the issue
+			// go deletes.
+			gh.workerCommits(t, one.commit)
 
 			data := filepath.Join(t.TempDir(), "data")
 			clone := gh.cloneInto(t, data, "acme/edge-sensors")

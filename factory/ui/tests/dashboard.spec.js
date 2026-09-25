@@ -127,7 +127,7 @@ test('the stage line and the outcome box show the scripted states', async ({ pag
   )
 
   await page.goto(working(`/#run=${BLOCKED_RUN}`))
-  // The blocked run stopped in its work session and never reached the gate after it.
+  // The blocked run stopped in its implement session and never reached the gate after it.
   await expect(detail(page).locator('.steps .at')).toHaveText('implement')
   await expect(detail(page).locator('.steps li').nth(1)).toHaveClass('')
   await expect(detail(page).locator('.outcome')).toContainText('blocked')
@@ -155,7 +155,7 @@ test('the selected run shows what it cost, how full its context came and what it
   page,
 }) => {
   await page.goto(working(`/#run=${WARNED_RUN}`))
-  // Its sixteen sessions are summed: the work session, the fix sessions of its merge and its gate in the
+  // Its sixteen sessions are summed: the implement session, the fix sessions of its merge and its gate in the
   // gate stage, seven reviewers over three rounds, the fix sessions of those rounds and of its gate on
   // the final head, the author session of its pr stage and the fix session of its conflict.
   await expect(detail(page).locator('.facts').first()).toContainText('$66.88')
@@ -176,13 +176,13 @@ test('the selected run shows what it cost, how full its context came and what it
 test('the live log sets the events of the worker’s subagents in', async ({ page }) => {
   await page.goto(working(`/#run=${READY_RUN}`))
   const log = detail(page).locator('.log')
-  // The ready run had twelve sessions, its work session, seven reviewers over two rounds and the fix
+  // The ready run had twelve sessions, its implement session, seven reviewers over two rounds and the fix
   // session between them, the author session of its pr stage, the fix session of one repair round
   // and the address-reviews session of the other, and each ended in a result line.
   await expect(log.locator('.ev-result')).toHaveCount(12)
   await expect(log.locator('.ev-result').last()).toContainText('result: success')
   const subagent = log.locator('.ev-sub').first()
-  await expect(subagent).toContainText('Read the diff under review')
+  await expect(subagent).toContainText('retry')
   // Set in: what a subagent did stands further right than what the worker itself did.
   await expect(subagent.locator('.what')).toHaveCSS('padding-left', '18px')
   await expect(log.locator('.ev:not(.ev-sub) .what').first()).toHaveCSS('padding-left', '0px')
@@ -191,7 +191,7 @@ test('the live log sets the events of the worker’s subagents in', async ({ pag
   const call = log.locator('.ev-tool').first()
   await expect(call.locator('pre')).toHaveCount(0)
   await call.getByRole('button').click()
-  await expect(call.locator('pre')).toContainText('plugins/worker/skills/work/SKILL.md')
+  await expect(call.locator('pre')).toContainText('AGENTS.md')
 })
 
 test('the log of a running worker grows as it is written, and repeats nothing', async ({ page }) => {

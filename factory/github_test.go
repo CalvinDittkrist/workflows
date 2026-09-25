@@ -651,7 +651,7 @@ type ghShim struct {
 	gate     string // the file that holds a ref creation until the test lets it through
 	worker   string // the log of the claude shim: how every worker was started
 	authors  string // the log of the claude shim: how every author session of the pr stage was started
-	plugins  string // the log of the claude shim: every plugin and version call before a session
+	host     string // the log of the claude shim: every call that is no session, the version and any plugin command
 	reviewer string // the log of the claude shim: how every reviewer session of the panel was started
 	verdicts string // the directory the claude shim reads a reviewer's result from (CLAUDE_SHIM_REVIEWS)
 	env      []string
@@ -671,7 +671,7 @@ func newGhShim(t *testing.T) *ghShim {
 		gate:     filepath.Join(dir, "gate"),
 		worker:   filepath.Join(dir, "workers.log"),
 		authors:  filepath.Join(dir, "authors.log"),
-		plugins:  filepath.Join(dir, "plugins.log"),
+		host:     filepath.Join(dir, "host.log"),
 		reviewer: filepath.Join(dir, "reviews.log"),
 		verdicts: filepath.Join(dir, "verdicts"),
 	}
@@ -685,7 +685,7 @@ func newGhShim(t *testing.T) *ghShim {
 		"HOME="+dir, "GH_SHIM_DIR="+g.answers, "GH_SHIM_LOG="+g.log, "GH_SHIM_REMOTES="+g.remotes,
 		"GH_SHIM_BODIES="+g.bodies,
 		"GH_SHIM_FAIL="+g.failing, "GH_SHIM_STALL="+g.stalling, "GH_SHIM_HANG="+g.hanging,
-		"CLAUDE_SHIM_LOG="+g.worker, "CLAUDE_SHIM_AUTHOR_LOG="+g.authors, "CLAUDE_SHIM_PLUGIN_LOG="+g.plugins,
+		"CLAUDE_SHIM_LOG="+g.worker, "CLAUDE_SHIM_AUTHOR_LOG="+g.authors, "CLAUDE_SHIM_HOST_LOG="+g.host,
 		"CLAUDE_SHIM_REVIEW_LOG="+g.reviewer, "CLAUDE_SHIM_REVIEWS="+g.verdicts)
 	return g
 }
@@ -964,52 +964,37 @@ func (g *ghShim) workerPrintsNoResult(t *testing.T) {
 	g.env = append(g.env, "CLAUDE_SHIM_NO_RESULT=1")
 }
 
-// installs is what the claude shim answers about this host: the version of the worker plugin its
-// user scope holds, and what `claude --version` prints — an empty one being a binary that printed
-// no version at all.
-func (g *ghShim) installs(t *testing.T, worker, claudeCode string) {
+// claudeIs is what `claude --version` of the claude shim prints, an empty one being a binary that
+// printed no version at all.
+func (g *ghShim) claudeIs(t *testing.T, printed string) {
 	t.Helper()
-	g.env = append(g.env, "CLAUDE_SHIM_WORKER_VERSION="+worker, "CLAUDE_SHIM_VERSION="+claudeCode)
+	g.env = append(g.env, "CLAUDE_SHIM_VERSION="+printed)
 }
 
-// switchedOff makes the worker plugin of the claude shim's user scope an install that is there but
-// disabled, which is a host no session of it runs the worker from.
-func (g *ghShim) switchedOff(t *testing.T) {
+// versionHangs makes `claude --version` of the claude shim wait to be ended instead of answering. The
+// call is logged before it waits, so hostCalls says when it began.
+func (g *ghShim) versionHangs(t *testing.T) {
 	t.Helper()
-	g.env = append(g.env, "CLAUDE_SHIM_WORKER_ENABLED=false")
+	g.env = append(g.env, "CLAUDE_SHIM_VERSION_HANG=300")
 }
 
-// updatesHang makes every plugin call of the claude shim wait to be ended instead of answering, as a
-// host whose line hangs. The call is logged before it waits, so pluginCalls says when it began.
-func (g *ghShim) updatesHang(t *testing.T) {
-	t.Helper()
-	g.env = append(g.env, "CLAUDE_SHIM_PLUGIN_HANG=300")
-}
-
-// updatesAnswerAgain takes that hang off, so the next factory started from this shim is answered.
-func (g *ghShim) updatesAnswerAgain(t *testing.T) {
+// versionAnswersAgain takes that hang off, so the next factory started from this shim is answered.
+func (g *ghShim) versionAnswersAgain(t *testing.T) {
 	t.Helper()
 	answering := g.env[:0]
 	for _, entry := range g.env {
-		if !strings.HasPrefix(entry, "CLAUDE_SHIM_PLUGIN_HANG=") {
+		if !strings.HasPrefix(entry, "CLAUDE_SHIM_VERSION_HANG=") {
 			answering = append(answering, entry)
 		}
 	}
 	g.env = answering
 }
 
-// updatesFail makes every plugin update of the claude shim fail with that sentence, as a host whose
-// line is down meets it. What is installed can still be read, which is the state such a run uses.
-func (g *ghShim) updatesFail(t *testing.T, said string) {
+// hostCalls is every call the factory made of claude that is no session, the version and any plugin
+// command, in the order it made them, one line per call.
+func (g *ghShim) hostCalls(t *testing.T) []string {
 	t.Helper()
-	g.env = append(g.env, "CLAUDE_SHIM_PLUGIN_FAIL="+said)
-}
-
-// pluginCalls is every plugin and version call the factory made of claude, in the order it made
-// them, one line per call.
-func (g *ghShim) pluginCalls(t *testing.T) []string {
-	t.Helper()
-	raw, err := os.ReadFile(g.plugins)
+	raw, err := os.ReadFile(g.host)
 	if os.IsNotExist(err) {
 		return nil
 	}
@@ -1153,6 +1138,13 @@ func (g *ghShim) head(t *testing.T, repository, branch string) string {
 		return ""
 	}
 	return strings.TrimSpace(string(out))
+}
+
+// cutFrom says whether the branch of the shim's GitHub carries the commit: the branch was cut from it,
+// and what the run committed and pushed since stands on top of it.
+func (g *ghShim) cutFrom(t *testing.T, repository, branch, commit string) bool {
+	t.Helper()
+	return exec.Command("git", "-C", g.remotePath(repository), "merge-base", "--is-ancestor", commit, "refs/heads/"+branch).Run() == nil
 }
 
 // branchAt makes a branch of the shim's GitHub point at another one, as a second line of work on the

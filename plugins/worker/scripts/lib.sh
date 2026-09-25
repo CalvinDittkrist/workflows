@@ -61,16 +61,6 @@ wf_review_rounds() {
   printf '%s' "$n" | grep -Eq '^[1-9][0-9]*$' || wf_die "WF_REVIEW_ROUNDS='$n' is not a positive number of rounds, e.g. WF_REVIEW_ROUNDS=3"
   printf '%s\n' "$n"
 }
-# The stage after which this session ends its pipeline, or empty when it runs the whole of it: a temporary
-# knob the factory sets while it takes the stages after that one over, one release at a time, and that the
-# local workflow never sets (ADR 0043). The stages are the ones a session can stop after, in pipeline order.
-wf_stop_stages() { printf 'implement gate review pr\n'; }
-wf_stop_after() {
-  local stage="${WF_STOP_AFTER:-}"
-  [ -z "$stage" ] || wf_in_list "$stage" "$(wf_stop_stages)" ||
-    wf_die "WF_STOP_AFTER='$stage' is no stage a session can stop after; set it to one of $(wf_stop_stages | sed 's/ /, /g'), e.g. WF_STOP_AFTER=pr, or unset it to run the whole pipeline"
-  printf '%s\n' "$stage"
-}
 # The uncommitted changes of this worktree, indented for a refusal that lists them, and empty when there are
 # none. Three writes refuse a dirty tree — a handoff, a round record and the summary — because each of them
 # describes a commit; what the three share is the listing, not the sentence that says why.
