@@ -83,4 +83,4 @@ Rules:
 - Never lower a reviewer's severity when you record a round.
 - You record every round, including one that ended on FIX, and every `disputed:` line with it.
 
-When this stage cannot go on without a person, such as a gate failure you cannot fix, stop the way the work skill says: open the final report with `blocked:` and what you need on that one line, and put the detail after it.
+When this stage needs a person, such as for a gate failure you cannot fix, stop the way the work skill says. Open the final report with `blocked:` and what you need on that one line. Put the detail after it.

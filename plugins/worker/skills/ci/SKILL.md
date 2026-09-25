@@ -17,7 +17,7 @@ The repair record counts the repair rounds of the pull request this branch has o
 - It is the branch's budget: the script reads which pull request that is itself.
 - An argument you pass this skill selects what to wait on, not what to count.
 - Count every repair round with `"${CLAUDE_PLUGIN_ROOT}/scripts/repair.sh" round` before you start it.
-- When it refuses, repair nothing more and stop the way the work skill says: open the final report with `blocked:` and the limit on that one line.
+- When it refuses, repair nothing more and stop. Open the final report with `blocked:` and the limit on that one line.
 - Then name the conflict, the failing checks or the unresolved threads for the maintainer.
 
 Run `"${CLAUDE_PLUGIN_ROOT}/scripts/pr-wait.sh" $ARGUMENTS` with the Bash tool timeout set to 600000 ms. The script returns within about nine minutes:

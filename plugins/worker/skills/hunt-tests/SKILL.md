@@ -59,4 +59,4 @@ This session is a test hunt: it works no issue, and the hunt record above stands
 5. **CI and reviews.** Run the CI stage exactly as `/worker:work` describes it: `/worker:ci`, `/worker:address-reviews` on `review-comments`, repairs on `checks-failed` and `conflicts`.
 6. **Finish.** This hunt runs in manual mode: report `ready: <pr-url>` plus the recorded panel summary, read with `"${CLAUDE_PLUGIN_ROOT}/scripts/panel.sh" print`. Never merge.
 
-A checkpoint that hands a stage over does so as the pipeline driver describes it: the fresh context resumes `/worker:work` at the stage named, which from the review stage on needs no issue. A report that stops for a person opens with `blocked:` and what you need on that one line.
+A checkpoint hands a stage over as the pipeline driver describes. The fresh context resumes `/worker:work` at the stage named. From the review stage on, that needs no issue. A report that stops for a person opens with `blocked:` and what you need on that one line.
