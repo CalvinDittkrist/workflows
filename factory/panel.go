@@ -1084,7 +1084,7 @@ func panelSummary(panel Panel, knobs reviewSettings) string {
 			fixed[severity[id]]++
 		}
 		for _, excuse := range round.Repair.Disputed {
-			line := fmt.Sprintf("disputed: round %d, %s; disputed: %s", round.Number, byID[excuse.Finding], oneLine(excuse.Reason))
+			line := fmt.Sprintf("disputed: round %d, %s; reason: %s", round.Number, byID[excuse.Finding], oneLine(excuse.Reason))
 			if !slices.Contains(disputed, line) {
 				disputed = append(disputed, line)
 			}

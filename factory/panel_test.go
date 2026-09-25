@@ -217,7 +217,7 @@ func TestMixedVerdictsTakeASecondRoundOfTheReviewersThatAskedForFixes(t *testing
 	}
 	body := pulls[0].Body
 	for _, want := range []string{"review_rounds: 2\npanel: code=FIX→PASS security=PASS docs=PASS tests=FIX→PASS senior=PASS\nfixed: 1 (S1 0, S2 1, S3 0)\n",
-		"disputed: round 1, tests F3 [S1] upload/retry_test.go:18: The test sleeps for the backoff.", "disputed: " + reason,
+		"\ndisputed: round 1, tests F3 [S1] upload/retry_test.go:18: The test sleeps for the backoff. It is flaky on a slow host. Fix: Inject the clock.; reason: " + reason + "\n",
 		"gate_result: pass (exit 0) at " + short(head), "gate_command: make check"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("the body does not carry %q:\n%s", want, body)
