@@ -42,12 +42,16 @@ func main() {
 		return
 	}
 	drained, err := run(*config, *fake, *paused)
+	if drained {
+		// A drain that ended owes nothing more, so an interface that stops slowly does not hide it.
+		if err != nil {
+			log.Printf("the HTTP interface did not stop cleanly: %v", err)
+		}
+		os.Exit(drainExit)
+	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
-	}
-	if drained {
-		os.Exit(drainExit)
 	}
 }
 
