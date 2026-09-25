@@ -143,7 +143,7 @@ Its configuration is in the [runbook](docs/factory-runbook.md#configuration). Th
 - A run on a developer's machine sets its own data directory, drops `"quota_axi"` and passes `-fake`.
 - A connected repository is `"owner/name"`, or `{"name": "owner/name", "base": "dev"}` when this host branches off another base.
 - `"notify"` names the logins, without `@`, that hear how a run ended.
-- `"worker_args"` adds flags to the writing sessions and is refused when it carries `--settings`, `--agents`, `--agent`, `--permission-mode`, `--output-format` or `-p`.
+- `"worker_args"` adds flags to the writing sessions and is refused when it carries `--settings`, `--agents`, `--agent`, `--plugin-dir`, `--permission-mode`, `--output-format`, `-p` or `--print`.
 - `"gate"` runs a command in the worktree, none, or hands the gate to CI through a draft pull request ([runbook](docs/factory-runbook.md#a-gate-on-ci)).
 - `"quota_axi"` is the path of a pinned [quota-axi](https://github.com/kunchenguid/quota-axi), version 0.1.49. Below `"quota_minimum"`, default 12 %, nothing starts ([ADR 0037](docs/adr/0037-the-quota-check-waits-below-12-percent-of-the-workers-scope.md)).
 
