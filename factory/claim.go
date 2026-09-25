@@ -72,7 +72,7 @@ func (f *Factory) claim(ctx context.Context, r *Run, entry Entry) (claimed, erro
 		return claimed{}, fmt.Errorf("%s could not be fetched into %s: %w; can this host reach the repository?", connected.Name, clone, err)
 	}
 	// A fetch does not touch refs/remotes/origin/HEAD. That reference is written once, when this host
-	// cloned the repository, so "the head the remote points at" would be the head it pointed at then
+	// cloned the repository, so "the head the remote points at" would be the head it pointed at then.
 	// A repository that moves its default branch afterwards would be branched off the old one
 	// for as long as this clone lives, or off a name the remote no longer has at all. Asking the
 	// remote for it again with every claim is what keeps the rule's second step true.

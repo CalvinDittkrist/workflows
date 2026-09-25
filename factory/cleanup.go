@@ -97,7 +97,7 @@ func (f *Factory) letGo(ctx context.Context, h holding, decision string) {
 // pushed on top of the host's commits. The branch is fetched and, when it contains them, the
 // handover carries on as after a push that landed.
 //
-// Any other refusal (a remote branch that does not hold the commits, a host that cannot reach it),
+// Any other refusal (a remote branch that does not hold the commits, a host that cannot reach it)
 // leaves the worktree, the branch and the assignee exactly as they are, says so on the run with all
 // git said, and the next poll tries again. The alternative is a directory of commits nobody else has.
 func (f *Factory) pushWorktree(ctx context.Context, record *Run, clone string, held Run) bool {

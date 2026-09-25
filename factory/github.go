@@ -656,7 +656,7 @@ func connect(ctx context.Context, settings Settings) {
 		}
 		log.Printf("cloning %s into %s", repository, dir)
 		// The clone lands beside its place and is moved in when gh is done, so a clone that was cut
-		// off (the host rebooted, the factory was stopped), leaves no half repository that the next
+		// off (the host rebooted, the factory was stopped) leaves no half repository that the next
 		// start would take for a finished one and hand to a worker.
 		// A staging directory of an earlier start is a clone nobody finished: it is swept, not kept,
 		// because a host that was rebooted mid-clone would otherwise collect half repositories.
