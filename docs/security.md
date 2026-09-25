@@ -104,7 +104,8 @@ Its HTTP interface is read-only and unauthenticated, and it serves live issue ti
 - The factory never runs `npx`. Its quota check runs the quota-axi at the absolute path its configuration names, installed on the host in a pinned version.
 - An expired credential it renews through Claude Code's own `claude doctor`, while no session runs ([ADR 0037](adr/0037-the-quota-check-waits-below-12-percent-of-the-workers-scope.md)).
 - The release path is the factory host's trust boundary. Whoever can push a factory version tag (`factory/v<version>`) on main decides what the host runs.
-- The release workflow attests both binaries in its publishing job, the one job with an OIDC token, which runs nothing but gh and the attestation action. The build job, which runs npm packages, can only read.
+- The release workflow attests both binaries in its publishing job, the one job with an OIDC token. That job runs nothing but gh and the attestation action.
+- The build job, which runs npm packages, can only read.
 - The attestation narrows the binary to one built by this repository's CI, from that tag, on a commit on main. No further: it says nothing about what the commit does.
 - The security reviewer flags new dependencies (pin, provenance, need) and CI or hook changes that widen permissions.
 
