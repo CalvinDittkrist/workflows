@@ -5,6 +5,7 @@
   "poll": "60s",
   "data_dir": "/var/lib/factory",
   "worker_args": [],
+  "gate": {"command": ["make", "check"], "rounds": 3, "timeout": "45m"},
   "paused": true,
   "notify": [
     "CalvinDittkrist"
