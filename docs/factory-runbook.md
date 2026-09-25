@@ -371,6 +371,8 @@ The logins in `notify` are asked for a review when a run ends `ready`. They are 
 ### Releasing a held issue
 - An issue is held when its run ended `blocked`, `failed`, on the deadline, or interrupted twice.
 - Its branch, worktree and assignee stay, and it is out of the line until you remove the assignee.
+- The run's ending pushed the worktree's HEAD to the branch, so the branch on the remote carries every commit of the last run.
+- A push that failed is a warning on the run, and the comment on the issue names it. A run the next start finds interrupted is pushed by that start, before its first poll.
 - The factory then assigns itself again and resumes it in the same worktree.
 - When `notify` names somebody, the comment the factory leaves on the issue says so.
 
@@ -689,7 +691,7 @@ Everything the factory knows about itself is in `data_dir`:
 | `run-<n>.json` | The record of run `n`: issue, branch, worktree, outcome, versions, warnings, what it owes a notification. | No. The records are how a factory knows after a restart what it holds, which resume it has spent and what it still owes the maintainer. Deleting one makes it forget an issue it holds. |
 | `run-<n>.events.jsonl` | The append-only event log of run `n`, which the dashboard shows. | Only with its record, and only for an issue the factory no longer holds. |
 | `run-<n>.lock` | The lock the worker of run `n` held; it tells a start whether that worker is still alive. | With the factory stopped, for a run whose record is no longer running. |
-| `repos/<owner>/<name>/` | The clone of a connected repository, in lower case, with the worktrees of the issues the factory holds under `.claude/worktrees/`. | Not while a worktree in it holds commits that are not pushed. The clone of a repository you disconnected may go once its worktrees are pushed. A missing clone is made again on the next start. |
+| `repos/<owner>/<name>/` | The clone of a connected repository, in lower case, with the worktrees of the issues the factory holds under `.claude/worktrees/`. | Not while a worktree in it holds commits that are not pushed. Every run that ends without a pull request pushes its worktree, so only a run whose push failed (a warning on it) leaves such commits. The clone of a repository you disconnected may go once its worktrees are pushed. A missing clone is made again on the next start. |
 | `repos/<owner>/.<name>.cloning-*` | A clone that was cut off. | Yes; the next start sweeps it too. |
 
 The factory itself never deletes a record or a log, so the directory grows by one record and one log per run.
@@ -700,7 +702,7 @@ The factory itself never deletes a record or a log, so the directory grows by on
 - So the data directory needs no location of its own, not even on an SD card.
 - Back it up if you want the history kept.
 
-A host that loses it knows nothing of the work it held. That work is still on GitHub, on the branches every removed worktree was pushed to.
+A host that loses it knows nothing of the work it held. That work is still on GitHub, on the branches every removed worktree and every run that ended without a pull request was pushed to.
 
 - The host loses the history, the automatic resume an issue had left and the notifications it still owed.
 - The issues it held stay assigned to the machine user and out of the line.
