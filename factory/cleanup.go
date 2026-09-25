@@ -124,9 +124,10 @@ func (f *Factory) pushWorktree(ctx context.Context, record *Run, clone string, h
 }
 
 // pushBranch pushes the commit ref points at in from to the branch on origin: a plain push, never a
-// forced one, bounded by handoverTimeout. It answers whether the push moved the remote branch as far
-// as this clone knew it, and whether it was refused because the branch moved on the remote and holds
-// the commit already, which is no loss (onRemote). Any other refusal is the error, with all git said.
+// forced one, bounded by handoverTimeout. Its first answer says the pushed commit differs from where
+// this clone's tracking ref had the branch, which is a push that moved it as far as the clone knew.
+// Its second says the push was refused because the branch moved on the remote and holds the commit
+// already, which is no loss (onRemote). Any other refusal is the error, with all git said.
 func pushBranch(ctx context.Context, clone, from, ref, branch string) (pushed, movedOn bool, err error) {
 	tracking := "refs/remotes/origin/" + branch
 	before, _ := git(ctx, from, "rev-parse", "--verify", "--quiet", tracking)
@@ -137,7 +138,10 @@ func pushBranch(ctx context.Context, clone, from, ref, branch string) (pushed, m
 		return false, false, err
 	}
 	head, err := git(ctx, from, "rev-parse", "--verify", ref)
-	return err != nil || head != before, false, nil
+	if err != nil {
+		return false, false, nil // the push landed; a ref that no longer reads names no move of it
+	}
+	return head != before, false, nil
 }
 
 // onRemote says whether the branch on the remote holds the commit ref points at in from, read after

@@ -9,9 +9,9 @@ import (
 	"time"
 )
 
-// A run that ends without a pull request holds its issue, and what its sessions committed is pushed
-// as the last step of that ending: the host then holds a copy of what the remote holds, so a lost
-// disk or data directory loses no commit ([ADR 0026]).
+// A run that ends without a pull request holds its issue. What its sessions committed is pushed as
+// the last step of that ending. The host then holds a copy of what the remote holds, so a lost disk
+// or data directory loses no commit ([ADR 0026]).
 //
 // [ADR 0026]: ../docs/adr/0026-the-factory-never-deletes-work-on-its-own.md
 func TestARunThatEndsWithoutAPullRequestLeavesItsCommitsOnTheRemote(t *testing.T) {
