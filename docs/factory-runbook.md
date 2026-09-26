@@ -651,12 +651,14 @@ Update them between runs. Stopping the factory interrupts the run that is going,
   - Then install the pinned version again.
 
 ### Draining
-A drain stops the factory between runs. `systemctl kill -s HUP factory` sends it `SIGHUP`, and the factory drains:
+A drain stops the factory between runs. `systemctl kill --kill-whom=main -s HUP factory` sends `SIGHUP` to the factory alone, and the factory drains:
 
 - It claims, resumes and follows up nothing new, and stops polling GitHub.
 - It waits for the run in `.now`, which ends with its own outcome and delivers the notifications it owes.
 - Then it exits with code 75, and systemd starts the binary on disk. An idle or paused factory exits at once.
 - The drained run was never interrupted, so it spends no automatic resume. The next process takes up its work as if the factory had never stopped.
+
+Keep `--kill-whom=main`. Without it systemd signals every process of the service, and the worker of the run that is going dies of the `SIGHUP`.
 
 `curl -s http://127.0.0.1:7341/api/line | jq '{version, draining, auto_update}'` reads the running process: its version, whether it drains and its `auto_update`. A second `SIGHUP` changes nothing, and the journal says so once.
 
