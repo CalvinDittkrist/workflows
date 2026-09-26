@@ -133,16 +133,18 @@ func run(config string, fake, paused bool) (bool, error) {
 	// which is why the interface is up while it runs and says it is connecting.
 	factory.Connect(ctx)
 	factory.Work(ctx)
+
+	shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	err = server.Shutdown(shutdown)
 	// A SIGTERM during a drain is a stop like any other: the run was interrupted, and the service
-	// manager is not asked to start the factory again.
+	// manager is not asked to start the factory again. It is read after the interface has stopped,
+	// so a SIGTERM that arrives while a slow request holds the shutdown still counts.
 	drained := factory.Draining() && ctx.Err() == nil
 	if drained {
 		log.Printf("drained; exiting with code %d", drainExit)
 	} else {
 		log.Printf("stopping")
 	}
-
-	shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	return drained, server.Shutdown(shutdown)
+	return drained, err
 }
