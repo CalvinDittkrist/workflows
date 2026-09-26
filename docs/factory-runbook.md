@@ -163,21 +163,23 @@ Run the following as root unless it says otherwise.
    - The `.sigstore.json` file is the attestation of both binaries: the release workflow signed their digests when it built them.
 
    ```sh
-   version=0.1.0
+   version=0.2.4   # a release after 0.2.3: those up to 0.2.3 carry no attestation
    arch=arm64   # or amd64: dpkg --print-architecture
-   cd "$(mktemp -d)"
-   gh release download "factory/v$version" -R CalvinDittkrist/workflows \
-     -p "factory-linux-$arch" -p checksums.txt -p "factory-v$version.sigstore.json"
-   sha256sum --check --ignore-missing checksums.txt   # must print: factory-linux-<arch>: OK
-   gh attestation verify "factory-linux-$arch" -R CalvinDittkrist/workflows \
-     --bundle "factory-v$version.sigstore.json" \
-     --cert-identity "https://github.com/CalvinDittkrist/workflows/.github/workflows/factory-release.yml@refs/tags/factory/v$version" \
-     --source-ref "refs/tags/factory/v$version" \
-     --deny-self-hosted-runners                       # must end without an error
-   install -m 0755 "factory-linux-$arch" /usr/local/bin/factory
-   factory -version                                   # factory 0.1.0
+   cd "$(mktemp -d)" &&
+     gh release download "factory/v$version" -R CalvinDittkrist/workflows \
+       -p "factory-linux-$arch" -p checksums.txt -p "factory-v$version.sigstore.json" &&
+     sha256sum --check --ignore-missing checksums.txt &&   # must print: factory-linux-<arch>: OK
+     gh attestation verify "factory-linux-$arch" -R CalvinDittkrist/workflows \
+       --bundle "factory-v$version.sigstore.json" \
+       --cert-identity "https://github.com/CalvinDittkrist/workflows/.github/workflows/factory-release.yml@refs/tags/factory/v$version" \
+       --source-ref "refs/tags/factory/v$version" \
+       --deny-self-hosted-runners &&
+     install -m 0755 "factory-linux-$arch" /usr/local/bin/factory
+   factory -version                                   # factory <version>
    ```
 
+   - The download, the checksum, the attestation and the install are chained with `&&`, since a pasted block runs on past a failed line. So a refused file is never installed.
+   - Releases up to `factory/v0.2.3` predate the attestation and carry no `.sigstore.json`, so the download of one fails. Install a later release.
    - The checksum says the file is the one the release lists. The attestation says the release workflow of this repository built it, run by the tag of this version.
    - `--cert-identity` is the release workflow at the tag `factory/v<version>`, and `--source-ref` is that same tag as the commit it was built from.
    - Install nothing that `sha256sum` did not answer `OK` for, and nothing that `gh attestation verify` refused.
