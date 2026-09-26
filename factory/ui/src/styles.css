@@ -223,6 +223,33 @@ h2 b {
 .line h2:not(:first-child) {
   margin-top: 24px;
 }
+/* A heading that folds its section: the button is the heading's text, set the way a heading is set,
+   and the chevron of the stage line after the count points down while the section is open. */
+.fold button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0;
+  color: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+}
+.fold button:hover {
+  color: var(--text);
+}
+.fold button:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 4px;
+}
+.fold button::after {
+  content: '›';
+  color: var(--faint);
+  font-size: 13px;
+  line-height: 1;
+}
+.fold button[aria-expanded='true']::after {
+  transform: rotate(90deg);
+}
 .row {
   display: grid;
   grid-template-columns: 24px minmax(0, 1fr);
