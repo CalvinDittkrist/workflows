@@ -79,7 +79,7 @@ This repository packages a way of working with coding agents as Claude Code plug
 8. Review: read-only reviewer sessions run in parallel. A `fix` verdict gets one fix session, and every round is recorded on the run.
 9. Pr: a read-only author session writes the title and body. The factory appends the gate result and the panel summary and opens the pull request.
 10. Ci: the factory starts a fix session for a conflict or failed checks, within a repair budget. Green ends the run `ready`.
-11. Address-reviews: a session fixes or declines each point of writers and configured bots. The factory posts the replies.
+11. Address-reviews: a session fixes or declines each point of writers and bots. The factory posts the replies.
 12. Each run writes one JSON record and one JSONL event log into the data directory. The HTTP interface and the dashboard only read ([ADR 0023](adr/0023-github-is-the-only-control-surface-of-the-factory.md)).
 13. The factory resumes an interrupted run once by itself, in its worktree. Taking the assignee off, the release signal, resumes it again.
 14. A new review that asks for changes, by a writer, queues a follow-up run at address-reviews. Held work stands before new issues.

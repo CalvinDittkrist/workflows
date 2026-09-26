@@ -26,7 +26,7 @@ One file per decision, numbered. An accepted ADR may be shortened in wording in 
 | [0020](0020-the-pane-measures-the-context-and-the-worktree-carries-the-value.md) | The pane's status line measures a worker's context, and the worktree carries the value | accepted |
 | [0021](0021-routing-is-decided-in-the-planner-and-never-stands-alone.md) | Routing is decided in the planner, and the routing label never stands alone | accepted |
 | [0022](0022-the-factory-is-a-second-driver-over-the-worker-pipeline.md) | The factory is a second driver over the worker pipeline | superseded by [0040](0040-the-factory-owns-the-delivery-lifecycle-in-go.md) |
-| [0023](0023-github-is-the-only-control-surface-of-the-factory.md) | GitHub is the only control surface of the factory | accepted |
+| [0023](0023-github-is-the-only-control-surface-of-the-factory.md) | GitHub is the only control surface of the factory | amended by [0051](0051-a-bots-review-queues-a-follow-up-run-within-the-repair-budget.md) |
 | [0024](0024-a-claim-is-the-creation-of-the-branch-through-the-api.md) | A claim is the creation of the branch through the GitHub API | accepted |
 | [0025](0025-one-queue-one-worker-work-in-progress-first.md) | One queue, one worker, and work in progress before new work | accepted |
 | [0026](0026-the-factory-never-deletes-work-on-its-own.md) | The factory never deletes work on its own | accepted |
@@ -54,3 +54,4 @@ One file per decision, numbered. An accepted ADR may be shortened in wording in 
 | [0048](0048-writing-rules-are-part-of-the-standard-and-the-gate-checks-the-mechanical-ones.md) | Writing rules are part of the standard, and the gate checks the mechanical ones | accepted |
 | [0049](0049-an-accepted-adr-may-be-shortened-in-wording-its-decision-is-never-edited.md) | An accepted ADR may be shortened in wording; its decision is never edited | accepted |
 | [0050](0050-the-host-installs-every-factory-release-and-the-factory-drains-on-signal.md) | The host installs every factory release and the factory drains on signal | accepted |
+| [0051](0051-a-bots-review-queues-a-follow-up-run-within-the-repair-budget.md) | A bot's review queues a follow-up run within the repair budget | accepted |

@@ -223,10 +223,15 @@ The factory is configured by one JSON file and nothing else: no environment vari
 
 - `repair_rounds` (default `3`): the repair rounds one pull request may take.
 - `bot_reviewers` (default `["chatgpt-codex-connector"]`): the bot logins whose review is waited for once the checks pass.
+  - It decides only that wait. The threads of every Bot account are answered, listed or not.
 - `review_wait` (default `20m`): how long that review is waited for, as a Go duration.
+  - `"review_wait": "0s"` skips the wait, for a host whose bot reviews only when asked.
 - `checks_grace` (default `10m`): how long after a push an empty check list is waited out, in a repository with GitHub workflows. GitHub may not have registered the checks yet.
 - `"bot_reviewers": []` is for a host whose machine user no bot reviews the pull requests of.
-- Codex reviews automatically only what a connected account opens. Without it every run waits the whole `review_wait` for a review that never comes.
+- On a Plus plan, Codex reviews automatically only the pull requests of the connected account.
+  - `@codex review` works only from that account. A comment by a machine user without a Codex connection triggers nothing.
+  - Reviewing every pull request of a repository needs a Pro plan.
+  - Without a review, every run waits the whole `review_wait` for one that never comes.
 
 `gate`:
 
@@ -597,12 +602,13 @@ Once the pr stage has opened the pull request, the factory waits on it, reading 
 | has checks pending | waits; the run's stage reads `ci`. |
 | has failed checks | starts a fix session with the failed checks and the tail of their failed logs from GitHub Actions, which fixes, commits and pushes. |
 | has no review of a listed bot yet, within `review_wait` of its checks passing | waits. |
-| has a writer's review that asks for changes, or an unresolved thread a writer or a listed bot opened | starts an address-reviews session in the worktree with what the reviewers still ask for. See [Answering reviews](#answering-reviews). |
+| has a writer's review that asks for changes, or an unresolved thread a writer or any Bot account opened | starts an address-reviews session in the worktree with what the reviewers still ask for. See [Answering reviews](#answering-reviews). |
 | is green | ends the run `ready` and asks `notify` for a review. |
 
 #### Answering reviews
 - The session is given the review summaries, then the unresolved threads with their ids and their replies.
-- Of those replies it is given only the ones a writer or a listed bot wrote.
+- Of those replies it is given only the ones a writer or a Bot account wrote.
+- GitHub's account type tells a bot from a user of the same login. A thread of a user who may not write starts no session.
 - It fixes each point or declines it with a reason, commits and pushes.
 - It reports a reply per thread and one answer to the summaries.
 - The factory posts a reply to each thread the brief listed and resolves it, and posts one comment on the pull request for the summaries.

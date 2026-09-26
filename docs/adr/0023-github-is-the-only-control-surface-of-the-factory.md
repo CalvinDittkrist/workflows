@@ -1,21 +1,23 @@
 # 0023. GitHub is the only control surface of the factory
 
 Date: 2026-09-21
-Status: accepted
+Status: accepted, amended
+Amended by: [0051](0051-a-bots-review-queues-a-follow-up-run-within-the-repair-budget.md)
 
 ## Context
-- The factory runs on a host of its own and is watched from a phone as often as from a desk.
-- A writing endpoint on the host needs authentication, authorisation and an audit trail, and holds state GitHub already holds.
-- Two surfaces for one decision drift apart, and the maintainer already decides this work on GitHub.
+- The factory runs on its own host and is watched from a phone as often as from a desk.
+- A writing endpoint on the host needs authentication, authorisation and an audit trail, and duplicates GitHub's state.
+- Two surfaces for one decision drift apart, and the maintainer already decides on GitHub.
 
 ## Decision
 GitHub is the only thing the factory host and a developer's machine share, and the only surface that steers the factory.
 
 ## Consequences
 - Route: add the routing label to an agent-ready issue.
-- Release a blocked, failed or timed-out run: answer on the issue, then remove the assignee.
-- Cancel: remove the routing label or close the issue; the worker ends and the issue is given back.
+- Release a blocked, failed or timed-out run: answer on the issue, remove the assignee.
+- Cancel: remove the routing label or close the issue; the worker ends, the issue is given back.
 - Ask for changes: a "changes requested" review on the factory's pull request queues a follow-up run.
+  - So does a bot's review, within the repair budget.
 - Merge: a person, on GitHub. The factory has no yolo mode.
 - The pause is the operator's: `"paused"` in the configuration file, read on every poll.
 - Notifications go the same way: a review request when a run ends `ready`, a mention otherwise.
