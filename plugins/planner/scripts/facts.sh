@@ -5,7 +5,8 @@ set -uo pipefail
 
 slug=$(wf_plan_slug)
 wf_kv plan "${slug:-none (not a plan/<slug> worktree)}"
-issue=$(wf_plan_issue); topic=$(wf_plan_topic)
+issue=$(wf_plan_issue); topic=$(wf_plan_topic); open=$(wf_plan_open)
+[ -n "$open" ] && [ -z "$issue" ] && wf_kv session "open (no topic; answer the user's questions about the code and the design)"
 [ -n "$issue" ] && wf_kv issue "#$issue"
 [ -n "$topic" ] && wf_kv topic "$topic"
 wf_kv base "$(wf_base_branch)"
