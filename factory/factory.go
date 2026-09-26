@@ -100,10 +100,12 @@ type Factory struct {
 	// draining says the factory answers a SIGHUP (Drain). It starts and polls nothing more, and the
 	// run that is going ends with its own outcome. Then the factory exits with the drain code. drain
 	// is closed when it begins, so the working loop hears of it at once. repeated says a second SIGHUP
-	// was logged, so the journal says it once.
-	draining atomic.Bool
-	drain    chan struct{}
-	repeated atomic.Bool
+	// was logged, so the journal says it once. admission is held by Drain while it begins the drain
+	// and by start while it admits a run, so no run is admitted after a Drain call has returned.
+	draining  atomic.Bool
+	admission sync.Mutex
+	drain     chan struct{}
+	repeated  atomic.Bool
 
 	mu    sync.Mutex
 	queue []Issue
@@ -283,6 +285,8 @@ func (f *Factory) Work(ctx context.Context) {
 // disk. The run is not interrupted, so it spends no resume. A SIGTERM during a drain still
 // interrupts that run, as it always does. A second SIGHUP changes nothing, and the log says so once.
 func (f *Factory) Drain() {
+	f.admission.Lock()
+	defer f.admission.Unlock()
 	if f.draining.Swap(true) {
 		if !f.repeated.Swap(true) {
 			log.Printf("SIGHUP again: the factory is draining already, and another SIGHUP changes nothing")
@@ -707,7 +711,9 @@ func (f *Factory) waiting() []Entry {
 // factory that is already stopping records nothing: the run would count as worked without ever
 // having run. A warning is what the run starts with, such as a quota check that could not answer.
 func (f *Factory) start(ctx context.Context, entry Entry, warning string) {
+	f.admission.Lock()
 	if ctx.Err() != nil || f.Draining() {
+		f.admission.Unlock()
 		return
 	}
 	r := &Run{
@@ -733,10 +739,11 @@ func (f *Factory) start(ctx context.Context, entry Entry, warning string) {
 		r.Holding = entry.Signal != signalRelease
 	}
 	f.runs.add(r)
+	f.active.Add(1)
+	f.admission.Unlock()
 	if warning != "" {
 		f.warn(r, "quota not checked", warning)
 	}
-	f.active.Add(1)
 	go func() {
 		defer f.active.Done()
 		f.execute(ctx, r, entry)
