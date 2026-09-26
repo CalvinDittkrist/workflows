@@ -76,10 +76,10 @@ const clock = (at) => new Date(at).toLocaleTimeString('en-GB')
 // reached by editing the address.
 const runInHash = () => Number(new URLSearchParams(location.hash.slice(1)).get('run')) || null
 
-// Whether the done section is folded is the reader's preference, and the browser keeps it: the key
+// Whether the done section is folded is the reader's preference, and the browser keeps it. The key
 // stands while the section is folded and is gone while it is open, so a first visit finds it open.
 // It stays out of the URL, so a link to a run carries no one's preference. A browser that refuses to
-// store anything folds for the page's lifetime and says nothing: a preference is not worth an error.
+// store anything folds for the page's lifetime and says nothing. A preference is not worth an error.
 const FOLDED = 'factory.done.folded'
 
 function useFolded() {
