@@ -359,6 +359,55 @@ What the settings rest on:
 - **Restart after a drain.** `RestartForceExitStatus=75` starts the factory again after a drain ([Draining](#draining)), which exits with code 75 and not with an error.
 - **One factory per host.** A second one fails on start, on the address or on the data directory's lock.
 
+### Auto-update
+The factory binary updates itself when `auto_update` is `true`. An update tick is the binary run with `-update` as root by a systemd timer once an hour, with a randomized delay. It is short: it reads, does one thing, logs it to the journal and exits. It never waits for a drain; the next tick reads where the drain stands.
+
+`/etc/systemd/system/factory-update.service`:
+
+```ini
+[Unit]
+Description=factory: one update tick
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+# Root: the tick renames the binary in /usr/local/bin and signals factory.service.
+ExecStart=/usr/local/bin/factory -update -config /etc/factory/factory.json
+TimeoutStartSec=15min
+```
+
+`/etc/systemd/system/factory-update.timer`:
+
+```ini
+[Unit]
+Description=factory: an update tick every hour
+
+[Timer]
+OnCalendar=hourly
+RandomizedDelaySec=30min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+```
+
+The one-time setup, as root:
+
+1. Write the two units above.
+2. Set `"auto_update": true` in `/etc/factory/factory.json`.
+3. Restart the factory once, so a process that reports `auto_update` runs: `systemctl restart factory` between runs, or a drain ([Draining](#draining)).
+4. Start the timer:
+
+   ```sh
+   systemctl daemon-reload
+   systemctl enable --now factory-update.timer
+   systemctl start factory-update.service   # one tick now
+   journalctl -u factory-update             # up to date: the running factory is <version>, ...
+   ```
+
+Switch auto-update off with `"auto_update": false` in the configuration. The next tick logs `auto-update off` once and touches nothing, and the factory reads the field again with no restart. `systemctl disable --now factory-update.timer` stops the ticks as well.
+
 ## Access
 The interface binds to `127.0.0.1` and has no login, so it is published to the tailnet and nowhere else. On the host, with Tailscale joined to your tailnet:
 
@@ -654,18 +703,47 @@ After a repair:
 ## Upkeep
 
 ### Updating
-The factory updates nothing. Claude Code, the factory binary and quota-axi are yours. The prompts every session runs on come with the factory binary. A change to them reaches a host with the next factory release ([ADR 0042](adr/0042-the-factory-carries-its-own-prompts-and-updates-no-plugin.md)).
+The factory updates only its own binary, and only with auto-update on ([Auto-update](#auto-update)). Claude Code and quota-axi are yours. The prompts every session runs on come with the factory binary. A change to them reaches a host with the next factory release ([ADR 0042](adr/0042-the-factory-carries-its-own-prompts-and-updates-no-plugin.md)).
 
-Update them between runs. Stopping the factory interrupts the run that is going, which is resumed once by itself; a second interruption of the same issue waits for you. A drain waits for that run instead ([Draining](#draining)). `curl -s http://127.0.0.1:7341/api/line | jq '.now | length'` prints `0` when nothing runs. Pause the factory first (below) to keep it that way.
+**The factory binary** needs no login and no SSH session any more. Each update tick reads three facts:
+
+- the newest release: the highest version among the published `factory/v<version>` releases of this repository, drafts and pre-releases left out, read through the REST API without a login;
+- the running factory: its version, whether it drains and the run in `.now`, from `/api/line`;
+- the binary on disk: what `factory -version` prints. The tick logs both versions when they differ.
+
+Then it does exactly one thing:
+
+- **The factory runs the newest release or newer:** nothing. The journal says `up to date` once per version.
+- **The file is the newest, the factory older and draining:** nothing. The journal names the run the drain waits for.
+- **The file is the newest, the factory older and not draining:** `SIGHUP` again, as `systemctl kill --kill-whom=main -s HUP factory`.
+- **The file is older than the newest release:** the tick downloads `factory-linux-<arch>` and `factory-v<version>.sigstore.json`.
+  - It checks them with `gh attestation verify`, without a login. Then it installs the file and sends `SIGHUP`.
+  - The policy: the certificate is this repository's release workflow at a factory tag, and the source ref is exactly the tag of that version.
+  - The issuer is GitHub Actions, self-hosted runners are refused, and the predicate is SLSA provenance v1.
+  - gh gets a fresh home of its own on every tick, so it fetches the trust roots through TUF every time.
+  - The installed binary is kept beside the new one as `/usr/local/bin/factory.previous`, and the new one is renamed over it in one step.
+  - A run in `.now` stops no install: the drain waits for it, and systemd then starts the new binary.
+- **The service is stopped** (inactive with a successful result, as `systemctl stop` leaves it): a newer file is installed and nothing is started. The journal says so.
+
+What the tick never does:
+
+- It never downgrades. A newest release older than the file is ignored, and the journal says so once.
+- A refused attestation or a failed download installs nothing. The journal gets an `error:` line with the reason, nothing is blocked, and the next tick tries again.
+- It writes nothing into the factory's data directory. What it has said once lives in `/var/lib/factory-update`, root's own.
+- It runs `gh` and `systemctl` by absolute path, `/usr/bin/gh` and `/usr/bin/systemctl`, and never through a shell.
+
+`journalctl -u factory-update` reads what the ticks did.
+
+The other two are yours. Update them between runs. Stopping the factory interrupts the run that is going, which is resumed once by itself; a second interruption of the same issue waits for you. A drain waits for that run instead ([Draining](#draining)). `curl -s http://127.0.0.1:7341/api/line | jq '.now | length'` prints `0` when nothing runs. Pause the factory first (below) to keep it that way.
 
 - **Claude Code**, as the user `factory`: `claude update`, then `claude --version`. Every run records the version it was made with.
-- **The factory binary**: download and check it as in [Installation](#installation), then `systemctl stop factory`.
-  - Then `install -m 0755 factory-linux-$arch /usr/local/bin/factory` and `systemctl start factory`, and look for the new version in the journal's first line.
 - **quota-axi**: the factory reads the output of the pinned version. Move the pin only after reading the new version's changelog.
   - Compare its Claude percentages with Claude Code's `/usage` first; 0.1.50 reports the used percentage as remaining.
   - Then run `npm install -g quota-axi@<version>` and restart nothing.
   - If the factory cannot read its answer, every run carries a warning that the check could not answer and starts regardless ([ADR 0028](adr/0028-the-quota-check-is-a-courtesy-not-a-guard.md)).
   - Then install the pinned version again.
+
+Without auto-update, install the factory binary by hand: download and check it as in [Installation](#installation), then `systemctl stop factory`, `install -m 0755 factory-linux-$arch /usr/local/bin/factory` and `systemctl start factory`. Look for the new version in the journal's first line.
 
 ### Draining
 A drain stops the factory between runs. `systemctl kill --kill-whom=main -s HUP factory` sends `SIGHUP` to the factory alone, and the factory drains:
