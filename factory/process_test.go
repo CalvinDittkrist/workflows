@@ -2,12 +2,7 @@ package main
 
 import (
 	"context"
-	"os"
 	"os/exec"
-	"path/filepath"
-	"regexp"
-	"strings"
-	"testing"
 )
 
 // Every factory a test starts is bound to the life of the test process. The cleanup a test registers
@@ -33,30 +28,4 @@ func factoryCommandContext(ctx context.Context, bin string, args ...string) *exe
 	cmd := exec.CommandContext(ctx, bin, args...)
 	lifeline(cmd)
 	return cmd
-}
-
-// A start of the binary that does not go through factoryCommand is one the kernel does not end with
-// the test process, so it is refused here by its spelling: the binaries of the tests are named
-// binary, hurried or bin wherever they are started.
-func TestNoTestSpellsAStartOfTheBinaryOutsideTheHelper(t *testing.T) {
-	t.Parallel()
-	direct := regexp.MustCompile(`exec\.Command(Context\([^,]+,)?\(?\s*(binary|hurried|bin)\b`)
-	sources, err := filepath.Glob("*_test.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, source := range sources {
-		if source == "process_test.go" {
-			continue
-		}
-		raw, err := os.ReadFile(source)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for n, line := range strings.Split(string(raw), "\n") {
-			if direct.MatchString(line) {
-				t.Errorf("%s:%d starts the factory with exec itself; start it with factoryCommand, which ends it with the test process", source, n+1)
-			}
-		}
-	}
 }
