@@ -54,6 +54,7 @@ cd my-repo && claude --agent orchestrator       # inside a Herdr pane
 ```text
 /orchestrator:plan add offline mode   # worktree + pane + planner: grill, spec, tickets
 /orchestrator:plan 123                # triage or shape an existing issue
+/orchestrator:plan                    # open session: ask about the code, no topic needed
 /orchestrator:claim 123          # worktree + pane + worker for issue 123
 /orchestrator:board              # who is doing what, PR and CI state
 /orchestrator:merge 45           # squash-merge, remove worktree, workspace and branch
