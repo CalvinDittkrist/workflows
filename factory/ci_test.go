@@ -625,8 +625,8 @@ func TestAnAddressReviewsBriefShowsTheRepliesOfAThread(t *testing.T) {
 }
 
 // A thread opened by any Bot account asks like a writer's, whether or not the host waits for that
-// bot's review: the session's reply is posted in it and the thread resolved, for a declined point as
-// for a fixed one, and the round counts against the repair budget.
+// bot's review. The session's reply is posted in it and the thread resolved, for a declined point as
+// for a fixed one. The round counts against the repair budget.
 func TestAThreadOfAnyBotIsAnsweredAndResolved(t *testing.T) {
 	t.Parallel()
 	gh, data := ciClaim(t)
