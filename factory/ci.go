@@ -1050,12 +1050,13 @@ func (g *gitHub) pullState(ctx context.Context, held Held, bots []string) (pullR
 			open.Login, open.URL, open.Body = comments[0].Author.Login, comments[0].URL, comments[0].Body
 		}
 		// Anybody may comment on a pull request of a public repository, and what a thread says becomes
-		// the brief of a session that pushes: only a thread a writer or a bot the host waits for opened
-		// asks for anything, and only the replies of such accounts are shown with it. GraphQL gives a
-		// bot's login without [bot], so the account's type is what tells the bot from a user of the
-		// same name.
+		// the brief of a session that pushes: only a thread a writer or a bot opened asks for anything,
+		// and only the replies of such accounts are shown with it. Any Bot account counts, because a
+		// bot is an app a maintainer installed; the repair budget bounds the rounds it can start.
+		// GraphQL gives a bot's login without [bot], so the account's type is what tells the bot from
+		// a user of the same name.
 		counts := func(login, kind string) (bool, error) {
-			if kind == "Bot" && slices.Contains(bots, login) {
+			if kind == "Bot" {
 				return true, nil
 			}
 			if login == "" {
