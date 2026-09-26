@@ -223,8 +223,8 @@ h2 b {
 .line h2:not(:first-child) {
   margin-top: 24px;
 }
-/* A heading that folds its section: the button is the heading's text, set the way a heading is set,
-   and the chevron of the stage line after the count points down while the section is open. */
+/* A heading that folds its section. Its button is set the way a heading is set. The chevron of the
+   stage line stands after the count and points down while the section is open. */
 .fold button {
   display: flex;
   align-items: center;

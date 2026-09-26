@@ -35,9 +35,9 @@ import (
 var binary, hurried string
 
 // hurriedTimeout is the session timeout the hurried binary is linked with. It holds every session of a
-// run, and a test that hangs a later stage needs the sessions before it to end in time: at 2s the
-// implement session of the shim ran past it under the load of the whole gate. A session under test
-// sleeps for minutes, so the margin costs a test seconds and never its verdict.
+// run. A test that hangs a later stage needs the sessions before it to end in time. At 2s the implement
+// session of the shim ran past it under the load of the whole gate. A session under test sleeps for
+// minutes, so the margin costs a test seconds and never its verdict.
 const hurriedTimeout = "10s"
 
 func TestMain(m *testing.M) {

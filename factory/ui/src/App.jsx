@@ -274,11 +274,11 @@ export default function App() {
 
         {/* The heading is the toggle, and its count stands in both states. */}
         <h2 className="fold">
-          <button type="button" aria-expanded={!folded} aria-controls="done" onClick={toggleFolded}>
+          <button type="button" aria-expanded={!folded} aria-controls="done-runs" onClick={toggleFolded}>
             Done<b>{done.length}</b>
           </button>
         </h2>
-        <div id="done" hidden={folded}>
+        <div id="done-runs" hidden={folded}>
           {done.length === 0 && <p className="none">nothing yet</p>}
           {shown.map((run) => (
             <button
