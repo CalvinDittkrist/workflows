@@ -7,6 +7,7 @@
   "worker_args": [],
   "gate": {"command": ["make", "check"], "rounds": 3, "timeout": "45m"},
   "paused": true,
+  "auto_update": false,
   "notify": [
     "CalvinDittkrist"
   ],

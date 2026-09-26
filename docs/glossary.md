@@ -60,6 +60,10 @@ Terms the code, the issues and the docs use, one row each.
 | address-reviews session | The factory session that fixes or declines each point writers or configured bots still raise, pushes, and reports replies. The factory posts them and resolves the threads. |
 | quota check | The factory's call of the host's quota-axi before every run and after a session error ([ADR 0028](adr/0028-the-quota-check-is-a-courtesy-not-a-guard.md), [ADR 0037](adr/0037-the-quota-check-waits-below-12-percent-of-the-workers-scope.md), [ADR 0044](adr/0044-the-quota-check-reads-the-scope-of-every-model-a-run-spends.md)). |
 | connected repository | A repository named in the factory's configuration, as `owner/name`. |
+| drain | The factory's answer to `SIGHUP`: it claims and resumes nothing new, lets the run in `.now` end with its own outcome, delivers what that run owes and exits with the drain code, 75 ([ADR 0050](adr/0050-the-host-installs-every-factory-release-and-the-factory-drains-on-signal.md)). |
+| update tick | One run of the factory binary's update mode by the host's timer, as root; it reads the release, the running state and the file, does one action and exits. |
+| auto-update | The configuration field `auto_update` that lets the host install factory releases; false by default, read by the update tick and reported by the factory. |
+| block list | The updater's root-owned list of versions that failed after an install and are never installed again; a line is lifted by deleting it. |
 | dashboard | The page the factory serves at `/`, built into the binary from `factory/ui`. It reads the four endpoints and writes nothing ([ADR 0033](adr/0033-the-dashboard-is-built-into-the-factory-binary.md)). |
 | test hunt | One run of `/orchestrator:hunt-tests`: a worker on a branch of its own that removes tests that prove nothing ([ADR 0045](adr/0045-a-test-hunt-runs-on-a-branch-without-an-issue.md)). |
 | hunter | The read-only subagent `test-hunter` of a test hunt, with no shell, that reads one share of at most 1500 lines and replies with candidates. |

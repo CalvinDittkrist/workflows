@@ -3,10 +3,11 @@
 Date: 2026-09-22
 Status: superseded by [0042](0042-the-factory-carries-its-own-prompts-and-updates-no-plugin.md)
 Extends: [0027](0027-the-factorys-isolation-boundary-is-the-host.md)
+Amended by: [0050](0050-the-host-installs-every-factory-release-and-the-factory-drains-on-signal.md)
 
 ## Context
 - The factory works on a host nobody watches ([ADR 0027](0027-the-factorys-isolation-boundary-is-the-host.md)), and every run is a session of the worker plugin ([ADR 0022](0022-the-factory-is-a-second-driver-over-the-worker-pipeline.md)).
-- A released fix to the pipeline reached that host only when somebody logged in.
+- A released pipeline fix reached that host only when somebody logged in.
 - The same argument would have the factory upgrade Claude Code, and then itself.
 
 ## Decision
@@ -19,6 +20,6 @@ Before every run the factory updates the marketplace and the worker plugin with 
 
 ## Consequences
 - Every run names its worker plugin, Claude Code and factory, on the record and the dashboard.
-- The `workflows` marketplace becomes a trust boundary of every host: whoever publishes there decides what the next unattended run executes, and nothing beyond the plugin commands pins it.
+- The `workflows` marketplace becomes a trust boundary of every host. Whoever publishes there decides what the next unattended run executes, pinned by nothing but the plugin commands.
 - The last step of the migration ends the update ([ADR 0043](0043-the-migration-runs-from-the-last-stage-to-the-first.md)).
 - Rejected: updating Claude Code and the factory too. A service that upgrades its own runtime or binary changes it on a schedule nobody chose.

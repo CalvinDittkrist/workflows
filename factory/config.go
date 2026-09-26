@@ -24,6 +24,9 @@ type Config struct {
 	// Paused is a pointer because its default is not the zero value: a file that does not name it
 	// runs paused, so working a line unattended is always something the operator wrote down.
 	Paused *bool `json:"paused"`
+	// AutoUpdate lets the host's update tick install factory releases on this host. It is false
+	// unless the file says otherwise, and like paused it is read again on every poll.
+	AutoUpdate bool `json:"auto_update"`
 	// Notify is the GitHub logins the factory tells how a run ended, written without the @. Nobody
 	// watches the host, so this is how the maintainer learns of it, and GitHub is the only channel
 	// there is ([ADR 0023]).
@@ -98,6 +101,7 @@ type Settings struct {
 	DataDir      string
 	WorkerArgs   []string
 	Paused       bool // as the file said when it was read; a running factory asks Factory.Paused
+	AutoUpdate   bool // as the file said when it was read; a running factory asks Factory.AutoUpdate
 	Notify       []string
 	Repositories []Connected
 	QuotaAxi     string // empty: the quota check is off
@@ -120,7 +124,7 @@ const (
 	defaultPoll         = 60 * time.Second
 	defaultQuotaMinimum = 12
 
-	configFields = "listen, label, deadline, poll, data_dir, worker_args, paused, notify, repositories, quota_axi, quota_minimum, ci, review, gate"
+	configFields = "listen, label, deadline, poll, data_dir, worker_args, paused, auto_update, notify, repositories, quota_axi, quota_minimum, ci, review, gate"
 )
 
 // A repository is named as owner/name; the factory never takes a URL or a local path, because the
@@ -238,6 +242,7 @@ func Load(path string) (Settings, error) {
 		Poll:         defaultPoll,
 		WorkerArgs:   c.WorkerArgs,
 		Paused:       c.Paused == nil || *c.Paused,
+		AutoUpdate:   c.AutoUpdate,
 		Notify:       []string{},
 		Repositories: []Connected{},
 		QuotaMinimum: defaultQuotaMinimum,

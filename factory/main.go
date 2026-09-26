@@ -41,16 +41,26 @@ func main() {
 		fmt.Printf("factory %s\n", version)
 		return
 	}
-	if err := run(*config, *fake, *paused); err != nil {
+	drained, err := run(*config, *fake, *paused)
+	if drained {
+		// A drain that ended owes nothing more, so an interface that stops slowly does not hide it.
+		if err != nil {
+			log.Printf("the HTTP interface did not stop cleanly: %v", err)
+		}
+		os.Exit(drainExit)
+	}
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-func run(config string, fake, paused bool) error {
+// run is the factory from its start to its stop. It says whether the stop was a drain, which the
+// process answers with the drain code so the service manager starts the binary on disk.
+func run(config string, fake, paused bool) (bool, error) {
 	settings, err := Load(config)
 	if err != nil {
-		return err
+		return false, err
 	}
 	// The command line can pause a factory and never unpause one: -paused is the operator's brake on
 	// a host whose configuration says otherwise, not a second place the setting lives.
@@ -61,21 +71,26 @@ func run(config string, fake, paused bool) error {
 	// answers to it too, so a stop during a long clone is not waited out.
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	// SIGHUP is the drain (Factory.Drain). It is caught from here on, so one that arrives before the
+	// factory exists waits in the channel rather than ending the process.
+	hangup := make(chan os.Signal, 1)
+	signal.Notify(hangup, syscall.SIGHUP)
+	defer signal.Stop(hangup)
 
 	// Listening comes before everything else: a second factory on this host has to fail here, before
 	// it has started a run or taken an issue from anybody.
 	listener, err := net.Listen("tcp", settings.Listen)
 	if errors.Is(err, syscall.EADDRINUSE) {
-		return fmt.Errorf("%w; is another factory running on this host? one host runs one factory", err)
+		return false, fmt.Errorf("%w; is another factory running on this host? one host runs one factory", err)
 	}
 	if err != nil {
-		return fmt.Errorf("%w; listen names the address the factory answers on, such as %q", err, defaultListen)
+		return false, fmt.Errorf("%w; listen names the address the factory answers on, such as %q", err, defaultListen)
 	}
 	defer listener.Close()
 	// The address the kernel chose is the one that counts: a host that is not an IP literal can still
 	// resolve to every interface, and this interface has no login of its own.
 	if bound, ok := listener.Addr().(*net.TCPAddr); ok && bound.IP.IsUnspecified() {
-		return fmt.Errorf("listen %q answers on every interface (%s); bind it to one address, such as %q, and reach it over the tailnet",
+		return false, fmt.Errorf("listen %q answers on every interface (%s); bind it to one address, such as %q, and reach it over the tailnet",
 			settings.Listen, bound, defaultListen)
 	}
 
@@ -85,15 +100,20 @@ func run(config string, fake, paused bool) error {
 	// process is gone.
 	release, err := lockDataDir(settings.DataDir)
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer release()
 
 	factory, err := New(settings, fake)
 	if err != nil {
-		return err
+		return false, err
 	}
 	factory.Follow(config, paused)
+	go func() {
+		for range hangup {
+			factory.Drain()
+		}
+	}()
 	server := &http.Server{Handler: factory.Handler(), ReadHeaderTimeout: 10 * time.Second}
 	go func() {
 		if err := server.Serve(listener); err != nil && err != http.ErrServerClosed {
@@ -113,9 +133,18 @@ func run(config string, fake, paused bool) error {
 	// which is why the interface is up while it runs and says it is connecting.
 	factory.Connect(ctx)
 	factory.Work(ctx)
-	log.Printf("stopping")
 
 	shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	return server.Shutdown(shutdown)
+	err = server.Shutdown(shutdown)
+	// A SIGTERM during a drain is a stop like any other: the run was interrupted, and the service
+	// manager is not asked to start the factory again. It is read after the interface has stopped,
+	// so a SIGTERM that arrives while a slow request holds the shutdown still counts.
+	drained := factory.Draining() && ctx.Err() == nil
+	if drained {
+		log.Printf("drained; exiting with code %d", drainExit)
+	} else {
+		log.Printf("stopping")
+	}
+	return drained, err
 }
