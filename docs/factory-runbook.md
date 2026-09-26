@@ -716,8 +716,10 @@ Then it does exactly one thing:
 - **The factory runs the newest release or newer:** nothing. The journal says `up to date` once per version.
 - **The file is the newest, the factory older and draining:** nothing. The journal names the run the drain waits for.
 - **The file is the newest, the factory older and not draining:** `SIGHUP` again, as `systemctl kill --kill-whom=main -s HUP factory`.
-- **The file is older than the newest release:** the tick downloads `factory-linux-<arch>` and `factory-v<version>.sigstore.json` and checks them with `gh attestation verify`, without a login. Then it installs the file and sends `SIGHUP`.
-  - The policy: the certificate is this repository's release workflow at a factory tag, the source ref is exactly the tag of that version, the issuer is GitHub Actions, self-hosted runners are refused, and the predicate is SLSA provenance v1.
+- **The file is older than the newest release:** the tick downloads `factory-linux-<arch>` and `factory-v<version>.sigstore.json`.
+  - It checks them with `gh attestation verify`, without a login. Then it installs the file and sends `SIGHUP`.
+  - The policy: the certificate is this repository's release workflow at a factory tag, and the source ref is exactly the tag of that version.
+  - The issuer is GitHub Actions, self-hosted runners are refused, and the predicate is SLSA provenance v1.
   - gh gets a fresh home of its own on every tick, so it fetches the trust roots through TUF every time.
   - The installed binary is kept beside the new one as `/usr/local/bin/factory.previous`, and the new one is renamed over it in one step.
   - A run in `.now` stops no install: the drain waits for it, and systemd then starts the new binary.
