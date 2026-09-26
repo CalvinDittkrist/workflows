@@ -103,6 +103,78 @@ test('a run is selected through the URL and the selection survives a reload', as
   await expect(detail(page).locator('h3')).toContainText('#104')
 })
 
+test('the done section folds to its heading, and the browser keeps it folded', async ({ page }) => {
+  await page.goto(working('/'))
+  const heading = page.getByRole('button', { name: /^Done/ })
+  const done = page.locator('.line button.row:not(.now)')
+
+  // A first visit finds it open, and the heading says how many runs are done in either state.
+  await expect(heading).toHaveAttribute('aria-expanded', 'true')
+  await expect(done).toHaveCount(6)
+  await heading.click()
+  await expect(heading).toHaveAttribute('aria-expanded', 'false')
+  await expect(heading).toHaveText('Done6')
+  for (const row of await done.all()) await expect(row).toBeHidden()
+
+  await page.reload()
+  await expect(heading).toHaveAttribute('aria-expanded', 'false')
+  await expect(done.first()).toBeHidden()
+
+  await heading.click()
+  await expect(done.first()).toBeVisible()
+  await page.reload()
+  await expect(heading).toHaveAttribute('aria-expanded', 'true')
+  await expect(done).toHaveCount(6)
+  for (const row of await done.all()) await expect(row).toBeVisible()
+})
+
+test('folding the done section leaves the selected run and the URL as they are', async ({ page }) => {
+  await page.goto(working(`/#run=${BLOCKED_RUN}`))
+  await expect(detail(page).locator('h3')).toContainText('#109')
+  const url = page.url()
+
+  await page.getByRole('button', { name: /^Done/ }).click()
+  await expect(page.locator('.line button.row', { hasText: '#109' })).toBeHidden()
+  await expect(detail(page).locator('h3')).toContainText('#109')
+  expect(page.url()).toBe(url)
+})
+
+test('the done section folds from the keyboard', async ({ page }) => {
+  await page.goto(working('/'))
+  const heading = page.getByRole('button', { name: /^Done/ })
+  await expect(heading).toBeVisible()
+
+  // Reached with Tab from the top of the page, the way a keyboard reaches it.
+  for (let i = 0; i < 20 && !(await heading.evaluate((e) => e === document.activeElement)); i++) {
+    await page.keyboard.press('Tab')
+  }
+  await expect(heading).toBeFocused()
+  await page.keyboard.press('Enter')
+  await expect(heading).toHaveAttribute('aria-expanded', 'false')
+  await page.keyboard.press('Space')
+  await expect(heading).toHaveAttribute('aria-expanded', 'true')
+})
+
+test('a browser that stores nothing folds for the page and shows no error', async ({ page }) => {
+  await page.addInitScript(() => {
+    const refuse = () => {
+      throw new DOMException('refused', 'SecurityError')
+    }
+    Object.defineProperty(window, 'localStorage', { get: refuse })
+  })
+  const failures = []
+  page.on('pageerror', (e) => failures.push(e.message))
+  await page.goto(working('/'))
+  const heading = page.getByRole('button', { name: /^Done/ })
+
+  await expect(heading).toHaveAttribute('aria-expanded', 'true')
+  await heading.click()
+  await expect(heading).toHaveAttribute('aria-expanded', 'false')
+  await expect(page.locator('.line button.row:not(.now)').first()).toBeHidden()
+  await expect(page.locator('.banner')).toHaveCount(0)
+  expect(failures).toEqual([])
+})
+
 test('the stage line and the outcome box show the scripted states', async ({ page }) => {
   await page.goto(working(`/#run=${READY_RUN}`))
   const stages = detail(page).locator('.steps li')

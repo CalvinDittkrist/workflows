@@ -76,6 +76,33 @@ const clock = (at) => new Date(at).toLocaleTimeString('en-GB')
 // reached by editing the address.
 const runInHash = () => Number(new URLSearchParams(location.hash.slice(1)).get('run')) || null
 
+// Whether the done section is folded is the reader's preference, and the browser keeps it. The key
+// stands while the section is folded and is gone while it is open, so a first visit finds it open.
+// It stays out of the URL, so a link to a run carries no one's preference. A browser that refuses to
+// store anything folds for the page's lifetime and says nothing. A preference is not worth an error.
+const FOLDED = 'factory.done.folded'
+
+function useFolded() {
+  const [folded, setFolded] = useState(() => {
+    try {
+      return localStorage.getItem(FOLDED) !== null
+    } catch {
+      return false
+    }
+  })
+  const toggle = () => {
+    const next = !folded
+    setFolded(next)
+    try {
+      if (next) localStorage.setItem(FOLDED, '1')
+      else localStorage.removeItem(FOLDED)
+    } catch {
+      // kept in memory only
+    }
+  }
+  return [folded, toggle]
+}
+
 // A duration or a clock time, the one thing on the page that differs between two readings of the
 // same state. It is marked so a screenshot can hold everything around it.
 function Tick({ children }) {
@@ -124,6 +151,7 @@ export default function App() {
   const [line, setLine] = useState(null)
   const [error, setError] = useState('')
   const [selected, setSelected] = useState(runInHash)
+  const [folded, toggleFolded] = useFolded()
   const now = useNow()
 
   useEffect(() => {
@@ -244,37 +272,42 @@ export default function App() {
           ))}
         </ol>
 
-        <h2>
-          Done<b>{done.length}</b>
-        </h2>
-        {done.length === 0 && <p className="none">nothing yet</p>}
-        {shown.map((run) => (
-          <button
-            type="button"
-            key={run.id}
-            className={`row state-${stateOf(run)}${run.id === current ? ' on' : ''}`}
-            onClick={() => select(run.id)}
-          >
-            <span className="pos">
-              <i />
-            </span>
-            <span className="title">
-              <em>#{run.issue}</em>
-              {run.title}
-            </span>
-            <Facts
-              items={[
-                <span key="o" className="outcome-word">
-                  {run.outcome}
-                </span>,
-                run.repository,
-                <Tick key="t">{duration(run.startedAt, run.endedAt)}</Tick>,
-                cost(run),
-              ]}
-            />
+        {/* The heading is the toggle, and its count stands in both states. */}
+        <h2 className="fold">
+          <button type="button" aria-expanded={!folded} aria-controls="done-runs" onClick={toggleFolded}>
+            Done<b>{done.length}</b>
           </button>
-        ))}
-        {done.length > shown.length && <p className="none">{done.length - shown.length} older</p>}
+        </h2>
+        <div id="done-runs" hidden={folded}>
+          {done.length === 0 && <p className="none">nothing yet</p>}
+          {shown.map((run) => (
+            <button
+              type="button"
+              key={run.id}
+              className={`row state-${stateOf(run)}${run.id === current ? ' on' : ''}`}
+              onClick={() => select(run.id)}
+            >
+              <span className="pos">
+                <i />
+              </span>
+              <span className="title">
+                <em>#{run.issue}</em>
+                {run.title}
+              </span>
+              <Facts
+                items={[
+                  <span key="o" className="outcome-word">
+                    {run.outcome}
+                  </span>,
+                  run.repository,
+                  <Tick key="t">{duration(run.startedAt, run.endedAt)}</Tick>,
+                  cost(run),
+                ]}
+              />
+            </button>
+          ))}
+          {done.length > shown.length && <p className="none">{done.length - shown.length} older</p>}
+        </div>
       </section>
 
       {current ? (
