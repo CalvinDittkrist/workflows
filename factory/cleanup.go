@@ -111,16 +111,37 @@ func (f *Factory) pushWorktree(ctx context.Context, record *Run, clone string, h
 			return true // no worktree and no branch of it on this host: nothing of it to push
 		}
 	}
-	if _, err := gitWithin(ctx, from, handoverTimeout, "push", "--quiet", "origin", ref+":refs/heads/"+held.Branch); err != nil {
-		if onRemote(ctx, clone, from, ref, held.Branch) {
-			f.runs.event(record, Event{Kind: "factory", Title: held.Branch + " is on the remote already",
-				Body: "the push was refused because the branch moved on the remote, and origin/" + held.Branch + " holds the commits of " + from})
-			return true
-		}
+	_, movedOn, err := pushBranch(ctx, clone, from, ref, held.Branch)
+	if err != nil {
 		return f.heldUp(ctx, record, fmt.Sprintf("the commits of %s in %s could not be pushed: %v; nothing of this issue is removed from this host until they are on the remote",
 			held.Branch, from, err))
 	}
+	if movedOn {
+		f.runs.event(record, Event{Kind: "factory", Title: held.Branch + " is on the remote already",
+			Body: "the push was refused because the branch moved on the remote, and origin/" + held.Branch + " holds the commits of " + from})
+	}
 	return true
+}
+
+// pushBranch pushes the commit ref points at in from to the branch on origin: a plain push, never a
+// forced one, bounded by handoverTimeout. Its first answer says the pushed commit differs from where
+// this clone's tracking ref had the branch, which is a push that moved it as far as the clone knew.
+// Its second says the push was refused because the branch moved on the remote and holds the commit
+// already, which is no loss (onRemote). Any other refusal is the error, with all git said.
+func pushBranch(ctx context.Context, clone, from, ref, branch string) (pushed, movedOn bool, err error) {
+	tracking := "refs/remotes/origin/" + branch
+	before, _ := git(ctx, from, "rev-parse", "--verify", "--quiet", tracking)
+	if _, err := gitWithin(ctx, from, handoverTimeout, "push", "--quiet", "origin", ref+":refs/heads/"+branch); err != nil {
+		if onRemote(ctx, clone, from, ref, branch) {
+			return false, true, nil
+		}
+		return false, false, err
+	}
+	head, err := git(ctx, from, "rev-parse", "--verify", ref)
+	if err != nil {
+		return false, false, nil // the push landed; a ref that no longer reads names no move of it
+	}
+	return head != before, false, nil
 }
 
 // onRemote says whether the branch on the remote holds the commit ref points at in from, read after

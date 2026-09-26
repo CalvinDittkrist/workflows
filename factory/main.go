@@ -106,6 +106,9 @@ func run(config string, fake, paused bool) error {
 
 	// What a factory before this one owed the maintainer is said first: it is one small write, and a
 	// run that ended in the moment the host was cut off is the one somebody is waiting on.
+	// The runs a factory before this one left active were ended by the store, which has no git: the
+	// push of their worktree is made before their notification and before any of them is resumed.
+	factory.PushCutOff()
 	factory.NotifyOwed(ctx)
 
 	// The clones come after the interface answers and before the first poll: a worker branches off a
