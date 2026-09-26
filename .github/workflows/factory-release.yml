@@ -58,18 +58,39 @@ jobs:
   release:
     needs: binaries
     runs-on: ubuntu-latest
-    # The only job that can write, and all it runs is gh: nothing built here, nothing installed.
+    # The only job that can write, and all it runs is gh and GitHub's attestation action: nothing
+    # built here, nothing installed. It alone gets an OIDC token, because the build job runs other
+    # people's npm code, and a token there could sign anything as this workflow.
     permissions:
       contents: write # the release the binaries are attached to
+      id-token: write # the Sigstore certificate that signs the attestation
+      attestations: write # the attestation, stored with the repository
     steps:
       - uses: actions/download-artifact@v8
         with:
           name: factory-binaries
           path: dist
+      - name: Attest where the binaries came from
+        id: attest
+        # The subjects are the binaries this job holds, digested here. A list of digests written by
+        # the build job would let that job choose what gets signed.
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: dist/factory-linux-*
+      - name: The bundle, named after the version
+        id: bundle
+        # The one place the bundle's name is made; the next step reads it from this step's output.
+        env:
+          ATTESTATION: ${{ steps.attest.outputs.bundle-path }}
+        run: |
+          bundle="dist/factory-v${GITHUB_REF_NAME#factory/v}.sigstore.json"
+          cp "$ATTESTATION" "$bundle"
+          echo "path=$bundle" >> "$GITHUB_OUTPUT"
       - name: Attach them to the release
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
+          BUNDLE: ${{ steps.bundle.outputs.path }}
         # Not the latest release: the repository's releases are its milestones, and a factory binary
         # is not one of them.
         run: |
@@ -79,12 +100,12 @@ jobs:
           # not the same file when the tag was moved or the toolchain has moved on. Both look alike
           # from here, so the finished release is refused and a person decides what to do.
           published="$(gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets | length' 2>/dev/null || echo 0)"
-          if [ "$published" -ge 3 ]; then # the three files below
-            echo "error: the release $GITHUB_REF_NAME already carries its binaries and checksums; a published version is never rebuilt, release the next version instead" >&2
+          if [ "$published" -ge 4 ]; then # the four files below
+            echo "error: the release $GITHUB_REF_NAME already carries its binaries, checksums and attestation; a published version is never rebuilt, release the next version instead" >&2
             exit 1
           fi
           gh release create "$GITHUB_REF_NAME" --verify-tag --latest=false \
             --title "factory v${GITHUB_REF_NAME#factory/v}" --generate-notes \
-            dist/factory-linux-amd64 dist/factory-linux-arm64 dist/checksums.txt \
+            dist/factory-linux-amd64 dist/factory-linux-arm64 dist/checksums.txt "$BUNDLE" \
             || gh release upload --clobber "$GITHUB_REF_NAME" \
-              dist/factory-linux-amd64 dist/factory-linux-arm64 dist/checksums.txt
+              dist/factory-linux-amd64 dist/factory-linux-arm64 dist/checksums.txt "$BUNDLE"

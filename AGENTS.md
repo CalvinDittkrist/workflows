@@ -21,7 +21,7 @@ Public repository of Claude Code plugins for agent-driven development: an orches
 - Release a plugin: bump `version` in `plugins/<name>/.claude-plugin/plugin.json`, commit, `scripts/release.sh <name> --push`
 - Release the factory: bump `factory/VERSION` (the one place its version is written), commit, `scripts/release.sh factory --push`.
   - It runs on main only. It refuses a tag that exists here or on origin, a dirty tree and a red gate.
-  - It tags `factory/v<version>`. That tag alone makes CI attach the static linux binaries and their checksums to a GitHub release.
+  - It tags `factory/v<version>`. That tag alone makes CI attach the static linux binaries, their checksums and their build attestation to a GitHub release.
   - `make binaries` builds the same files here.
 
 ## Priorities
