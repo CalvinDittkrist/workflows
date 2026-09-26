@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Open a planning session: worktree plan/<slug> + Herdr workspace running `claude --agent planner`.
-# Usage: plan.sh <topic words...> | <#issue> [--base <branch>]
+# Usage: plan.sh [<topic words...> | <#issue>] [--base <branch>]; without a topic it opens an open session.
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
@@ -14,7 +14,6 @@ while [ $# -gt 0 ]; do
   esac
   shift
 done
-[ -n "$words" ] || wf_die "usage: plan.sh <topic words...> | <#issue> [--base <branch>]"
 [ "${HERDR_ENV:-}" = 1 ] || wf_die "plan needs a Herdr-managed pane (HERDR_ENV=1). Start the orchestrator inside Herdr."
 wf_need gh; wf_need jq; wf_need herdr; wf_need git
 wf_check_claude_args WF_PLANNER_CLAUDE_ARGS
@@ -23,15 +22,19 @@ wf_check_planner_language
 root=$(wf_main_root); cd "$root"
 [ -n "$base" ] || base=$(wf_base_branch)
 
-issue="" topic="$words"
-if printf '%s' "$words" | grep -Eq '^#?[0-9]+$'; then
+issue="" topic="$words" stamp=""
+if [ -z "$words" ]; then
+  # An open session has no topic: the local time names its branch, so several may exist at once.
+  stamp=$(date +%Y%m%d-%H%M)
+  slug="open-$stamp"
+elif printf '%s' "$words" | grep -Eq '^#?[0-9]+$'; then
   issue="${words#\#}"
   json=$(gh issue view "$issue" --json number,title,state,labels,url 2>/dev/null) || wf_die "issue #$issue not found in $(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || echo 'this repo')"
   state=$(printf '%s' "$json" | jq -r .state)
   [ "$state" = "OPEN" ] || wf_die "issue #$issue is $state, not OPEN"
   topic=$(printf '%s' "$json" | jq -r .title)
 fi
-slug=$(wf_slug "$topic")
+[ -n "$stamp" ] || slug=$(wf_slug "$topic")
 [ -n "$slug" ] || wf_die "could not derive a branch name from '$topic'"
 branch="plan/$slug"
 
@@ -53,7 +56,9 @@ if [ "${WF_DRY_RUN:-0}" = 1 ]; then
 fi
 
 # The topic travels in git's branch description: restart-safe, shared by all worktrees, no file in the tree.
-if [ -n "$issue" ]; then git config "branch.$branch.description" "issue: #$issue"; else git config "branch.$branch.description" "topic: $topic"; fi
+# An open session is marked as such, so the planner tells it apart from a plan whose topic got lost.
+if [ -n "$stamp" ]; then git config "branch.$branch.description" "open: $stamp"
+elif [ -n "$issue" ]; then git config "branch.$branch.description" "issue: #$issue"; else git config "branch.$branch.description" "topic: $topic"; fi
 
 # The planner session disables the other plugins so their skills and agents stay out of its context.
 # WF_PLANNER_LANGUAGE rides along as claude's native `language` setting: this session only, no settings file.
@@ -68,11 +73,13 @@ if ! wf_start_agent "$pane" "$name" --agent planner --strict-mcp-config --permis
 fi
 
 wf_kv plan "$slug"
-if [ -n "$issue" ]; then wf_kv issue "#$issue $topic"; else wf_kv topic "$topic"; fi
+if [ -n "$stamp" ]; then wf_kv session open
+elif [ -n "$issue" ]; then wf_kv issue "#$issue $topic"; else wf_kv topic "$topic"; fi
 wf_kv branch "$branch"
 wf_kv path "$path"
 wf_kv workspace "$ws"
 wf_kv pane "$pane"
 wf_kv agent "$name"
 wf_kv agent_status "${agent_status:-not-detected}"
-wf_kv next "answer the planner's questions in its pane; board.sh shows the frontier once tickets exist"
+if [ -n "$stamp" ]; then wf_kv next "put your question to the planner in its pane; once a topic emerges it continues as a planning session"
+else wf_kv next "answer the planner's questions in its pane; board.sh shows the frontier once tickets exist"; fi

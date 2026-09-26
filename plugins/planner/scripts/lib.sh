@@ -13,6 +13,8 @@ wf_plan_issue() {
   if [ -n "${WF_PLAN_ISSUE:-}" ]; then printf '%s\n' "$WF_PLAN_ISSUE"; else wf_plan_desc | sed -nE 's/^issue: #([0-9]+).*/\1/p' | head -n 1; fi
 }
 wf_plan_topic() { wf_plan_desc | sed -nE 's/^topic: (.*)$/\1/p' | head -n 1; }
+# An open session has neither topic nor issue on purpose; its description is `open: <timestamp>`.
+wf_plan_open() { wf_plan_desc | sed -nE 's/^open: (.*)$/\1/p' | head -n 1; }
 wf_base_branch() {
   if [ -n "${WF_BASE_BRANCH:-}" ]; then printf '%s\n' "$WF_BASE_BRANCH"; return; fi
   local ref; ref=$(git symbolic-ref -q --short refs/remotes/origin/HEAD 2>/dev/null || true)

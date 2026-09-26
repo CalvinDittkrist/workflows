@@ -52,6 +52,21 @@ class SessionStartHookTests(PlanWorktree):
         ctx = json.loads(self.hook(WF_PLAN_ISSUE="12").stdout)["hookSpecificOutput"]["additionalContext"]
         self.assertIn("#12 Fix login timeout", ctx)
 
+    def test_open_session_is_named_open_and_not_a_lost_topic(self):
+        self.plan("open-20260926-1430", "open: 20260926-1430")
+        ctx = json.loads(self.hook().stdout)["hookSpecificOutput"]["additionalContext"]
+        self.assertIn("Open session: no topic", ctx)
+        self.assertIn("questions about the code and the design", ctx)
+        self.assertNotIn("unknown", ctx)
+        ctx = json.loads(self.hook(source="resume").stdout)["hookSpecificOutput"]["additionalContext"]
+        self.assertIn("open session without a topic", ctx)
+
+    def test_plan_without_description_still_says_the_topic_is_unknown(self):
+        self.git("checkout", "-qb", "plan/lost")
+        ctx = json.loads(self.hook().stdout)["hookSpecificOutput"]["additionalContext"]
+        self.assertIn("Topic: unknown (ask the user)", ctx)
+        self.assertNotIn("Open session", ctx)
+
     def test_silent_outside_plan_branches_and_short_on_resume(self):
         self.assertEqual(self.hook().stdout, "")
         self.git("checkout", "-qb", "feat/12-x")
@@ -71,6 +86,14 @@ class FactsAndLabelsTests(PlanWorktree):
         self.assertIn("issue: #12", r.stdout)
         self.assertIn("glossary: missing", r.stdout)
         self.assertIn("adrs: missing", r.stdout)
+
+    def test_facts_print_the_open_marker_and_no_topic_in_an_open_session(self):
+        self.plan("open-20260926-1430", "open: 20260926-1430")
+        r = self.run_script(PLANNER / "facts.sh")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("session: open", r.stdout)
+        self.assertNotIn("topic:", r.stdout)
+        self.assertNotIn("issue:", r.stdout)
 
     def specs(self):
         """A spec whose tickets are all closed, one with an open ticket, and one nobody cut up."""

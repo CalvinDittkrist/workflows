@@ -25,7 +25,8 @@ This repository packages a way of working with coding agents as Claude Code plug
 ## Data flow
 
 ### Planning
-1. `/orchestrator:plan <idea | #N>`: `plan.sh` creates the branch `plan/<slug>`, a worktree and a workspace, and starts `claude --agent planner` with `/planner:plan`.
+1. `/orchestrator:plan [<idea | #N>]`: `plan.sh` creates `plan/<slug>`, a worktree and a workspace, and starts the planner on `/planner:plan`.
+   - Without an argument it opens an open session, `plan/open-<yyyymmdd-hhmm>`.
 2. The planner writes a `spec` issue and cuts it into `ready-for-agent` sub-issues with blocking edges and an optional milestone. Or it triages an issue into an agent brief.
 3. The maintainer names per ticket whether the factory gets it; `issue.sh` refuses the label `factory` without `ready-for-agent` or beside `ready-for-human` ([ADR 0021](adr/0021-routing-is-decided-in-the-planner-and-never-stands-alone.md)).
 4. `/planner:finish` removes the worktree; the plan branch never carries commits.

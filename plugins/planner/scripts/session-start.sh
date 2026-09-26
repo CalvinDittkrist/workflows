@@ -10,12 +10,13 @@ source_=$(printf '%s' "$input" | jq -r '.source // "startup"')
 cwd=$(printf '%s' "$input" | jq -r '.cwd // empty')
 if [ -n "$cwd" ]; then cd "$cwd" 2>/dev/null || exit 0; fi
 slug=$(wf_plan_slug); [ -n "$slug" ] || exit 0
-issue=$(wf_plan_issue); topic=$(wf_plan_topic)
+issue=$(wf_plan_issue); topic=$(wf_plan_topic); open=""
+[ -n "$issue" ] || open=$(wf_plan_open)
 
 emit() { jq -n --arg c "$1" '{hookSpecificOutput:{hookEventName:"SessionStart",additionalContext:$c}}'; }
 
 if [ "$source_" != "startup" ]; then
-  emit "Planner session $slug (branch: $(wf_branch)${issue:+, issue #$issue}${topic:+, topic: $topic}). You plan and write issues; you do not implement. Run /planner:plan if you lost the routes."
+  emit "Planner session $slug (branch: $(wf_branch)${open:+, open session without a topic}${issue:+, issue #$issue}${topic:+, topic: $topic}). You plan and write issues; you do not implement. Run /planner:plan if you lost the routes."
   exit 0
 fi
 
@@ -24,6 +25,13 @@ Branch: $(wf_branch) (never pushed, never committed to). You plan and write issu
 if [ -f docs/glossary.md ]; then head="$head
 Glossary: docs/glossary.md exists; read it before naming things."; else head="$head
 Glossary: docs/glossary.md does not exist yet; the spec lists new terms for the worker to record."; fi
+
+if [ -n "$open" ]; then
+  emit "$head
+Open session: no topic, on purpose. You answer the user's questions about the code and the design; ask for the first question.
+When a topic emerges, the session continues as a planning session through the stage skills."
+  exit 0
+fi
 
 if [ -z "$issue" ]; then
   emit "$head

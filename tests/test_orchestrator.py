@@ -486,6 +486,36 @@ class PlanTests(ShimTest):
         settings = json.loads(start[start.index("--settings") + 1])
         self.assertEqual(settings["env"], {"WF_PLAN": "fix-login-timeout", "WF_PLAN_ISSUE": "12"})
 
+    def test_plan_without_argument_opens_an_open_session_like_a_topic_session(self):
+        r = self.run_script(ORCH / "plan.sh")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        branch = self.git("branch", "--list", "plan/*", "--format=%(refname:short)").strip()
+        self.assertRegex(branch, r"^plan/open-\d{8}-\d{4}$")
+        stamp = branch[len("plan/open-"):]
+        self.assertEqual(self.git("config", f"branch.{branch}.description").strip(), f"open: {stamp}")
+        self.assertIn(f"branch: {branch}", r.stdout)
+        self.assertIn("session: open", r.stdout)
+        self.assertNotIn("topic:", r.stdout)
+        self.assertIn("next: put your question to the planner", r.stdout)
+        start = [c for c in self.argv_calls() if c[1:3] == ["agent", "start"]][0]
+        self.assertEqual(start[start.index("--agent") + 1], "planner")
+        self.assertEqual(start[-1], "/planner:plan")
+        self.assertIn("--strict-mcp-config", start)
+        self.assertEqual(start[start.index("--permission-mode") + 1], "auto")
+        settings = json.loads(start[start.index("--settings") + 1])
+        self.assertEqual(settings["env"], {"WF_PLAN": f"open-{stamp}"})
+        self.assertEqual(settings["enabledPlugins"], {"worker@workflows": False, "orchestrator@workflows": False, "repo-standards@workflows": False})
+        self.assertFalse([c for c in self.calls() if c.startswith("gh issue")])
+
+    def test_open_session_honours_base_and_refuses_unknown_flags(self):
+        self.git("branch", "dev")
+        r = self.run_script(ORCH / "plan.sh", "--base", "dev", WF_DRY_RUN="1")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertRegex(r.stdout, r"plan: open-\d{8}-\d{4}")
+        self.assertRegex(r.stdout, r"base: (origin/)?dev\n")
+        r = self.run_script(ORCH / "plan.sh", "--nope")
+        self.assertNotEqual(r.returncode, 0); self.assertIn("unknown flag --nope", r.stderr)
+
     def test_planning_sessions_keep_their_background_subagents(self):
         # The planner's research stage works while a subagent runs; only workers wait for their subagents.
         r = self.run_script(ORCH / "plan.sh", "Offline mode")

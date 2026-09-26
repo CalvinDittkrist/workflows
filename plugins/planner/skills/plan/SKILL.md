@@ -19,7 +19,10 @@ Routes:
 
 Do now:
 1. Read AGENTS.md, docs/architecture.md and docs/glossary.md when they exist. Nothing else yet.
-2. If the session starts from an issue, summarize it in three lines. Otherwise restate the topic in one line.
+2. If the session starts from an issue, summarize it in three lines.
+   - In an open session (a `session: open` line above), say that the session has no topic and ask for the question.
+   - Otherwise restate the topic in one line.
 3. Recommend one route in one sentence and stop.
+   - An open session names no route until a topic exists; then it continues through the stage skills.
    - When an `acceptance:` line above says the session's issue is a spec whose tickets are all closed, the route is `/planner:accept`.
    - The user invokes the stage skills; you never start a stage on your own.
