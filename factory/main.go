@@ -36,9 +36,17 @@ func main() {
 	fake := flag.Bool("fake", false, "canned queue and scripted workers: no tokens, no git, no GitHub")
 	paused := flag.Bool("paused", false, "show the queue and start nothing")
 	reportVersion := flag.Bool("version", false, "print the version of this binary and exit")
+	updateTick := flag.Bool("update", false, "one update tick, run as root by the host's timer: install a verified newer release and have the factory drain onto it")
 	flag.Parse()
 	if *reportVersion {
 		fmt.Printf("factory %s\n", version)
+		return
+	}
+	if *updateTick {
+		if err := update(*config); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
 		return
 	}
 	drained, err := run(*config, *fake, *paused)
