@@ -23,7 +23,7 @@ import { gate } from './gate.js'
 import { resumeFix, review } from './review.js'
 import { enter } from './engine.js'
 import { graphOf } from './graphs.js'
-import { ci, followUps } from './ci.js'
+import { followUps } from './ci.js'
 import { checkout, derive, type Listed, type Project, Refusal } from './project.js'
 import type { SessionRecord } from './records.js'
 import { eventsFile, processId, readRecord, seen, watch } from './store.js'
@@ -189,7 +189,7 @@ export function serve(o: Options): Server {
             : interrupted.stage === 'pr'
               ? enter(graphOf(interrupted), 'pr', interrupted, project, rt)
               : (interrupted.stage === 'ci' || interrupted.stage === 'address-reviews') && !fix
-                ? ci(interrupted, project, rt)
+                ? enter(graphOf(interrupted), 'ci', interrupted, project, rt)
                 : begin(interrupted, project, rt)
     log({ event: 'resumed', project: project.path, issue, branch: record.branch, session: record.session_id ?? null })
     send(res, 200, { record })

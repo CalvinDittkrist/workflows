@@ -1,33 +1,45 @@
 // The ci stage of a work process, which the controller runs once the pr stage has opened the pull
-// request. It pushes what the branch has, then waits on the pull request itself, with one wait at a time
-// and no session polling: first for GitHub to say whether the branch merges into its base, then for the
-// checks, then for a review of a bot of WF_PR_BOT_REVIEWERS within WF_PR_REVIEW_WAIT seconds of the
-// checks' end, then it reads the standing requests for changes and the unresolved threads. A bot's review
-// is a review of it in any state, or its thumbs-up reaction on the pull request, which Codex leaves
-// instead of a review when it finds nothing.
+// request. It pushes what the branch has, then waits on the pull request, one wait at a time and with no
+// session polling.
+// It waits first for GitHub to say whether the branch merges into its base, then for the checks.
+// Then it waits for a review of a bot of WF_PR_BOT_REVIEWERS, within WF_PR_REVIEW_WAIT seconds of the
+// checks' end. Last it reads the standing requests for changes and the unresolved threads.
+// A bot's review is a review of it in any state, or its thumbs-up reaction on the pull request.
+// Codex leaves that reaction instead of a review when it finds nothing.
 //
 // A gate's draft the pr stage marked ready waits for the checks its ready starts, as the README's ci
 // stage says. Bot reviewers skip drafts, so their review is waited for from the ready on.
 //
-// A conflict or failed checks start a fix session of the ci stage within WF_CI_REPAIR_ROUNDS; its complete
-// comes back here, which pushes and waits again. A writer's request for changes, or an unresolved thread
-// a writer or a bot opened, that no round has answered yet starts an address-reviews session, which
-// fixes or declines each point and reports its replies; its complete comes back here too, which pushes,
-// posts the replies, resolves their threads and answers the requests with one comment, then waits again.
-// A writer's request starts the repair count afresh, once; a bot's review is a repair round of its own,
-// and so is a request asked again, as when its answer could not be posted, so no request is answered
-// by sessions without end.
+// The stage runs as three nodes of the delivery graph (delivery.ts), and the engine (engine.ts) follows
+// their outcomes. No node starts a stage or names its successor.
 //
-// Green ends the process ready, where the board offers the merge; a yolo process whose panel passed is
-// merged at once, by the merge action's rules. A request that stands once it is answered, a request or a
-// thread of somebody who is no writer, or a merge state other than clean is never green: the process is
-// blocked until the maintainer answers it. A pull request merged meanwhile blocks it too, for the
-// maintainer to abandon. A spent repair budget ends the process failed, and so does a pull request that
-// is closed. Every verdict other than a wait is an attempt in the record's history.
+// The ci node pushes, posts what an address-reviews session reported, and waits. It returns the verdict
+// as its outcome.
+// A conflict or failed checks go to the ci fix node while WF_CI_REPAIR_ROUNDS remain.
+// The ci fix node runs a fresh fix session. Its complete comes back to the ci node.
+// Review points no round has answered yet go to the address-reviews node. Such a point is a writer's
+// request for changes, or an unresolved thread a writer or a bot opened.
+// The address-reviews session fixes or declines each point and reports its replies. Its complete comes
+// back to the ci node.
+// The ci node then posts the replies, resolves their threads and answers the requests in one comment.
+// A writer's request starts the repair count afresh, once. A bot's review costs a repair round.
+// A request asked again costs one too, so sessions never answer a request without end.
+// The repair guard of the graph reads the same count.
 //
-// followUps reads the pull request of each process the stage left ready or blocked on a review, and waits
-// on it again once a new request for changes or thread asks for an answer, a review stands on one ready,
-// or a review it was blocked on has changed: the follow-up.
+// Green parks the process ready, where the board offers the merge.
+// A yolo process whose panel passed is merged at once, by the merge action's rules, and is done.
+// Three verdicts are never green and block the process until the maintainer answers:
+// - a request that stands once answered,
+// - a request or thread of somebody who is no writer,
+// - a merge state other than clean.
+// A pull request merged meanwhile blocks the process too, for the maintainer to abandon.
+// A spent repair budget parks the process failed, and so does a closed pull request.
+// A bot's points with the budget spent get a comment that names the writers first.
+// Every verdict other than a wait is an attempt in the record's history.
+//
+// followUps reads the pull request of each process the stage left ready or blocked on a review.
+// It waits on it again once a new request for changes or thread asks for an answer, a review stands on
+// a ready one, or a review it was blocked on has changed. That follow-up is an event on the ci node.
 import { readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { merge } from './actions.js'
@@ -37,11 +49,13 @@ import { defaultGrace } from './gate.js'
 import type { Project } from './project.js'
 import { addressBrief, ciFixBrief } from './briefs.js'
 import { repairsSpent } from './budgets.js'
+import { advance, type Node, type NodeContext, type Outcome } from './engine.js'
+import { graphOf } from './graphs.js'
 import { busy, track } from './running.js'
 import { begin, type Runtime } from './session.js'
 import { knob, setting } from './settings.js'
 import type { Attempt, Check, Point, StageRecord } from './records.js'
-import { attempt, event, readRecord, recordsDir, update } from './store.js'
+import { event, readRecord, recordsDir, update } from './store.js'
 
 // The ci stage's knobs, the worker's own defaults: the repair rounds of one pull request, the bots whose
 // review is waited for, and how many seconds after the checks' end a bot's review is waited for.
@@ -354,34 +368,6 @@ export function pause(ms: number, signal: AbortSignal): Promise<void> {
   })
 }
 
-// ci starts the ci stage of a process once after has settled, as the runtime of a fix session before it
-// has exited, and answers the record as it runs. A stop ends its wait; before is the abort of that
-// session, which a stop of the stage aborts too while its runtime exits. The replies and the answer an
-// address-reviews session reported are in the record's addressing, which the stage posts once it has pushed.
-export function ci(record: StageRecord, project: Project, rt: Runtime, after: Promise<void> = Promise.resolve(), before?: AbortController): StageRecord {
-  const id = record.id
-  const n = record.pull?.number
-  const started = (update(rt.stateDir, id, { stage: 'ci', state: 'waiting', note: `waiting on PR #${n ?? '?'}`, fixing: false } as Partial<StageRecord>) as StageRecord | undefined) ?? record
-  event(rt.stateDir, id, { event: 'ci-start', stage: 'ci', pr: n })
-  const abort = new AbortController()
-  if (before) abort.signal.addEventListener('abort', () => before.abort(), { once: true })
-  let own = () => true
-  const done = after
-    .then(() => (own() ? wait(started, project, rt, abort.signal, () => own()) : undefined))
-    .catch((err: unknown) => {
-      if (!own()) return
-      const note = `the ci stage failed: ${(err as Error).message}`
-      event(rt.stateDir, id, { event: 'ci-end', stage: 'ci', state: 'failed', note })
-      const failed = update(rt.stateDir, id, { state: 'failed', note, wait: undefined, unseen: true } as Partial<StageRecord>)
-      if (failed) rt.announce(failed)
-    })
-    .catch((err: unknown) => {
-      process.stderr.write(`warning: ${id}: its ci stage ended unexpectedly: ${(err as Error).message}\n`)
-    })
-  own = track(id, abort, done, `the ci stage waits on PR #${n ?? '?'}`).own
-  return started
-}
-
 type Reported = NonNullable<NonNullable<StageRecord['addressing']>['reported']>
 
 // The mutations that reply to a review thread and resolve it.
@@ -474,17 +460,48 @@ async function mention(record: StageRecord, project: Project, rt: Runtime, n: nu
   }
 }
 
-async function wait(record: StageRecord, project: Project, rt: Runtime, signal: AbortSignal, own: () => boolean): Promise<void> {
+// ciNode is the ci node of the delivery graph (delivery.ts). It pushes and posts what an address-reviews
+// session reported. Then it waits on the pull request and returns its verdict. It starts no stage and no
+// session itself; the engine follows its outcome. A stop ends its wait; a resume enters the node again.
+export const ciNode: Node = {
+  run: async (ctx) => {
+    try {
+      return await wait(ctx)
+    } catch (err) {
+      // A throw parks the process failed, and its wait is over.
+      if (ctx.own()) update(ctx.rt.stateDir, ctx.record.id, { wait: undefined } as Partial<StageRecord>)
+      throw err
+    }
+  },
+}
+
+// stopped is what a node returns once a stop has taken the process over, which the engine discards.
+const stopped: Outcome = { outcome: 'stopped' }
+
+// repairRounds is WF_CI_REPAIR_ROUNDS of the process, or its default where the ci node refused it already.
+function repairRounds(record: StageRecord): number {
+  try {
+    return knob(record, 'WF_CI_REPAIR_ROUNDS', defaultRepairs)
+  } catch {
+    return defaultRepairs
+  }
+}
+
+async function wait({ record, project, rt, signal, running, own, attempt: nodeAttempt, event: nodeEvent }: NodeContext): Promise<Outcome> {
   const id = record.id
   const repo = `${project.owner}/${project.name}`
   const wt = record.worktree
-  // end ends the process in the state with the note, unless a stop has taken it over.
-  const end = (state: 'ready' | 'blocked' | 'failed', note: string, a?: Attempt) => {
-    if (!own()) return
-    event(rt.stateDir, id, { event: 'ci-end', stage: 'ci', state, note })
-    const change = { state, note, wait: undefined, unseen: true } as Partial<StageRecord>
-    const ended = a ? attempt(rt.stateDir, id, a, change) : update(rt.stateDir, id, change)
-    if (ended) rt.announce(ended)
+  const first = record.pull?.number
+  running.busy = `the ci stage waits on PR #${first ?? '?'}`
+  update(rt.stateDir, id, { note: `waiting on PR #${first ?? '?'}` })
+  nodeEvent({ event: 'ci-start', stage: 'ci', pr: first })
+  // end is an outcome that ends the wait, with the attempt of its verdict.
+  const end = (outcome: string, note?: string, a?: Attempt, fields: Partial<Outcome> = {}): Outcome => {
+    if (!own()) return stopped
+    const change = { wait: undefined } as Partial<StageRecord>
+    if (a) nodeAttempt(a, change)
+    else update(rt.stateDir, id, change)
+    return { outcome, ...(note !== undefined ? { note } : {}), ...fields }
   }
   const pull = record.pull
   if (!pull) return end('failed', 'the ci stage has no pull request to wait on; resume it to open one')
@@ -513,13 +530,13 @@ async function wait(record: StageRecord, project: Project, rt: Runtime, signal: 
   } catch (err) {
     return end('failed', `could not push ${record.branch} to origin: ${(err as Error).message}`)
   }
-  if (!own()) return
+  if (!own()) return stopped
   // The replies and the answer of an address-reviews session go to GitHub once what it fixed is pushed.
   const reported = record.addressing?.reported
   if (reported) {
     const posted = await post(record, project, rt, n, pull.url, reported)
-    if (!own()) return
-    attempt(rt.stateDir, id, posted, { addressing: undefined } as Partial<StageRecord>)
+    if (!own()) return stopped
+    nodeAttempt(posted, { addressing: undefined } as Partial<StageRecord>)
   }
   const head = await git(wt, 'rev-parse', 'HEAD')
   const now = () => new Date().toISOString()
@@ -529,7 +546,7 @@ async function wait(record: StageRecord, project: Project, rt: Runtime, signal: 
   const history = () => (readRecord(rt.stateDir, id) as StageRecord | undefined)?.history ?? record.history ?? []
   update(rt.stateDir, id, { repairs: { spent: repairsSpent(history()), of: repairs } } as Partial<StageRecord>)
   for (;;) {
-    if (!own()) return
+    if (!own()) return stopped
     let verdict: Verdict
     let checks: Check[] = []
     try {
@@ -554,13 +571,13 @@ async function wait(record: StageRecord, project: Project, rt: Runtime, signal: 
     } catch (err) {
       verdict = { kind: 'waiting', wait: `GitHub to answer: ${(err as Error).message.split('\n')[0]}` }
     }
-    if (!own()) return
+    if (!own()) return stopped
     const said = JSON.stringify(checks)
     if (verdict.kind === 'waiting') {
       if (verdict.wait !== shown || said !== seen) {
         shown = verdict.wait
         seen = said
-        event(rt.stateDir, id, { event: 'ci-wait', stage: 'ci', pr: n, wait: verdict.wait })
+        nodeEvent({ event: 'ci-wait', stage: 'ci', pr: n, wait: verdict.wait })
         update(rt.stateDir, id, { state: 'waiting', note: `PR #${n}: waiting for ${verdict.wait}`, wait: verdict.wait, checks } as Partial<StageRecord>)
       }
       await pause(rt.poll, signal)
@@ -568,10 +585,10 @@ async function wait(record: StageRecord, project: Project, rt: Runtime, signal: 
     }
     update(rt.stateDir, id, { checks } as Partial<StageRecord>)
     const a: Attempt = { stage: 'ci', kind: 'wait', result: verdict.kind, at: now(), commit: head, pr: n, url: pull.url, checks }
-    if (verdict.kind === 'green') return green(record, project, rt, n, a, end)
-    if (verdict.kind === 'merged') return end('blocked', `PR #${n} is merged already on GitHub; abandon the process to remove its worktree and branch`, a)
-    if (verdict.kind === 'unmergeable') return end('blocked', `PR #${n} is not green: its merge state is ${verdict.status}, not CLEAN; meet the base's rules on GitHub, or write here to have the session bring the branch up to date`, a)
-    if (verdict.kind === 'closed') return end('failed', `PR #${n} is closed, so there is nothing to wait on; open it again and resume, or abandon the process`, a)
+    if (verdict.kind === 'green') return green(record, project, rt, n, a, own, nodeAttempt)
+    if (verdict.kind === 'merged') return end('merged', `PR #${n} is merged already on GitHub; abandon the process to remove its worktree and branch`, a)
+    if (verdict.kind === 'unmergeable') return end('unmergeable', `PR #${n} is not green: its merge state is ${verdict.status}, not CLEAN; meet the base's rules on GitHub, or write here to have the session bring the branch up to date`, a)
+    if (verdict.kind === 'closed') return end('closed', `PR #${n} is closed, so there is nothing to wait on; open it again and resume, or abandon the process`, a)
     const spent = repairsSpent(history())
     if (verdict.kind === 'review-comments') {
       a.reviews = verdict.reviews
@@ -583,7 +600,7 @@ async function wait(record: StageRecord, project: Project, rt: Runtime, signal: 
         const stands = [...(again.length > 0 ? [`the request for changes of ${again.join(', ')} is answered and waits for their review again`] : []), ...verdict.points.others]
         const what = (stands.length > 0 ? stands : verdict.reviews).join('; ')
         a.result = again.length > 0 && verdict.points.others.length === 0 ? 'answered' : 'review-comments'
-        return end('blocked', `PR #${n} is not green: ${what}; answer the review, or write here to have the session take it on`, a)
+        return end('answered', `PR #${n} is not green: ${what}; answer the review, or write here to have the session take it on`, a)
       }
       // A writer's request no session was asked yet is a new mandate, which starts the repair count
       // afresh; a bot's review, a thread without a request, or a request asked again is a repair round of
@@ -592,12 +609,15 @@ async function wait(record: StageRecord, project: Project, rt: Runtime, signal: 
       const fresh = asks.filter((p) => p.kind === 'request' && !asked.has(p.key))
       const again = asks.filter((p) => p.kind === 'request' && asked.has(p.key))
       const mandate = fresh.length > 0 ? 'writer' : 'bot'
-      event(rt.stateDir, id, { event: 'ci', ...a })
+      nodeEvent({ event: 'ci', ...a })
+      // A bot's points with the budget spent are left to a person, whom the spent comment names.
       if (mandate === 'bot' && spent >= repairs) {
         await mention(record, project, rt, n, repairs, asks)
-        return end('failed', `the ci stage spent its ${repairs} repair round(s): ${asks.length} review point(s) on PR #${n} are left to a person`, a)
+        return end('comments', `the ci stage spent its ${repairs} repair round(s): ${asks.length} review point(s) on PR #${n} are left to a person`, a, { mandate })
       }
-      if (!own()) return
+      if (!own()) return stopped
+      // a.asked records the points the address-reviews node answers,
+      // so a later wait does not treat them as unanswered.
       a.asked = asks.map((p) => p.key)
       const note =
         mandate === 'writer'
@@ -605,58 +625,113 @@ async function wait(record: StageRecord, project: Project, rt: Runtime, signal: 
           : again.length > 0
             ? `answering the request for changes of ${[...new Set(again.map((p) => p.login))].join(', ')} again, and ${asks.length - again.length} review thread(s); repair round ${spent + 1} of ${repairs}`
             : `answering ${asks.length} review thread(s); repair round ${spent + 1} of ${repairs}`
-      const addressing = attempt(rt.stateDir, id, a, {
+      if (!nodeAttempt(a, { wait: undefined, note, addressing: { mandate, points: asks } } as Partial<StageRecord>)) return stopped
+      return { outcome: 'comments', mandate }
+    }
+    const what = whatFailed(record, n, verdict.kind, checks)
+    nodeEvent({ event: 'ci', ...a })
+    return end(verdict.kind, `the ci stage spent its ${repairs} repair round(s): ${what}`, a)
+  }
+}
+
+// whatFailed names a conflict of the pull request with its base, or the checks that failed on it.
+const whatFailed = (record: StageRecord, n: number, kind: string, checks: Check[]) =>
+  kind === 'conflicts'
+    ? `PR #${n} conflicts with ${record.base}`
+    : `checks failed on PR #${n}: ${checks
+        .filter((c) => c.state === 'fail')
+        .map((c) => c.name)
+        .join(', ')}`
+
+// ciFixNode is the fix-session node of the ci stage, a fresh session. Its brief is for the conflict or
+// for the failed checks of the verdict it was entered with. That verdict is the last wait of the record. Before a
+// conflict fix it fetches the base. Its complete returns to the ci node through the engine.
+export const ciFixNode: Node = {
+  adapt: (record, project, rt) => {
+    const id = record.id
+    const history = record.history ?? []
+    const verdict = [...history].reverse().find((h) => h.stage === 'ci' && h.kind === 'wait')
+    const kind = verdict?.result === 'conflicts' ? 'conflicts' : 'checks-failed'
+    const checks = verdict?.checks ?? []
+    const n = record.pull?.number ?? 0
+    const repairs = repairRounds(record)
+    const spent = repairsSpent(history)
+    const what = whatFailed(record, n, kind, checks)
+    // A fix session is a fresh session: the one before it is in the history, not in its resume.
+    const fixing =
+      (update(rt.stateDir, id, { stage: 'ci', session_id: undefined, fixing: true, wait: undefined, note: `${what}; repair round ${spent + 1} of ${repairs}`, repairs: { spent: spent + 1, of: repairs } } as Partial<StageRecord>) as
+        | StageRecord
+        | undefined) ?? record
+    const start = () => begin(fixing, project, rt, ciFixBrief(fixing, `${project.owner}/${project.name}`, n, kind, checks.filter((c) => c.state === 'fail')))
+    if (kind !== 'conflicts' || !record.base.startsWith('origin/')) return start()
+    // The base is fetched before the conflict fix, tracked so a stop meanwhile starts no session.
+    const abort = new AbortController()
+    let own = () => false
+    const done = fetch(record.project, record.base.slice('origin/'.length), rt.fake)
+      .catch(() => false)
+      .then((fetched) => {
+        if (!own()) return
+        if (!fetched) event(rt.stateDir, id, { event: 'ci-note', note: `could not fetch ${record.base}; the fix session merges what this checkout has of it` })
+        start()
+      })
+      .catch((err: unknown) => {
+        process.stderr.write(`warning: ${id}: its ci fix session could not start: ${(err as Error).message}\n`)
+      })
+    own = track(id, abort, done, `the ci stage fetches ${record.base}`).own
+    return fixing
+  },
+}
+
+// addressNode is the address-reviews node: a fresh session with the points of its record, the
+// writer's request or a bot's review the wait gave it. What the session reported is written with its
+// end, and its complete returns to the ci node through the engine, which posts it.
+export const addressNode: Node = {
+  adapt: (record, project, rt) => {
+    const addressing = record.addressing
+    const points = addressing?.points ?? []
+    const repairs = repairRounds(record)
+    const spent = repairsSpent(record.history ?? [])
+    const started =
+      (update(rt.stateDir, record.id, {
         stage: 'address-reviews',
         session_id: undefined,
         fixing: true,
         wait: undefined,
-        note,
-        addressing: { mandate, points: asks },
-        repairs: { spent: mandate === 'writer' ? 0 : spent + 1, of: repairs },
-      } as Partial<StageRecord>)
-      if (!addressing || !own()) return
-      begin(addressing, project, rt, addressBrief(addressing, repo, n, asks))
-      return
-    }
-    const failing = checks.filter((c) => c.state === 'fail')
-    const what = verdict.kind === 'conflicts' ? `PR #${n} conflicts with ${record.base}` : `checks failed on PR #${n}: ${failing.map((c) => c.name).join(', ')}`
-    event(rt.stateDir, id, { event: 'ci', ...a })
-    if (spent >= repairs) return end('failed', `the ci stage spent its ${repairs} repair round(s): ${what}`, a)
-    if (verdict.kind === 'conflicts' && record.base.startsWith('origin/') && !(await fetch(record.project, record.base.slice('origin/'.length), rt.fake))) {
-      event(rt.stateDir, id, { event: 'ci-note', note: `could not fetch ${record.base}; the fix session merges what this checkout has of it` })
-    }
-    if (!own()) return
-    // A fix session is a fresh session: the one before it is in the history, not in its resume.
-    const fixing = attempt(rt.stateDir, id, a, { session_id: undefined, fixing: true, wait: undefined, note: `${what}; repair round ${spent + 1} of ${repairs}`, repairs: { spent: spent + 1, of: repairs } } as Partial<StageRecord>)
-    if (!fixing || !own()) return
-    begin(fixing, project, rt, ciFixBrief(fixing, repo, n, verdict.kind, failing))
-    return
-  }
+        repairs: { spent: addressing?.mandate === 'writer' ? 0 : spent + 1, of: repairs },
+      } as Partial<StageRecord>) as StageRecord | undefined) ?? record
+    return begin(started, project, rt, addressBrief(started, `${project.owner}/${project.name}`, record.pull?.number ?? 0, points))
+  },
 }
 
-// green ends a process whose pull request is green. A manual process is ready for the maintainer's
-// merge. A yolo process whose panel passed is merged at once, by the merge action's rules, which remove
-// its worktree, its branch and its record; the maintainer is told of it as it ended. A merge that is
-// refused, or that a merge queue takes, leaves it ready with the reason.
-async function green(record: StageRecord, project: Project, rt: Runtime, n: number, a: Attempt, end: (state: 'ready', note: string, a?: Attempt) => void) {
+// green is the outcome of a green pull request. A manual process parks ready for the maintainer's
+// merge. A yolo process whose panel passed is merged at once, by the merge action's rules. The merge
+// removes its worktree, its branch and its record, so it ends done. The maintainer is told of it as it
+// ended. A
+// merge that is refused, or that a merge queue takes, is unmerged and parks it ready with the reason.
+async function green(record: StageRecord, project: Project, rt: Runtime, n: number, a: Attempt, own: () => boolean, attempt: NodeContext['attempt']): Promise<Outcome> {
   const note = `PR #${n} is green: it merges, its checks pass and no review asks for changes`
-  if (record.mode !== 'yolo') return end('ready', note, a)
-  if (record.panel !== 'pass') return end('ready', `${note}; its panel did not pass, so the yolo process waits for the merge`, a)
+  const change = { wait: undefined } as Partial<StageRecord>
+  if (record.mode !== 'yolo' || record.panel !== 'pass') {
+    if (!own()) return stopped
+    attempt(a, change)
+    return { outcome: 'green', note: record.mode !== 'yolo' ? note : `${note}; its panel did not pass, so the yolo process waits for the merge` }
+  }
   const id = record.id
-  const before = attempt(rt.stateDir, id, a, { note: `${note}; merging it, as the process is yolo` } as Partial<StageRecord>)
-  if (!before) return
+  const before = attempt(a, { ...change, note: `${note}; merging it, as the process is yolo` } as Partial<StageRecord>)
+  if (!before) return stopped
   event(rt.stateDir, id, { event: 'ci-note', note: `merging PR #${n}, as the process is yolo` })
   let merged: Awaited<ReturnType<typeof merge>>
   try {
     merged = await merge(project, rt.stateDir, rt.gh, rt.fake, n)
   } catch (err) {
-    return end('ready', `${note}, but its yolo merge was refused: ${(err as Error).message}; merge it by hand`)
+    return { outcome: 'green', note: `${note}, but its yolo merge was refused: ${(err as Error).message}; merge it by hand`, unmerged: true }
   }
-  if (merged.queued) return end('ready', `${note}; the merge queue of ${merged.base} took it, and the process stays until GitHub merges it`)
+  if (merged.queued) return { outcome: 'green', note: `${note}; the merge queue of ${merged.base} took it, and the process stays until GitHub merges it`, unmerged: true }
   const closed = merged.closed !== null ? `, closed #${merged.closed}` : ''
   const warned = merged.warnings.length > 0 ? `; ${merged.warnings.join('; ')}` : ''
   // The merge removed the record, so the maintainer is told of the process as it was, merged.
   rt.announce({ ...before, state: 'ready', note: `merged PR #${n} into ${merged.base}${closed}, as the process is yolo${warned}`, wait: undefined } as StageRecord)
+  return { outcome: 'green' }
 }
 
 // Whether a process the ci stage left calls for a follow-up: one ready, or blocked on a review, whose
@@ -704,7 +779,7 @@ export async function followUps(rt: Runtime, projectOf: (path: string) => Promis
       const now = readRecord(rt.stateDir, id) as StageRecord | undefined
       if (!now || !following(now) || busy(id)) continue
       event(rt.stateDir, id, { event: 'ci-note', note: fresh ? `a review of PR #${n} asks for an answer: the follow-up waits on it again` : now.state === 'ready' ? `a review of PR #${n} stands since it was green: the follow-up waits on it again` : `the review PR #${n} was blocked on has changed: the follow-up waits on it again` })
-      ci(now, project, rt)
+      advance(graphOf(now), 'ci', { outcome: 'follow-up' }, now, project, rt)
     } catch (err) {
       const why = (err as Error).message.split('\n')[0] ?? ''
       if (warned.get(id) !== why) process.stderr.write(`warning: ${id}: its follow-up could not read its pull request: ${why}\n`)

@@ -65,8 +65,9 @@ export function deliveryContext(record: StageRecord): DeliveryContext {
 
 // An event of the delivery graph: the outcome of a node, or a message or a follow-up to a parked
 // process. mandate is writer or bot on a comments event of the ci stage: a writer's comments are always
-// addressed, a bot's only while a repair round remains.
-export type DeliveryEvent = { type: string; mandate?: 'writer' | 'bot' }
+// addressed, a bot's only while a repair round remains. unmerged is set on a green event whose yolo
+// merge was refused or queued, which parks the process ready.
+export type DeliveryEvent = { type: string; mandate?: 'writer' | 'bot'; unmerged?: boolean }
 
 // park keeps the process on its node in one of the park states.
 const park = (state: 'ready' | 'blocked' | 'input' | 'failed') => ({ type: 'park', params: { state } }) as const
@@ -84,7 +85,7 @@ export const delivery = setup({
     reviewRoundsRemain: ({ context }) => context.reviewRound < context.reviewRounds,
     repairRoundsRemain: ({ context }) => context.repairs < context.repairRounds,
     writerOrRepairRoundsRemain: ({ context, event }) => event.mandate === 'writer' || context.repairs < context.repairRounds,
-    yoloPanelPassed: ({ context }) => context.yolo && context.panelPassed,
+    yoloPanelPassed: ({ context, event }) => context.yolo && context.panelPassed && event.unmerged !== true,
   },
   actions: {
     // park is read from the transition by the engine, which writes the park; it runs nothing itself.
@@ -137,8 +138,8 @@ export const delivery = setup({
       on: { opened: 'ci', found: 'ci', finished: 'ci', failed: { actions: park('failed') } },
     },
     ci: {
-      // The ci stage's own note names the pull request it waits on.
-      meta: { stage: 'ci', entry: { state: 'waiting', fixing: false }, start: 'ci-start', end: 'ci-end', failure: 'the ci stage failed', what: 'its ci stage' } satisfies StateMeta,
+      // The ci node writes its own note and its start event, which name the pull request it waits on.
+      meta: { stage: 'ci', entry: { state: 'waiting', fixing: false }, end: 'ci-end', failure: 'the ci stage failed', what: 'its ci stage' } satisfies StateMeta,
       on: {
         green: [{ guard: 'yoloPanelPassed', target: 'done' }, { actions: park('ready') }],
         merged: { actions: park('blocked') },

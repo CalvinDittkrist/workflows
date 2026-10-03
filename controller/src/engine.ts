@@ -11,7 +11,10 @@
 // the same state. An outcome without an edge parks the process failed, with a note naming the node and
 // the outcome. A park writes the node's end event, the state and the note, and is announced. The next
 // node is entered before the run settles, so the process is never untracked between two nodes. A state
-// whose stage is not a node yet calls today's stage function through an adapter.
+// whose stage is not a node yet calls today's stage function through an adapter. advance follows an
+// outcome or an event into a node from outside a run. That is the complete of a session an adapter
+// started, or the follow-up of a parked process. A node entered after a session runs once that runtime has exited.
+// A stop of the node stops that runtime too, so two never work the worktree at once.
 import type { AnyStateMachine } from 'xstate'
 import { transition } from 'xstate'
 import type { Project } from './project.js'
@@ -20,11 +23,13 @@ import { type Running, track } from './running.js'
 import type { Runtime } from './session.js'
 import { attempt, event, readRecord, update } from './store.js'
 
-// The outcome a node returns, with the note of a park and what an edge's guard reads of it.
+// The outcome a node returns, with the note of a park and what an edge's guard reads of it: mandate on
+// the comments of the ci stage, and unmerged on a green pull request whose yolo merge did not happen.
 export interface Outcome {
   outcome: string
   note?: string
   mandate?: 'writer' | 'bot'
+  unmerged?: boolean
 }
 
 // What a node runs with: the record as it entered, the project, the runtime and the abort signal of its
@@ -79,8 +84,10 @@ function metaOf(g: Registration, node: string, record: StageRecord): StateMeta {
   return meta
 }
 
-// enter enters a node of the graph for the process and answers the record as it runs.
-export function enter(g: Registration, node: string, record: StageRecord, project: Project, rt: Runtime): SessionRecord {
+// enter enters a node of the graph for the process and answers the record as it runs. Its run starts once
+// after has settled, and before is the abort of a session whose runtime still exits, which a stop of the
+// run aborts too. A node without a note of its own keeps the record's note until it writes one.
+export function enter(g: Registration, node: string, record: StageRecord, project: Project, rt: Runtime, after: Promise<void> = Promise.resolve(), before?: AbortController): SessionRecord {
   const id = record.id
   const impl = g.nodes[node]
   const meta = metaOf(g, node, record)
@@ -90,14 +97,15 @@ export function enter(g: Registration, node: string, record: StageRecord, projec
     const adapted = (update(rt.stateDir, id, at) as StageRecord | undefined) ?? record
     return impl.adapt(adapted, project, rt)
   }
-  const note = meta.note ?? ''
-  const started = (update(rt.stateDir, id, { stage: meta.stage, ...meta.entry, note, ...at } as Partial<StageRecord>) as StageRecord | undefined) ?? record
+  const note = meta.note !== undefined ? { note: meta.note } : {}
+  const started = (update(rt.stateDir, id, { stage: meta.stage, ...meta.entry, ...note, ...at } as Partial<StageRecord>) as StageRecord | undefined) ?? record
   if (meta.start) event(rt.stateDir, id, { event: meta.start, stage: meta.stage })
   const abort = new AbortController()
+  if (before) abort.signal.addEventListener('abort', () => before.abort(), { once: true })
   // The node runs on the next turn, once it is tracked, so a stop meanwhile ends it.
   const tracked: { own: () => boolean; s?: Running } = { own: () => false }
   const own = () => tracked.own()
-  const done = Promise.resolve()
+  const done = after
     .then(async () => {
       const s = tracked.s
       if (!s) return
@@ -122,13 +130,19 @@ export function enter(g: Registration, node: string, record: StageRecord, projec
     .catch((err: unknown) => {
       process.stderr.write(`warning: ${id}: ${meta.what ?? `its ${node} node`} ended unexpectedly: ${(err as Error).message}\n`)
     })
-  Object.assign(tracked, track(id, abort, done, note))
+  Object.assign(tracked, track(id, abort, done, meta.note ?? `${meta.what ?? `its ${node} node`} runs`))
   return started
+}
+
+// advance follows the edge of an outcome or an event from a node of the graph for the process, as its
+// record stands, and enters the next node once after has settled, with before chained to its stop.
+export function advance(g: Registration, node: string, o: Outcome, record: StageRecord, project: Project, rt: Runtime, after?: Promise<void>, before?: AbortController) {
+  follow(g, record.id, node, metaOf(g, node, record), o, project, rt, after, before)
 }
 
 // follow takes the edge of the node's outcome from the record as it stands: a park keeps the process on
 // the node, a final state ends the graph, any other state is entered.
-function follow(g: Registration, id: string, node: string, meta: StateMeta, o: Outcome, project: Project, rt: Runtime) {
+function follow(g: Registration, id: string, node: string, meta: StateMeta, o: Outcome, project: Project, rt: Runtime, after?: Promise<void>, before?: AbortController) {
   const record = readRecord(rt.stateDir, id) as StageRecord | undefined
   if (!record) return
   const { outcome, note, ...fields } = o
@@ -139,7 +153,7 @@ function follow(g: Registration, id: string, node: string, meta: StateMeta, o: O
   const parked = (actions as { type: string; params?: unknown }[]).find((a) => a.type === 'park')
   if (parked) return park(rt, id, meta, (parked.params as { state: string }).state, note ?? record.note)
   if (next.status === 'done') return
-  enter(g, String(next.value), record, project, rt)
+  enter(g, String(next.value), record, project, rt, after, before)
 }
 
 // park ends the run of a node with the process waiting on it: its end event, then its state and note,
